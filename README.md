@@ -119,12 +119,15 @@ up for it.
   - The Guests tab has a matching UI: pick a `.csv` file (headers are read client-side so the
     mapping dropdowns appear immediately), map columns, preview, then confirm — the confirm
     button is disabled while any row still has an error.
+  - **FR-2.9 re-check on edit/import** (see its own bullet under Table & Venue Layout below for
+    the full explanation): editing a guest's Attendance Status, Side, Relationship Tier, household
+    (partyName), or Requires Accessible Table — through this tab's inline controls, a future full
+    edit form, or a bulk import update row — re-checks hard rules and flags **Needs
+    Reassignment** if their current seat is no longer valid, or (for Attendance Status specifically)
+    frees their seat outright the same way the dedicated Day-of endpoint always has.
   - **Deliberately left out:** Excel (`.xlsx`) isn't parsed, only CSV — spreadsheet software
     exports CSV directly, and adding a binary-format parser for the same acceptance criteria
-    wasn't judged worth a new dependency for this pass. FR-2.9's re-check-hard-rules-on-edit
-    behavior (an edited/imported guest whose assignment becomes invalid should flip to "Needs
-    Reassignment") isn't wired up here either — consistent with the standing TS-9/TS-11 decision
-    already documented below that nothing in the app sets that flag yet.
+    wasn't judged worth a new dependency for this pass.
 - Seating rules between guests (must sit together / must not sit together / prefer near / avoid),
   with the FR-0.1 hard-rule invariant enforced server-side: a pair of guests can't simultaneously
   be required to sit together and forbidden from it — that's blocked outright with a clear error,
@@ -153,11 +156,47 @@ up for it.
     count entirely; when guests exceed capacity, the exact shortfall is called out.
   - **Accessible-flag re-check** (FR-4.6): unmarking a table Accessible re-checks FR-0.1 for
     anyone currently seated there who requires one — they're flagged **Needs Reassignment**
-    (the `needsReassignment` field on a plan version's assignments, previously unused anywhere in
-    the app) and the current plan version is marked incomplete until it's fixed, rather than
-    silently leaving them in a now-invalid seat. Re-marking the table Accessible again clears the
-    flag and restores completeness (as long as nothing else is wrong). With no affected guest, the
-    flag toggles freely either way — no warning, no incompleteness.
+    (the `needsReassignment` field on a plan version's assignments) and the current plan version
+    is marked incomplete until it's fixed, rather than silently leaving them in a now-invalid seat.
+    Re-marking the table Accessible again clears the flag and restores completeness (as long as
+    nothing else is wrong). With no affected guest, the flag toggles freely either way — no
+    warning, no incompleteness. The Plan tab now shows a "needs reassignment" badge next to any
+    flagged guest's name, wherever this pass's more general FR-2.9 re-check (below) or this
+    table-side one sets it.
+  - **FR-2.9 (generalized): editing or importing a change to a guest's Attendance Status, Side,
+    Relationship Tier, household, or Requires Accessible Table re-checks their current seat
+    assignment against hard rules.** This generalizes FR-4.6 above beyond its one original
+    trigger (a table's Accessible flag) to the *guest* side: `PATCH .../guests/:id` and a bulk
+    import's update rows both now run the same re-check.
+    - **Attendance Status → Not Attending** gets FR-8.1's full existing behavior (the seat is
+      freed immediately and the guest is excluded from completeness, not just flagged) rather than
+      a new, separate "flagged" state — reusing `setGuestAttendance` under the hood. This closes a
+      real gap: editing `dayOfAttendance` through the general guest-edit endpoint or an import
+      previously changed the column directly without freeing the guest's seat at all, unlike the
+      dedicated Day-of-mode endpoint. That stale-assignment gap is what `test_version_compare.py`
+      was unknowingly relying on to construct one of its own test scenarios — fixing FR-2.9
+      surfaced it, and the test was rewritten (generate the older version *before* the attendance
+      change, matching how Plan Versions are actually meant to behave) rather than worked around.
+    - **Side, Relationship Tier, household (partyName), and Requires Accessible Table** re-check
+      the guest's current table against every hard rule a guest-level edit can actually affect:
+      Requires Accessible Table vs. the table's Accessible flag, a Restricted table's
+      required-guest list, and Must-Not-Sit-Together against whoever else is seated there —
+      flagging **Needs Reassignment** (and marking the plan incomplete) if any is now violated, or
+      clearing the flag if it's no longer violated. Side-Mixing and a table's `singleSideOnly`
+      override are explicitly soft-only preferences in the engine (never a hard rule), so a side
+      change alone won't trip this today — the re-check still runs for every named field
+      (consistent, and correct if a future hard rule ever keys off side/tier/household), it's just
+      an honest "nothing's actually wrong" for those specific fields under today's rule set.
+    - **Removing a guest** also recomputes the current plan's completeness — deleting a guest
+      cascades away their own seat assignment at the database level regardless, but if they were
+      counted as Unassigned, removing them can flip an incomplete plan back to complete, which
+      nothing previously recomputed.
+    - **Deliberately out of scope:** FR-2.9 also names "age category" and "identity" as triggers.
+      Age category was never built anywhere in this app (a pre-existing FR-2.2 gap, not something
+      this pass introduced or could reasonably backfill as a side effect), so there's no field to
+      re-check. A guest's own name/identity changing has no hard-rule implication (nobody's seat
+      becomes invalid because their name changed), so there's genuinely nothing to re-check there
+      either.
   - **Table-level assignment only** (FR-4.7): confirmed by inspection across every planning,
     review, day-of, and export interface — there's no chair/seat-position concept anywhere in the
     schema, API, or UI; "available seat" always means available table capacity.
@@ -499,18 +538,15 @@ together, so there's nothing to defer here in the usual sense. It surfaced two a
 gaps — bulk guest import (a TS-5 gap) and Side-Mixing (a TS-6 gap) — that were never built as part
 of TS-5/TS-6. Both have since been closed — see the TS-5 and TS-6 paragraphs below.
 
-**TS-5 (Guest List Management) is now fully built**, aside from FR-2.9's re-check behavior. What's
+**TS-5 (Guest List Management) is now fully built**, including FR-2.9's re-check behavior. What's
 there beyond the original individual add/edit/remove flow described above: bulk CSV import and
 export (FR-2.4/FR-2.4a), described in its own bullet near the top of "What's implemented" — the
-one gap TS-15's testing surfaced. What's still deliberately left out, and why: FR-2.9 asks that
-editing or importing a change to a guest re-checks their current seat assignment against hard
-rules, flipping them to "Needs Reassignment" if it's no longer valid. The `needsReassignment`
-flag on `seat_assignments` is no longer purely theoretical — TS-7 (below) wires it up for one
-specific trigger (a table losing its Accessible flag) — but a guest *edit or import* still doesn't
-trigger the same re-check for any other field (side, tier, household, age category). Generalizing
-it to every field FR-2.9 names is a bigger, standalone piece (properly FR-6.1's full
-Assigned/Unassigned/Needs Reassignment/Not Attending picture), not a one-off special case worth
-adding just for imports.
+one gap TS-15's testing surfaced — and FR-2.9's generalized re-check, described in its own bullet
+under Table & Venue Layout above (it's grouped there since it shares the `needsReassignment`
+mechanics FR-4.6 introduced). Editing or importing a change to a guest's Attendance Status, Side,
+Relationship Tier, household, or Requires Accessible Table field, or removing the guest, now
+re-checks their current seat assignment against hard rules for both the individual guest-edit
+endpoint and bulk import, closing the last gap this story had left open.
 
 **TS-6 (Relationships & Seating Rules) is now fully built**, aside from one deliberately deferred
 stretch goal. What's there, beyond the original must/must-not-sit-together/prefer-near/avoid rules
@@ -526,18 +562,16 @@ need for a human reading the table list, just without the engine reading it as a
 **TS-7 (Table & Venue Layout) is now fully built** across all seven of its requirements, described
 in its own bullet above — shape, quick-create, the optional drag-and-drop floor plan, capacity
 enforcement and its overview display, the Accessible-flag re-check, and table-level-only
-assignment. Nothing here was deferred as a stretch goal; the one thing worth flagging is that the
-Needs Reassignment flag FR-4.6 introduces is specifically scoped to the accessible-flag trigger —
-see the TS-5 paragraph above for how that same flag stays unwired for every other field FR-2.9
-names.
+assignment. Nothing here was deferred as a stretch goal; the Needs Reassignment flag FR-4.6
+introduces started out scoped to just the accessible-flag trigger, but has since been generalized
+to every field FR-2.9 names — see the FR-2.9 bullet above and the TS-5 paragraph below.
 
 Version labeling and side-by-side comparison are now built (described above) — that closes the
 last gap TS-12 had left open, and permission-aware UI hiding (described above) closes the last gap
 TS-13 had left open. All three gaps TS-15 originally surfaced or that TS-7 depended on (bulk guest
 import, Side-Mixing, and the visual floor plan) are also closed, so what's left across the whole
 app is: FR-7.1's guest-drag-onto-table interaction on top of the now-existing floor plan, the rest
-of TS-10 (undo/redo, live concurrent-edit sync), a real email provider, and the FR-2.9/FR-6.1
-Needs Reassignment state beyond FR-4.6's one wired trigger.
+of TS-10 (undo/redo, live concurrent-edit sync), and a real email provider.
 
 ## Mobile later
 

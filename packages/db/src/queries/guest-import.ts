@@ -1,6 +1,7 @@
 import { randomUUID } from "crypto";
 import { pool } from "../pool";
 import { encryptText } from "../crypto";
+import { checkGuestHardRuleViolation } from "./plan-versions";
 import {
   parseCsv,
   guestTierEnum,
@@ -217,11 +218,22 @@ export async function commitGuestImport(
     );
   }
 
+  // FR-2.9: the Current Plan Version, if any -- fetched once up front since import never
+  // generates a new version itself, so it's stable for the whole commit below.
+  const { rows: planRows } = await pool.query(
+    `SELECT id FROM "plan_versions" WHERE "weddingId" = $1 ORDER BY "versionNumber" DESC LIMIT 1`,
+    [weddingId]
+  );
+  const planVersionId: string | undefined = planRows[0]?.id;
+
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
     let createdCount = 0;
     let updatedCount = 0;
+    // FR-2.9: names of guests whose current assignment was flagged Needs Reassignment by this
+    // import, surfaced to the caller the same way TS-7's table-side re-check surfaces warnings.
+    const reassignmentWarnings: string[] = [];
 
     for (const row of preview.rows) {
       const p = row.preview;
@@ -300,11 +312,78 @@ export async function commitGuestImport(
           );
         }
         updatedCount++;
+
+        // FR-2.9: Attendance Status -> Not Attending frees the seat outright (matching FR-8.1's
+        // dedicated day-of behavior, not just a flag) regardless of anything else in this row;
+        // otherwise, if any of the other named trigger fields changed, re-check this guest's
+        // current assignment (if they have one) against hard rules.
+        if (p.dayOfAttendance === "NOT_ATTENDING" && planVersionId) {
+          await client.query(
+            `DELETE FROM "seat_assignments" WHERE "planVersionId" = $1 AND "guestId" = $2`,
+            [planVersionId, row.guestId]
+          );
+        } else if (
+          planVersionId &&
+          (p.side !== undefined ||
+            p.tier !== undefined ||
+            "partyName" in p ||
+            p.requiresAccessibleTable !== undefined)
+        ) {
+          const { rows: assignRows } = await client.query(
+            `SELECT id, "seatingTableId" AS "tableId" FROM "seat_assignments"
+             WHERE "planVersionId" = $1 AND "guestId" = $2`,
+            [planVersionId, row.guestId]
+          );
+          const assignment = assignRows[0] as { id: string; tableId: string } | undefined;
+          if (assignment) {
+            const { rows: guestRows } = await client.query(
+              `SELECT ("firstName" || ' ' || "lastName") AS name, "requiresAccessibleTable"
+               FROM "guests" WHERE id = $1`,
+              [row.guestId]
+            );
+            const guest = guestRows[0] as { name: string; requiresAccessibleTable: boolean };
+            const violated = await checkGuestHardRuleViolation(
+              client,
+              weddingId,
+              planVersionId,
+              row.guestId,
+              assignment.tableId,
+              guest.requiresAccessibleTable
+            );
+            await client.query(
+              `UPDATE "seat_assignments" SET "needsReassignment" = $1, "updatedAt" = now() WHERE id = $2`,
+              [violated, assignment.id]
+            );
+            if (violated) {
+              reassignmentWarnings.push(
+                `${guest.name}'s current table no longer fits a hard rule for them — flagged as Needs Reassignment.`
+              );
+            }
+          }
+        }
       }
     }
 
+    if (planVersionId) {
+      const { rows: countRows } = await client.query(
+        `SELECT
+           (SELECT COUNT(*)::int FROM "guests" g WHERE g."weddingId" = $1 AND g."dayOfAttendance" = 'ATTENDING'
+              AND NOT EXISTS (SELECT 1 FROM "seat_assignments" sa WHERE sa."planVersionId" = $2 AND sa."guestId" = g.id)
+           ) AS "unassignedCount",
+           (SELECT COUNT(*)::int FROM "seat_assignments" WHERE "planVersionId" = $2 AND "needsReassignment" = true)
+             AS "needsReassignmentCount"`,
+        [weddingId, planVersionId]
+      );
+      const isComplete =
+        countRows[0].unassignedCount === 0 && countRows[0].needsReassignmentCount === 0;
+      await client.query(`UPDATE "plan_versions" SET "isComplete" = $1 WHERE id = $2`, [
+        isComplete,
+        planVersionId,
+      ]);
+    }
+
     await client.query("COMMIT");
-    return { createdCount, updatedCount };
+    return { createdCount, updatedCount, warnings: reassignmentWarnings };
   } catch (err) {
     await client.query("ROLLBACK");
     throw err;

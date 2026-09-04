@@ -170,6 +170,36 @@ export async function getLatestAssignmentsForWedding(
   return new Map(rows.map((r) => [r.guestId, r.tableId]));
 }
 
+// FR-2.9 ("removing the guest" trigger): recomputes the Current Plan Version's isComplete using
+// the same combined unassigned+needsReassignment formula every other write path uses. A guest
+// delete cascades away their seat_assignments row at the DB level (no invalid assignment can be
+// left behind for *them*), but if they were counted as Unassigned, removing them can flip the
+// plan from incomplete to complete -- nothing else recomputes that on delete today.
+export async function recomputeCurrentPlanCompleteness(weddingId: string): Promise<void> {
+  const { rows: planRows } = await pool.query(
+    `SELECT id FROM "plan_versions" WHERE "weddingId" = $1 ORDER BY "versionNumber" DESC LIMIT 1`,
+    [weddingId]
+  );
+  const planVersionId: string | undefined = planRows[0]?.id;
+  if (!planVersionId) return;
+
+  const { rows: countRows } = await pool.query(
+    `SELECT
+       (SELECT COUNT(*)::int FROM "guests" g WHERE g."weddingId" = $1 AND g."dayOfAttendance" = 'ATTENDING'
+          AND NOT EXISTS (SELECT 1 FROM "seat_assignments" sa WHERE sa."planVersionId" = $2 AND sa."guestId" = g.id)
+       ) AS "unassignedCount",
+       (SELECT COUNT(*)::int FROM "seat_assignments" WHERE "planVersionId" = $2 AND "needsReassignment" = true)
+         AS "needsReassignmentCount"`,
+    [weddingId, planVersionId]
+  );
+  const isComplete =
+    countRows[0].unassignedCount === 0 && countRows[0].needsReassignmentCount === 0;
+  await pool.query(`UPDATE "plan_versions" SET "isComplete" = $1 WHERE id = $2`, [
+    isComplete,
+    planVersionId,
+  ]);
+}
+
 export async function listPlanVersionsForWedding(weddingId: string): Promise<PlanVersionRow[]> {
   const { rows } = await pool.query(
     `SELECT pv.id, pv."weddingId", pv."versionNumber", pv.label, pv.status, pv."isComplete",
@@ -1394,4 +1424,137 @@ export async function comparePlanVersions(
     guests,
     summary: { movedCount, addedCount, removedCount, unchangedCount },
   };
+}
+
+// FR-2.9/FR-6.1 (generalizing TS-7's FR-4.6 accessible-table-only trigger): a minimal
+// "Queryable" so the same hard-rule check can run either against the shared pool (a standalone
+// guest edit, its own transaction) or against an already-open transaction's client (a bulk
+// import commit, so the check is part of the same all-or-nothing write rather than a second,
+// independently-committed transaction).
+interface Queryable {
+  query: (text: string, params?: unknown[]) => Promise<{ rows: Record<string, unknown>[] }>;
+}
+
+// Re-checks one already-seated guest's current table against every hard rule a guest-level edit
+// can actually affect: requires-accessible-table (FR-3.x), a Restricted table's required-guest
+// list (FR-3.7a), and must-not-sit-together (FR-3.1) against whoever else is currently at that
+// table. Capacity isn't included -- none of FR-2.9's named trigger fields (attendance status,
+// side, tier, household, requires-accessible-table) change how much room the guest's own unit
+// takes up. Side-Mixing and a table's singleSideOnly override are explicitly soft-only
+// preferences (see seating-engine.ts), never hard rules, so a side change alone can never trip
+// this check today -- re-running it for every named trigger field is still correct (and
+// future-proofs against a hard rule ever keying off side/tier/household), it just may honestly
+// find nothing wrong for those fields under today's rule set.
+export async function checkGuestHardRuleViolation(
+  q: Queryable,
+  weddingId: string,
+  planVersionId: string,
+  guestId: string,
+  tableId: string,
+  requiresAccessibleTable: boolean
+): Promise<boolean> {
+  const { rows: tableRows } = await q.query(
+    `SELECT "isAccessible", "isRestricted" FROM "seating_tables" WHERE id = $1`,
+    [tableId]
+  );
+  const table = tableRows[0] as { isAccessible: boolean; isRestricted: boolean } | undefined;
+  if (!table) return false;
+
+  if (requiresAccessibleTable && !table.isAccessible) return true;
+
+  if (table.isRestricted) {
+    const { rows: reqRows } = await q.query(
+      `SELECT 1 FROM "restricted_table_guests" WHERE "tableId" = $1 AND "guestId" = $2`,
+      [tableId, guestId]
+    );
+    if (reqRows.length === 0) return true;
+  }
+
+  const { rows: conflictRows } = await q.query(
+    `SELECT 1
+     FROM "guest_relationships" gr
+     JOIN "seat_assignments" sa2
+       ON sa2."planVersionId" = $1 AND sa2."seatingTableId" = $2 AND sa2."guestId" <> $3
+       AND ((gr."guestAId" = $3 AND gr."guestBId" = sa2."guestId")
+         OR (gr."guestBId" = $3 AND gr."guestAId" = sa2."guestId"))
+     WHERE gr."weddingId" = $4 AND gr.type = 'MUST_NOT_SIT_TOGETHER'
+     LIMIT 1`,
+    [planVersionId, tableId, guestId, weddingId]
+  );
+  return conflictRows.length > 0;
+}
+
+// FR-2.9: called after a guest edit changes side, tier, household (partyName), or
+// requires-accessible-table -- re-checks that guest's *current* seat assignment (if they have
+// one in the Current Plan Version) against hard rules and flags/clears Needs Reassignment
+// accordingly, keeping isComplete in sync the same way TS-7's table-side trigger does. A guest
+// who isn't currently seated (unassigned, or attendance already NOT_ATTENDING) has nothing to
+// re-check and this is a no-op returning null.
+export async function revalidateGuestAssignment(
+  weddingId: string,
+  guestId: string
+): Promise<{ guestName: string; flagged: boolean } | null> {
+  const { rows: planRows } = await pool.query(
+    `SELECT id FROM "plan_versions" WHERE "weddingId" = $1 ORDER BY "versionNumber" DESC LIMIT 1`,
+    [weddingId]
+  );
+  const planVersionId: string | undefined = planRows[0]?.id;
+  if (!planVersionId) return null;
+
+  const { rows: guestRows } = await pool.query(
+    `SELECT ("firstName" || ' ' || "lastName") AS name, "requiresAccessibleTable"
+     FROM "guests" WHERE id = $1 AND "weddingId" = $2`,
+    [guestId, weddingId]
+  );
+  const guest = guestRows[0] as { name: string; requiresAccessibleTable: boolean } | undefined;
+  if (!guest) return null;
+
+  const { rows: assignRows } = await pool.query(
+    `SELECT id, "seatingTableId" AS "tableId" FROM "seat_assignments"
+     WHERE "planVersionId" = $1 AND "guestId" = $2`,
+    [planVersionId, guestId]
+  );
+  const assignment = assignRows[0] as { id: string; tableId: string } | undefined;
+  if (!assignment) return null;
+
+  const violated = await checkGuestHardRuleViolation(
+    pool,
+    weddingId,
+    planVersionId,
+    guestId,
+    assignment.tableId,
+    guest.requiresAccessibleTable
+  );
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query(
+      `UPDATE "seat_assignments" SET "needsReassignment" = $1, "updatedAt" = now() WHERE id = $2`,
+      [violated, assignment.id]
+    );
+    const { rows: countRows } = await client.query(
+      `SELECT
+         (SELECT COUNT(*)::int FROM "guests" g WHERE g."weddingId" = $1 AND g."dayOfAttendance" = 'ATTENDING'
+            AND NOT EXISTS (SELECT 1 FROM "seat_assignments" sa WHERE sa."planVersionId" = $2 AND sa."guestId" = g.id)
+         ) AS "unassignedCount",
+         (SELECT COUNT(*)::int FROM "seat_assignments" WHERE "planVersionId" = $2 AND "needsReassignment" = true)
+           AS "needsReassignmentCount"`,
+      [weddingId, planVersionId]
+    );
+    const isComplete =
+      countRows[0].unassignedCount === 0 && countRows[0].needsReassignmentCount === 0;
+    await client.query(`UPDATE "plan_versions" SET "isComplete" = $1 WHERE id = $2`, [
+      isComplete,
+      planVersionId,
+    ]);
+    await client.query("COMMIT");
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
+
+  return { guestName: guest.name, flagged: violated };
 }

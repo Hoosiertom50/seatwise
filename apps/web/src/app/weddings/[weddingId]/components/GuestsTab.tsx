@@ -57,7 +57,11 @@ export function GuestsTab({
   const [previewing, setPreviewing] = useState(false);
   const [committing, setCommitting] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
-  const [importResult, setImportResult] = useState<{ createdCount: number; updatedCount: number } | null>(null);
+  const [importResult, setImportResult] = useState<{
+    createdCount: number;
+    updatedCount: number;
+    warnings: string[];
+  } | null>(null);
 
   function resetImport() {
     setCsvText(null);
@@ -145,7 +149,7 @@ export function GuestsTab({
     setCommitting(true);
     try {
       const { result, guests: updatedGuests } = await api.post<{
-        result: { createdCount: number; updatedCount: number };
+        result: { createdCount: number; updatedCount: number; warnings: string[] };
         guests: GuestDTO[];
       }>(`/api/v1/weddings/${weddingId}/guests/import/commit`, { csv: csvText, mapping: cleanMapping() });
       setGuests(updatedGuests.sort((a, b) => a.lastName.localeCompare(b.lastName)));
@@ -405,10 +409,19 @@ export function GuestsTab({
 
         {importError && <p className="mb-3 text-sm text-red-600">{importError}</p>}
         {importResult && (
-          <p className="mb-3 text-sm text-green-700">
-            Import complete: {importResult.createdCount} guest(s) added, {importResult.updatedCount}{" "}
-            updated.
-          </p>
+          <div className="mb-3">
+            <p className="text-sm text-green-700">
+              Import complete: {importResult.createdCount} guest(s) added, {importResult.updatedCount}{" "}
+              updated.
+            </p>
+            {importResult.warnings.length > 0 && (
+              <ul className="mt-1 list-inside list-disc text-sm text-amber-700">
+                {importResult.warnings.map((w, i) => (
+                  <li key={i}>{w}</li>
+                ))}
+              </ul>
+            )}
+          </div>
         )}
 
         {importPreview && (

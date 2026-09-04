@@ -249,12 +249,14 @@ export function PlanTab({
 
   const grouped = new Map<
     string,
-    { tableLabel: string; guests: { guestId: string; guestName: string }[] }
+    { tableLabel: string; guests: { guestId: string; guestName: string; needsReassignment: boolean }[] }
   >();
   if (detail) {
     for (const a of detail.assignments) {
       if (!grouped.has(a.tableId)) grouped.set(a.tableId, { tableLabel: a.tableLabel, guests: [] });
-      grouped.get(a.tableId)!.guests.push({ guestId: a.guestId, guestName: a.guestName });
+      grouped
+        .get(a.tableId)!
+        .guests.push({ guestId: a.guestId, guestName: a.guestName, needsReassignment: a.needsReassignment });
     }
   }
   const canEditThisVersion = canEdit && Boolean(detail?.isCurrent);
@@ -713,7 +715,17 @@ export function PlanTab({
                 <ul className="flex flex-col gap-1.5">
                   {t.guests.map((g) => (
                     <li key={g.guestId} className="flex items-center justify-between gap-2 text-sm">
-                      <span>{g.guestName}</span>
+                      <span>
+                        {g.guestName}
+                        {g.needsReassignment && (
+                          <span
+                            className="ml-2 rounded bg-amber-50 px-1.5 py-0.5 text-xs font-medium text-amber-700"
+                            title="This guest's current table no longer fits a hard rule for them (e.g. an edited field, or a table setting changed) — move them to fix it."
+                          >
+                            needs reassignment
+                          </span>
+                        )}
+                      </span>
                       {canEditThisVersion && (
                         <select
                           aria-label={`Move ${g.guestName} to a different table`}

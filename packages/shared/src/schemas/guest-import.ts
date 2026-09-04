@@ -62,4 +62,8 @@ export interface GuestImportPreview {
 export interface GuestImportCommitResult {
   createdCount: number;
   updatedCount: number;
+  // FR-2.9: guests whose current seat assignment was flagged Needs Reassignment as a result of
+  // this import (an edited side/tier/household/requires-accessible-table field no longer fits a
+  // hard rule at their current table).
+  warnings: string[];
 }
