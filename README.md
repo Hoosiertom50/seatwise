@@ -158,6 +158,34 @@ up for it.
     be honored (its table was deleted, or keeping it would now break a hard rule), the guest
     falls back to normal automatic placement with a warning explaining why, rather than being
     stranded over a stale pin.
+- **Day-of / Emergency Mode** (TS-11, FR-8.1–FR-8.4): a dedicated "Day-of mode" tab, built for a
+  phone in someone's hand at the venue rather than a laptop at a desk:
+  - A guest's same-day **attendance** (Attending / Not Attending) is tracked completely separately
+    from their `rsvpStatus` — someone can RSVP Confirmed weeks out and still no-show, or walk in
+    unannounced. Marking a guest Not Attending frees their seat **immediately**, with no full plan
+    regeneration and nobody else's seat moving, and excludes them from the unassigned/completeness
+    count entirely (they're not "pending" — they're not here today). Reverting them back to
+    Attending does *not* auto-seat them; per FR-8.1 they come back as Unassigned until someone
+    explicitly (re)seats them, since their old table may no longer have room or be the right call.
+  - A **walk-in** guest can be added and seated in one flow — it's the existing create-guest and
+    manual-move endpoints, so it gets exactly the same hard-rule validation (a walk-in can't be
+    seated at a table that's already full, requires-accessible-table conflicts, etc. — rejected
+    with the same specific, named reason a planned move would get).
+  - Two guests' (or their forced-together units') tables can be **swapped** in one atomic action —
+    "put the Smiths where the Johnsons were, and vice versa" — instead of the two-step dance of
+    moving one to a holding spot first. Both directions are validated against every hard rule
+    (capacity, accessible-table, must-not-sit-together) *before* anything changes; if either
+    direction would break one, the whole swap is blocked with a specific explanation and nothing
+    changes. An "avoid" conflict in either direction is allowed but comes back as a non-blocking
+    warning, same as a regular manual move.
+  - The tab itself: a search box to find a guest fast, an at-a-glance table-occupancy summary
+    (seated/capacity per table), and every actionable control sized to ~44×44 CSS px (FR-8.4) —
+    verified visually at a 390×844 (phone-portrait) viewport as well as desktop width.
+  - Generating a brand-new plan now excludes Not Attending guests entirely — not just from
+    seating, but from the relationship graph too (a "must sit together" rule involving someone
+    who isn't here today simply doesn't apply while they're out).
+  - Every attendance change and swap is recorded as its own immutable Change History entry (actor,
+    timestamp, description), same as a regular manual move.
 - Every list/detail endpoint enforces ownership — you can't read or modify another account's
   wedding, guests, rules, tables, or plan versions by guessing an ID, and a seating rule can't be
   created between guests from two different weddings even if you have access to both.
@@ -189,11 +217,20 @@ concurrency version checks that are substantial enough to be their own slice; to
 editing the same plan at the same time can each save a change, and the second simply overwrites
 what the first saw (no conflict warning yet).
 
-Table/venue *visual* layout (drag-and-drop floor plan), day-of mode, export/print, collaboration
-& notifications, and richer plan-versioning (labeling/comparing/restoring versions) are modeled
-in `schema.prisma` already and map to the remaining Jira stories (TS-7's visual piece, TS-11
-through TS-15, and the rest of TS-9/TS-10). Each can be built as its own vertical slice on top of
-this foundation.
+**TS-11 (Day-of Mode) is built**, described above. What's deliberately left out, and why: change
+history entries are recorded for every day-of action (and every manual move / status change
+before it), but there's still no UI anywhere to *view* that history — it's all sitting in the
+`change_history_entries` table, verified directly, waiting on a "History" panel that's really a
+piece of its own (arguably part of TS-9's fuller FR-6.1 status/reassignment picture). The
+`needsReassignment` flag on `seat_assignments` exists in the schema but isn't touched by an
+attendance change today — a Not Attending guest's seat is deleted outright rather than flagged,
+since FR-8.1 doesn't ask for a "this needs a look" state for them, just an immediately-free seat.
+
+Table/venue *visual* layout (drag-and-drop floor plan), export/print, collaboration &
+notifications, and richer plan-versioning (labeling/comparing/restoring versions) are modeled in
+`schema.prisma` already and map to the remaining Jira stories (TS-7's visual piece, TS-12 through
+TS-15, and the rest of TS-9/TS-10). Each can be built as its own vertical slice on top of this
+foundation.
 
 ## Mobile later
 

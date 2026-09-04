@@ -36,8 +36,18 @@ export async function POST(req: NextRequest, { params }: Params) {
     return errorResponse("Add some tables before generating a seating plan.", 422);
   }
 
+  // FR-8.1: a guest marked Not Attending isn't part of today's plan at all — they don't occupy a
+  // seat, don't count toward completeness, and don't participate in relationship rules. Their
+  // relationships are dropped too (not just filtered from the guest list) since the engine's
+  // union-find would otherwise choke on a rule referencing a guest who was never added to it.
+  const attendingGuests = guests.filter((g) => g.dayOfAttendance === "ATTENDING");
+  const attendingIds = new Set(attendingGuests.map((g) => g.id));
+  const attendingRelationships = relationships.filter(
+    (r) => attendingIds.has(r.guestAId) && attendingIds.has(r.guestBId)
+  );
+
   const result = generateSeatingPlan(
-    guests.map((g) => ({
+    attendingGuests.map((g) => ({
       id: g.id,
       name: `${g.firstName} ${g.lastName}`,
       headcount: g.headcount,
@@ -45,7 +55,7 @@ export async function POST(req: NextRequest, { params }: Params) {
       isLocked: g.isLocked,
       currentTableId: currentAssignments.get(g.id) ?? null,
     })),
-    relationships.map((r) => ({ guestAId: r.guestAId, guestBId: r.guestBId, type: r.type })),
+    attendingRelationships.map((r) => ({ guestAId: r.guestAId, guestBId: r.guestBId, type: r.type })),
     tables.map((t) => ({
       id: t.id,
       label: t.label,

@@ -52,3 +52,16 @@ export const moveGuestAssignmentSchema = z.object({
   tableId: z.string().min(1),
 });
 export type MoveGuestAssignmentInput = z.infer<typeof moveGuestAssignmentSchema>;
+
+// FR-8.1 (Day-Of Mode): swap two guests' (or their forced-together units') tables in one move.
+export const swapGuestAssignmentsSchema = z.object({
+  guestAId: z.string().min(1),
+  guestBId: z.string().min(1),
+});
+export type SwapGuestAssignmentsInput = z.infer<typeof swapGuestAssignmentsSchema>;
+
+// FR-8.1: flip a guest's same-day attendance signal (independent of rsvpStatus).
+export const setAttendanceSchema = z.object({
+  attendance: z.enum(["ATTENDING", "NOT_ATTENDING"]),
+});
+export type SetAttendanceInput = z.infer<typeof setAttendanceSchema>;

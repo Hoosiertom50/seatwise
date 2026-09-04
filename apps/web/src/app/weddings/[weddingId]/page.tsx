@@ -9,14 +9,16 @@ import { GuestsTab } from "./components/GuestsTab";
 import { RulesTab } from "./components/RulesTab";
 import { TablesTab } from "./components/TablesTab";
 import { PlanTab } from "./components/PlanTab";
+import { DayOfTab } from "./components/DayOfTab";
 
-type Tab = "guests" | "rules" | "tables" | "plan";
+type Tab = "guests" | "rules" | "tables" | "plan" | "dayof";
 
 const TABS: { value: Tab; label: string }[] = [
   { value: "guests", label: "Guests" },
   { value: "rules", label: "Seating rules" },
   { value: "tables", label: "Tables" },
   { value: "plan", label: "Seating plan" },
+  { value: "dayof", label: "Day-of mode" },
 ];
 
 export default function WeddingDetailPage() {
@@ -103,6 +105,9 @@ export default function WeddingDetailPage() {
       {tab === "rules" && <RulesTab weddingId={weddingId} guests={guests} />}
       {tab === "tables" && <TablesTab weddingId={weddingId} />}
       {tab === "plan" && <PlanTab weddingId={weddingId} guests={guests} />}
+      {tab === "dayof" && (
+        <DayOfTab weddingId={weddingId} guests={guests} setGuests={setGuests} />
+      )}
     </main>
   );
 }

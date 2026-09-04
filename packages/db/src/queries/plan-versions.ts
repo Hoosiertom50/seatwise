@@ -23,6 +23,8 @@ export interface ModifiedSinceApproval {
 
 export class PlanVersionStatusError extends Error {}
 export class ManualMoveError extends Error {}
+export class AttendanceError extends Error {}
+export class SwapError extends Error {}
 
 export interface ManualMoveResult {
   planVersion: PlanVersionDetail;
@@ -132,7 +134,7 @@ export async function listPlanVersionsForWedding(weddingId: string): Promise<Pla
             (pv."versionNumber" = (SELECT MAX("versionNumber") FROM "plan_versions" WHERE "weddingId" = pv."weddingId")) AS "isCurrent",
             COALESCE(sa.count, 0)::int AS "assignedGuestCount",
             GREATEST(
-              (SELECT COUNT(*)::int FROM "guests" WHERE "weddingId" = pv."weddingId") -
+              (SELECT COUNT(*)::int FROM "guests" WHERE "weddingId" = pv."weddingId" AND "dayOfAttendance" = 'ATTENDING') -
               COALESCE(sa.count, 0)::int,
               0
             ) AS "unassignedGuestCount"
@@ -279,8 +281,10 @@ export async function getPlanVersionDetail(
     [id]
   );
 
+  // FR-8.1: a guest marked Not Attending doesn't occupy a seat and isn't counted as
+  // "unassigned" — they've been excluded from the plan entirely, not left pending.
   const { rows: allGuests } = await pool.query(
-    `SELECT id FROM "guests" WHERE "weddingId" = $1`,
+    `SELECT id FROM "guests" WHERE "weddingId" = $1 AND "dayOfAttendance" = 'ATTENDING'`,
     [weddingId]
   );
   const assignedIds = new Set(assignments.map((a) => a.guestId));
@@ -320,12 +324,17 @@ export async function moveGuestAssignment(
   }
 
   const { rows: guestRows } = await pool.query(
-    `SELECT id, ("firstName" || ' ' || "lastName") AS name, headcount, "requiresAccessibleTable"
+    `SELECT id, ("firstName" || ' ' || "lastName") AS name, headcount, "requiresAccessibleTable", "dayOfAttendance"
      FROM "guests" WHERE id = $1 AND "weddingId" = $2`,
     [guestId, weddingId]
   );
   const guest = guestRows[0];
   if (!guest) throw new ManualMoveError("Guest not found.");
+  if (guest.dayOfAttendance === "NOT_ATTENDING") {
+    throw new ManualMoveError(
+      `${guest.name} is marked not attending — mark them attending again before seating them.`
+    );
+  }
 
   const { rows: tableRows } = await pool.query(
     `SELECT id, label, capacity, "isAccessible" FROM "seating_tables" WHERE id = $1 AND "weddingId" = $2`,
@@ -337,9 +346,12 @@ export async function moveGuestAssignment(
   // The guest's forced-together unit: everyone connected to them by a chain of
   // MUST_SIT_TOGETHER rules always shares a table, so moving "just" this guest really means
   // moving the whole unit.
+  // Not-attending guests are excluded from the graph entirely — they don't occupy a seat, and
+  // if one happens to have a MUST_SIT_TOGETHER rule with an attending guest, that rule doesn't
+  // apply while they're not here (FR-8.1).
   const { rows: allGuests } = await pool.query(
     `SELECT id, ("firstName" || ' ' || "lastName") AS name, headcount, "requiresAccessibleTable"
-     FROM "guests" WHERE "weddingId" = $1`,
+     FROM "guests" WHERE "weddingId" = $1 AND "dayOfAttendance" = 'ATTENDING'`,
     [weddingId]
   );
   const { rows: rels } = await pool.query(
@@ -361,7 +373,9 @@ export async function moveGuestAssignment(
     if (ra !== rb) parent.set(ra, rb);
   };
   for (const r of rels) {
-    if (r.type === "MUST_SIT_TOGETHER") union(r.guestAId, r.guestBId);
+    if (r.type === "MUST_SIT_TOGETHER" && parent.has(r.guestAId) && parent.has(r.guestBId)) {
+      union(r.guestAId, r.guestBId);
+    }
   }
   const root = find(guestId);
   const unit = allGuests.filter((g) => find(g.id) === root);
@@ -458,7 +472,7 @@ export async function moveGuestAssignment(
 
     const { rows: unassignedCountRows } = await client.query(
       `SELECT COUNT(*)::int AS "count" FROM "guests" g
-       WHERE g."weddingId" = $1
+       WHERE g."weddingId" = $1 AND g."dayOfAttendance" = 'ATTENDING'
          AND NOT EXISTS (
            SELECT 1 FROM "seat_assignments" sa WHERE sa."planVersionId" = $2 AND sa."guestId" = g.id
          )`,
@@ -487,6 +501,358 @@ export async function moveGuestAssignment(
 
   const planVersion = await getPlanVersionDetail(planVersionId, weddingId);
   if (!planVersion) throw new ManualMoveError("Plan version not found after move.");
+  planVersion.warnings = warnings;
+  return { planVersion, warnings };
+}
+
+// FR-8.1 (Day-Of Mode): flip a guest's same-day attendance signal, independent of rsvpStatus —
+// a guest can RSVP Confirmed weeks ahead and still no-show, or walk in unannounced. Marking
+// someone Not Attending frees their seat immediately against the Current Plan Version (no full
+// regeneration, nobody else moves) and excludes them from unassigned/completeness counts
+// entirely — they're not "pending," they're not here today. Reverting to Attending does NOT
+// auto-seat them back: per FR-8.1 they come back as Unassigned until someone explicitly (re)seats
+// them, since their old table may no longer have room or may no longer be the right call.
+export async function setGuestAttendance(
+  weddingId: string,
+  guestId: string,
+  attendance: "ATTENDING" | "NOT_ATTENDING",
+  actorUserId: string
+): Promise<PlanVersionDetail | null> {
+  const { rows: guestRows } = await pool.query(
+    `SELECT id, ("firstName" || ' ' || "lastName") AS name, "dayOfAttendance"
+     FROM "guests" WHERE id = $1 AND "weddingId" = $2`,
+    [guestId, weddingId]
+  );
+  const guest = guestRows[0];
+  if (!guest) throw new AttendanceError("Guest not found.");
+
+  const { rows: currentRows } = await pool.query(
+    `SELECT id FROM "plan_versions" WHERE "weddingId" = $1 ORDER BY "versionNumber" DESC LIMIT 1`,
+    [weddingId]
+  );
+  const currentPlanVersionId: string | undefined = currentRows[0]?.id;
+
+  if (guest.dayOfAttendance === attendance) {
+    // Already at the requested attendance — no-op, just return current state.
+    return currentPlanVersionId ? getPlanVersionDetail(currentPlanVersionId, weddingId) : null;
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query(
+      `UPDATE "guests" SET "dayOfAttendance" = $1::"DayOfAttendance", "updatedAt" = now() WHERE id = $2`,
+      [attendance, guestId]
+    );
+
+    if (currentPlanVersionId) {
+      if (attendance === "NOT_ATTENDING") {
+        await client.query(
+          `DELETE FROM "seat_assignments" WHERE "planVersionId" = $1 AND "guestId" = $2`,
+          [currentPlanVersionId, guestId]
+        );
+      }
+      // Recompute completeness against the new attendance-filtered denominator — a guest who
+      // just became NOT_ATTENDING can no longer make the plan "incomplete" by being unseated,
+      // and one who just became ATTENDING again can.
+      const { rows: unassignedCountRows } = await client.query(
+        `SELECT COUNT(*)::int AS "count" FROM "guests" g
+         WHERE g."weddingId" = $1 AND g."dayOfAttendance" = 'ATTENDING'
+           AND NOT EXISTS (
+             SELECT 1 FROM "seat_assignments" sa WHERE sa."planVersionId" = $2 AND sa."guestId" = g.id
+           )`,
+        [weddingId, currentPlanVersionId]
+      );
+      const isComplete = unassignedCountRows[0].count === 0;
+      await client.query(`UPDATE "plan_versions" SET "isComplete" = $1 WHERE id = $2`, [
+        isComplete,
+        currentPlanVersionId,
+      ]);
+
+      const description =
+        attendance === "NOT_ATTENDING"
+          ? `${guest.name} marked not attending — seat freed`
+          : `${guest.name} marked attending again — now unassigned`;
+      await client.query(
+        `INSERT INTO "change_history_entries" (id, "planVersionId", action, description, "actorUserId")
+         VALUES ($1, $2, 'ATTENDANCE_CHANGE', $3, $4)`,
+        [randomUUID(), currentPlanVersionId, description, actorUserId]
+      );
+    }
+
+    await client.query("COMMIT");
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
+
+  return currentPlanVersionId ? getPlanVersionDetail(currentPlanVersionId, weddingId) : null;
+}
+
+// FR-8.1 (Day-Of Mode): swap two guests' (or their forced-together units') tables in one atomic
+// move — e.g. "put the Smiths where the Johnsons are, and vice versa" — instead of the two-step
+// dance of moving one to a holding spot first. Both directions are validated against every hard
+// rule (capacity, accessible-table, must-not-sit-together) using each other's post-swap
+// occupancy *before* anything changes; if either direction would fail, the whole swap is blocked
+// with a specific explanation and nothing changes. AVOID conflicts in either direction are
+// allowed but returned as non-blocking warnings. Only attending guests already fully and
+// consistently seated (their whole forced-together unit at one table) can be swapped.
+export async function swapGuestAssignments(
+  planVersionId: string,
+  weddingId: string,
+  guestAId: string,
+  guestBId: string,
+  actorUserId: string
+): Promise<ManualMoveResult> {
+  if (!(await isCurrentVersion(planVersionId, weddingId))) {
+    throw new SwapError(
+      "Only the current plan version can be manually edited — this one has been superseded."
+    );
+  }
+  if (guestAId === guestBId) {
+    throw new SwapError("Can't swap a guest with themselves.");
+  }
+
+  const { rows: allGuests } = await pool.query(
+    `SELECT id, ("firstName" || ' ' || "lastName") AS name, headcount, "requiresAccessibleTable"
+     FROM "guests" WHERE "weddingId" = $1 AND "dayOfAttendance" = 'ATTENDING'`,
+    [weddingId]
+  );
+  const guestsById = new Map(allGuests.map((g) => [g.id, g]));
+  const guestA = guestsById.get(guestAId);
+  const guestB = guestsById.get(guestBId);
+  if (!guestA) throw new SwapError("First guest not found, or not currently attending.");
+  if (!guestB) throw new SwapError("Second guest not found, or not currently attending.");
+
+  const { rows: rels } = await pool.query(
+    `SELECT "guestAId", "guestBId", type FROM "guest_relationships" WHERE "weddingId" = $1`,
+    [weddingId]
+  );
+
+  const parent = new Map<string, string>(allGuests.map((g) => [g.id, g.id]));
+  const find = (id: string): string => {
+    const p = parent.get(id);
+    if (p === undefined || p === id) return id;
+    const root = find(p);
+    parent.set(id, root);
+    return root;
+  };
+  const union = (a: string, b: string) => {
+    const ra = find(a);
+    const rb = find(b);
+    if (ra !== rb) parent.set(ra, rb);
+  };
+  for (const r of rels) {
+    if (r.type === "MUST_SIT_TOGETHER" && parent.has(r.guestAId) && parent.has(r.guestBId)) {
+      union(r.guestAId, r.guestBId);
+    }
+  }
+
+  const rootA = find(guestAId);
+  const rootB = find(guestBId);
+  if (rootA === rootB) {
+    throw new SwapError(
+      `${guestA.name} and ${guestB.name} are in the same must-sit-together group — there's nothing to swap.`
+    );
+  }
+  const unitA = allGuests.filter((g) => find(g.id) === rootA);
+  const unitB = allGuests.filter((g) => find(g.id) === rootB);
+  const unitAIds = new Set(unitA.map((g) => g.id));
+  const unitBIds = new Set(unitB.map((g) => g.id));
+
+  const { rows: currentAssignmentRows } = await pool.query(
+    `SELECT sa."guestId", sa."seatingTableId" AS "tableId"
+     FROM "seat_assignments" sa WHERE sa."planVersionId" = $1`,
+    [planVersionId]
+  );
+  const tableByGuest = new Map(currentAssignmentRows.map((r) => [r.guestId, r.tableId]));
+
+  // Both units must currently be fully and consistently seated — each entirely at one table —
+  // for "swap" to be a well-defined operation.
+  const unitATables = new Set(unitA.map((g) => tableByGuest.get(g.id)).filter(Boolean));
+  const unitBTables = new Set(unitB.map((g) => tableByGuest.get(g.id)).filter(Boolean));
+  if (unitATables.size !== 1) {
+    throw new SwapError(
+      `${guestA.name}'s group isn't fully seated at one table yet — seat them first before swapping.`
+    );
+  }
+  if (unitBTables.size !== 1) {
+    throw new SwapError(
+      `${guestB.name}'s group isn't fully seated at one table yet — seat them first before swapping.`
+    );
+  }
+  const tableAId = [...unitATables][0] as string;
+  const tableBId = [...unitBTables][0] as string;
+  if (tableAId === tableBId) {
+    throw new SwapError(`${guestA.name} and ${guestB.name} are already seated at the same table.`);
+  }
+
+  const { rows: tableRows } = await pool.query(
+    `SELECT id, label, capacity, "isAccessible" FROM "seating_tables" WHERE id = ANY($1::text[]) AND "weddingId" = $2`,
+    [[tableAId, tableBId], weddingId]
+  );
+  const tablesById = new Map(tableRows.map((t) => [t.id, t]));
+  const tableA = tablesById.get(tableAId);
+  const tableB = tablesById.get(tableBId);
+  if (!tableA || !tableB) throw new SwapError("Table not found.");
+
+  const mustNotByGuest = new Map<string, Set<string>>();
+  const avoidByGuest = new Map<string, Set<string>>();
+  for (const r of rels) {
+    if (r.type === "MUST_NOT_SIT_TOGETHER" || r.type === "AVOID") {
+      const map = r.type === "MUST_NOT_SIT_TOGETHER" ? mustNotByGuest : avoidByGuest;
+      if (!map.has(r.guestAId)) map.set(r.guestAId, new Set());
+      map.get(r.guestAId)!.add(r.guestBId);
+      if (!map.has(r.guestBId)) map.set(r.guestBId, new Set());
+      map.get(r.guestBId)!.add(r.guestAId);
+    }
+  }
+
+  const { rows: occupantRows } = await pool.query(
+    `SELECT sa."guestId", sa."seatingTableId" AS "tableId", g.headcount, g."requiresAccessibleTable",
+            (g."firstName" || ' ' || g."lastName") AS name
+     FROM "seat_assignments" sa
+     JOIN "guests" g ON g.id = sa."guestId"
+     WHERE sa."planVersionId" = $1 AND sa."seatingTableId" = ANY($2::text[])`,
+    [planVersionId, [tableAId, tableBId]]
+  );
+  // Who's staying put at each table once its current occupant unit leaves and the other arrives.
+  const stayingAtA = occupantRows.filter((o) => o.tableId === tableAId && !unitAIds.has(o.guestId));
+  const stayingAtB = occupantRows.filter((o) => o.tableId === tableBId && !unitBIds.has(o.guestId));
+
+  const headcount = (rows: { headcount: number }[]) =>
+    rows.reduce((sum, r) => sum + r.headcount, 0);
+  const unitAHeadcount = headcount(unitA);
+  const unitBHeadcount = headcount(unitB);
+  const stayingAtAHeadcount = headcount(stayingAtA);
+  const stayingAtBHeadcount = headcount(stayingAtB);
+
+  const guestNameList = (ids: string[], unit: typeof unitA) =>
+    unit
+      .filter((g) => ids.includes(g.id))
+      .map((g) => g.name)
+      .join(", ");
+
+  // --- Hard rules, both directions, all checked before anything changes. ---
+  if (stayingAtAHeadcount + unitBHeadcount > tableA.capacity) {
+    throw new SwapError(
+      `${guestB.name}'s group can't be seated at "${tableA.label}" — it only has ` +
+        `${Math.max(tableA.capacity - stayingAtAHeadcount, 0)} seat(s) left once ${guestA.name}'s group ` +
+        `moves out, but ${unitBHeadcount} ${unitBHeadcount === 1 ? "is" : "are"} needed.`
+    );
+  }
+  if (stayingAtBHeadcount + unitAHeadcount > tableB.capacity) {
+    throw new SwapError(
+      `${guestA.name}'s group can't be seated at "${tableB.label}" — it only has ` +
+        `${Math.max(tableB.capacity - stayingAtBHeadcount, 0)} seat(s) left once ${guestB.name}'s group ` +
+        `moves out, but ${unitAHeadcount} ${unitAHeadcount === 1 ? "is" : "are"} needed.`
+    );
+  }
+  const unitBNeedsAccessible = unitB.filter((g) => g.requiresAccessibleTable).map((g) => g.id);
+  if (unitBNeedsAccessible.length > 0 && !tableA.isAccessible) {
+    throw new SwapError(
+      `${guestNameList(unitBNeedsAccessible, unitB)} require${
+        unitBNeedsAccessible.length === 1 ? "s" : ""
+      } an accessible table, and "${tableA.label}" isn't marked as one.`
+    );
+  }
+  const unitANeedsAccessible = unitA.filter((g) => g.requiresAccessibleTable).map((g) => g.id);
+  if (unitANeedsAccessible.length > 0 && !tableB.isAccessible) {
+    throw new SwapError(
+      `${guestNameList(unitANeedsAccessible, unitA)} require${
+        unitANeedsAccessible.length === 1 ? "s" : ""
+      } an accessible table, and "${tableB.label}" isn't marked as one.`
+    );
+  }
+  for (const member of unitB) {
+    const conflicts = mustNotByGuest.get(member.id);
+    if (!conflicts) continue;
+    const conflictingOccupant = stayingAtA.find((o) => conflicts.has(o.guestId));
+    if (conflictingOccupant) {
+      throw new SwapError(
+        `${member.name} has a "must not sit together" rule with ${conflictingOccupant.name}, ` +
+          `who's staying at "${tableA.label}".`
+      );
+    }
+  }
+  for (const member of unitA) {
+    const conflicts = mustNotByGuest.get(member.id);
+    if (!conflicts) continue;
+    const conflictingOccupant = stayingAtB.find((o) => conflicts.has(o.guestId));
+    if (conflictingOccupant) {
+      throw new SwapError(
+        `${member.name} has a "must not sit together" rule with ${conflictingOccupant.name}, ` +
+          `who's staying at "${tableB.label}".`
+      );
+    }
+  }
+
+  // --- Soft rules — allowed, non-blocking warning, both directions. ---
+  const warnings: string[] = [];
+  for (const member of unitB) {
+    const avoids = avoidByGuest.get(member.id);
+    if (!avoids) continue;
+    for (const occupant of stayingAtA) {
+      if (avoids.has(occupant.guestId)) {
+        warnings.push(
+          `${member.name} and ${occupant.name} will be seated together at "${tableA.label}" ` +
+            `despite an "avoid" preference between them.`
+        );
+      }
+    }
+  }
+  for (const member of unitA) {
+    const avoids = avoidByGuest.get(member.id);
+    if (!avoids) continue;
+    for (const occupant of stayingAtB) {
+      if (avoids.has(occupant.guestId)) {
+        warnings.push(
+          `${member.name} and ${occupant.name} will be seated together at "${tableB.label}" ` +
+            `despite an "avoid" preference between them.`
+        );
+      }
+    }
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    for (const member of unitB) {
+      await client.query(
+        `UPDATE "seat_assignments" SET "seatingTableId" = $1, "needsReassignment" = false, "updatedAt" = now()
+         WHERE "planVersionId" = $2 AND "guestId" = $3`,
+        [tableAId, planVersionId, member.id]
+      );
+    }
+    for (const member of unitA) {
+      await client.query(
+        `UPDATE "seat_assignments" SET "seatingTableId" = $1, "needsReassignment" = false, "updatedAt" = now()
+         WHERE "planVersionId" = $2 AND "guestId" = $3`,
+        [tableBId, planVersionId, member.id]
+      );
+    }
+
+    const description =
+      `Swapped ${unitA.map((g) => g.name).join(", ")} (was at "${tableA.label}") with ` +
+      `${unitB.map((g) => g.name).join(", ")} (was at "${tableB.label}")`;
+    await client.query(
+      `INSERT INTO "change_history_entries" (id, "planVersionId", action, description, "actorUserId")
+       VALUES ($1, $2, 'MANUAL_SWAP', $3, $4)`,
+      [randomUUID(), planVersionId, description, actorUserId]
+    );
+
+    await client.query("COMMIT");
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
+
+  const planVersion = await getPlanVersionDetail(planVersionId, weddingId);
+  if (!planVersion) throw new SwapError("Plan version not found after swap.");
   planVersion.warnings = warnings;
   return { planVersion, warnings };
 }

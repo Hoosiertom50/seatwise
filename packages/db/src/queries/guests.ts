@@ -12,13 +12,14 @@ export interface GuestRow {
   rsvpStatus: string;
   requiresAccessibleTable: boolean;
   isLocked: boolean;
+  dayOfAttendance: string;
   notes: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
 
 const COLUMNS = `id, "weddingId", "firstName", "lastName", "partyName", headcount, tier,
-  "rsvpStatus", "requiresAccessibleTable", "isLocked", notes, "createdAt", "updatedAt"`;
+  "rsvpStatus", "requiresAccessibleTable", "isLocked", "dayOfAttendance", notes, "createdAt", "updatedAt"`;
 
 export interface CreateGuestData {
   firstName: string;
@@ -29,6 +30,7 @@ export interface CreateGuestData {
   rsvpStatus?: string;
   requiresAccessibleTable?: boolean;
   isLocked?: boolean;
+  dayOfAttendance?: string;
   notes?: string | null;
 }
 
@@ -36,8 +38,8 @@ export async function createGuest(weddingId: string, input: CreateGuestData): Pr
   const id = randomUUID();
   const { rows } = await pool.query(
     `INSERT INTO "guests"
-       (id, "weddingId", "firstName", "lastName", "partyName", headcount, tier, "rsvpStatus", "requiresAccessibleTable", "isLocked", notes, "updatedAt")
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, now())
+       (id, "weddingId", "firstName", "lastName", "partyName", headcount, tier, "rsvpStatus", "requiresAccessibleTable", "isLocked", "dayOfAttendance", notes, "updatedAt")
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, now())
      RETURNING ${COLUMNS}`,
     [
       id,
@@ -50,6 +52,7 @@ export async function createGuest(weddingId: string, input: CreateGuestData): Pr
       input.rsvpStatus ?? "PENDING",
       input.requiresAccessibleTable ?? false,
       input.isLocked ?? false,
+      input.dayOfAttendance ?? "ATTENDING",
       input.notes ?? null,
     ]
   );
@@ -86,6 +89,7 @@ export async function updateGuestForWedding(
     rsvpStatus: `"rsvpStatus"`,
     requiresAccessibleTable: `"requiresAccessibleTable"`,
     isLocked: `"isLocked"`,
+    dayOfAttendance: `"dayOfAttendance"`,
     notes: `notes`,
   };
   const fields: string[] = [];

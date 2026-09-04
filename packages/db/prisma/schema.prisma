@@ -73,6 +73,13 @@ enum RsvpStatus {
   DECLINED
 }
 
+// FR-8.1 (Day-Of Mode): distinct from rsvpStatus — a guest can RSVP Confirmed weeks ahead and
+// still no-show, or walk in unannounced. Attendance is the day-of, same-day-editable signal.
+enum DayOfAttendance {
+  ATTENDING
+  NOT_ATTENDING
+}
+
 model Guest {
   id                      String     @id @default(cuid())
   weddingId               String
@@ -87,6 +94,7 @@ model Guest {
   // FR-7.4: when locked, automated (re)generation keeps this guest at their current table
   // instead of reshuffling them; manual moves and hard-rule checks are never affected by a lock.
   isLocked                Boolean    @default(false)
+  dayOfAttendance         DayOfAttendance @default(ATTENDING)
   notes                   String?
   createdAt               DateTime   @default(now())
   updatedAt               DateTime   @updatedAt

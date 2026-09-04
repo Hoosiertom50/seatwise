@@ -209,6 +209,14 @@ export function GuestsTab({
                       locked
                     </span>
                   )}
+                  {g.dayOfAttendance === "NOT_ATTENDING" && (
+                    <span
+                      className="ml-2 rounded bg-red-50 px-1.5 py-0.5 text-xs text-red-700"
+                      title="Marked not attending in Day-of mode — their seat has been freed."
+                    >
+                      not attending
+                    </span>
+                  )}
                 </p>
                 <p className="text-sm text-neutral-500">
                   {g.partyName ? `${g.partyName} · ` : ""}
