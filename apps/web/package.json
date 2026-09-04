@@ -9,25 +9,26 @@
     "lint": "eslint"
   },
   "dependencies": {
-    "next": "16.3.4",
-    "react": "19.2.8",
-    "react-dom": "19.2.8",
-    "@seatwise/shared": "workspace:*",
     "@seatwise/db": "workspace:*",
+    "@seatwise/shared": "workspace:*",
     "bcryptjs": "^2.4.3",
     "jose": "^5.9.6",
+    "next": "16.3.4",
+    "pdf-lib": "^1.17.1",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
     "zod": "^3.23.8"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
+    "@types/bcryptjs": "^2.4.6",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.3.4",
     "tailwindcss": "^4",
-    "typescript": "^5",
-    "@types/bcryptjs": "^2.4.6"
+    "typescript": "^5"
   },
   "packageManager": "pnpm@10.28.0"
 }

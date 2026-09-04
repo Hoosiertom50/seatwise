@@ -7,6 +7,7 @@ import type {
   PlanVersionDTO,
   PlanVersionDetailDTO,
   PlanVersionStatusValue,
+  RestorePreviewDTO,
   SeatingTableDTO,
 } from "@seatwise/shared";
 
@@ -33,6 +34,9 @@ export function PlanTab({ weddingId, guests }: { weddingId: string; guests: Gues
   const [error, setError] = useState<string | null>(null);
   const [moveWarnings, setMoveWarnings] = useState<string[]>([]);
   const [conflicts, setConflicts] = useState<string[]>([]);
+  const [restorePreview, setRestorePreview] = useState<RestorePreviewDTO | null>(null);
+  const [previewingRestore, setPreviewingRestore] = useState(false);
+  const [restoring, setRestoring] = useState(false);
 
   const guestName = (id: string) => {
     const g = guests.find((g) => g.id === id);
@@ -71,6 +75,7 @@ export function PlanTab({ weddingId, guests }: { weddingId: string; guests: Gues
     setError(null);
     setConflicts([]);
     setMoveWarnings([]);
+    setRestorePreview(null);
     setGenerating(true);
     try {
       const res = await api.post<{ planVersion: PlanVersionDetailDTO }>(
@@ -90,6 +95,7 @@ export function PlanTab({ weddingId, guests }: { weddingId: string; guests: Gues
 
   async function onSelectVersion(id: string) {
     setMoveWarnings([]);
+    setRestorePreview(null);
     const d = await api.get<{ planVersion: PlanVersionDetailDTO }>(
       `/api/v1/weddings/${weddingId}/plan-versions/${id}`
     );
@@ -131,6 +137,40 @@ export function PlanTab({ weddingId, guests }: { weddingId: string; guests: Gues
       setError(err instanceof ApiError ? err.message : "Couldn't update the plan's status.");
     } finally {
       setStatusUpdating(false);
+    }
+  }
+
+  async function onPreviewRestore() {
+    if (!detail) return;
+    setError(null);
+    setPreviewingRestore(true);
+    try {
+      const res = await api.get<{ preview: RestorePreviewDTO }>(
+        `/api/v1/weddings/${weddingId}/plan-versions/${detail.id}/restore-preview`
+      );
+      setRestorePreview(res.preview);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Couldn't preview that restore.");
+    } finally {
+      setPreviewingRestore(false);
+    }
+  }
+
+  async function onConfirmRestore() {
+    if (!detail) return;
+    setError(null);
+    setRestoring(true);
+    try {
+      const res = await api.post<{ planVersion: PlanVersionDetailDTO; warnings: string[] }>(
+        `/api/v1/weddings/${weddingId}/plan-versions/${detail.id}/restore`
+      );
+      setRestorePreview(null);
+      await loadVersions(res.planVersion.id);
+      setMoveWarnings(res.warnings);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Couldn't restore that version.");
+    } finally {
+      setRestoring(false);
     }
   }
 
@@ -192,8 +232,10 @@ export function PlanTab({ weddingId, guests }: { weddingId: string; guests: Gues
           >
             {versions.map((v) => (
               <option key={v.id} value={v.id}>
-                v{v.versionNumber} — {v.isComplete ? "complete" : "incomplete"},{" "}
-                {STATUS_LABEL[v.status]} ({new Date(v.createdAt).toLocaleString()})
+                v{v.versionNumber}
+                {v.restoredFromVersionNumber ? ` (restored from v${v.restoredFromVersionNumber})` : ""} —{" "}
+                {v.isComplete ? "complete" : "incomplete"}, {STATUS_LABEL[v.status]} (
+                {new Date(v.createdAt).toLocaleString()})
               </option>
             ))}
           </select>
@@ -223,10 +265,96 @@ export function PlanTab({ weddingId, guests }: { weddingId: string; guests: Gues
             </span>
           </div>
 
+          {detail.status === "APPROVED" && (
+            <div className="mb-6 flex flex-wrap items-center gap-2 rounded-lg border border-neutral-200 p-3">
+              <span className="text-sm font-medium">Export (FR-9.1/9.2/9.3):</span>
+              <a
+                href={`/api/v1/weddings/${weddingId}/plan-versions/${detail.id}/export/chart`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50"
+              >
+                Seating chart (PDF)
+              </a>
+              <a
+                href={`/api/v1/weddings/${weddingId}/plan-versions/${detail.id}/export/lookup`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50"
+              >
+                Guest lookup list (PDF)
+              </a>
+              <a
+                href={`/api/v1/weddings/${weddingId}/plan-versions/${detail.id}/export/cards`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50"
+              >
+                Place cards (PDF)
+              </a>
+            </div>
+          )}
+
           {!detail.isCurrent && (
-            <p className="mb-4 text-sm text-neutral-500">
-              This is a past version — status can only be changed on the current one.
-            </p>
+            <div className="mb-6 rounded-lg border border-neutral-200 p-4">
+              <p className="mb-2 text-sm text-neutral-500">
+                This is a past version — status can only be changed on the current one. Restoring
+                it (FR-9.4) makes a brand-new current version with a copy of its assignments,
+                re-checked against today's guests/tables/rules — it never rewrites this version or
+                anything newer.
+              </p>
+              {restorePreview?.sourceVersionNumber !== detail.versionNumber && (
+                <button
+                  onClick={onPreviewRestore}
+                  disabled={previewingRestore}
+                  className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 disabled:opacity-50"
+                >
+                  {previewingRestore ? "Checking..." : `Restore version ${detail.versionNumber}...`}
+                </button>
+              )}
+              {restorePreview && restorePreview.sourceVersionNumber === detail.versionNumber && (
+                <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3">
+                  <p className="mb-2 text-sm font-medium text-amber-800">
+                    Restoring version {restorePreview.sourceVersionNumber} will create a new
+                    version {restorePreview.isComplete ? "(complete)" : "(incomplete)"}: {restorePreview.keptCount}{" "}
+                    guest(s) kept exactly as seated, {restorePreview.unassignedGuestIds.length} left
+                    unassigned.
+                  </p>
+                  {restorePreview.droppedGuests.length > 0 && (
+                    <ul className="mb-2 list-inside list-disc text-sm text-amber-700">
+                      {restorePreview.droppedGuests.map((d, i) => (
+                        <li key={i}>
+                          {d.guestName} — {d.reason}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  {restorePreview.warnings.length > 0 && (
+                    <ul className="mb-2 list-inside list-disc text-sm text-amber-700">
+                      {restorePreview.warnings.map((w, i) => (
+                        <li key={i}>{w}</li>
+                      ))}
+                    </ul>
+                  )}
+                  <div className="flex gap-2">
+                    <button
+                      onClick={onConfirmRestore}
+                      disabled={restoring}
+                      className="rounded-md bg-neutral-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-neutral-700 disabled:opacity-50"
+                    >
+                      {restoring ? "Restoring..." : "Confirm restore"}
+                    </button>
+                    <button
+                      onClick={() => setRestorePreview(null)}
+                      disabled={restoring}
+                      className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 disabled:opacity-50"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
           )}
 
           {detail.isCurrent && (

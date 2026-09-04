@@ -186,6 +186,32 @@ up for it.
     who isn't here today simply doesn't apply while they're out).
   - Every attendance change and swap is recorded as its own immutable Change History entry (actor,
     timestamp, description), same as a regular manual move.
+- **Export & Print, and version restore** (TS-12, FR-9.1–FR-9.4): available once a plan version is
+  Approved (exporting a plan that could still change under you doesn't make sense, so this is
+  gated the same way the acceptance criteria describe it):
+  - **Seating chart PDF** (FR-9.1): every table, guest names underneath, paginated automatically
+    for large weddings.
+  - **Guest lookup list PDF** (FR-9.2): every guest alphabetically (last name, then first — the
+    same order the rest of the app uses for a guest list) with their table, for whoever's on
+    door/registration duty.
+  - **Place cards PDF** (FR-9.3): one print-ready card per guest (name + table, cut lines), several
+    to a page.
+  - All three are generated server-side with `pdf-lib` (no headless browser, no external
+    service) from the same `(guestName, tableLabel)` data every plan-version endpoint already
+    returns.
+  - **Restoring a prior version** (FR-9.4): Plan Versions and Change History are kept genuinely
+    distinct — restoring v2 never rewrites v2, v3, v4, v5, or any of their history; it creates a
+    brand-new version (v6) that copies v2's assignments and becomes Current simply because it's
+    the newest version. Since guests/tables/rules can have changed since v2 was made, every one of
+    its assignments is re-validated against *today's* data before being copied (FR-0.1): a table
+    that's gone, shrunk below what it now holds, lost its accessible flag, or a "must not sit
+    together" rule added since then all drop the affected guest back to Unassigned with a specific
+    reason rather than silently keeping something no longer valid. A `GET .../restore-preview`
+    endpoint computes exactly this (kept vs. dropped, with reasons) without writing anything, so
+    the UI can show what a restore would do and let the user confirm before `POST .../restore`
+    actually commits it — a "must sit together" rule added since the snapshot is a genuine tension
+    with "restore exactly what v2 looked like," so rather than silently reshuffling the copied
+    layout to fix it, that case is surfaced as a non-blocking warning instead.
 - Every list/detail endpoint enforces ownership — you can't read or modify another account's
   wedding, guests, rules, tables, or plan versions by guessing an ID, and a seating rule can't be
   created between guests from two different weddings even if you have access to both.
@@ -226,11 +252,18 @@ piece of its own (arguably part of TS-9's fuller FR-6.1 status/reassignment pict
 attendance change today — a Not Attending guest's seat is deleted outright rather than flagged,
 since FR-8.1 doesn't ask for a "this needs a look" state for them, just an immediately-free seat.
 
-Table/venue *visual* layout (drag-and-drop floor plan), export/print, collaboration &
-notifications, and richer plan-versioning (labeling/comparing/restoring versions) are modeled in
-`schema.prisma` already and map to the remaining Jira stories (TS-7's visual piece, TS-12 through
-TS-15, and the rest of TS-9/TS-10). Each can be built as its own vertical slice on top of this
-foundation.
+**TS-12 (Export & Print) is built**, described above. What's deliberately left out, and why: a
+version can only ever be restored wholesale — there's no "compare two versions side by side" view
+(mentioned as a nice-to-have in the FR-9.4 area, but not in its acceptance criteria) and no
+labeling a version with a custom name yet (`PlanVersion.label` exists in the schema but nothing
+sets it — versions are only ever referred to by number today). The place-card layout is fixed at 2
+columns x 4 rows per page for readability; a denser layout or a stationery-brand-matched template
+would be a styling pass on the same `pdf-lib` code, not a new feature.
+
+Table/venue *visual* layout (drag-and-drop floor plan), collaboration & notifications, and
+version labeling/comparison are modeled in `schema.prisma` already and map to the remaining Jira
+stories (TS-7's visual piece, TS-13 through TS-15, and the rest of TS-9/TS-10). Each can be built
+as its own vertical slice on top of this foundation.
 
 ## Mobile later
 

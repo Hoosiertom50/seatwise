@@ -13,6 +13,9 @@ export interface PlanVersionRow {
   assignedGuestCount: number;
   unassignedGuestCount: number;
   isCurrent: boolean;
+  // FR-9.4: set when this version was created by restoring an earlier one — the number (not the
+  // id) is what's useful to show, so the UI never has to cross-reference another version's row.
+  restoredFromVersionNumber: number | null;
 }
 
 export interface ModifiedSinceApproval {
@@ -25,6 +28,16 @@ export class PlanVersionStatusError extends Error {}
 export class ManualMoveError extends Error {}
 export class AttendanceError extends Error {}
 export class SwapError extends Error {}
+export class RestoreError extends Error {}
+
+export interface RestorePreview {
+  sourceVersionNumber: number;
+  keptCount: number;
+  droppedGuests: { guestId: string; guestName: string; reason: string }[];
+  unassignedGuestIds: string[];
+  isComplete: boolean;
+  warnings: string[];
+}
 
 export interface ManualMoveResult {
   planVersion: PlanVersionDetail;
@@ -137,11 +150,13 @@ export async function listPlanVersionsForWedding(weddingId: string): Promise<Pla
               (SELECT COUNT(*)::int FROM "guests" WHERE "weddingId" = pv."weddingId" AND "dayOfAttendance" = 'ATTENDING') -
               COALESCE(sa.count, 0)::int,
               0
-            ) AS "unassignedGuestCount"
+            ) AS "unassignedGuestCount",
+            restored_from."versionNumber" AS "restoredFromVersionNumber"
      FROM "plan_versions" pv
      LEFT JOIN (
        SELECT "planVersionId", COUNT(DISTINCT "guestId") AS count FROM "seat_assignments" GROUP BY "planVersionId"
      ) sa ON sa."planVersionId" = pv.id
+     LEFT JOIN "plan_versions" restored_from ON restored_from.id = pv."restoredFromId"
      WHERE pv."weddingId" = $1
      ORDER BY pv."versionNumber" DESC`,
     [weddingId]
@@ -234,9 +249,13 @@ export async function getPlanVersionDetail(
   weddingId: string
 ): Promise<PlanVersionDetail | null> {
   const { rows: versionRows } = await pool.query(
-    `SELECT id, "weddingId", "versionNumber", label, status, "isComplete", "approvedAt", "createdAt",
-            ("versionNumber" = (SELECT MAX("versionNumber") FROM "plan_versions" WHERE "weddingId" = $2)) AS "isCurrent"
-     FROM "plan_versions" WHERE id = $1 AND "weddingId" = $2`,
+    `SELECT pv.id, pv."weddingId", pv."versionNumber", pv.label, pv.status, pv."isComplete",
+            pv."approvedAt", pv."createdAt",
+            (pv."versionNumber" = (SELECT MAX("versionNumber") FROM "plan_versions" WHERE "weddingId" = $2)) AS "isCurrent",
+            restored_from."versionNumber" AS "restoredFromVersionNumber"
+     FROM "plan_versions" pv
+     LEFT JOIN "plan_versions" restored_from ON restored_from.id = pv."restoredFromId"
+     WHERE pv.id = $1 AND pv."weddingId" = $2`,
     [id, weddingId]
   );
   const version = versionRows[0];
@@ -853,6 +872,239 @@ export async function swapGuestAssignments(
 
   const planVersion = await getPlanVersionDetail(planVersionId, weddingId);
   if (!planVersion) throw new SwapError("Plan version not found after swap.");
+  planVersion.warnings = warnings;
+  return { planVersion, warnings };
+}
+
+// FR-9.4 (Plan Versions vs. Change History): restoring a prior version copies its assignments
+// into a brand-new version rather than rewriting history — v3..v5 (and everything's history)
+// stay exactly as they were, and the restored copy becomes Current only because it's numbered
+// higher, same as any other new version. Guests/tables/rules can have changed since the source
+// version was made, so every one of its assignments is re-validated against *current* data
+// before being copied (FR-0.1): a table that's gone, shrunk below what it now holds, lost its
+// accessible flag, or a must-not-sit-together rule added since then all drop the affected guest
+// back to Unassigned rather than silently keeping an assignment that's no longer valid. A
+// must-sit-together rule added since the snapshot is a genuine tension with "restore exactly
+// what v2 looked like" — rather than silently reshuffling the copied layout to fix it (which
+// would stop being a restore), it's surfaced as a non-blocking warning instead.
+async function computeRestorePlacement(sourceVersionId: string, weddingId: string) {
+  const { rows: sourceRows } = await pool.query(
+    `SELECT id, "versionNumber" FROM "plan_versions" WHERE id = $1 AND "weddingId" = $2`,
+    [sourceVersionId, weddingId]
+  );
+  const source = sourceRows[0];
+  if (!source) throw new RestoreError("Source plan version not found.");
+
+  const { rows: sourceAssignments } = await pool.query(
+    `SELECT "guestId", "seatingTableId" AS "tableId" FROM "seat_assignments" WHERE "planVersionId" = $1`,
+    [sourceVersionId]
+  );
+
+  const { rows: guests } = await pool.query(
+    `SELECT id, ("firstName" || ' ' || "lastName") AS name, headcount, "requiresAccessibleTable"
+     FROM "guests" WHERE "weddingId" = $1 AND "dayOfAttendance" = 'ATTENDING'`,
+    [weddingId]
+  );
+  const guestsById = new Map(guests.map((g) => [g.id, g]));
+
+  const { rows: tables } = await pool.query(
+    `SELECT id, label, capacity, "isAccessible" FROM "seating_tables" WHERE "weddingId" = $1`,
+    [weddingId]
+  );
+  const tablesById = new Map(tables.map((t) => [t.id, t]));
+
+  const { rows: rels } = await pool.query(
+    `SELECT "guestAId", "guestBId", type FROM "guest_relationships" WHERE "weddingId" = $1`,
+    [weddingId]
+  );
+  const mustNotByGuest = new Map<string, Set<string>>();
+  const mustTogetherByGuest = new Map<string, Set<string>>();
+  for (const r of rels) {
+    const map =
+      r.type === "MUST_NOT_SIT_TOGETHER"
+        ? mustNotByGuest
+        : r.type === "MUST_SIT_TOGETHER"
+          ? mustTogetherByGuest
+          : null;
+    if (!map) continue;
+    if (!map.has(r.guestAId)) map.set(r.guestAId, new Set());
+    map.get(r.guestAId)!.add(r.guestBId);
+    if (!map.has(r.guestBId)) map.set(r.guestBId, new Set());
+    map.get(r.guestBId)!.add(r.guestAId);
+  }
+
+  const kept: { guestId: string; tableId: string }[] = [];
+  const droppedGuests: { guestId: string; guestName: string; reason: string }[] = [];
+  const runningHeadcount = new Map<string, number>();
+  const runningOccupants = new Map<string, string[]>();
+
+  for (const a of sourceAssignments) {
+    const guest = guestsById.get(a.guestId);
+    if (!guest) continue; // deleted, or not attending today — simply not part of this plan
+
+    const table = tablesById.get(a.tableId);
+    if (!table) {
+      droppedGuests.push({
+        guestId: guest.id,
+        guestName: guest.name,
+        reason: "their table no longer exists",
+      });
+      continue;
+    }
+    if (guest.requiresAccessibleTable && !table.isAccessible) {
+      droppedGuests.push({
+        guestId: guest.id,
+        guestName: guest.name,
+        reason: `"${table.label}" isn't marked as an accessible table anymore`,
+      });
+      continue;
+    }
+    const currentHeadcount = runningHeadcount.get(table.id) ?? 0;
+    if (currentHeadcount + guest.headcount > table.capacity) {
+      droppedGuests.push({
+        guestId: guest.id,
+        guestName: guest.name,
+        reason: `"${table.label}"'s capacity (${table.capacity}) no longer has room for them`,
+      });
+      continue;
+    }
+    const conflicts = mustNotByGuest.get(guest.id);
+    const occupantsHere = runningOccupants.get(table.id) ?? [];
+    const conflictingOccupantId = conflicts
+      ? occupantsHere.find((id) => conflicts.has(id))
+      : undefined;
+    if (conflictingOccupantId) {
+      const conflictingGuest = guestsById.get(conflictingOccupantId);
+      droppedGuests.push({
+        guestId: guest.id,
+        guestName: guest.name,
+        reason:
+          `they now have a "must not sit together" rule with ` +
+          `${conflictingGuest?.name ?? "someone"} at "${table.label}"`,
+      });
+      continue;
+    }
+
+    kept.push({ guestId: guest.id, tableId: table.id });
+    runningHeadcount.set(table.id, currentHeadcount + guest.headcount);
+    runningOccupants.set(table.id, [...occupantsHere, guest.id]);
+  }
+
+  const keptIds = new Set(kept.map((k) => k.guestId));
+  const tableByKeptGuest = new Map(kept.map((k) => [k.guestId, k.tableId]));
+
+  const warnings: string[] = [];
+  const warnedPairs = new Set<string>();
+  for (const [guestId, others] of mustTogetherByGuest) {
+    if (!keptIds.has(guestId)) continue;
+    for (const otherId of others) {
+      if (!keptIds.has(otherId)) continue;
+      const pairKey = [guestId, otherId].sort().join("|");
+      if (warnedPairs.has(pairKey)) continue;
+      if (tableByKeptGuest.get(guestId) !== tableByKeptGuest.get(otherId)) {
+        warnedPairs.add(pairKey);
+        const a = guestsById.get(guestId);
+        const b = guestsById.get(otherId);
+        warnings.push(
+          `${a?.name ?? guestId} and ${b?.name ?? otherId} are now required to sit together, but ` +
+            `this restored version keeps them at different tables (that rule didn't exist when ` +
+            `this version was made) — move one of them manually if they should be reunited.`
+        );
+      }
+    }
+  }
+
+  const unassignedGuestIds = guests.map((g) => g.id).filter((id) => !keptIds.has(id));
+
+  return {
+    sourceVersionNumber: source.versionNumber as number,
+    kept,
+    droppedGuests,
+    unassignedGuestIds,
+    isComplete: unassignedGuestIds.length === 0,
+    warnings,
+  };
+}
+
+// Dry run — computes exactly what a restore would produce without writing anything, so the UI
+// can show "this is what will change" before the user confirms (FR-9.4's "becomes Current only
+// after the user confirms").
+export async function previewPlanVersionRestore(
+  sourceVersionId: string,
+  weddingId: string
+): Promise<RestorePreview> {
+  const result = await computeRestorePlacement(sourceVersionId, weddingId);
+  return {
+    sourceVersionNumber: result.sourceVersionNumber,
+    keptCount: result.kept.length,
+    droppedGuests: result.droppedGuests,
+    unassignedGuestIds: result.unassignedGuestIds,
+    isComplete: result.isComplete,
+    warnings: result.warnings,
+  };
+}
+
+// FR-9.4: actually perform the restore — creates a new, numbered version (the source and every
+// version/history entry in between are never touched) which becomes Current simply because it's
+// the newest version that exists.
+export async function restorePlanVersion(
+  sourceVersionId: string,
+  weddingId: string,
+  actorUserId: string
+): Promise<ManualMoveResult> {
+  const result = await computeRestorePlacement(sourceVersionId, weddingId);
+
+  const client = await pool.connect();
+  let newVersionId: string;
+  try {
+    await client.query("BEGIN");
+
+    const { rows: versionRows } = await client.query(
+      `SELECT COALESCE(MAX("versionNumber"), 0) + 1 AS "next" FROM "plan_versions" WHERE "weddingId" = $1`,
+      [weddingId]
+    );
+    const versionNumber: number = versionRows[0].next;
+
+    newVersionId = randomUUID();
+    await client.query(
+      `INSERT INTO "plan_versions" (id, "weddingId", "versionNumber", status, "isComplete", "restoredFromId")
+       VALUES ($1, $2, $3, 'DRAFT', $4, $5)`,
+      [newVersionId, weddingId, versionNumber, result.isComplete, sourceVersionId]
+    );
+
+    for (const a of result.kept) {
+      await client.query(
+        `INSERT INTO "seat_assignments" (id, "planVersionId", "guestId", "seatingTableId", "needsReassignment", "updatedAt")
+         VALUES ($1, $2, $3, $4, false, now())`,
+        [randomUUID(), newVersionId, a.guestId, a.tableId]
+      );
+    }
+
+    const description =
+      `Restored from version ${result.sourceVersionNumber}` +
+      (result.droppedGuests.length > 0
+        ? ` (${result.droppedGuests.length} guest(s) left Unassigned — data has changed since then)`
+        : "");
+    await client.query(
+      `INSERT INTO "change_history_entries" (id, "planVersionId", action, description, "actorUserId")
+       VALUES ($1, $2, 'RESTORE', $3, $4)`,
+      [randomUUID(), newVersionId, description, actorUserId]
+    );
+
+    await client.query("COMMIT");
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
+
+  const planVersion = await getPlanVersionDetail(newVersionId, weddingId);
+  if (!planVersion) throw new RestoreError("Plan version not found after restore.");
+  const warnings = [...result.warnings];
+  for (const d of result.droppedGuests) {
+    warnings.push(`${d.guestName} was left Unassigned — ${d.reason}.`);
+  }
   planVersion.warnings = warnings;
   return { planVersion, warnings };
 }

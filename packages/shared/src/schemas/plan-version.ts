@@ -24,6 +24,8 @@ export interface PlanVersionDTO {
   createdAt: string;
   assignedGuestCount: number;
   unassignedGuestCount: number;
+  // FR-9.4: set when this version was created by restoring an earlier one.
+  restoredFromVersionNumber: number | null;
 }
 
 export interface PlanVersionAssignmentDTO {
@@ -65,3 +67,14 @@ export const setAttendanceSchema = z.object({
   attendance: z.enum(["ATTENDING", "NOT_ATTENDING"]),
 });
 export type SetAttendanceInput = z.infer<typeof setAttendanceSchema>;
+
+// FR-9.4: what restoring a prior version would do, computed against current data without
+// writing anything — meant to be shown to the user before they confirm the actual restore.
+export interface RestorePreviewDTO {
+  sourceVersionNumber: number;
+  keptCount: number;
+  droppedGuests: { guestId: string; guestName: string; reason: string }[];
+  unassignedGuestIds: string[];
+  isComplete: boolean;
+  warnings: string[];
+}
