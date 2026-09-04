@@ -1,0 +1,216 @@
+// Seatwise data model
+// Modeled from the Seatwise Requirements & Acceptance Criteria docs (FR-0.x through FR-10.x).
+// This first pass wires up the tables needed for auth + wedding/guest management (the current
+// vertical slice) and lays down the full relational shape (tables, seating rules, plan
+// versioning, change history) that later stories (TS-6 through TS-15 in Jira) will build on,
+// so those features are additive rather than requiring a schema rework.
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["queryCompiler", "driverAdapters"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// --- Accounts -----------------------------------------------------------
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  name         String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  weddings Wedding[]
+
+  @@map("users")
+}
+
+// --- Core wedding / guest domain (FR-1, FR-2) ---------------------------
+
+enum WeddingStatus {
+  PLANNING
+  APPROVED
+  ARCHIVED
+}
+
+model Wedding {
+  id        String        @id @default(cuid())
+  ownerId   String
+  owner     User          @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  name      String
+  eventDate DateTime?     @db.Date
+  venueName String?
+  status    WeddingStatus @default(PLANNING)
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+
+  guests        Guest[]
+  relationships GuestRelationship[]
+  tables        SeatingTable[]
+  planVersions  PlanVersion[]
+  ruleConfigs   RuleWeightConfig[]
+
+  @@index([ownerId])
+  @@map("weddings")
+}
+
+enum GuestTier {
+  VIP
+  FAMILY
+  FRIEND
+  PLUS_ONE
+  OTHER
+}
+
+enum RsvpStatus {
+  PENDING
+  CONFIRMED
+  DECLINED
+}
+
+model Guest {
+  id                      String     @id @default(cuid())
+  weddingId               String
+  wedding                 Wedding    @relation(fields: [weddingId], references: [id], onDelete: Cascade)
+  firstName               String
+  lastName                String
+  partyName               String?
+  headcount               Int        @default(1)
+  tier                    GuestTier  @default(OTHER)
+  rsvpStatus              RsvpStatus @default(PENDING)
+  requiresAccessibleTable Boolean    @default(false)
+  notes                   String?
+  createdAt               DateTime   @default(now())
+  updatedAt               DateTime   @updatedAt
+
+  relationshipsFrom GuestRelationship[] @relation("relationshipGuestA")
+  relationshipsTo   GuestRelationship[] @relation("relationshipGuestB")
+  seatAssignments   SeatAssignment[]
+
+  @@index([weddingId])
+  @@map("guests")
+}
+
+// --- Relationships & seating rules (FR-3) --------------------------------
+
+enum RelationshipType {
+  MUST_SIT_TOGETHER
+  MUST_NOT_SIT_TOGETHER
+  PREFER_NEAR
+  AVOID
+}
+
+model GuestRelationship {
+  id        String           @id @default(cuid())
+  weddingId String
+  wedding   Wedding          @relation(fields: [weddingId], references: [id], onDelete: Cascade)
+  guestAId  String
+  guestA    Guest            @relation("relationshipGuestA", fields: [guestAId], references: [id], onDelete: Cascade)
+  guestBId  String
+  guestB    Guest            @relation("relationshipGuestB", fields: [guestBId], references: [id], onDelete: Cascade)
+  type      RelationshipType
+  createdAt DateTime         @default(now())
+
+  @@unique([weddingId, guestAId, guestBId, type])
+  @@index([weddingId])
+  @@map("guest_relationships")
+}
+
+// --- Table & venue layout (FR-4) ------------------------------------------
+
+model SeatingTable {
+  id           String   @id @default(cuid())
+  weddingId    String
+  wedding      Wedding  @relation(fields: [weddingId], references: [id], onDelete: Cascade)
+  label        String
+  capacity     Int
+  isRestricted Boolean  @default(false)
+  purpose      String?
+  positionX    Float?
+  positionY    Float?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  seatAssignments SeatAssignment[]
+
+  @@index([weddingId])
+  @@map("seating_tables")
+}
+
+// --- Plan versions & change history (FR-9.4) ------------------------------
+
+enum PlanVersionStatus {
+  DRAFT
+  CURRENT
+  ARCHIVED
+}
+
+model PlanVersion {
+  id             String            @id @default(cuid())
+  weddingId      String
+  wedding        Wedding           @relation(fields: [weddingId], references: [id], onDelete: Cascade)
+  versionNumber  Int
+  label          String?
+  status         PlanVersionStatus @default(DRAFT)
+  isComplete     Boolean           @default(false)
+  restoredFromId String?
+  restoredFrom   PlanVersion?      @relation("restoredFrom", fields: [restoredFromId], references: [id])
+  restoredInto   PlanVersion[]     @relation("restoredFrom")
+  createdAt      DateTime          @default(now())
+
+  seatAssignments SeatAssignment[]
+  changeHistory   ChangeHistoryEntry[]
+
+  @@unique([weddingId, versionNumber])
+  @@index([weddingId])
+  @@map("plan_versions")
+}
+
+model SeatAssignment {
+  id                 String       @id @default(cuid())
+  planVersionId       String
+  planVersion         PlanVersion  @relation(fields: [planVersionId], references: [id], onDelete: Cascade)
+  guestId             String
+  guest               Guest        @relation(fields: [guestId], references: [id], onDelete: Cascade)
+  seatingTableId      String
+  seatingTable        SeatingTable @relation(fields: [seatingTableId], references: [id], onDelete: Cascade)
+  needsReassignment   Boolean      @default(false)
+  createdAt           DateTime     @default(now())
+  updatedAt           DateTime     @updatedAt
+
+  @@unique([planVersionId, guestId])
+  @@index([planVersionId])
+  @@map("seat_assignments")
+}
+
+model ChangeHistoryEntry {
+  id            String      @id @default(cuid())
+  planVersionId String
+  planVersion   PlanVersion @relation(fields: [planVersionId], references: [id], onDelete: Cascade)
+  action        String
+  description   String
+  actorUserId   String?
+  createdAt     DateTime    @default(now())
+
+  @@index([planVersionId])
+  @@map("change_history_entries")
+}
+
+// --- Soft-rule weighting config (FR-0.2) ----------------------------------
+
+model RuleWeightConfig {
+  id        String   @id @default(cuid())
+  weddingId String
+  wedding   Wedding  @relation(fields: [weddingId], references: [id], onDelete: Cascade)
+  version   Int
+  config    Json
+  createdAt DateTime @default(now())
+
+  @@unique([weddingId, version])
+  @@map("rule_weight_configs")
+}
