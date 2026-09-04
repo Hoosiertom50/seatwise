@@ -4,12 +4,31 @@ import { useEffect, useState } from "react";
 import { api, ApiError } from "@/lib/api-client";
 import type {
   GuestDTO,
+  PlanVersionComparisonDTO,
   PlanVersionDTO,
   PlanVersionDetailDTO,
   PlanVersionStatusValue,
   RestorePreviewDTO,
   SeatingTableDTO,
 } from "@seatwise/shared";
+
+const COMPARISON_STATUS_LABEL: Record<PlanVersionComparisonDTO["guests"][number]["status"], string> = {
+  unchanged: "Unchanged",
+  moved: "Moved",
+  added: "Added",
+  removed: "Removed",
+};
+
+const COMPARISON_STATUS_CLASS: Record<PlanVersionComparisonDTO["guests"][number]["status"], string> = {
+  unchanged: "bg-neutral-100 text-neutral-600",
+  moved: "bg-blue-50 text-blue-700",
+  added: "bg-green-50 text-green-700",
+  removed: "bg-red-50 text-red-700",
+};
+
+function versionOptionLabel(v: PlanVersionDTO): string {
+  return `v${v.versionNumber}${v.label ? ` — ${v.label}` : ""} (${new Date(v.createdAt).toLocaleDateString()})`;
+}
 
 const STATUS_LABEL: Record<PlanVersionStatusValue, string> = {
   DRAFT: "Draft",
@@ -37,6 +56,15 @@ export function PlanTab({ weddingId, guests }: { weddingId: string; guests: Gues
   const [restorePreview, setRestorePreview] = useState<RestorePreviewDTO | null>(null);
   const [previewingRestore, setPreviewingRestore] = useState(false);
   const [restoring, setRestoring] = useState(false);
+  const [editingLabel, setEditingLabel] = useState(false);
+  const [labelInput, setLabelInput] = useState("");
+  const [savingLabel, setSavingLabel] = useState(false);
+  const [showCompare, setShowCompare] = useState(false);
+  const [compareFromId, setCompareFromId] = useState("");
+  const [compareToId, setCompareToId] = useState("");
+  const [comparison, setComparison] = useState<PlanVersionComparisonDTO | null>(null);
+  const [comparing, setComparing] = useState(false);
+  const [compareError, setCompareError] = useState<string | null>(null);
 
   const guestName = (id: string) => {
     const g = guests.find((g) => g.id === id);
@@ -174,6 +202,41 @@ export function PlanTab({ weddingId, guests }: { weddingId: string; guests: Gues
     }
   }
 
+  async function onSaveLabel() {
+    if (!detail) return;
+    setError(null);
+    setSavingLabel(true);
+    try {
+      const res = await api.patch<{ planVersion: PlanVersionDetailDTO }>(
+        `/api/v1/weddings/${weddingId}/plan-versions/${detail.id}`,
+        { label: labelInput }
+      );
+      setDetail(res.planVersion);
+      setVersions((vs) => vs.map((v) => (v.id === res.planVersion.id ? res.planVersion : v)));
+      setEditingLabel(false);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Couldn't save that label.");
+    } finally {
+      setSavingLabel(false);
+    }
+  }
+
+  async function onCompare() {
+    if (!compareFromId || !compareToId) return;
+    setCompareError(null);
+    setComparing(true);
+    try {
+      const res = await api.get<{ comparison: PlanVersionComparisonDTO }>(
+        `/api/v1/weddings/${weddingId}/plan-versions/compare?from=${compareFromId}&to=${compareToId}`
+      );
+      setComparison(res.comparison);
+    } catch (err) {
+      setCompareError(err instanceof ApiError ? err.message : "Couldn't compare those versions.");
+    } finally {
+      setComparing(false);
+    }
+  }
+
   if (loading) return <p className="text-sm text-neutral-500">Loading seating plans...</p>;
 
   const grouped = new Map<
@@ -236,12 +299,118 @@ export function PlanTab({ weddingId, guests }: { weddingId: string; guests: Gues
             {versions.map((v) => (
               <option key={v.id} value={v.id}>
                 v{v.versionNumber}
+                {v.label ? ` — ${v.label}` : ""}
                 {v.restoredFromVersionNumber ? ` (restored from v${v.restoredFromVersionNumber})` : ""} —{" "}
                 {v.isComplete ? "complete" : "incomplete"}, {STATUS_LABEL[v.status]} (
                 {new Date(v.createdAt).toLocaleString()})
               </option>
             ))}
           </select>
+        </div>
+      )}
+
+      {versions.length > 1 && (
+        <div className="mb-6 rounded-lg border border-neutral-200 p-4">
+          <button
+            onClick={() => {
+              setShowCompare((s) => !s);
+              if (!showCompare) {
+                setCompareFromId(versions[1]?.id ?? "");
+                setCompareToId(versions[0]?.id ?? "");
+              }
+            }}
+            className="text-sm font-medium text-neutral-700 hover:text-neutral-900"
+          >
+            {showCompare ? "Hide version comparison" : "Compare two versions..."}
+          </button>
+          {showCompare && (
+            <div className="mt-3">
+              <div className="mb-3 flex flex-wrap items-end gap-3">
+                <div>
+                  <label htmlFor="compare-from" className="mb-1 block text-xs font-medium text-neutral-500">
+                    From
+                  </label>
+                  <select
+                    id="compare-from"
+                    className="min-h-11 rounded-md border border-neutral-300 px-2 py-1 text-sm"
+                    value={compareFromId}
+                    onChange={(e) => setCompareFromId(e.target.value)}
+                  >
+                    {versions.map((v) => (
+                      <option key={v.id} value={v.id}>
+                        {versionOptionLabel(v)}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label htmlFor="compare-to" className="mb-1 block text-xs font-medium text-neutral-500">
+                    To
+                  </label>
+                  <select
+                    id="compare-to"
+                    className="min-h-11 rounded-md border border-neutral-300 px-2 py-1 text-sm"
+                    value={compareToId}
+                    onChange={(e) => setCompareToId(e.target.value)}
+                  >
+                    {versions.map((v) => (
+                      <option key={v.id} value={v.id}>
+                        {versionOptionLabel(v)}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <button
+                  onClick={onCompare}
+                  disabled={comparing || !compareFromId || !compareToId}
+                  className="min-h-11 rounded-md bg-neutral-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-neutral-700 disabled:opacity-50"
+                >
+                  {comparing ? "Comparing..." : "Compare"}
+                </button>
+              </div>
+              {compareError && <p className="mb-2 text-sm text-red-600">{compareError}</p>}
+              {comparison && (
+                <div>
+                  <p className="mb-2 text-sm text-neutral-600">
+                    v{comparison.from.versionNumber}
+                    {comparison.from.label ? ` (${comparison.from.label})` : ""} →{" "}
+                    v{comparison.to.versionNumber}
+                    {comparison.to.label ? ` (${comparison.to.label})` : ""}: {comparison.summary.movedCount}{" "}
+                    moved, {comparison.summary.addedCount} added, {comparison.summary.removedCount} removed,{" "}
+                    {comparison.summary.unchangedCount} unchanged
+                  </p>
+                  <div className="max-h-96 overflow-y-auto rounded-md border border-neutral-200">
+                    <table className="w-full text-left text-sm">
+                      <thead className="sticky top-0 bg-neutral-50">
+                        <tr>
+                          <th className="px-3 py-2 font-medium">Guest</th>
+                          <th className="px-3 py-2 font-medium">From table</th>
+                          <th className="px-3 py-2 font-medium">To table</th>
+                          <th className="px-3 py-2 font-medium">Status</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {comparison.guests.map((g) => (
+                          <tr key={g.guestId} className="border-t border-neutral-100">
+                            <td className="px-3 py-1.5">{g.guestName}</td>
+                            <td className="px-3 py-1.5 text-neutral-500">{g.fromTableLabel ?? "—"}</td>
+                            <td className="px-3 py-1.5 text-neutral-500">{g.toTableLabel ?? "—"}</td>
+                            <td className="px-3 py-1.5">
+                              <span
+                                className={`rounded px-2 py-0.5 text-xs font-medium ${COMPARISON_STATUS_CLASS[g.status]}`}
+                              >
+                                {COMPARISON_STATUS_LABEL[g.status]}
+                              </span>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
 
@@ -266,6 +435,42 @@ export function PlanTab({ weddingId, guests }: { weddingId: string; guests: Gues
             <span className="text-sm text-neutral-500">
               {detail.assignedGuestCount} seated, {detail.unassignedGuestCount} unassigned
             </span>
+            {editingLabel ? (
+              <span className="flex items-center gap-1">
+                <input
+                  autoFocus
+                  value={labelInput}
+                  onChange={(e) => setLabelInput(e.target.value)}
+                  placeholder="Version nickname"
+                  maxLength={100}
+                  className="min-h-11 rounded-md border border-neutral-300 px-2 py-1 text-sm"
+                />
+                <button
+                  onClick={onSaveLabel}
+                  disabled={savingLabel}
+                  className="min-h-11 rounded-md bg-neutral-900 px-2 py-1 text-xs font-medium text-white hover:bg-neutral-700 disabled:opacity-50"
+                >
+                  {savingLabel ? "Saving..." : "Save"}
+                </button>
+                <button
+                  onClick={() => setEditingLabel(false)}
+                  disabled={savingLabel}
+                  className="min-h-11 rounded-md border border-neutral-300 px-2 py-1 text-xs font-medium hover:bg-neutral-50 disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+              </span>
+            ) : (
+              <button
+                onClick={() => {
+                  setLabelInput(detail.label ?? "");
+                  setEditingLabel(true);
+                }}
+                className="text-sm text-neutral-500 underline hover:text-neutral-700"
+              >
+                {detail.label ? `“${detail.label}” (rename)` : "Add a nickname..."}
+              </button>
+            )}
           </div>
 
           {detail.status === "APPROVED" && (

@@ -7,6 +7,14 @@ export const planVersionStatusSchema = z.object({
   status: z.enum(["DRAFT", "IN_REVIEW", "APPROVED"]),
 });
 
+// FR-9.4/TS-10: a plan version's label is a free-text nickname ("Family-approved draft",
+// "Post-RSVP final") to tell versions apart at a glance beyond the auto-incrementing number.
+// Empty string clears the label back to none.
+export const setPlanVersionLabelSchema = z.object({
+  label: z.string().trim().max(100),
+});
+export type SetPlanVersionLabelInput = z.infer<typeof setPlanVersionLabelSchema>;
+
 export interface ModifiedSinceApprovalDTO {
   active: boolean;
   firstModifiedAt: string | null;
@@ -82,4 +90,39 @@ export interface RestorePreviewDTO {
   unassignedGuestIds: string[];
   isComplete: boolean;
   warnings: string[];
+}
+
+// Version labeling + comparison (TS-10/TS-12): compare any two of a wedding's plan versions
+// guest-by-guest. "moved" means seated at a different table in each version; "added"/"removed"
+// means seated in one version but not the other (e.g. attendance changed between versions);
+// "unchanged" means the same table in both.
+export type GuestComparisonStatus = "unchanged" | "moved" | "added" | "removed";
+
+export interface GuestComparisonEntryDTO {
+  guestId: string;
+  guestName: string;
+  fromTableId: string | null;
+  fromTableLabel: string | null;
+  toTableId: string | null;
+  toTableLabel: string | null;
+  status: GuestComparisonStatus;
+}
+
+export interface PlanVersionComparisonSummaryRefDTO {
+  id: string;
+  versionNumber: number;
+  label: string | null;
+  createdAt: string;
+}
+
+export interface PlanVersionComparisonDTO {
+  from: PlanVersionComparisonSummaryRefDTO;
+  to: PlanVersionComparisonSummaryRefDTO;
+  guests: GuestComparisonEntryDTO[];
+  summary: {
+    movedCount: number;
+    addedCount: number;
+    removedCount: number;
+    unchangedCount: number;
+  };
 }

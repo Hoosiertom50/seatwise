@@ -1263,3 +1263,135 @@ export async function restorePlanVersion(
   planVersion.warnings = warnings;
   return { planVersion, warnings };
 }
+
+// TS-10/TS-12: give a plan version a free-text nickname so it's easier to tell apart than just
+// its version number. An empty/blank string clears the label back to none. Any version can be
+// labeled, not just the Current one — labels are just a memory aid, not part of the review
+// workflow, so there's no "current version only" restriction like setPlanVersionStatus has.
+export async function setPlanVersionLabel(
+  id: string,
+  weddingId: string,
+  label: string
+): Promise<PlanVersionDetail | null> {
+  const trimmed = label.trim();
+  const { rows } = await pool.query(
+    `UPDATE "plan_versions" SET label = $1 WHERE id = $2 AND "weddingId" = $3 RETURNING id`,
+    [trimmed.length > 0 ? trimmed : null, id, weddingId]
+  );
+  if (rows.length === 0) return null;
+  return getPlanVersionDetail(id, weddingId);
+}
+
+export interface GuestComparisonEntry {
+  guestId: string;
+  guestName: string;
+  fromTableId: string | null;
+  fromTableLabel: string | null;
+  toTableId: string | null;
+  toTableLabel: string | null;
+  status: "unchanged" | "moved" | "added" | "removed";
+}
+
+export interface PlanVersionComparisonRef {
+  id: string;
+  versionNumber: number;
+  label: string | null;
+  createdAt: Date;
+}
+
+export interface PlanVersionComparison {
+  from: PlanVersionComparisonRef;
+  to: PlanVersionComparisonRef;
+  guests: GuestComparisonEntry[];
+  summary: { movedCount: number; addedCount: number; removedCount: number; unchangedCount: number };
+}
+
+export class CompareVersionError extends Error {}
+
+// TS-10/TS-12: side-by-side comparison of two of a wedding's plan versions, guest by guest.
+// Either version may be the older or newer one — the caller picks "from"/"to" and this just
+// reports the diff in that direction. A guest seated in only one of the two versions (e.g.
+// their attendance changed between versions, or they didn't exist yet) is "added"/"removed"
+// rather than "moved", since there's no real "from" or "to" table to compare.
+export async function comparePlanVersions(
+  weddingId: string,
+  fromId: string,
+  toId: string
+): Promise<PlanVersionComparison> {
+  if (fromId === toId) {
+    throw new CompareVersionError("Choose two different plan versions to compare.");
+  }
+
+  const { rows: versionRows } = await pool.query(
+    `SELECT id, "versionNumber", label, "createdAt" FROM "plan_versions" WHERE "weddingId" = $1 AND id = ANY($2::text[])`,
+    [weddingId, [fromId, toId]]
+  );
+  const byId = new Map(versionRows.map((r) => [r.id as string, r]));
+  const from = byId.get(fromId);
+  const to = byId.get(toId);
+  if (!from || !to) {
+    throw new CompareVersionError("One or both plan versions were not found for this wedding.");
+  }
+
+  const { rows: assignmentRows } = await pool.query(
+    `SELECT sa."planVersionId", sa."guestId", (g."firstName" || ' ' || g."lastName") AS "guestName",
+            sa."seatingTableId" AS "tableId", t.label AS "tableLabel"
+     FROM "seat_assignments" sa
+     JOIN "guests" g ON g.id = sa."guestId"
+     JOIN "seating_tables" t ON t.id = sa."seatingTableId"
+     WHERE sa."planVersionId" = ANY($1::text[])`,
+    [[fromId, toId]]
+  );
+
+  const fromByGuest = new Map<string, { name: string; tableId: string; tableLabel: string }>();
+  const toByGuest = new Map<string, { name: string; tableId: string; tableLabel: string }>();
+  for (const row of assignmentRows) {
+    const target = row.planVersionId === fromId ? fromByGuest : toByGuest;
+    target.set(row.guestId, { name: row.guestName, tableId: row.tableId, tableLabel: row.tableLabel });
+  }
+
+  const allGuestIds = new Set([...fromByGuest.keys(), ...toByGuest.keys()]);
+  const guests: GuestComparisonEntry[] = [];
+  let movedCount = 0;
+  let addedCount = 0;
+  let removedCount = 0;
+  let unchangedCount = 0;
+
+  for (const guestId of allGuestIds) {
+    const f = fromByGuest.get(guestId);
+    const t = toByGuest.get(guestId);
+    const guestName = (t ?? f)!.name;
+
+    let status: GuestComparisonEntry["status"];
+    if (f && t) {
+      status = f.tableId === t.tableId ? "unchanged" : "moved";
+    } else if (t && !f) {
+      status = "added";
+    } else {
+      status = "removed";
+    }
+    if (status === "unchanged") unchangedCount++;
+    else if (status === "moved") movedCount++;
+    else if (status === "added") addedCount++;
+    else removedCount++;
+
+    guests.push({
+      guestId,
+      guestName,
+      fromTableId: f?.tableId ?? null,
+      fromTableLabel: f?.tableLabel ?? null,
+      toTableId: t?.tableId ?? null,
+      toTableLabel: t?.tableLabel ?? null,
+      status,
+    });
+  }
+
+  guests.sort((a, b) => a.guestName.localeCompare(b.guestName));
+
+  return {
+    from,
+    to,
+    guests,
+    summary: { movedCount, addedCount, removedCount, unchangedCount },
+  };
+}

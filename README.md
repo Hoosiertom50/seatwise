@@ -269,6 +269,16 @@ up for it.
     actually commits it — a "must sit together" rule added since the snapshot is a genuine tension
     with "restore exactly what v2 looked like," so rather than silently reshuffling the copied
     layout to fix it, that case is surfaced as a non-blocking warning instead.
+  - **Version labeling and comparison** (TS-10/TS-12 follow-on): any version — current or past —
+    can be given a free-text nickname (`PATCH .../plan-versions/:id` with `{ label }`; a blank
+    string clears it back to none) so it's easier to tell apart than just its version number; the
+    version picker on the Seating plan tab shows the label alongside the number. A
+    `GET .../plan-versions/compare?from=:id&to=:id` endpoint diffs any two versions guest by guest
+    — each guest is reported `unchanged`, `moved` (seated at a different table in each), `added`,
+    or `removed` (seated in only one of the two, e.g. their attendance changed between versions) —
+    with a summary count of each. The Seating plan tab has a "Compare two versions..." panel that
+    picks any two versions from the wedding's history (not just the current one against a past
+    one) and renders the diff as a table.
 - **Collaboration & Notifications** (TS-13, FR-10.1–FR-10.3): a real multi-user model on top of
   the single-owner one every earlier story used.
   - A wedding's owner can invite any other existing Seatwise account by email at **View**,
@@ -447,13 +457,11 @@ piece of its own (arguably part of TS-9's fuller FR-6.1 status/reassignment pict
 attendance change today — a Not Attending guest's seat is deleted outright rather than flagged,
 since FR-8.1 doesn't ask for a "this needs a look" state for them, just an immediately-free seat.
 
-**TS-12 (Export & Print) is built**, described above. What's deliberately left out, and why: a
-version can only ever be restored wholesale — there's no "compare two versions side by side" view
-(mentioned as a nice-to-have in the FR-9.4 area, but not in its acceptance criteria) and no
-labeling a version with a custom name yet (`PlanVersion.label` exists in the schema but nothing
-sets it — versions are only ever referred to by number today). The place-card layout is fixed at 2
-columns x 4 rows per page for readability; a denser layout or a stationery-brand-matched template
-would be a styling pass on the same `pdf-lib` code, not a new feature.
+**TS-12 (Export & Print) is built**, described above, including the version labeling and
+side-by-side comparison view (described in its own bullet above) that was originally deferred here
+— both are now in place. The place-card layout is fixed at 2 columns x 4 rows per page for
+readability; a denser layout or a stationery-brand-matched template would be a styling pass on the
+same `pdf-lib` code, not a new feature.
 
 **TS-13 (Collaboration & Notifications) is built**, described above. What's deliberately left
 out, and why: the existing tabs (Guests, Tables, Rules, Seating plan, Day-of mode) don't yet
@@ -517,15 +525,13 @@ Needs Reassignment flag FR-4.6 introduces is specifically scoped to the accessib
 see the TS-5 paragraph above for how that same flag stays unwired for every other field FR-2.9
 names.
 
-Version labeling is modeled in `schema.prisma` already (`PlanVersion.label`) but nothing sets it
-yet, and there's still no side-by-side version comparison view — both can be built as their own
-vertical slice on top of this foundation. All three gaps TS-15 originally surfaced or that TS-7
-depended on (bulk guest import, Side-Mixing, and the visual floor plan) are now closed, so what's
-left across the whole app is: FR-7.1's guest-drag-onto-table interaction on top of the
-now-existing floor plan, the rest of TS-10 (undo/redo, live concurrent-edit sync), version
-labeling/comparison, and the smaller deliberately-deferred items called out story-by-story above
-(permission-aware UI hiding, a real email provider, and the FR-2.9/FR-6.1 Needs Reassignment
-state beyond FR-4.6's one wired trigger).
+Version labeling and side-by-side comparison are now built (described above) — that closes the
+last gap TS-12 had left open. All three gaps TS-15 originally surfaced or that TS-7 depended on
+(bulk guest import, Side-Mixing, and the visual floor plan) are also closed, so what's left across
+the whole app is: FR-7.1's guest-drag-onto-table interaction on top of the now-existing floor
+plan, the rest of TS-10 (undo/redo, live concurrent-edit sync), and the smaller
+deliberately-deferred items called out story-by-story above (permission-aware UI hiding, a real
+email provider, and the FR-2.9/FR-6.1 Needs Reassignment state beyond FR-4.6's one wired trigger).
 
 ## Mobile later
 
