@@ -3,6 +3,8 @@ export * from "./schemas/wedding";
 export * from "./schemas/guest";
 export * from "./schemas/relationship";
 export * from "./schemas/table";
+export * from "./schemas/plan-version";
+export * from "./seating-engine";
 
 export interface ApiErrorResponse {
   error: string;

@@ -8,13 +8,15 @@ import type { WeddingDTO, GuestDTO } from "@seatwise/shared";
 import { GuestsTab } from "./components/GuestsTab";
 import { RulesTab } from "./components/RulesTab";
 import { TablesTab } from "./components/TablesTab";
+import { PlanTab } from "./components/PlanTab";
 
-type Tab = "guests" | "rules" | "tables";
+type Tab = "guests" | "rules" | "tables" | "plan";
 
 const TABS: { value: Tab; label: string }[] = [
   { value: "guests", label: "Guests" },
   { value: "rules", label: "Seating rules" },
   { value: "tables", label: "Tables" },
+  { value: "plan", label: "Seating plan" },
 ];
 
 export default function WeddingDetailPage() {
@@ -100,6 +102,7 @@ export default function WeddingDetailPage() {
       )}
       {tab === "rules" && <RulesTab weddingId={weddingId} guests={guests} />}
       {tab === "tables" && <TablesTab weddingId={weddingId} />}
+      {tab === "plan" && <PlanTab weddingId={weddingId} guests={guests} />}
     </main>
   );
 }

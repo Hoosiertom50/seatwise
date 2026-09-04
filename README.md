@@ -102,19 +102,43 @@ up for it.
   be required to sit together and forbidden from it — that's blocked outright with a clear error,
   not just left to the UI to prevent.
 - Tables: create/update/delete tables for a wedding with a name, seat capacity, optional purpose
-  (e.g. "Kids table"), and a restricted flag. (A visual drag-and-drop floor plan is a follow-on
-  enhancement — this pass is the data layer plus a straightforward list-based UI.)
+  (e.g. "Kids table"), a restricted flag, and an accessible-seating flag. (A visual drag-and-drop
+  floor plan is a follow-on enhancement — this pass is the data layer plus a straightforward
+  list-based UI.)
+- **Automated seat assignment engine** (TS-8): a "Generate new plan" button on a wedding's
+  Seating plan tab groups guests into tables, respecting every hard rule and never silently
+  breaking one:
+  - Guests forced together by "must sit together" (including chains — if A must sit with B, and
+    B must sit with C, all three are kept together as one unit) always land at the same table.
+  - Guests with a "must not sit together" rule are never placed at the same table as each
+    other — whether or not they're in the same forced-together unit — and a rule that's flatly
+    unsatisfiable (e.g. A-B and B-C are forced together, but A-C also must not sit together) is
+    rejected outright before anything is saved, with a clear explanation of the conflict.
+  - A guest who needs an accessible table is only ever placed at one flagged as accessible.
+  - Table capacity is a hard limit — a table is never overbooked.
+  - "Prefer near" / "avoid" are treated as soft, best-effort preferences: honored when there's
+    room to do so, and surfaced as a non-blocking warning (naming the guests involved) when they
+    can't be.
+  - If there isn't a valid seat for everyone (not enough capacity, or every remaining table
+    already seats someone a guest must not sit with), the plan is generated anyway, those guests
+    are listed as unassigned with a clear reason, and the plan is marked incomplete — nothing is
+    ever guessed or silently dropped.
+  - Every generation creates a new numbered version; past versions stay viewable from the
+    dropdown on the Seating plan tab.
+  - Restricted tables (a specific required guest list, e.g. a reserved family table) are left
+    out of automatic assignment for now — the schema tracks the flag, but seating those is a
+    manual/later step, since a per-table required-guest list isn't modeled yet.
 - Every list/detail endpoint enforces ownership — you can't read or modify another account's
-  wedding, guests, rules, or tables by guessing an ID, and a seating rule can't be created
-  between guests from two different weddings even if you have access to both.
+  wedding, guests, rules, tables, or plan versions by guessing an ID, and a seating rule can't be
+  created between guests from two different weddings even if you have access to both.
 
 ## What's next
 
-Table/venue *visual* layout (drag-and-drop floor plan), the automated seat assignment engine,
-review/approval, manual adjustment, day-of mode, export/print, collaboration, and plan
-versioning are modeled in `schema.prisma` already and map to the remaining Jira stories (TS-7's
-visual piece, TS-8 through TS-15). Each can be built as its own vertical slice on top of this
-foundation.
+Table/venue *visual* layout (drag-and-drop floor plan) and review/approval, manual adjustment,
+day-of mode, export/print, collaboration, and richer plan-versioning (labeling/comparing/rolling
+back versions) are modeled in `schema.prisma` already and map to the remaining Jira stories
+(TS-7's visual piece, TS-9 through TS-15). Each can be built as its own vertical slice on top of
+this foundation.
 
 ## Mobile later
 

@@ -7,17 +7,19 @@ export interface SeatingTableRow {
   label: string;
   capacity: number;
   isRestricted: boolean;
+  isAccessible: boolean;
   purpose: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
 
-const COLUMNS = `id, "weddingId", label, capacity, "isRestricted", purpose, "createdAt", "updatedAt"`;
+const COLUMNS = `id, "weddingId", label, capacity, "isRestricted", "isAccessible", purpose, "createdAt", "updatedAt"`;
 
 export interface CreateSeatingTableData {
   label: string;
   capacity: number;
   isRestricted?: boolean;
+  isAccessible?: boolean;
   purpose?: string | null;
 }
 
@@ -27,10 +29,18 @@ export async function createSeatingTable(
 ): Promise<SeatingTableRow> {
   const id = randomUUID();
   const { rows } = await pool.query(
-    `INSERT INTO "seating_tables" (id, "weddingId", label, capacity, "isRestricted", purpose, "updatedAt")
-     VALUES ($1, $2, $3, $4, $5, $6, now())
+    `INSERT INTO "seating_tables" (id, "weddingId", label, capacity, "isRestricted", "isAccessible", purpose, "updatedAt")
+     VALUES ($1, $2, $3, $4, $5, $6, $7, now())
      RETURNING ${COLUMNS}`,
-    [id, weddingId, input.label, input.capacity, input.isRestricted ?? false, input.purpose ?? null]
+    [
+      id,
+      weddingId,
+      input.label,
+      input.capacity,
+      input.isRestricted ?? false,
+      input.isAccessible ?? false,
+      input.purpose ?? null,
+    ]
   );
   return rows[0];
 }
@@ -62,6 +72,10 @@ export async function updateSeatingTableForWedding(
   if (input.isRestricted !== undefined) {
     fields.push(`"isRestricted" = $${i++}`);
     values.push(input.isRestricted);
+  }
+  if (input.isAccessible !== undefined) {
+    fields.push(`"isAccessible" = $${i++}`);
+    values.push(input.isAccessible);
   }
   if (input.purpose !== undefined) {
     fields.push(`purpose = $${i++}`);

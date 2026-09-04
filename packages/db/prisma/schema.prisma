@@ -130,6 +130,7 @@ model SeatingTable {
   label        String
   capacity     Int
   isRestricted Boolean  @default(false)
+  isAccessible Boolean  @default(false)
   purpose      String?
   positionX    Float?
   positionY    Float?

@@ -11,6 +11,7 @@ export function TablesTab({ weddingId }: { weddingId: string }) {
   const [capacity, setCapacity] = useState(8);
   const [purpose, setPurpose] = useState("");
   const [isRestricted, setIsRestricted] = useState(false);
+  const [isAccessible, setIsAccessible] = useState(false);
   const [adding, setAdding] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -29,13 +30,14 @@ export function TablesTab({ weddingId }: { weddingId: string }) {
     try {
       const { table } = await api.post<{ table: SeatingTableDTO }>(
         `/api/v1/weddings/${weddingId}/tables`,
-        { label, capacity, purpose: purpose || null, isRestricted }
+        { label, capacity, purpose: purpose || null, isRestricted, isAccessible }
       );
       setTables([...tables, table].sort((a, b) => a.label.localeCompare(b.label)));
       setLabel("");
       setCapacity(8);
       setPurpose("");
       setIsRestricted(false);
+      setIsAccessible(false);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't add that table.");
     } finally {
@@ -101,7 +103,15 @@ export function TablesTab({ weddingId }: { weddingId: string }) {
             checked={isRestricted}
             onChange={(e) => setIsRestricted(e.target.checked)}
           />
-          Restricted (only specific guests may be seated here)
+          Restricted (only specific guests may be seated here — excluded from auto-assignment for now)
+        </label>
+        <label className="flex items-center gap-2 text-sm sm:col-span-2">
+          <input
+            type="checkbox"
+            checked={isAccessible}
+            onChange={(e) => setIsAccessible(e.target.checked)}
+          />
+          Accessible (wheelchair-accessible seating)
         </label>
         <button
           type="submit"
@@ -132,6 +142,11 @@ export function TablesTab({ weddingId }: { weddingId: string }) {
                   {t.isRestricted && (
                     <span className="ml-2 rounded bg-amber-50 px-1.5 py-0.5 text-xs text-amber-700">
                       restricted
+                    </span>
+                  )}
+                  {t.isAccessible && (
+                    <span className="ml-2 rounded bg-blue-50 px-1.5 py-0.5 text-xs text-blue-700">
+                      accessible
                     </span>
                   )}
                 </p>
