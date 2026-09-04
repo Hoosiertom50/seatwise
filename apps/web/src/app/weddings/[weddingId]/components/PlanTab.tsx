@@ -2,13 +2,31 @@
 
 import { useEffect, useState } from "react";
 import { api, ApiError } from "@/lib/api-client";
-import type { GuestDTO, PlanVersionDTO, PlanVersionDetailDTO } from "@seatwise/shared";
+import type {
+  GuestDTO,
+  PlanVersionDTO,
+  PlanVersionDetailDTO,
+  PlanVersionStatusValue,
+} from "@seatwise/shared";
+
+const STATUS_LABEL: Record<PlanVersionStatusValue, string> = {
+  DRAFT: "Draft",
+  IN_REVIEW: "In review",
+  APPROVED: "Approved",
+};
+
+const STATUS_BADGE_CLASS: Record<PlanVersionStatusValue, string> = {
+  DRAFT: "bg-neutral-100 text-neutral-700",
+  IN_REVIEW: "bg-blue-50 text-blue-700",
+  APPROVED: "bg-green-50 text-green-700",
+};
 
 export function PlanTab({ weddingId, guests }: { weddingId: string; guests: GuestDTO[] }) {
   const [versions, setVersions] = useState<PlanVersionDTO[]>([]);
   const [detail, setDetail] = useState<PlanVersionDetailDTO | null>(null);
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
+  const [statusUpdating, setStatusUpdating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [conflicts, setConflicts] = useState<string[]>([]);
 
@@ -67,6 +85,24 @@ export function PlanTab({ weddingId, guests }: { weddingId: string; guests: Gues
     setDetail(d.planVersion);
   }
 
+  async function onSetStatus(newStatus: PlanVersionStatusValue) {
+    if (!detail) return;
+    setError(null);
+    setStatusUpdating(true);
+    try {
+      const res = await api.post<{ planVersion: PlanVersionDetailDTO }>(
+        `/api/v1/weddings/${weddingId}/plan-versions/${detail.id}/status`,
+        { status: newStatus }
+      );
+      setDetail(res.planVersion);
+      setVersions((vs) => vs.map((v) => (v.id === res.planVersion.id ? res.planVersion : v)));
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Couldn't update the plan's status.");
+    } finally {
+      setStatusUpdating(false);
+    }
+  }
+
   if (loading) return <p className="text-sm text-neutral-500">Loading seating plans...</p>;
 
   const grouped = new Map<string, { tableLabel: string; guests: string[] }>();
@@ -121,8 +157,8 @@ export function PlanTab({ weddingId, guests }: { weddingId: string; guests: Gues
           >
             {versions.map((v) => (
               <option key={v.id} value={v.id}>
-                v{v.versionNumber} — {v.isComplete ? "complete" : "incomplete"} (
-                {new Date(v.createdAt).toLocaleString()})
+                v{v.versionNumber} — {v.isComplete ? "complete" : "incomplete"},{" "}
+                {STATUS_LABEL[v.status]} ({new Date(v.createdAt).toLocaleString()})
               </option>
             ))}
           </select>
@@ -136,7 +172,7 @@ export function PlanTab({ weddingId, guests }: { weddingId: string; guests: Gues
         </p>
       ) : (
         <>
-          <div className="mb-6 flex items-center gap-2">
+          <div className="mb-4 flex flex-wrap items-center gap-2">
             <span
               className={`rounded px-2 py-0.5 text-xs font-medium ${
                 detail.isComplete ? "bg-green-50 text-green-700" : "bg-amber-50 text-amber-700"
@@ -144,10 +180,80 @@ export function PlanTab({ weddingId, guests }: { weddingId: string; guests: Gues
             >
               Version {detail.versionNumber} — {detail.isComplete ? "complete" : "incomplete"}
             </span>
+            <span className={`rounded px-2 py-0.5 text-xs font-medium ${STATUS_BADGE_CLASS[detail.status]}`}>
+              {STATUS_LABEL[detail.status]}
+            </span>
             <span className="text-sm text-neutral-500">
               {detail.assignedGuestCount} seated, {detail.unassignedGuestCount} unassigned
             </span>
           </div>
+
+          {!detail.isCurrent && (
+            <p className="mb-4 text-sm text-neutral-500">
+              This is a past version — status can only be changed on the current one.
+            </p>
+          )}
+
+          {detail.isCurrent && (
+            <div className="mb-6 flex flex-wrap items-center gap-2">
+              {detail.status === "DRAFT" && (
+                <button
+                  onClick={() => onSetStatus("IN_REVIEW")}
+                  disabled={statusUpdating}
+                  className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 disabled:opacity-50"
+                >
+                  Move to review
+                </button>
+              )}
+              {detail.status === "IN_REVIEW" && (
+                <>
+                  <button
+                    onClick={() => onSetStatus("DRAFT")}
+                    disabled={statusUpdating}
+                    className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 disabled:opacity-50"
+                  >
+                    Move back to draft
+                  </button>
+                  <button
+                    onClick={() => onSetStatus("APPROVED")}
+                    disabled={statusUpdating || !detail.isComplete}
+                    title={!detail.isComplete ? "Every guest must be seated before a plan can be approved." : undefined}
+                    className="rounded-md bg-green-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-green-800 disabled:opacity-50"
+                  >
+                    Approve
+                  </button>
+                  {!detail.isComplete && (
+                    <span className="text-sm text-neutral-500">
+                      Seat every guest before this can be approved.
+                    </span>
+                  )}
+                </>
+              )}
+              {detail.status === "APPROVED" && (
+                <button
+                  onClick={() => onSetStatus("IN_REVIEW")}
+                  disabled={statusUpdating}
+                  className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 disabled:opacity-50"
+                >
+                  Reopen for review
+                </button>
+              )}
+            </div>
+          )}
+
+          {detail.status === "APPROVED" && detail.modifiedSinceApproval.active && (
+            <div className="mb-6 rounded-lg border border-amber-200 bg-amber-50 p-4">
+              <p className="text-sm font-medium text-amber-800">
+                Modified since approval
+              </p>
+              <p className="text-sm text-amber-700">
+                First change {new Date(detail.modifiedSinceApproval.firstModifiedAt!).toLocaleString()},
+                latest {new Date(detail.modifiedSinceApproval.latestModifiedAt!).toLocaleString()}.
+                Approval doesn&apos;t lock anything — this plan is still Approved, but review what
+                changed.
+              </p>
+            </div>
+          )}
 
           {detail.warnings.length > 0 && (
             <div className="mb-6 rounded-lg border border-amber-200 bg-amber-50 p-4">

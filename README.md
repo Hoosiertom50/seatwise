@@ -128,17 +128,40 @@ up for it.
   - Restricted tables (a specific required guest list, e.g. a reserved family table) are left
     out of automatic assignment for now — the schema tracks the flag, but seating those is a
     manual/later step, since a per-table required-guest list isn't modeled yet.
+- **Plan review status** (TS-9, partial — see below): the Current Plan Version (the latest one
+  generated) moves through Draft → In Review → Approved. Approving requires a complete plan
+  (FR-0.1) and only ever applies to the current version — an older, superseded version's status
+  can no longer be changed. Approving is a checkpoint, not a lock: nothing about assignments,
+  rules, guests, or tables becomes read-only. If the plan is edited after approval, it stays
+  Approved but shows a "Modified since approval" indicator (first/latest change time); moving
+  status back to Draft or In Review clears that indicator without deleting the underlying
+  history. Every status change is recorded as an immutable Change History entry (user,
+  timestamp, from → to).
 - Every list/detail endpoint enforces ownership — you can't read or modify another account's
   wedding, guests, rules, tables, or plan versions by guessing an ID, and a seating rule can't be
   created between guests from two different weddings even if you have access to both.
 
 ## What's next
 
-Table/venue *visual* layout (drag-and-drop floor plan) and review/approval, manual adjustment,
-day-of mode, export/print, collaboration, and richer plan-versioning (labeling/comparing/rolling
-back versions) are modeled in `schema.prisma` already and map to the remaining Jira stories
-(TS-7's visual piece, TS-9 through TS-15). Each can be built as its own vertical slice on top of
-this foundation.
+**TS-9 is only partially built.** What's there: the Draft/In Review/Approved status workflow
+above (FR-6.4, FR-6.5, FR-6.6). What's deliberately deferred, and why: FR-6.1's full
+Assigned/Unassigned/**Needs Reassignment**/**Not Attending** distinction depends on concepts
+(day-of attendance changes, manual edits that can invalidate a seat) that don't exist yet —
+they're TS-10 (Manual Adjustment) and TS-11 (Day-Of Mode); the schema already has a
+`needsReassignment` flag on each seat assignment ready for that. FR-6.2 (sharing a plan with
+in-app/email notifications) and FR-6.3 (comments on a table or guest assignment, gated by
+View/Comment/Edit permission) are left out entirely for now — they need a real
+collaborator/permissions model (inviting other accounts to a wedding with a permission level),
+which is substantial enough to be its own slice rather than something to fake with the
+single-owner model this app has today. Approve is currently allowed for any signed-in owner,
+standing in for "Planner/Owner or a Couple user with Comment/Edit" until that permissions model
+exists.
+
+Table/venue *visual* layout (drag-and-drop floor plan), manual adjustment, day-of mode,
+export/print, collaboration & notifications, and richer plan-versioning (labeling/comparing/
+restoring versions) are modeled in `schema.prisma` already and map to the remaining Jira stories
+(TS-7's visual piece, TS-10 through TS-15, and the rest of TS-9). Each can be built as its own
+vertical slice on top of this foundation.
 
 ## Mobile later
 

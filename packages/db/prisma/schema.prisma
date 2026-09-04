@@ -145,10 +145,13 @@ model SeatingTable {
 
 // --- Plan versions & change history (FR-9.4) ------------------------------
 
+// Review/approval workflow status (FR-6.4). Applies only to the Current Plan Version — the one
+// with the highest versionNumber for a wedding; older versions keep whatever status they had
+// when superseded, since FR-6.4 only lets the Current version's status change going forward.
 enum PlanVersionStatus {
   DRAFT
-  CURRENT
-  ARCHIVED
+  IN_REVIEW
+  APPROVED
 }
 
 model PlanVersion {
@@ -159,6 +162,10 @@ model PlanVersion {
   label          String?
   status         PlanVersionStatus @default(DRAFT)
   isComplete     Boolean           @default(false)
+  // Set when status moves to APPROVED, cleared (not deleted) when it moves away again. FR-6.6's
+  // "Modified Since Approval" indicator is derived from this: active whenever status is
+  // APPROVED and a change_history_entries row exists with createdAt after approvedAt.
+  approvedAt     DateTime?
   restoredFromId String?
   restoredFrom   PlanVersion?      @relation("restoredFrom", fields: [restoredFromId], references: [id])
   restoredInto   PlanVersion[]     @relation("restoredFrom")
