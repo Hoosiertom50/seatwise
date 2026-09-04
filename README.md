@@ -3,10 +3,11 @@
 Wedding seating & table assignment planner — build a guest list, define who has to (or can't)
 sit together, and generate a seating chart that respects every rule.
 
-This repo is the first working slice of Seatwise: account signup/login, creating a wedding, and
-managing its guest list. It's built to grow into the full feature set described in the
-requirements doc and tracked in Jira (TS-2 through TS-15) without a rewrite, and to make an
-eventual iOS/Android app a thin addition rather than a second project.
+This repo is the first working slice of Seatwise: account signup/login, creating a wedding,
+managing its guest list, defining seating rules between guests, and setting up tables. It's
+built to grow into the full feature set described in the requirements doc and tracked in Jira
+(TS-2 through TS-15) without a rewrite, and to make an eventual iOS/Android app a thin addition
+rather than a second project.
 
 ## Stack
 
@@ -63,7 +64,8 @@ Then from the repo root:
 pnpm dev
 ```
 
-and open http://localhost:3000 — sign up, create a wedding, add some guests.
+and open http://localhost:3000 — sign up, create a wedding, add some guests, and try the
+Seating rules and Tables tabs on a wedding's page.
 
 ### A note on how the database layer was built and verified here
 
@@ -95,15 +97,24 @@ up for it.
 - Create/list weddings, scoped to the signed-in owner.
 - Add/list/update (RSVP status)/remove guests within a wedding, with tier, party/household
   grouping, headcount, and an accessible-table flag.
+- Seating rules between guests (must sit together / must not sit together / prefer near / avoid),
+  with the FR-0.1 hard-rule invariant enforced server-side: a pair of guests can't simultaneously
+  be required to sit together and forbidden from it — that's blocked outright with a clear error,
+  not just left to the UI to prevent.
+- Tables: create/update/delete tables for a wedding with a name, seat capacity, optional purpose
+  (e.g. "Kids table"), and a restricted flag. (A visual drag-and-drop floor plan is a follow-on
+  enhancement — this pass is the data layer plus a straightforward list-based UI.)
 - Every list/detail endpoint enforces ownership — you can't read or modify another account's
-  wedding or guests by guessing an ID.
+  wedding, guests, rules, or tables by guessing an ID, and a seating rule can't be created
+  between guests from two different weddings even if you have access to both.
 
 ## What's next
 
-The rest of the requirements (seating rules between guests, table/venue layout, the automated
-assignment engine, review/approval, manual adjustment, day-of mode, export/print, collaboration,
-plan versioning) are modeled in `schema.prisma` already and map to the remaining Jira stories
-(TS-6 through TS-15). Each can be built as its own vertical slice on top of this foundation.
+Table/venue *visual* layout (drag-and-drop floor plan), the automated seat assignment engine,
+review/approval, manual adjustment, day-of mode, export/print, collaboration, and plan
+versioning are modeled in `schema.prisma` already and map to the remaining Jira stories (TS-7's
+visual piece, TS-8 through TS-15). Each can be built as its own vertical slice on top of this
+foundation.
 
 ## Mobile later
 
