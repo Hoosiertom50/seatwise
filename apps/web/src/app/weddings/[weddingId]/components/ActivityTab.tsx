@@ -47,12 +47,12 @@ export function ActivityTab({ weddingId }: { weddingId: string }) {
                   {ACTION_LABELS[e.action] ?? e.action}
                   <span className="ml-2 font-normal text-neutral-500">v{e.versionNumber}</span>
                 </span>
-                <span className="text-xs text-neutral-400">
+                <span className="text-xs text-neutral-500">
                   {new Date(e.createdAt).toLocaleString()}
                 </span>
               </div>
               <p className="mt-1 text-sm text-neutral-700">{e.description}</p>
-              {e.actorName && <p className="mt-1 text-xs text-neutral-400">by {e.actorName}</p>}
+              {e.actorName && <p className="mt-1 text-xs text-neutral-500">by {e.actorName}</p>}
             </li>
           ))}
         </ul>

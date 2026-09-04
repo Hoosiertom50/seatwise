@@ -129,6 +129,7 @@ export function CommentsTab({
           >
             <div className="flex flex-col gap-3 sm:flex-row">
               <select
+                aria-label="Comment target type"
                 className="rounded-md border border-neutral-300 px-3 py-2 text-sm"
                 value={targetType}
                 onChange={(e) => {
@@ -140,6 +141,7 @@ export function CommentsTab({
                 <option value="TABLE">About a table</option>
               </select>
               <select
+                aria-label={targetType === "GUEST" ? "Select a guest" : "Select a table"}
                 className="flex-1 rounded-md border border-neutral-300 px-3 py-2 text-sm"
                 value={targetId}
                 onChange={(e) => setTargetId(e.target.value)}
@@ -162,6 +164,7 @@ export function CommentsTab({
               </select>
             </div>
             <textarea
+              aria-label="Comment text"
               className="rounded-md border border-neutral-300 px-3 py-2 text-sm"
               rows={2}
               placeholder="What's the question or note?"
@@ -200,11 +203,11 @@ export function CommentsTab({
                     <p className="text-sm font-medium">
                       {root.targetLabel}
                       {root.targetRemoved && (
-                        <span className="ml-2 text-xs font-normal text-neutral-400">(removed)</span>
+                        <span className="ml-2 text-xs font-normal text-neutral-500">(removed)</span>
                       )}
                     </p>
                     <p className="mt-1 text-sm text-neutral-700">{root.body}</p>
-                    <p className="mt-1 text-xs text-neutral-400">
+                    <p className="mt-1 text-xs text-neutral-500">
                       {root.authorName} · {new Date(root.createdAt).toLocaleString()}
                     </p>
                   </div>
@@ -229,7 +232,7 @@ export function CommentsTab({
                     {replies.map((r) => (
                       <li key={r.id}>
                         <p className="text-sm text-neutral-700">{r.body}</p>
-                        <p className="mt-0.5 text-xs text-neutral-400">
+                        <p className="mt-0.5 text-xs text-neutral-500">
                           {r.authorName} · {new Date(r.createdAt).toLocaleString()}
                         </p>
                       </li>
@@ -242,6 +245,7 @@ export function CommentsTab({
                     {replyingTo === root.id ? (
                       <div className="flex flex-col gap-2 sm:flex-row">
                         <input
+                          aria-label="Reply text"
                           className="flex-1 rounded-md border border-neutral-300 px-3 py-2 text-sm"
                           placeholder="Write a reply..."
                           value={replyBodies[root.id] ?? ""}

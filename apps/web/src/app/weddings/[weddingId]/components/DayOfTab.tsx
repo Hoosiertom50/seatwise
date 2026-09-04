@@ -245,8 +245,11 @@ export function DayOfTab({
       )}
 
       <div>
-        <label className="mb-1 block text-sm font-medium">Find a guest</label>
+        <label htmlFor="dayof-guest-search" className="mb-1 block text-sm font-medium">
+          Find a guest
+        </label>
         <input
+          id="dayof-guest-search"
           className="min-h-11 w-full rounded-md border border-neutral-300 px-3 py-3 text-base"
           placeholder="Search by name or party..."
           value={search}
@@ -281,6 +284,7 @@ export function DayOfTab({
               <div className="flex min-h-11 flex-wrap items-center gap-2">
                 {!notAttending && detail && !seatedAt && (
                   <select
+                    aria-label={`Seat ${g.firstName} ${g.lastName} at a table`}
                     className="min-h-11 rounded-md border border-neutral-300 px-2 py-2 text-sm disabled:opacity-50"
                     value=""
                     disabled={busyGuestId === g.id}
@@ -320,14 +324,22 @@ export function DayOfTab({
         <p className="mb-3 text-sm font-medium">Add a walk-in</p>
         <form onSubmit={onAddWalkIn} className="flex flex-col gap-3">
           <div className="flex flex-wrap gap-3">
+            <label htmlFor="walkin-first-name" className="sr-only">
+              First name
+            </label>
             <input
+              id="walkin-first-name"
               className="min-h-11 flex-1 rounded-md border border-neutral-300 px-3 py-3 text-base"
               placeholder="First name"
               value={walkInFirst}
               onChange={(e) => setWalkInFirst(e.target.value)}
               required
             />
+            <label htmlFor="walkin-last-name" className="sr-only">
+              Last name
+            </label>
             <input
+              id="walkin-last-name"
               className="min-h-11 flex-1 rounded-md border border-neutral-300 px-3 py-3 text-base"
               placeholder="Last name"
               value={walkInLast}
@@ -337,6 +349,7 @@ export function DayOfTab({
           </div>
           {detail && (
             <select
+              aria-label="Seat the walk-in at a table"
               className="min-h-11 rounded-md border border-neutral-300 px-3 py-2 text-sm"
               value={walkInTableId}
               onChange={(e) => setWalkInTableId(e.target.value)}
@@ -364,6 +377,7 @@ export function DayOfTab({
           <p className="mb-3 text-sm font-medium">Swap two guests&apos; tables</p>
           <div className="flex flex-col gap-3 sm:flex-row">
             <select
+              aria-label="First guest to swap"
               className="min-h-11 flex-1 rounded-md border border-neutral-300 px-3 py-2 text-sm"
               value={swapAId}
               onChange={(e) => setSwapAId(e.target.value)}
@@ -376,6 +390,7 @@ export function DayOfTab({
               ))}
             </select>
             <select
+              aria-label="Second guest to swap"
               className="min-h-11 flex-1 rounded-md border border-neutral-300 px-3 py-2 text-sm"
               value={swapBId}
               onChange={(e) => setSwapBId(e.target.value)}

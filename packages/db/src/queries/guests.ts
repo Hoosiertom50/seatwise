@@ -1,5 +1,6 @@
 import { randomUUID } from "crypto";
 import { pool } from "../pool";
+import { encryptText, decryptText } from "../crypto";
 
 export interface GuestRow {
   id: string;
@@ -34,6 +35,9 @@ export interface CreateGuestData {
   notes?: string | null;
 }
 
+// NFR-9.3b: `notes` is where free-text dietary/accessibility details actually end up, so it's the
+// one guest field encrypted at rest (see crypto.ts) — encrypted on the way in here, decrypted on
+// the way back out in every read below.
 export async function createGuest(weddingId: string, input: CreateGuestData): Promise<GuestRow> {
   const id = randomUUID();
   const { rows } = await pool.query(
@@ -53,10 +57,10 @@ export async function createGuest(weddingId: string, input: CreateGuestData): Pr
       input.requiresAccessibleTable ?? false,
       input.isLocked ?? false,
       input.dayOfAttendance ?? "ATTENDING",
-      input.notes ?? null,
+      encryptText(input.notes ?? null),
     ]
   );
-  return rows[0];
+  return { ...rows[0], notes: decryptText(rows[0].notes) };
 }
 
 export async function listGuestsByWedding(weddingId: string): Promise<GuestRow[]> {
@@ -64,7 +68,7 @@ export async function listGuestsByWedding(weddingId: string): Promise<GuestRow[]
     `SELECT ${COLUMNS} FROM "guests" WHERE "weddingId" = $1 ORDER BY "lastName", "firstName"`,
     [weddingId]
   );
-  return rows;
+  return rows.map((r) => ({ ...r, notes: decryptText(r.notes) }));
 }
 
 export async function getGuestForWedding(id: string, weddingId: string): Promise<GuestRow | null> {
@@ -72,7 +76,8 @@ export async function getGuestForWedding(id: string, weddingId: string): Promise
     `SELECT ${COLUMNS} FROM "guests" WHERE id = $1 AND "weddingId" = $2`,
     [id, weddingId]
   );
-  return rows[0] ?? null;
+  if (!rows[0]) return null;
+  return { ...rows[0], notes: decryptText(rows[0].notes) };
 }
 
 export async function updateGuestForWedding(
@@ -99,7 +104,7 @@ export async function updateGuestForWedding(
     const value = (input as Record<string, unknown>)[key];
     if (value !== undefined) {
       fields.push(`${column} = $${i++}`);
-      values.push(value);
+      values.push(key === "notes" ? encryptText(value as string | null) : value);
     }
   }
   if (fields.length === 0) return true;

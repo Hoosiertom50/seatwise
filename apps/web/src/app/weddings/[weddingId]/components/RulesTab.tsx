@@ -81,8 +81,11 @@ export function RulesTab({ weddingId, guests }: { weddingId: string; guests: Gue
         className="mb-8 grid grid-cols-1 gap-3 rounded-lg border border-neutral-200 p-4 sm:grid-cols-3"
       >
         <div>
-          <label className="mb-1 block text-sm font-medium">Guest A</label>
+          <label htmlFor="rule-guest-a" className="mb-1 block text-sm font-medium">
+            Guest A
+          </label>
           <select
+            id="rule-guest-a"
             className="w-full rounded-md border border-neutral-300 px-3 py-2 text-sm"
             value={guestAId}
             onChange={(e) => setGuestAId(e.target.value)}
@@ -97,8 +100,11 @@ export function RulesTab({ weddingId, guests }: { weddingId: string; guests: Gue
           </select>
         </div>
         <div>
-          <label className="mb-1 block text-sm font-medium">Guest B</label>
+          <label htmlFor="rule-guest-b" className="mb-1 block text-sm font-medium">
+            Guest B
+          </label>
           <select
+            id="rule-guest-b"
             className="w-full rounded-md border border-neutral-300 px-3 py-2 text-sm"
             value={guestBId}
             onChange={(e) => setGuestBId(e.target.value)}
@@ -113,8 +119,11 @@ export function RulesTab({ weddingId, guests }: { weddingId: string; guests: Gue
           </select>
         </div>
         <div>
-          <label className="mb-1 block text-sm font-medium">Rule</label>
+          <label htmlFor="rule-type" className="mb-1 block text-sm font-medium">
+            Rule
+          </label>
           <select
+            id="rule-type"
             className="w-full rounded-md border border-neutral-300 px-3 py-2 text-sm"
             value={type}
             onChange={(e) => setType(e.target.value as RelationshipTypeValue)}

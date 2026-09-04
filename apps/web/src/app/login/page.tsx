@@ -34,8 +34,11 @@ export default function LoginPage() {
         <h1 className="mb-6 text-2xl font-semibold">Log in</h1>
         <form onSubmit={onSubmit} className="flex flex-col gap-4">
           <div>
-            <label className="mb-1 block text-sm font-medium">Email</label>
+            <label htmlFor="login-email" className="mb-1 block text-sm font-medium">
+              Email
+            </label>
             <input
+              id="login-email"
               type="email"
               className="w-full rounded-md border border-neutral-300 px-3 py-2 text-sm"
               value={email}
@@ -44,8 +47,11 @@ export default function LoginPage() {
             />
           </div>
           <div>
-            <label className="mb-1 block text-sm font-medium">Password</label>
+            <label htmlFor="login-password" className="mb-1 block text-sm font-medium">
+              Password
+            </label>
             <input
+              id="login-password"
               type="password"
               className="w-full rounded-md border border-neutral-300 px-3 py-2 text-sm"
               value={password}

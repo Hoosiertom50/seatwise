@@ -202,7 +202,7 @@ export function PlanTab({ weddingId, guests }: { weddingId: string; guests: Gues
         <button
           onClick={onGenerate}
           disabled={generating}
-          className="shrink-0 rounded-md bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-700 disabled:opacity-50"
+          className="min-h-11 shrink-0 rounded-md bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-700 disabled:opacity-50"
         >
           {generating ? "Generating..." : "Generate new plan"}
         </button>
@@ -224,9 +224,12 @@ export function PlanTab({ weddingId, guests }: { weddingId: string; guests: Gues
 
       {versions.length > 1 && (
         <div className="mb-6">
-          <label className="mb-1 block text-sm font-medium">Version</label>
+          <label htmlFor="plan-version-select" className="mb-1 block text-sm font-medium">
+            Version
+          </label>
           <select
-            className="rounded-md border border-neutral-300 px-3 py-2 text-sm"
+            id="plan-version-select"
+            className="min-h-11 rounded-md border border-neutral-300 px-3 py-2 text-sm"
             value={detail?.id ?? ""}
             onChange={(e) => onSelectVersion(e.target.value)}
           >
@@ -272,7 +275,7 @@ export function PlanTab({ weddingId, guests }: { weddingId: string; guests: Gues
                 href={`/api/v1/weddings/${weddingId}/plan-versions/${detail.id}/export/chart`}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50"
+                className="rounded-md border border-neutral-300 min-h-11 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50"
               >
                 Seating chart (PDF)
               </a>
@@ -280,7 +283,7 @@ export function PlanTab({ weddingId, guests }: { weddingId: string; guests: Gues
                 href={`/api/v1/weddings/${weddingId}/plan-versions/${detail.id}/export/lookup`}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50"
+                className="rounded-md border border-neutral-300 min-h-11 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50"
               >
                 Guest lookup list (PDF)
               </a>
@@ -288,7 +291,7 @@ export function PlanTab({ weddingId, guests }: { weddingId: string; guests: Gues
                 href={`/api/v1/weddings/${weddingId}/plan-versions/${detail.id}/export/cards`}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50"
+                className="rounded-md border border-neutral-300 min-h-11 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50"
               >
                 Place cards (PDF)
               </a>
@@ -307,7 +310,7 @@ export function PlanTab({ weddingId, guests }: { weddingId: string; guests: Gues
                 <button
                   onClick={onPreviewRestore}
                   disabled={previewingRestore}
-                  className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 disabled:opacity-50"
+                  className="rounded-md border border-neutral-300 min-h-11 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 disabled:opacity-50"
                 >
                   {previewingRestore ? "Checking..." : `Restore version ${detail.versionNumber}...`}
                 </button>
@@ -340,14 +343,14 @@ export function PlanTab({ weddingId, guests }: { weddingId: string; guests: Gues
                     <button
                       onClick={onConfirmRestore}
                       disabled={restoring}
-                      className="rounded-md bg-neutral-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-neutral-700 disabled:opacity-50"
+                      className="rounded-md bg-neutral-900 min-h-11 px-3 py-1.5 text-sm font-medium text-white hover:bg-neutral-700 disabled:opacity-50"
                     >
                       {restoring ? "Restoring..." : "Confirm restore"}
                     </button>
                     <button
                       onClick={() => setRestorePreview(null)}
                       disabled={restoring}
-                      className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 disabled:opacity-50"
+                      className="rounded-md border border-neutral-300 min-h-11 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 disabled:opacity-50"
                     >
                       Cancel
                     </button>
@@ -363,7 +366,7 @@ export function PlanTab({ weddingId, guests }: { weddingId: string; guests: Gues
                 <button
                   onClick={() => onSetStatus("IN_REVIEW")}
                   disabled={statusUpdating}
-                  className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 disabled:opacity-50"
+                  className="rounded-md border border-neutral-300 min-h-11 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 disabled:opacity-50"
                 >
                   Move to review
                 </button>
@@ -373,7 +376,7 @@ export function PlanTab({ weddingId, guests }: { weddingId: string; guests: Gues
                   <button
                     onClick={() => onSetStatus("DRAFT")}
                     disabled={statusUpdating}
-                    className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 disabled:opacity-50"
+                    className="rounded-md border border-neutral-300 min-h-11 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 disabled:opacity-50"
                   >
                     Move back to draft
                   </button>
@@ -381,7 +384,7 @@ export function PlanTab({ weddingId, guests }: { weddingId: string; guests: Gues
                     onClick={() => onSetStatus("APPROVED")}
                     disabled={statusUpdating || !detail.isComplete}
                     title={!detail.isComplete ? "Every guest must be seated before a plan can be approved." : undefined}
-                    className="rounded-md bg-green-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-green-800 disabled:opacity-50"
+                    className="rounded-md bg-green-700 min-h-11 px-3 py-1.5 text-sm font-medium text-white hover:bg-green-800 disabled:opacity-50"
                   >
                     Approve
                   </button>
@@ -396,7 +399,7 @@ export function PlanTab({ weddingId, guests }: { weddingId: string; guests: Gues
                 <button
                   onClick={() => onSetStatus("IN_REVIEW")}
                   disabled={statusUpdating}
-                  className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 disabled:opacity-50"
+                  className="rounded-md border border-neutral-300 min-h-11 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 disabled:opacity-50"
                 >
                   Reopen for review
                 </button>
@@ -457,7 +460,8 @@ export function PlanTab({ weddingId, guests }: { weddingId: string; guests: Gues
                     <span>{guestName(id)}</span>
                     {canEdit && (
                       <select
-                        className="rounded-md border border-neutral-300 px-2 py-1 text-sm disabled:opacity-50"
+                        aria-label={`Move ${guestName(id)} to a table`}
+                        className="min-h-11 rounded-md border border-neutral-300 px-2 py-1 text-sm disabled:opacity-50"
                         value=""
                         disabled={movingGuestId === id}
                         onChange={(e) => onMoveGuest(id, e.target.value)}
@@ -488,7 +492,8 @@ export function PlanTab({ weddingId, guests }: { weddingId: string; guests: Gues
                       <span>{g.guestName}</span>
                       {canEdit && (
                         <select
-                          className="rounded-md border border-neutral-300 px-2 py-1 text-xs disabled:opacity-50"
+                          aria-label={`Move ${g.guestName} to a different table`}
+                          className="min-h-11 rounded-md border border-neutral-300 px-2 py-1 text-xs disabled:opacity-50"
                           value=""
                           disabled={movingGuestId === g.guestId}
                           onChange={(e) => onMoveGuest(g.guestId, e.target.value)}

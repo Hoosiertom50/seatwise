@@ -96,8 +96,11 @@ export function GuestsTab({
         className="mb-8 grid grid-cols-1 gap-3 rounded-lg border border-neutral-200 p-4 sm:grid-cols-2"
       >
         <div>
-          <label className="mb-1 block text-sm font-medium">First name</label>
+          <label htmlFor="guest-first-name" className="mb-1 block text-sm font-medium">
+            First name
+          </label>
           <input
+            id="guest-first-name"
             className="w-full rounded-md border border-neutral-300 px-3 py-2 text-sm"
             value={firstName}
             onChange={(e) => setFirstName(e.target.value)}
@@ -105,8 +108,11 @@ export function GuestsTab({
           />
         </div>
         <div>
-          <label className="mb-1 block text-sm font-medium">Last name</label>
+          <label htmlFor="guest-last-name" className="mb-1 block text-sm font-medium">
+            Last name
+          </label>
           <input
+            id="guest-last-name"
             className="w-full rounded-md border border-neutral-300 px-3 py-2 text-sm"
             value={lastName}
             onChange={(e) => setLastName(e.target.value)}
@@ -114,8 +120,11 @@ export function GuestsTab({
           />
         </div>
         <div>
-          <label className="mb-1 block text-sm font-medium">Party / household</label>
+          <label htmlFor="guest-party-name" className="mb-1 block text-sm font-medium">
+            Party / household
+          </label>
           <input
+            id="guest-party-name"
             className="w-full rounded-md border border-neutral-300 px-3 py-2 text-sm"
             placeholder="e.g. The Carter Family"
             value={partyName}
@@ -123,8 +132,11 @@ export function GuestsTab({
           />
         </div>
         <div>
-          <label className="mb-1 block text-sm font-medium">Headcount</label>
+          <label htmlFor="guest-headcount" className="mb-1 block text-sm font-medium">
+            Headcount
+          </label>
           <input
+            id="guest-headcount"
             type="number"
             min={1}
             max={20}
@@ -134,8 +146,11 @@ export function GuestsTab({
           />
         </div>
         <div>
-          <label className="mb-1 block text-sm font-medium">Tier</label>
+          <label htmlFor="guest-tier" className="mb-1 block text-sm font-medium">
+            Tier
+          </label>
           <select
+            id="guest-tier"
             className="w-full rounded-md border border-neutral-300 px-3 py-2 text-sm"
             value={tier}
             onChange={(e) => setTier(e.target.value as GuestTier)}
@@ -148,8 +163,11 @@ export function GuestsTab({
           </select>
         </div>
         <div>
-          <label className="mb-1 block text-sm font-medium">RSVP</label>
+          <label htmlFor="guest-rsvp" className="mb-1 block text-sm font-medium">
+            RSVP
+          </label>
           <select
+            id="guest-rsvp"
             className="w-full rounded-md border border-neutral-300 px-3 py-2 text-sm"
             value={rsvpStatus}
             onChange={(e) => setRsvpStatus(e.target.value as RsvpStatus)}
@@ -225,6 +243,7 @@ export function GuestsTab({
               </div>
               <div className="flex items-center gap-2">
                 <select
+                  aria-label={`RSVP status for ${g.firstName} ${g.lastName}`}
                   className="rounded-md border border-neutral-300 px-2 py-1 text-sm"
                   value={g.rsvpStatus}
                   onChange={(e) => onUpdateRsvp(g.id, e.target.value as RsvpStatus)}

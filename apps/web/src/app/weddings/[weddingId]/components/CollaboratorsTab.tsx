@@ -114,8 +114,11 @@ export function CollaboratorsTab({
             className="mb-8 grid grid-cols-1 gap-3 rounded-lg border border-neutral-200 p-4 sm:grid-cols-3"
           >
             <div className="sm:col-span-2">
-              <label className="mb-1 block text-sm font-medium">Email address</label>
+              <label htmlFor="collab-email" className="mb-1 block text-sm font-medium">
+                Email address
+              </label>
               <input
+                id="collab-email"
                 type="email"
                 className="w-full rounded-md border border-neutral-300 px-3 py-2 text-sm"
                 value={email}
@@ -125,8 +128,11 @@ export function CollaboratorsTab({
               />
             </div>
             <div>
-              <label className="mb-1 block text-sm font-medium">Access level</label>
+              <label htmlFor="collab-level" className="mb-1 block text-sm font-medium">
+                Access level
+              </label>
               <select
+                id="collab-level"
                 className="w-full rounded-md border border-neutral-300 px-3 py-2 text-sm"
                 value={level}
                 onChange={(e) => setLevel(e.target.value as CollaboratorPermission)}
@@ -183,6 +189,7 @@ export function CollaboratorsTab({
               {isOwner ? (
                 <div className="flex items-center gap-2">
                   <select
+                    aria-label={`Access level for ${c.userName}`}
                     className="rounded-md border border-neutral-300 px-2 py-1.5 text-sm"
                     value={c.permissionLevel}
                     onChange={(e) => onChangeLevel(c.id, e.target.value as CollaboratorPermission)}

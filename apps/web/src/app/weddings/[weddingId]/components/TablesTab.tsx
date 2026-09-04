@@ -79,8 +79,11 @@ export function TablesTab({ weddingId }: { weddingId: string }) {
         className="mb-8 grid grid-cols-1 gap-3 rounded-lg border border-neutral-200 p-4 sm:grid-cols-2"
       >
         <div>
-          <label className="mb-1 block text-sm font-medium">Table name</label>
+          <label htmlFor="table-name" className="mb-1 block text-sm font-medium">
+            Table name
+          </label>
           <input
+            id="table-name"
             className="w-full rounded-md border border-neutral-300 px-3 py-2 text-sm"
             placeholder="Table 1"
             value={label}
@@ -89,8 +92,11 @@ export function TablesTab({ weddingId }: { weddingId: string }) {
           />
         </div>
         <div>
-          <label className="mb-1 block text-sm font-medium">Capacity</label>
+          <label htmlFor="table-capacity" className="mb-1 block text-sm font-medium">
+            Capacity
+          </label>
           <input
+            id="table-capacity"
             type="number"
             min={1}
             max={50}
@@ -100,8 +106,11 @@ export function TablesTab({ weddingId }: { weddingId: string }) {
           />
         </div>
         <div className="sm:col-span-2">
-          <label className="mb-1 block text-sm font-medium">Purpose (optional)</label>
+          <label htmlFor="table-purpose" className="mb-1 block text-sm font-medium">
+            Purpose (optional)
+          </label>
           <input
+            id="table-purpose"
             className="w-full rounded-md border border-neutral-300 px-3 py-2 text-sm"
             placeholder="e.g. Kids table, Head table"
             value={purpose}

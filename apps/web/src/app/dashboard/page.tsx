@@ -92,8 +92,11 @@ export default function DashboardPage() {
         className="mb-8 flex flex-col gap-3 rounded-lg border border-neutral-200 p-4 sm:flex-row sm:items-end"
       >
         <div className="flex-1">
-          <label className="mb-1 block text-sm font-medium">Wedding name</label>
+          <label htmlFor="new-wedding-name" className="mb-1 block text-sm font-medium">
+            Wedding name
+          </label>
           <input
+            id="new-wedding-name"
             className="w-full rounded-md border border-neutral-300 px-3 py-2 text-sm"
             placeholder="Alex &amp; Jordan's Wedding"
             value={newName}
@@ -102,8 +105,11 @@ export default function DashboardPage() {
           />
         </div>
         <div>
-          <label className="mb-1 block text-sm font-medium">Date</label>
+          <label htmlFor="new-wedding-date" className="mb-1 block text-sm font-medium">
+            Date
+          </label>
           <input
+            id="new-wedding-date"
             type="date"
             className="rounded-md border border-neutral-300 px-3 py-2 text-sm"
             value={newDate}
@@ -111,8 +117,11 @@ export default function DashboardPage() {
           />
         </div>
         <div className="flex-1">
-          <label className="mb-1 block text-sm font-medium">Venue</label>
+          <label htmlFor="new-wedding-venue" className="mb-1 block text-sm font-medium">
+            Venue
+          </label>
           <input
+            id="new-wedding-venue"
             className="w-full rounded-md border border-neutral-300 px-3 py-2 text-sm"
             value={newVenue}
             onChange={(e) => setNewVenue(e.target.value)}

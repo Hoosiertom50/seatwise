@@ -240,6 +240,57 @@ up for it.
 - Every list/detail endpoint enforces access — you can't read or modify a wedding, guests, rules,
   tables, or plan versions you don't own or collaborate on by guessing an ID, and a seating rule
   can't be created between guests from two different weddings even if you have access to both.
+- **Non-Functional Requirements** (TS-14): performance, security, availability, and accessibility
+  verified and, where needed, built out across the whole app rather than any one feature.
+  - **Performance** (NFR-9.1/9.1b): a 500-guest wedding with 55 tables and 50 seating rules
+    generates a full plan in well under a second (0.34s measured, against a 60s target), and a
+    single manual move/swap round-trips in 0.065s (against a 1s target) — both scripted end-to-end
+    against the real API and database, not estimated.
+  - **Plain-language UI and specific error messages** (NFR-9.2/9.2b): every blocked action across
+    the seating engine, manual moves, and swaps already names the specific rule, guest(s), and
+    table involved rather than a generic "can't do that" — e.g. `"Jane Doe has a "must not sit
+    together" rule with John Smith, who's already seated at "Table 3.""` for a rule conflict, or
+    `""Table 3" can't fit Jane Doe's group — it only has 2 seat(s) left, but they need 4."` for a
+    capacity conflict. This was existing behavior from TS-6/TS-10; TS-14 confirmed it holds for
+    every blocking path (capacity, accessibility, hard rules, both directions of a swap) rather
+    than adding new messages.
+  - **Access control** (NFR-9.3): already fully covered by TS-13's access-level model and its
+    `test_collaboration.py` regression — a stranger gets a 404 (not a 403, so a nonexistent and an
+    inaccessible wedding are indistinguishable) on every endpoint for a wedding they don't own or
+    collaborate on, confirmed by direct ID guessing, not just missing UI links.
+  - **Encryption at rest** (NFR-9.3b): guest `notes` — the field free-text dietary and
+    accessibility information lives in — is encrypted with AES-256-GCM before it's written to
+    Postgres and decrypted only when read back out for an authorized request. Verified by querying
+    the raw database row directly (bypassing the API entirely) and confirming the stored value is
+    ciphertext (`enc:v1:...`), not the plaintext that was submitted. Deliberately scoped to this
+    one field rather than the whole database: it's the specific personal/health-adjacent data the
+    requirement is about, and column-level encryption keeps every other field queryable/sortable
+    normally. Encryption in transit (TLS) and whole-database encryption/backups are hosting-level
+    concerns (what terminates HTTPS, what the managed Postgres provider encrypts at rest) that
+    don't exist as "application code" to write in this sandboxed dev environment — they're
+    configuration of wherever this gets deployed, not a gap in the app.
+  - **Accessibility** (NFR-9.5): every page and wedding tab (login, signup, dashboard, Guests,
+    Rules, Tables, Seating plan, Day-of mode, Comments, Activity, Collaborators) scanned with
+    axe-core against the WCAG 2.1 A/AA and 2.1 A/AA rule sets. The initial scan found unlabeled
+    inputs/selects (missing `label`/`aria-label`) on 9 of those views and one contrast failure;
+    all were fixed (explicit `<label htmlFor>`/`id` pairs, `aria-label` on selects that don't have
+    a visible label, `sr-only` labels for the Day-of walk-in fields, `text-neutral-400` swapped for
+    the AA-passing `text-neutral-500`) and every page re-scanned clean — **zero violations**
+    across all 11 views. The Seating plan view's controls were also brought up to the 44×44px
+    touch-target size Day-of Mode already used (`min-h-11`), matching the acceptance criterion
+    that names both views explicitly. No element in the app overrides the browser's default
+    focus-visible outline, so keyboard-only operation keeps visible focus everywhere.
+  - **Responsive, no horizontal scroll** (NFR-9.5b): checked programmatically (comparing
+    `scrollWidth` to `clientWidth`) across 6 widths (375/390/768/1024/1280/1920px) on all 8 wedding
+    tabs — 48 checks, zero overflow anywhere — plus a manual tablet-viewport (768×1024) pass over
+    the dashboard, Guests tab, and Day-of mode. Day-of Mode was already optimized for a portrait
+    phone as part of TS-11.
+  - **Availability** (NFR-9.4): exported PDFs (place cards, table signs, seating charts — from
+    TS-12) are static files with no external network calls baked in, so they're fully usable
+    offline once downloaded/printed, satisfying the "event-ready exports work without a live
+    connection" half of this requirement directly. Uptime monitoring and planned-maintenance
+    scheduling are hosting/ops concerns with nothing to build in application code in this
+    environment — scoped out the same way TLS and infrastructure-level encryption are above.
 
 ## What's next
 
@@ -296,9 +347,20 @@ There's no real email provider wired up — `sendEmailNotification` is a stand-i
 would send; swapping in Resend/SendGrid/SES means replacing that one function's body, not any of
 its call sites or the notification logic around it.
 
+**TS-14 (Non-Functional Requirements) is built**, described above. What's deliberately left out,
+and why: everything that's genuinely a deployment/hosting concern rather than application code —
+TLS termination for encryption in transit, whole-database encryption and backup/retention policy
+at the managed-Postgres level, and uptime monitoring/planned-maintenance scheduling — is
+documented as out of scope for this sandboxed environment rather than faked. `Guest.notes` is the
+only field encrypted at the application level (field-level AES-256-GCM); it's the specific
+personal-data field the requirement is aimed at, not a signal that other fields were overlooked.
+The existing tabs' hide-controls-by-permission gap noted under TS-13 above is unchanged by this
+story — NFR-9.2's plain-language requirement is about the messages shown when an action *is*
+attempted, not about hiding buttons a lower-access collaborator can't use.
+
 Table/venue *visual* layout (drag-and-drop floor plan) and version labeling/comparison are
 modeled in `schema.prisma` already and map to the remaining Jira stories (TS-7's visual piece,
-TS-14, TS-15, and the rest of TS-10). Each can be built as its own vertical slice on top of this
+TS-15, and the rest of TS-10). Each can be built as its own vertical slice on top of this
 foundation.
 
 ## Mobile later

@@ -113,7 +113,7 @@ export function NotificationsBell() {
                     {!n.isRead && <span className="h-2 w-2 shrink-0 rounded-full bg-blue-600" />}
                   </div>
                   <span className="text-sm text-neutral-800">{n.message}</span>
-                  <span className="text-xs text-neutral-400">
+                  <span className="text-xs text-neutral-500">
                     {new Date(n.createdAt).toLocaleString()}
                   </span>
                 </button>
