@@ -17,10 +17,12 @@ export function DayOfTab({
   weddingId,
   guests,
   setGuests,
+  canEdit,
 }: {
   weddingId: string;
   guests: GuestDTO[];
   setGuests: (guests: GuestDTO[]) => void;
+  canEdit: boolean;
 }) {
   const [tables, setTables] = useState<SeatingTableDTO[]>([]);
   const [detail, setDetail] = useState<PlanVersionDetailDTO | null>(null);
@@ -211,6 +213,12 @@ export function DayOfTab({
         </p>
       </div>
 
+      {!canEdit && (
+        <p className="rounded-md bg-neutral-100 px-3 py-2 text-sm text-neutral-600">
+          You have view-only access to this wedding — marking attendance, seating, walk-ins, and
+          swaps are turned off. You can still search and see where everyone's seated.
+        </p>
+      )}
       {error && <p className="text-sm text-red-600">{error}</p>}
       {notice && (
         <p className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-800">
@@ -281,37 +289,39 @@ export function DayOfTab({
                       : "Unassigned"}
                 </p>
               </div>
-              <div className="flex min-h-11 flex-wrap items-center gap-2">
-                {!notAttending && detail && !seatedAt && (
-                  <select
-                    aria-label={`Seat ${g.firstName} ${g.lastName} at a table`}
-                    className="min-h-11 rounded-md border border-neutral-300 px-2 py-2 text-sm disabled:opacity-50"
-                    value=""
-                    disabled={busyGuestId === g.id}
-                    onChange={(e) => onSeatGuest(g.id, e.target.value)}
-                  >
-                    <option value="" disabled>
-                      {busyGuestId === g.id ? "Seating..." : "Seat at..."}
-                    </option>
-                    {tables.map((t) => (
-                      <option key={t.id} value={t.id}>
-                        {t.label}
+              {canEdit && (
+                <div className="flex min-h-11 flex-wrap items-center gap-2">
+                  {!notAttending && detail && !seatedAt && (
+                    <select
+                      aria-label={`Seat ${g.firstName} ${g.lastName} at a table`}
+                      className="min-h-11 rounded-md border border-neutral-300 px-2 py-2 text-sm disabled:opacity-50"
+                      value=""
+                      disabled={busyGuestId === g.id}
+                      onChange={(e) => onSeatGuest(g.id, e.target.value)}
+                    >
+                      <option value="" disabled>
+                        {busyGuestId === g.id ? "Seating..." : "Seat at..."}
                       </option>
-                    ))}
-                  </select>
-                )}
-                <button
-                  onClick={() => onToggleAttendance(g)}
-                  disabled={busyGuestId === g.id}
-                  className={`min-h-11 rounded-md border px-3 py-2 text-sm font-medium disabled:opacity-50 ${
-                    notAttending
-                      ? "border-neutral-300 hover:bg-neutral-50"
-                      : "border-red-300 text-red-600 hover:bg-red-50"
-                  }`}
-                >
-                  {notAttending ? "Mark attending" : "Mark not attending"}
-                </button>
-              </div>
+                      {tables.map((t) => (
+                        <option key={t.id} value={t.id}>
+                          {t.label}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                  <button
+                    onClick={() => onToggleAttendance(g)}
+                    disabled={busyGuestId === g.id}
+                    className={`min-h-11 rounded-md border px-3 py-2 text-sm font-medium disabled:opacity-50 ${
+                      notAttending
+                        ? "border-neutral-300 hover:bg-neutral-50"
+                        : "border-red-300 text-red-600 hover:bg-red-50"
+                    }`}
+                  >
+                    {notAttending ? "Mark attending" : "Mark not attending"}
+                  </button>
+                </div>
+              )}
             </li>
           );
         })}
@@ -320,6 +330,7 @@ export function DayOfTab({
         )}
       </ul>
 
+      {canEdit && (
       <div className="rounded-lg border border-neutral-200 p-4">
         <p className="mb-3 text-sm font-medium">Add a walk-in</p>
         <form onSubmit={onAddWalkIn} className="flex flex-col gap-3">
@@ -371,8 +382,9 @@ export function DayOfTab({
           </button>
         </form>
       </div>
+      )}
 
-      {detail && attendingSeatedGuests.length >= 2 && (
+      {canEdit && detail && attendingSeatedGuests.length >= 2 && (
         <div className="rounded-lg border border-neutral-200 p-4">
           <p className="mb-3 text-sm font-medium">Swap two guests&apos; tables</p>
           <div className="flex flex-col gap-3 sm:flex-row">

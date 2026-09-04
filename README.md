@@ -287,6 +287,14 @@ up for it.
     endpoint — guests, tables, rules, plan versions, manual moves, day-of mode, export, restore —
     now checks this access level instead of pure ownership: reads need View, writes need Edit;
     renaming/deleting the wedding and managing collaborators stay owner-only.
+  - **Permission-aware UI** (follow-on to the above): every tab (Guests, Seating rules, Tables,
+    Seating plan, Day-of mode, Collaborators) now hides or omits a write control a View/Comment-
+    level collaborator can't use, rather than showing it and letting the server's already-correct
+    403 be the first sign something's off. A View-only collaborator sees a plain "view-only access"
+    note in place of the add/import/edit forms per tab, read-only status text instead of action
+    buttons on each row, and the floor plan's tables stop being draggable; an Edit-level
+    collaborator (or the owner) sees every control exactly as before. This is UI-only — the
+    server-side access checks it mirrors were already there and unchanged.
   - **Comments** (FR-10.3) attach to a specific guest or table, support one level of threaded
     replies, and can be resolved by the original commenter or anyone with Edit access (nobody
     else). A comment's target label (e.g. "Guest: Jane Doe") is captured once at creation, so if
@@ -463,18 +471,16 @@ side-by-side comparison view (described in its own bullet above) that was origin
 readability; a denser layout or a stationery-brand-matched template would be a styling pass on the
 same `pdf-lib` code, not a new feature.
 
-**TS-13 (Collaboration & Notifications) is built**, described above. What's deliberately left
-out, and why: the existing tabs (Guests, Tables, Rules, Seating plan, Day-of mode) don't yet
-*hide* controls a View/Comment-level collaborator can't use — server-side enforcement is complete
-and verified (a 403 comes back for every disallowed write), but e.g. a View-only collaborator
-still sees an "Add guest" button that then fails with that 403 rather than being hidden or
-disabled up front. Making every existing tab permission-aware in the UI, not just the API, is a
-straightforward follow-on pass, not a new capability. Notifications are polled (the bell refetches
-every 30s) rather than pushed over a live connection — same tradeoff TS-10 already made for
-concurrent-edit sync, and for the same reason (no websocket/SSE infrastructure in this pass).
-There's no real email provider wired up — `sendEmailNotification` is a stand-in that logs what it
-would send; swapping in Resend/SendGrid/SES means replacing that one function's body, not any of
-its call sites or the notification logic around it.
+**TS-13 (Collaboration & Notifications) is built**, described above, including the
+permission-aware UI hiding that was originally deferred here — every tab now hides/disables the
+write controls a View/Comment-level collaborator can't use, verified end-to-end with a real
+browser session per access level (`test_permission_ui.py`). What's still deliberately left out,
+and why: notifications are polled (the bell refetches every 30s) rather than pushed over a live
+connection — same tradeoff TS-10 already made for concurrent-edit sync, and for the same reason
+(no websocket/SSE infrastructure in this pass). There's no real email provider wired up —
+`sendEmailNotification` is a stand-in that logs what it would send; swapping in Resend/SendGrid/SES
+means replacing that one function's body, not any of its call sites or the notification logic
+around it.
 
 **TS-14 (Non-Functional Requirements) is built**, described above. What's deliberately left out,
 and why: everything that's genuinely a deployment/hosting concern rather than application code —
@@ -483,9 +489,9 @@ at the managed-Postgres level, and uptime monitoring/planned-maintenance schedul
 documented as out of scope for this sandboxed environment rather than faked. `Guest.notes` is the
 only field encrypted at the application level (field-level AES-256-GCM); it's the specific
 personal-data field the requirement is aimed at, not a signal that other fields were overlooked.
-The existing tabs' hide-controls-by-permission gap noted under TS-13 above is unchanged by this
-story — NFR-9.2's plain-language requirement is about the messages shown when an action *is*
-attempted, not about hiding buttons a lower-access collaborator can't use.
+NFR-9.2's plain-language requirement is about the messages shown when an action *is* attempted,
+which is a separate concern from the tabs' permission-aware hiding of those actions up front
+(TS-13, described above) — both are now in place, from two different requirements.
 
 **TS-15 (Integration / End-to-End Scenarios) is built**, described above. Its own description is
 explicit that it "has no requirements of its own" — it validates every other story working
@@ -526,12 +532,12 @@ see the TS-5 paragraph above for how that same flag stays unwired for every othe
 names.
 
 Version labeling and side-by-side comparison are now built (described above) — that closes the
-last gap TS-12 had left open. All three gaps TS-15 originally surfaced or that TS-7 depended on
-(bulk guest import, Side-Mixing, and the visual floor plan) are also closed, so what's left across
-the whole app is: FR-7.1's guest-drag-onto-table interaction on top of the now-existing floor
-plan, the rest of TS-10 (undo/redo, live concurrent-edit sync), and the smaller
-deliberately-deferred items called out story-by-story above (permission-aware UI hiding, a real
-email provider, and the FR-2.9/FR-6.1 Needs Reassignment state beyond FR-4.6's one wired trigger).
+last gap TS-12 had left open, and permission-aware UI hiding (described above) closes the last gap
+TS-13 had left open. All three gaps TS-15 originally surfaced or that TS-7 depended on (bulk guest
+import, Side-Mixing, and the visual floor plan) are also closed, so what's left across the whole
+app is: FR-7.1's guest-drag-onto-table interaction on top of the now-existing floor plan, the rest
+of TS-10 (undo/redo, live concurrent-edit sync), a real email provider, and the FR-2.9/FR-6.1
+Needs Reassignment state beyond FR-4.6's one wired trigger.
 
 ## Mobile later
 

@@ -28,10 +28,12 @@ export function GuestsTab({
   weddingId,
   guests,
   setGuests,
+  canEdit,
 }: {
   weddingId: string;
   guests: GuestDTO[];
   setGuests: (guests: GuestDTO[]) => void;
+  canEdit: boolean;
 }) {
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
@@ -220,6 +222,14 @@ export function GuestsTab({
 
   return (
     <div>
+      {!canEdit && (
+        <p className="mb-4 rounded-md bg-neutral-100 px-3 py-2 text-sm text-neutral-600">
+          You have view-only access to this wedding's guest list — adding, importing, and editing
+          guests is turned off.
+        </p>
+      )}
+      {canEdit && (
+        <>
       <h2 className="mb-3 text-lg font-medium">Add a guest</h2>
       <form
         onSubmit={onAddGuest}
@@ -331,12 +341,6 @@ export function GuestsTab({
       <div className="mb-8 rounded-lg border border-neutral-200 p-4">
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
           <h2 className="text-lg font-medium">Bulk import guests (CSV)</h2>
-          <a
-            href={`/api/v1/weddings/${weddingId}/guests/export`}
-            className="rounded-md border border-neutral-300 min-h-11 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50"
-          >
-            Export current guest list (CSV)
-          </a>
         </div>
         <p className="mb-3 text-sm text-neutral-500">
           Add many guests at once, or update existing ones. Map a &quot;Guest ID&quot; column
@@ -464,10 +468,20 @@ export function GuestsTab({
           </div>
         )}
       </div>
+        </>
+      )}
 
-      <h2 className="mb-3 text-lg font-medium">
-        Guests ({guests.reduce((sum, g) => sum + g.headcount, 0)})
-      </h2>
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <h2 className="text-lg font-medium">
+          Guests ({guests.reduce((sum, g) => sum + g.headcount, 0)})
+        </h2>
+        <a
+          href={`/api/v1/weddings/${weddingId}/guests/export`}
+          className="rounded-md border border-neutral-300 min-h-11 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50"
+        >
+          Export guest list (CSV)
+        </a>
+      </div>
       {guests.length === 0 ? (
         <p className="text-sm text-neutral-500">No guests yet — add your first one above.</p>
       ) : (
@@ -509,31 +523,37 @@ export function GuestsTab({
                 </p>
               </div>
               <div className="flex items-center gap-2">
-                <select
-                  aria-label={`RSVP status for ${g.firstName} ${g.lastName}`}
-                  className="rounded-md border border-neutral-300 px-2 py-1 text-sm"
-                  value={g.rsvpStatus}
-                  onChange={(e) => onUpdateRsvp(g.id, e.target.value as RsvpStatus)}
-                >
-                  {RSVP_STATUSES.map((s) => (
-                    <option key={s} value={s}>
-                      {s}
-                    </option>
-                  ))}
-                </select>
-                <button
-                  onClick={() => onToggleLock(g.id, !g.isLocked)}
-                  title="Locking keeps this guest at their current table when a new plan is generated."
-                  className="rounded-md border border-neutral-300 px-2 py-1 text-sm hover:bg-neutral-50"
-                >
-                  {g.isLocked ? "Unlock" : "Lock"}
-                </button>
-                <button
-                  onClick={() => onDeleteGuest(g.id)}
-                  className="rounded-md border border-neutral-300 px-2 py-1 text-sm text-red-600 hover:bg-red-50"
-                >
-                  Remove
-                </button>
+                {canEdit ? (
+                  <>
+                    <select
+                      aria-label={`RSVP status for ${g.firstName} ${g.lastName}`}
+                      className="rounded-md border border-neutral-300 px-2 py-1 text-sm"
+                      value={g.rsvpStatus}
+                      onChange={(e) => onUpdateRsvp(g.id, e.target.value as RsvpStatus)}
+                    >
+                      {RSVP_STATUSES.map((s) => (
+                        <option key={s} value={s}>
+                          {s}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      onClick={() => onToggleLock(g.id, !g.isLocked)}
+                      title="Locking keeps this guest at their current table when a new plan is generated."
+                      className="rounded-md border border-neutral-300 px-2 py-1 text-sm hover:bg-neutral-50"
+                    >
+                      {g.isLocked ? "Unlock" : "Lock"}
+                    </button>
+                    <button
+                      onClick={() => onDeleteGuest(g.id)}
+                      className="rounded-md border border-neutral-300 px-2 py-1 text-sm text-red-600 hover:bg-red-50"
+                    >
+                      Remove
+                    </button>
+                  </>
+                ) : (
+                  <span className="text-sm text-neutral-500">{g.rsvpStatus}</span>
+                )}
               </div>
             </li>
           ))}

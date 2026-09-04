@@ -42,7 +42,15 @@ const STATUS_BADGE_CLASS: Record<PlanVersionStatusValue, string> = {
   APPROVED: "bg-green-50 text-green-700",
 };
 
-export function PlanTab({ weddingId, guests }: { weddingId: string; guests: GuestDTO[] }) {
+export function PlanTab({
+  weddingId,
+  guests,
+  canEdit,
+}: {
+  weddingId: string;
+  guests: GuestDTO[];
+  canEdit: boolean;
+}) {
   const [versions, setVersions] = useState<PlanVersionDTO[]>([]);
   const [detail, setDetail] = useState<PlanVersionDetailDTO | null>(null);
   const [tables, setTables] = useState<SeatingTableDTO[]>([]);
@@ -249,7 +257,7 @@ export function PlanTab({ weddingId, guests }: { weddingId: string; guests: Gues
       grouped.get(a.tableId)!.guests.push({ guestId: a.guestId, guestName: a.guestName });
     }
   }
-  const canEdit = Boolean(detail?.isCurrent);
+  const canEditThisVersion = canEdit && Boolean(detail?.isCurrent);
 
   return (
     <div>
@@ -262,14 +270,21 @@ export function PlanTab({ weddingId, guests }: { weddingId: string; guests: Gues
             than silently dropped.
           </p>
         </div>
-        <button
-          onClick={onGenerate}
-          disabled={generating}
-          className="min-h-11 shrink-0 rounded-md bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-700 disabled:opacity-50"
-        >
-          {generating ? "Generating..." : "Generate new plan"}
-        </button>
+        {canEdit && (
+          <button
+            onClick={onGenerate}
+            disabled={generating}
+            className="min-h-11 shrink-0 rounded-md bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-700 disabled:opacity-50"
+          >
+            {generating ? "Generating..." : "Generate new plan"}
+          </button>
+        )}
       </div>
+      {!canEdit && (
+        <p className="mb-4 rounded-md bg-neutral-100 px-3 py-2 text-sm text-neutral-600">
+          You have view-only access to this wedding's seating plan.
+        </p>
+      )}
 
       {conflicts.length > 0 && (
         <div className="mb-6 rounded-lg border border-red-200 bg-red-50 p-4">
@@ -435,7 +450,9 @@ export function PlanTab({ weddingId, guests }: { weddingId: string; guests: Gues
             <span className="text-sm text-neutral-500">
               {detail.assignedGuestCount} seated, {detail.unassignedGuestCount} unassigned
             </span>
-            {editingLabel ? (
+            {!canEdit ? (
+              detail.label && <span className="text-sm text-neutral-500">“{detail.label}”</span>
+            ) : editingLabel ? (
               <span className="flex items-center gap-1">
                 <input
                   autoFocus
@@ -511,7 +528,7 @@ export function PlanTab({ weddingId, guests }: { weddingId: string; guests: Gues
                 re-checked against today's guests/tables/rules — it never rewrites this version or
                 anything newer.
               </p>
-              {restorePreview?.sourceVersionNumber !== detail.versionNumber && (
+              {canEdit && restorePreview?.sourceVersionNumber !== detail.versionNumber && (
                 <button
                   onClick={onPreviewRestore}
                   disabled={previewingRestore}
@@ -520,7 +537,7 @@ export function PlanTab({ weddingId, guests }: { weddingId: string; guests: Gues
                   {previewingRestore ? "Checking..." : `Restore version ${detail.versionNumber}...`}
                 </button>
               )}
-              {restorePreview && restorePreview.sourceVersionNumber === detail.versionNumber && (
+              {canEdit && restorePreview && restorePreview.sourceVersionNumber === detail.versionNumber && (
                 <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3">
                   <p className="mb-2 text-sm font-medium text-amber-800">
                     Restoring version {restorePreview.sourceVersionNumber} will create a new
@@ -565,7 +582,7 @@ export function PlanTab({ weddingId, guests }: { weddingId: string; guests: Gues
             </div>
           )}
 
-          {detail.isCurrent && (
+          {detail.isCurrent && canEdit && (
             <div className="mb-6 flex flex-wrap items-center gap-2">
               {detail.status === "DRAFT" && (
                 <button
@@ -650,9 +667,11 @@ export function PlanTab({ weddingId, guests }: { weddingId: string; guests: Gues
             </div>
           )}
 
-          {!canEdit && (
+          {!canEditThisVersion && (
             <p className="mb-4 text-sm text-neutral-500">
-              This is a past version — guests can only be manually moved on the current one.
+              {canEdit
+                ? "This is a past version — guests can only be manually moved on the current one."
+                : "You have view-only access to this wedding's seating plan — manual moves are turned off."}
             </p>
           )}
 
@@ -663,7 +682,7 @@ export function PlanTab({ weddingId, guests }: { weddingId: string; guests: Gues
                 {detail.unassignedGuestIds.map((id) => (
                   <li key={id} className="flex items-center justify-between gap-2 text-sm">
                     <span>{guestName(id)}</span>
-                    {canEdit && (
+                    {canEditThisVersion && (
                       <select
                         aria-label={`Move ${guestName(id)} to a table`}
                         className="min-h-11 rounded-md border border-neutral-300 px-2 py-1 text-sm disabled:opacity-50"
@@ -695,7 +714,7 @@ export function PlanTab({ weddingId, guests }: { weddingId: string; guests: Gues
                   {t.guests.map((g) => (
                     <li key={g.guestId} className="flex items-center justify-between gap-2 text-sm">
                       <span>{g.guestName}</span>
-                      {canEdit && (
+                      {canEditThisVersion && (
                         <select
                           aria-label={`Move ${g.guestName} to a different table`}
                           className="min-h-11 rounded-md border border-neutral-300 px-2 py-1 text-xs disabled:opacity-50"

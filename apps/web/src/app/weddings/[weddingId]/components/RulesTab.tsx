@@ -11,7 +11,15 @@ const TYPES: { value: RelationshipTypeValue; label: string; hard: boolean }[] = 
   { value: "AVOID", label: "Avoid (soft)", hard: false },
 ];
 
-export function RulesTab({ weddingId, guests }: { weddingId: string; guests: GuestDTO[] }) {
+export function RulesTab({
+  weddingId,
+  guests,
+  canEdit,
+}: {
+  weddingId: string;
+  guests: GuestDTO[];
+  canEdit: boolean;
+}) {
   const [relationships, setRelationships] = useState<RelationshipDTO[]>([]);
   const [loading, setLoading] = useState(true);
   const [guestAId, setGuestAId] = useState("");
@@ -70,6 +78,14 @@ export function RulesTab({ weddingId, guests }: { weddingId: string; guests: Gue
 
   return (
     <div>
+      {!canEdit && (
+        <p className="mb-4 rounded-md bg-neutral-100 px-3 py-2 text-sm text-neutral-600">
+          You have view-only access to this wedding's seating rules — adding or removing rules is
+          turned off.
+        </p>
+      )}
+      {canEdit && (
+        <>
       <h2 className="mb-3 text-lg font-medium">Add a seating rule</h2>
       <p className="mb-3 text-sm text-neutral-500">
         &ldquo;Must&rdquo; rules are hard rules — they can never be violated once a seating chart
@@ -148,6 +164,8 @@ export function RulesTab({ weddingId, guests }: { weddingId: string; guests: Gue
         <p className="mb-4 text-sm text-neutral-500">Add at least two guests first.</p>
       )}
       {error && <p className="mb-4 text-sm text-red-600">{error}</p>}
+        </>
+      )}
 
       <h2 className="mb-3 text-lg font-medium">Rules ({relationships.length})</h2>
       {relationships.length === 0 ? (
@@ -171,12 +189,14 @@ export function RulesTab({ weddingId, guests }: { weddingId: string; guests: Gue
                     </span>
                   </p>
                 </div>
-                <button
-                  onClick={() => onRemove(r.id)}
-                  className="rounded-md border border-neutral-300 px-2 py-1 text-sm text-red-600 hover:bg-red-50"
-                >
-                  Remove
-                </button>
+                {canEdit && (
+                  <button
+                    onClick={() => onRemove(r.id)}
+                    className="rounded-md border border-neutral-300 px-2 py-1 text-sm text-red-600 hover:bg-red-50"
+                  >
+                    Remove
+                  </button>
+                )}
               </li>
             );
           })}

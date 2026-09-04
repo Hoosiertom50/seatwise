@@ -126,13 +126,13 @@ export default function WeddingDetailPage() {
       </div>
 
       {tab === "guests" && (
-        <GuestsTab weddingId={weddingId} guests={guests} setGuests={setGuests} />
+        <GuestsTab weddingId={weddingId} guests={guests} setGuests={setGuests} canEdit={canEdit} />
       )}
-      {tab === "rules" && <RulesTab weddingId={weddingId} guests={guests} />}
-      {tab === "tables" && <TablesTab weddingId={weddingId} guests={guests} />}
-      {tab === "plan" && <PlanTab weddingId={weddingId} guests={guests} />}
+      {tab === "rules" && <RulesTab weddingId={weddingId} guests={guests} canEdit={canEdit} />}
+      {tab === "tables" && <TablesTab weddingId={weddingId} guests={guests} canEdit={canEdit} />}
+      {tab === "plan" && <PlanTab weddingId={weddingId} guests={guests} canEdit={canEdit} />}
       {tab === "dayof" && (
-        <DayOfTab weddingId={weddingId} guests={guests} setGuests={setGuests} />
+        <DayOfTab weddingId={weddingId} guests={guests} setGuests={setGuests} canEdit={canEdit} />
       )}
       {tab === "comments" && (
         <CommentsTab
