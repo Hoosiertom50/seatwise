@@ -64,7 +64,10 @@ export interface GeneratePlanResponse {
 
 export const moveGuestAssignmentSchema = z.object({
   guestId: z.string().min(1),
-  tableId: z.string().min(1),
+  // FR-7.5: undo/redo of "assign a previously unassigned guest" needs a way to put a guest back
+  // to unassigned -- tableId: null means exactly that (never exposed as a manual "unassign"
+  // button; only the undo/redo stack calls it directly today).
+  tableId: z.string().min(1).nullable(),
 });
 export type MoveGuestAssignmentInput = z.infer<typeof moveGuestAssignmentSchema>;
 

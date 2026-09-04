@@ -666,6 +666,127 @@ export async function moveGuestAssignment(
   return { planVersion, warnings };
 }
 
+// Shared by moveGuestAssignment and unassignGuestFromPlan: everyone connected to this guest by a
+// chain of MUST_SIT_TOGETHER rules always shares a table, so any manual action on "just" this
+// guest really applies to the whole unit. Not-attending guests are excluded (FR-8.1).
+async function findMustSitTogetherUnit(
+  weddingId: string,
+  guestId: string
+): Promise<{ id: string; name: string }[]> {
+  const { rows: allGuests } = await pool.query(
+    `SELECT id, ("firstName" || ' ' || "lastName") AS name
+     FROM "guests" WHERE "weddingId" = $1 AND "dayOfAttendance" = 'ATTENDING'`,
+    [weddingId]
+  );
+  const { rows: rels } = await pool.query(
+    `SELECT "guestAId", "guestBId" FROM "guest_relationships"
+     WHERE "weddingId" = $1 AND type = 'MUST_SIT_TOGETHER'`,
+    [weddingId]
+  );
+  const parent = new Map<string, string>(allGuests.map((g) => [g.id, g.id]));
+  const find = (id: string): string => {
+    const p = parent.get(id);
+    if (p === undefined || p === id) return id;
+    const root = find(p);
+    parent.set(id, root);
+    return root;
+  };
+  const union = (a: string, b: string) => {
+    const ra = find(a);
+    const rb = find(b);
+    if (ra !== rb) parent.set(ra, rb);
+  };
+  for (const r of rels) {
+    if (parent.has(r.guestAId) && parent.has(r.guestBId)) union(r.guestAId, r.guestBId);
+  }
+  const root = find(guestId);
+  return allGuests.filter((g) => find(g.id) === root);
+}
+
+// FR-7.5: undo/redo needs a way to put a guest (and their must-sit-together unit) back to
+// Unassigned when the action being undone was originally assigning a previously-unassigned
+// guest to a table. Never exposed as a manual "unassign" control -- only the undo/redo stack
+// calls this today -- but it's a real, independently useful primitive: unassigning never
+// violates a hard rule (an empty seat can't conflict with anything), so there's nothing to block,
+// only completeness and change history to keep in sync.
+export async function unassignGuestFromPlan(
+  planVersionId: string,
+  weddingId: string,
+  guestId: string,
+  actorUserId: string
+): Promise<ManualMoveResult> {
+  if (!(await isCurrentVersion(planVersionId, weddingId))) {
+    throw new ManualMoveError(
+      "Only the current plan version can be manually edited — this one has been superseded."
+    );
+  }
+  const { rows: guestRows } = await pool.query(
+    `SELECT id FROM "guests" WHERE id = $1 AND "weddingId" = $2`,
+    [guestId, weddingId]
+  );
+  if (!guestRows[0]) throw new ManualMoveError("Guest not found.");
+
+  const unit = await findMustSitTogetherUnit(weddingId, guestId);
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    for (const member of unit) {
+      await client.query(
+        `DELETE FROM "seat_assignments" WHERE "planVersionId" = $1 AND "guestId" = $2`,
+        [planVersionId, member.id]
+      );
+    }
+
+    const { rows: unassignedCountRows } = await client.query(
+      `SELECT
+         (SELECT COUNT(*)::int FROM "guests" g WHERE g."weddingId" = $1 AND g."dayOfAttendance" = 'ATTENDING'
+            AND NOT EXISTS (
+              SELECT 1 FROM "seat_assignments" sa WHERE sa."planVersionId" = $2 AND sa."guestId" = g.id
+            )
+         ) AS "count",
+         (SELECT COUNT(*)::int FROM "seat_assignments" WHERE "planVersionId" = $2 AND "needsReassignment" = true)
+           AS "needsReassignmentCount"`,
+      [weddingId, planVersionId]
+    );
+    const isComplete =
+      unassignedCountRows[0].count === 0 && unassignedCountRows[0].needsReassignmentCount === 0;
+    await client.query(`UPDATE "plan_versions" SET "isComplete" = $1 WHERE id = $2`, [
+      isComplete,
+      planVersionId,
+    ]);
+
+    const description = `Unassigned ${unit.map((g) => g.name).join(", ")}`;
+    await client.query(
+      `INSERT INTO "change_history_entries" (id, "planVersionId", action, description, "actorUserId")
+       VALUES ($1, $2, 'MANUAL_MOVE', $3, $4)`,
+      [randomUUID(), planVersionId, description, actorUserId]
+    );
+
+    await client.query("COMMIT");
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
+
+  const planVersion = await getPlanVersionDetail(planVersionId, weddingId);
+  if (!planVersion) throw new ManualMoveError("Plan version not found after unassign.");
+  planVersion.warnings = [];
+
+  if (planVersion.status === "APPROVED") {
+    await notifyWeddingCollaborators(
+      weddingId,
+      actorUserId,
+      "TABLE_CHANGED",
+      `${unit.map((g) => g.name).join(", ")} unassigned from their table.`
+    );
+  }
+
+  return { planVersion, warnings: [] };
+}
+
 // FR-8.1 (Day-Of Mode): flip a guest's same-day attendance signal, independent of rsvpStatus —
 // a guest can RSVP Confirmed weeks ahead and still no-show, or walk in unannounced. Marking
 // someone Not Attending frees their seat immediately against the Current Plan Version (no full

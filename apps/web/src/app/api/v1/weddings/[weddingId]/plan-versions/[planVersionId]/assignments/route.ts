@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { moveGuestAssignmentSchema } from "@seatwise/shared";
-import { moveGuestAssignment, ManualMoveError } from "@seatwise/db";
+import { moveGuestAssignment, unassignGuestFromPlan, ManualMoveError } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
 import { errorResponse, zodErrorResponse } from "@/lib/api-response";
 import { requireAccess } from "@/lib/access";
@@ -25,13 +25,18 @@ export async function POST(req: NextRequest, { params }: Params) {
   if (!parsed.success) return zodErrorResponse(parsed.error);
 
   try {
-    const { planVersion, warnings } = await moveGuestAssignment(
-      planVersionId,
-      weddingId,
-      parsed.data.guestId,
-      parsed.data.tableId,
-      user.id
-    );
+    // FR-7.5: tableId: null is the undo/redo stack putting a guest back to Unassigned — never a
+    // manually-offered "unassign" control, but a real distinct action from moving between tables.
+    const { planVersion, warnings } =
+      parsed.data.tableId === null
+        ? await unassignGuestFromPlan(planVersionId, weddingId, parsed.data.guestId, user.id)
+        : await moveGuestAssignment(
+            planVersionId,
+            weddingId,
+            parsed.data.guestId,
+            parsed.data.tableId,
+            user.id
+          );
     return NextResponse.json({ planVersion, warnings });
   } catch (err) {
     if (err instanceof ManualMoveError) {

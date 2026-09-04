@@ -247,6 +247,23 @@ up for it.
     is a second way to trigger the same validated action, not a second code path. Disabled the
     same way the dropdowns are: view-only for a past version, and turned off entirely for a
     Comment/View-level collaborator (the chips simply aren't draggable).
+  - **FR-7.5**: Undo/Redo buttons appear on the Seating plan tab once this browser session has
+    made at least one manual move. Undo replays the inverse of the session's most recent move —
+    back to the guest's actual prior table, or back to Unassigned if that's genuinely where they
+    started — by re-checking the plan first and re-running the same validated move-or-unassign
+    call, so it's subject to the exact same hard-rule checks a fresh move would be (FR-7.2 still
+    applies to an undo). Redo re-applies whatever was just undone. Both are strictly
+    session-scoped, in-memory state — switching plan versions, generating a new version,
+    restoring one, or reloading the page all clear the history, matching the requirement that a
+    reload falls back to version history instead. Before replaying either one, the guest's
+    current seat is checked against what this action expects to find — if anyone (this session
+    via another tab, or another collaborator) has since moved that guest again, the stale
+    undo/redo entry is dropped with an on-screen explanation instead of silently overwriting
+    that newer change. Undoing an "assign a previously-unassigned guest" move needed a genuine
+    new primitive — putting a guest back to Unassigned — since nothing in the app could do that
+    before; the assignment endpoint now accepts `tableId: null` for exactly this (never exposed
+    as its own "Unassign" button, only used by undo/redo today), which itself takes the same
+    must-sit-together unit the forward move would.
   - Guests forced together by "must sit together" always move as one unit — moving one member
     brings the rest along automatically.
   - A move that would break a hard rule (capacity, must-not-sit-together with whoever's already
@@ -493,13 +510,18 @@ Couple user with Comment/Edit" — Comment-level users can comment but not chang
 the permission model FR-6.2/6.3 describe.
 
 **TS-10 is only partially built.** What's there: manual moves with full hard/soft-rule
-validation, locks, change history, and — since this pass — FR-7.1's guest-drag-onto-table
-floor plan, described above. What's deliberately deferred, and why: FR-7.5 (session-scoped
-undo/redo) and FR-7.7 (sub-5-second concurrent-edit sync with conflict detection) are left out —
-they need client-side state and either a live connection (websockets/polling) or optimistic-
-concurrency version checks that are substantial enough to be their own slice; today, two users
-editing the same plan at the same time can each save a change, and the second simply overwrites
-what the first saw (no conflict warning yet).
+validation, locks, change history, FR-7.1's guest-drag-onto-table floor plan, and — since this
+pass — FR-7.5's session-scoped undo/redo, all described above. What's deliberately deferred, and
+why: FR-7.7 (sub-5-second concurrent-edit sync with conflict detection) is left out — it needs
+either a live connection (websockets/polling) or a broader optimistic-concurrency version-check
+layer across every write, substantial enough to be its own slice; today, two users editing the
+same plan at the same time can each save a change, and the second simply overwrites what the
+first saw (no conflict warning yet) — except for undo/redo's own narrow case: before replaying,
+it re-checks the one guest an undo/redo entry is about and refuses if their seat has changed
+since (see the FR-7.5 bullet above). That's real protection for the case undo/redo itself can
+cause, but it's not FR-7.7's fuller picture — a live, sub-5-second refresh across every
+collaborator, or conflict detection on a rule, table, floor-plan position, comment, status, or
+version change that didn't go through undo/redo at all.
 
 **TS-11 (Day-of Mode) is built**, described above. What's deliberately left out, and why: change
 history entries are recorded for every day-of action (and every manual move / status change
@@ -576,8 +598,8 @@ Version labeling and side-by-side comparison are now built (described above) —
 last gap TS-12 had left open, and permission-aware UI hiding (described above) closes the last gap
 TS-13 had left open. All three gaps TS-15 originally surfaced or that TS-7 depended on (bulk guest
 import, Side-Mixing, and the visual floor plan) are also closed, so what's left across the whole
-app is: the rest of TS-10 (undo/redo, live concurrent-edit sync — FR-7.1's guest-drag-onto-table
-interaction is now built, described above) and a real email provider.
+app is: TS-10's live concurrent-edit sync (FR-7.7 — FR-7.1's guest-drag-onto-table interaction
+and FR-7.5's undo/redo are now both built, described above) and a real email provider.
 
 ## Mobile later
 

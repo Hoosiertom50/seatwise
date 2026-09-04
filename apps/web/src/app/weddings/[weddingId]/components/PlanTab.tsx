@@ -36,6 +36,18 @@ function versionOptionLabel(v: PlanVersionDTO): string {
 const PLAN_BOX_WIDTH = 168;
 const PLAN_BOX_MIN_HEIGHT = 92;
 
+// FR-7.5: one manual-move action, as recorded for undo/redo. `toTableId` is the table the guest's
+// own unit ended up at; `priorTableId` is where *this specific guest* was seated before (null if
+// they were unassigned). Undoing/redoing replays a single move-or-unassign call for `guestId` --
+// since MUST_SIT_TOGETHER membership is still live and unchanged, the backend sweeps the same
+// whole unit along again, exactly mirroring how the original action worked.
+interface UndoEntry {
+  guestId: string;
+  priorTableId: string | null;
+  toTableId: string;
+  description: string;
+}
+
 const STATUS_LABEL: Record<PlanVersionStatusValue, string> = {
   DRAFT: "Draft",
   IN_REVIEW: "In review",
@@ -80,11 +92,19 @@ export function PlanTab({
   const [comparing, setComparing] = useState(false);
   const [compareError, setCompareError] = useState<string | null>(null);
   const [planView, setPlanView] = useState<"list" | "floorplan">("list");
+  // FR-7.5: session-scoped undo/redo of manual moves. Deliberately plain component state, not
+  // persisted anywhere -- per the requirement, undo/redo only ever applies "within the user's
+  // current editing session," and after a reload the user goes through version history instead.
+  const [undoStack, setUndoStack] = useState<UndoEntry[]>([]);
+  const [redoStack, setRedoStack] = useState<UndoEntry[]>([]);
+  const [undoRedoBusy, setUndoRedoBusy] = useState(false);
 
   const guestName = (id: string) => {
     const g = guests.find((g) => g.id === id);
     return g ? `${g.firstName} ${g.lastName}` : id;
   };
+
+  const tableLabel = (id: string) => tables.find((t) => t.id === id)?.label ?? id;
 
   async function loadVersions(selectId?: string) {
     const res = await api.get<{ planVersions: PlanVersionDTO[] }>(
@@ -119,6 +139,8 @@ export function PlanTab({
     setConflicts([]);
     setMoveWarnings([]);
     setRestorePreview(null);
+    setUndoStack([]);
+    setRedoStack([]);
     setGenerating(true);
     try {
       const res = await api.post<{ planVersion: PlanVersionDetailDTO }>(
@@ -139,6 +161,11 @@ export function PlanTab({
   async function onSelectVersion(id: string) {
     setMoveWarnings([]);
     setRestorePreview(null);
+    // Undo/redo history is scoped to whichever version was current when each move was made --
+    // switching what's being viewed ends that continuity rather than risk replaying a stale move
+    // against the wrong version later.
+    setUndoStack([]);
+    setRedoStack([]);
     const d = await api.get<{ planVersion: PlanVersionDetailDTO }>(
       `/api/v1/weddings/${weddingId}/plan-versions/${id}`
     );
@@ -150,6 +177,7 @@ export function PlanTab({
     setError(null);
     setMoveWarnings([]);
     setMovingGuestId(guestId);
+    const priorTableId = detail.assignments.find((a) => a.guestId === guestId)?.tableId ?? null;
     try {
       const res = await api.post<{ planVersion: PlanVersionDetailDTO; warnings: string[] }>(
         `/api/v1/weddings/${weddingId}/plan-versions/${detail.id}/assignments`,
@@ -158,10 +186,95 @@ export function PlanTab({
       setDetail(res.planVersion);
       setVersions((vs) => vs.map((v) => (v.id === res.planVersion.id ? res.planVersion : v)));
       setMoveWarnings(res.warnings);
+      if (priorTableId !== tableId) {
+        setUndoStack((s) => [
+          ...s,
+          {
+            guestId,
+            priorTableId,
+            toTableId: tableId,
+            description: `move ${guestName(guestId)} to "${tableLabel(tableId)}"`,
+          },
+        ]);
+        setRedoStack([]);
+      }
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't move that guest.");
     } finally {
       setMovingGuestId(null);
+    }
+  }
+
+  // FR-7.5: undo and redo are each "replay this one guest's move-or-unassign action" -- they
+  // never reverse another user's later saved change. Before replaying, re-fetch the plan and
+  // check the guest is still exactly where this action last left them; if anyone (this user via
+  // another tab, or a collaborator) has since moved them again, the stale entry is dropped
+  // instead of blindly overwriting that newer change, and the current state is shown instead.
+  async function onUndo() {
+    if (undoStack.length === 0 || !detail || undoRedoBusy) return;
+    const entry = undoStack[undoStack.length - 1];
+    setError(null);
+    setUndoRedoBusy(true);
+    try {
+      const fresh = await api.get<{ planVersion: PlanVersionDetailDTO }>(
+        `/api/v1/weddings/${weddingId}/plan-versions/${detail.id}`
+      );
+      const currentTableId = fresh.planVersion.assignments.find((a) => a.guestId === entry.guestId)?.tableId ?? null;
+      if (currentTableId !== entry.toTableId) {
+        setDetail(fresh.planVersion);
+        setUndoStack((s) => s.slice(0, -1));
+        setError(
+          `Can't undo that — ${guestName(entry.guestId)}'s seat has changed since then (possibly by another collaborator).`
+        );
+        return;
+      }
+      const res = await api.post<{ planVersion: PlanVersionDetailDTO; warnings: string[] }>(
+        `/api/v1/weddings/${weddingId}/plan-versions/${detail.id}/assignments`,
+        { guestId: entry.guestId, tableId: entry.priorTableId }
+      );
+      setDetail(res.planVersion);
+      setVersions((vs) => vs.map((v) => (v.id === res.planVersion.id ? res.planVersion : v)));
+      setMoveWarnings(res.warnings);
+      setUndoStack((s) => s.slice(0, -1));
+      setRedoStack((r) => [...r, entry]);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Couldn't undo that move.");
+    } finally {
+      setUndoRedoBusy(false);
+    }
+  }
+
+  async function onRedo() {
+    if (redoStack.length === 0 || !detail || undoRedoBusy) return;
+    const entry = redoStack[redoStack.length - 1];
+    setError(null);
+    setUndoRedoBusy(true);
+    try {
+      const fresh = await api.get<{ planVersion: PlanVersionDetailDTO }>(
+        `/api/v1/weddings/${weddingId}/plan-versions/${detail.id}`
+      );
+      const currentTableId = fresh.planVersion.assignments.find((a) => a.guestId === entry.guestId)?.tableId ?? null;
+      if (currentTableId !== entry.priorTableId) {
+        setDetail(fresh.planVersion);
+        setRedoStack((s) => s.slice(0, -1));
+        setError(
+          `Can't redo that — ${guestName(entry.guestId)}'s seat has changed since then (possibly by another collaborator).`
+        );
+        return;
+      }
+      const res = await api.post<{ planVersion: PlanVersionDetailDTO; warnings: string[] }>(
+        `/api/v1/weddings/${weddingId}/plan-versions/${detail.id}/assignments`,
+        { guestId: entry.guestId, tableId: entry.toTableId }
+      );
+      setDetail(res.planVersion);
+      setVersions((vs) => vs.map((v) => (v.id === res.planVersion.id ? res.planVersion : v)));
+      setMoveWarnings(res.warnings);
+      setRedoStack((s) => s.slice(0, -1));
+      setUndoStack((u) => [...u, entry]);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Couldn't redo that move.");
+    } finally {
+      setUndoRedoBusy(false);
     }
   }
 
@@ -208,6 +321,8 @@ export function PlanTab({
         `/api/v1/weddings/${weddingId}/plan-versions/${detail.id}/restore`
       );
       setRestorePreview(null);
+      setUndoStack([]);
+      setRedoStack([]);
       await loadVersions(res.planVersion.id);
       setMoveWarnings(res.warnings);
     } catch (err) {
@@ -682,6 +797,33 @@ export function PlanTab({
                 ? "This is a past version — guests can only be manually moved on the current one."
                 : "You have view-only access to this wedding's seating plan — manual moves are turned off."}
             </p>
+          )}
+
+          {canEditThisVersion && (undoStack.length > 0 || redoStack.length > 0) && (
+            <div className="mb-4 flex flex-wrap items-center gap-2">
+              <button
+                data-testid="undo-button"
+                onClick={onUndo}
+                disabled={undoStack.length === 0 || undoRedoBusy || movingGuestId !== null}
+                title={undoStack.length > 0 ? `Undo: ${undoStack[undoStack.length - 1].description}` : undefined}
+                className="min-h-11 rounded-md border border-neutral-300 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 disabled:opacity-50"
+              >
+                {undoRedoBusy ? "Working..." : "Undo"}
+              </button>
+              <button
+                data-testid="redo-button"
+                onClick={onRedo}
+                disabled={redoStack.length === 0 || undoRedoBusy || movingGuestId !== null}
+                title={redoStack.length > 0 ? `Redo: ${redoStack[redoStack.length - 1].description}` : undefined}
+                className="min-h-11 rounded-md border border-neutral-300 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 disabled:opacity-50"
+              >
+                Redo
+              </button>
+              <span className="text-xs text-neutral-500">
+                Undo/redo covers this browser session's own moves only (FR-7.5) — reload or switch
+                versions and use version history instead.
+              </span>
+            </div>
           )}
 
           {planView === "list" && detail.unassignedGuestIds.length > 0 && (
