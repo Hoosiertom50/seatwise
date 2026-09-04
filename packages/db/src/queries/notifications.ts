@@ -1,4 +1,5 @@
 import { randomUUID } from "crypto";
+import { Resend } from "resend";
 import { pool } from "../pool";
 
 export interface NotificationRow {
@@ -12,15 +13,42 @@ export interface NotificationRow {
   createdAt: Date;
 }
 
-// FR-10.2: no real email provider is wired up in this environment — this stands in for one. A
-// failed "send" must never block the in-app notification or the action that triggered it, so it
-// never throws; swapping in a real provider (Resend, SendGrid, SES) means replacing only this
-// function's body, not any of its call sites.
+// FR-10.2: real email delivery via Resend. This sandbox has no real Resend account, so
+// RESEND_API_KEY is an env-var placeholder — see .env.example. With no key configured, this falls
+// back to the same console-log stand-in the app always used, so local/dev/sandbox behavior (and
+// every existing test) is unaffected; set RESEND_API_KEY (and optionally RESEND_FROM_EMAIL, which
+// must be a verified sending address/domain in the Resend account) to send real email instead. A
+// failed "send" — no key, a rejected request, a network error — must never block the in-app
+// notification or the action that triggered it, so this never throws.
+const resendFromAddress = process.env.RESEND_FROM_EMAIL || "Seatwise <notifications@seatwise.app>";
+let resendClient: Resend | null | undefined;
+
+function getResendClient(): Resend | null {
+  if (resendClient === undefined) {
+    const apiKey = process.env.RESEND_API_KEY;
+    resendClient = apiKey ? new Resend(apiKey) : null;
+  }
+  return resendClient;
+}
+
 async function sendEmailNotification(toEmail: string, subject: string, body: string): Promise<void> {
   try {
-    console.log(`[email-stub] to=${toEmail} subject="${subject}" body="${body}"`);
-  } catch {
-    // best-effort — never throw
+    const client = getResendClient();
+    if (!client) {
+      console.log(`[email-stub] to=${toEmail} subject="${subject}" body="${body}"`);
+      return;
+    }
+    const { error } = await client.emails.send({
+      from: resendFromAddress,
+      to: toEmail,
+      subject,
+      text: body,
+    });
+    if (error) {
+      console.error(`[email] Resend rejected a notification to ${toEmail}: ${error.message}`);
+    }
+  } catch (err) {
+    console.error(`[email] failed to send notification to ${toEmail}:`, err);
   }
 }
 

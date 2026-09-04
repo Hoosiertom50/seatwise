@@ -14,7 +14,8 @@
     "@prisma/adapter-pg": "^7.10.0",
     "@prisma/client": "^6.9.0",
     "@seatwise/shared": "workspace:*",
-    "pg": "^8.23.0"
+    "pg": "^8.23.0",
+    "resend": "^6.26.0"
   },
   "devDependencies": {
     "@types/pg": "^8.23.1",

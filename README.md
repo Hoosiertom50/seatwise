@@ -386,14 +386,21 @@ up for it.
     wedding (every earlier story's Change History entries were only ever queryable one version at
     a time) — status changes, manual moves/swaps, attendance changes, and restores, newest first,
     each with who did it and when.
-  - **In-app notifications** (FR-10.2): the owner and every other collaborator (except whoever
-    caused it) gets a notification when a plan is shared for review, a comment gets a reply, or —
-    once the Current version is Approved — a guest's table changes, a guest is added or removed,
-    or attendance changes; any other status transition also notifies. A bell in the header (every
-    page) shows the unread count and a dropdown to read/mark-read. Each wedding has a per-wedding
-    email opt-out (on by default); a stubbed "email send" logs what it would have sent (there's no
-    real provider wired up in this environment) and is written so a failed send can never block
-    the in-app notification or the action that triggered it.
+  - **In-app and real email notifications** (FR-10.2): the owner and every other collaborator
+    (except whoever caused it) gets a notification when a plan is shared for review, a comment
+    gets a reply, or — once the Current version is Approved — a guest's table changes, a guest is
+    added or removed, or attendance changes; any other status transition also notifies. A bell in
+    the header (every page) shows the unread count and a dropdown to read/mark-read. Each wedding
+    has a per-wedding email opt-out (on by default). Email delivery goes through Resend; this
+    sandbox has no real Resend account, so `RESEND_API_KEY` is an env-var placeholder (see
+    `.env.example`) and, unset, falls back to logging what would have been sent — set the key (and
+    `RESEND_FROM_EMAIL`, a verified sending address in that Resend account) to send real email
+    with no other code change. Either way, a failed or unconfigured send can never block the
+    in-app notification or the action that triggered it — verified end-to-end against a live
+    (restarted) server both with no key configured and with a key Resend actually rejects, in
+    both cases confirming the underlying action still succeeds and the in-app notification still
+    lands, and that a real rejection is genuinely logged rather than silently swallowed
+    (`test_email_provider.py`).
 - Every list/detail endpoint enforces access — you can't read or modify a wedding, guests, rules,
   tables, or plan versions you don't own or collaborate on by guessing an ID, and a seating rule
   can't be created between guests from two different weddings even if you have access to both.
@@ -559,16 +566,15 @@ side-by-side comparison view (described in its own bullet above) that was origin
 readability; a denser layout or a stationery-brand-matched template would be a styling pass on the
 same `pdf-lib` code, not a new feature.
 
-**TS-13 (Collaboration & Notifications) is built**, described above, including the
-permission-aware UI hiding that was originally deferred here — every tab now hides/disables the
-write controls a View/Comment-level collaborator can't use, verified end-to-end with a real
-browser session per access level (`test_permission_ui.py`). What's still deliberately left out,
-and why: notifications are polled (the bell refetches every 30s) rather than pushed over a live
-connection — same tradeoff TS-10 already made for concurrent-edit sync, and for the same reason
-(no websocket/SSE infrastructure in this pass). There's no real email provider wired up —
-`sendEmailNotification` is a stand-in that logs what it would send; swapping in Resend/SendGrid/SES
-means replacing that one function's body, not any of its call sites or the notification logic
-around it.
+**TS-13 (Collaboration & Notifications) is now fully built.** What's there: everything described
+above, including the permission-aware UI hiding that was originally deferred here — every tab now
+hides/disables the write controls a View/Comment-level collaborator can't use, verified end-to-end
+with a real browser session per access level (`test_permission_ui.py`) — and, since this pass,
+real email delivery via Resend (`RESEND_API_KEY`/`RESEND_FROM_EMAIL`, both env-var placeholders in
+this sandbox — see the FR-10.2 bullet above). What's still deliberately left out, and why:
+notifications are polled (the bell refetches every 30s) rather than pushed over a live connection
+— same tradeoff TS-10's own live-sync polling makes for the same reason (no websocket/SSE
+infrastructure in this pass).
 
 **TS-14 (Non-Functional Requirements) is built**, described above. What's deliberately left out,
 and why: everything that's genuinely a deployment/hosting concern rather than application code —
@@ -616,13 +622,15 @@ introduces started out scoped to just the accessible-flag trigger, but has since
 to every field FR-2.9 names — see the FR-2.9 bullet above and the TS-5 paragraph below.
 
 Version labeling and side-by-side comparison are now built (described above) — that closes the
-last gap TS-12 had left open, and permission-aware UI hiding (described above) closes the last gap
-TS-13 had left open. All three gaps TS-15 originally surfaced or that TS-7 depended on (bulk guest
-import, Side-Mixing, and the visual floor plan) are also closed. TS-10 is now built for the Current
-Plan Version scope FR-7.1–FR-7.7 describe (FR-7.1's floor-plan drag, FR-7.5's undo/redo, and
-FR-7.7's concurrent-edit sync and conflict detection are all in, described above; entity-level
-conflict detection for guests/rules/tables/comments remains a documented, deliberate gap — see the
-TS-10 paragraph above), so what's left across the whole app is a real email provider.
+last gap TS-12 had left open, and permission-aware UI hiding and real email delivery (both
+described above) close the last gaps TS-13 had left open. All three gaps TS-15 originally surfaced
+or that TS-7 depended on (bulk guest import, Side-Mixing, and the visual floor plan) are also
+closed. TS-10 is now built for the Current Plan Version scope FR-7.1–FR-7.7 describe (FR-7.1's
+floor-plan drag, FR-7.5's undo/redo, and FR-7.7's concurrent-edit sync and conflict detection are
+all in, described above; entity-level conflict detection for guests/rules/tables/comments remains
+a documented, deliberate gap — see the TS-10 paragraph above). With that, every story in the
+original requirements doc has been built to the scope its own requirements describe, with every
+deliberate gap named and explained in its own paragraph above rather than left silent.
 
 ## Mobile later
 
