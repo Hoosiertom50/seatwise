@@ -106,6 +106,16 @@ export function PlanTab({
 
   const tableLabel = (id: string) => tables.find((t) => t.id === id)?.label ?? id;
 
+  // FR-7.7: a 409 conflict carries the fresh, currently-committed plan version alongside the
+  // message -- pulling it out lets every write handler refresh the view in one step instead of a
+  // second round-trip, and shows the user what changed rather than a bare error.
+  function conflictPlanVersion(err: unknown): PlanVersionDetailDTO | null {
+    if (err instanceof ApiError && err.status === 409 && err.data?.planVersion) {
+      return err.data.planVersion as PlanVersionDetailDTO;
+    }
+    return null;
+  }
+
   async function loadVersions(selectId?: string) {
     const res = await api.get<{ planVersions: PlanVersionDTO[] }>(
       `/api/v1/weddings/${weddingId}/plan-versions`
@@ -133,6 +143,47 @@ export function PlanTab({
       .finally(() => setLoading(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [weddingId]);
+
+  // FR-7.7: "a saved change made by one user becomes visible to the others within five seconds
+  // without a manual refresh." Polls the Current Plan Version every 4s and merges in whatever's
+  // actually new (by comparing revision, so an unchanged plan never re-renders). Skipped entirely
+  // while any write from this tab is in flight, so a poll landing mid-action can't clobber an
+  // optimistic update or yank the view out from under a click. Scoped to the current version
+  // only, matching FR-7.7's own "the same wedding or Current Plan Version" wording -- broader
+  // live sync for guests/rules/tables/comments isn't built in this pass (see the README).
+  useEffect(() => {
+    if (!detail?.isCurrent) return;
+    const planVersionId = detail.id;
+    const busy = movingGuestId !== null || undoRedoBusy || statusUpdating || savingLabel || restoring || generating;
+    if (busy) return;
+    const interval = setInterval(async () => {
+      try {
+        const res = await api.get<{ planVersion: PlanVersionDetailDTO }>(
+          `/api/v1/weddings/${weddingId}/plan-versions/${planVersionId}`
+        );
+        setDetail((cur) => {
+          if (!cur || cur.id !== planVersionId || cur.revision === res.planVersion.revision) return cur;
+          return res.planVersion;
+        });
+        setVersions((vs) => vs.map((v) => (v.id === res.planVersion.id ? res.planVersion : v)));
+      } catch {
+        // Best-effort background sync -- a transient failure here isn't worth surfacing as an
+        // error; the next tick tries again.
+      }
+    }, 4000);
+    return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    detail?.id,
+    detail?.isCurrent,
+    weddingId,
+    movingGuestId,
+    undoRedoBusy,
+    statusUpdating,
+    savingLabel,
+    restoring,
+    generating,
+  ]);
 
   async function onGenerate() {
     setError(null);
@@ -181,7 +232,7 @@ export function PlanTab({
     try {
       const res = await api.post<{ planVersion: PlanVersionDetailDTO; warnings: string[] }>(
         `/api/v1/weddings/${weddingId}/plan-versions/${detail.id}/assignments`,
-        { guestId, tableId }
+        { guestId, tableId, expectedRevision: detail.revision }
       );
       setDetail(res.planVersion);
       setVersions((vs) => vs.map((v) => (v.id === res.planVersion.id ? res.planVersion : v)));
@@ -199,6 +250,13 @@ export function PlanTab({
         setRedoStack([]);
       }
     } catch (err) {
+      // FR-7.7: this plan changed under us -- show the fresh state instead of leaving the view
+      // stale, and don't record an undo entry for a move that never actually applied.
+      const fresh = conflictPlanVersion(err);
+      if (fresh) {
+        setDetail(fresh);
+        setVersions((vs) => vs.map((v) => (v.id === fresh.id ? fresh : v)));
+      }
       setError(err instanceof ApiError ? err.message : "Couldn't move that guest.");
     } finally {
       setMovingGuestId(null);
@@ -285,11 +343,16 @@ export function PlanTab({
     try {
       const res = await api.post<{ planVersion: PlanVersionDetailDTO }>(
         `/api/v1/weddings/${weddingId}/plan-versions/${detail.id}/status`,
-        { status: newStatus }
+        { status: newStatus, expectedRevision: detail.revision }
       );
       setDetail(res.planVersion);
       setVersions((vs) => vs.map((v) => (v.id === res.planVersion.id ? res.planVersion : v)));
     } catch (err) {
+      const fresh = conflictPlanVersion(err);
+      if (fresh) {
+        setDetail(fresh);
+        setVersions((vs) => vs.map((v) => (v.id === fresh.id ? fresh : v)));
+      }
       setError(err instanceof ApiError ? err.message : "Couldn't update the plan's status.");
     } finally {
       setStatusUpdating(false);
@@ -339,12 +402,17 @@ export function PlanTab({
     try {
       const res = await api.patch<{ planVersion: PlanVersionDetailDTO }>(
         `/api/v1/weddings/${weddingId}/plan-versions/${detail.id}`,
-        { label: labelInput }
+        { label: labelInput, expectedRevision: detail.revision }
       );
       setDetail(res.planVersion);
       setVersions((vs) => vs.map((v) => (v.id === res.planVersion.id ? res.planVersion : v)));
       setEditingLabel(false);
     } catch (err) {
+      const fresh = conflictPlanVersion(err);
+      if (fresh) {
+        setDetail(fresh);
+        setVersions((vs) => vs.map((v) => (v.id === fresh.id ? fresh : v)));
+      }
       setError(err instanceof ApiError ? err.message : "Couldn't save that label.");
     } finally {
       setSavingLabel(false);

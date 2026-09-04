@@ -22,6 +22,9 @@ export interface PlanVersionRow {
   // effect when this version was generated — null on a version created before this field existed.
   sideMixingSetting: string | null;
   ruleConfigVersion: number | null;
+  // FR-7.7: an optimistic-concurrency counter for this version's assignments/status/label. A
+  // write that names an expectedRevision the server no longer matches is rejected as stale.
+  revision: number;
 }
 
 export interface ModifiedSinceApproval {
@@ -35,6 +38,45 @@ export class ManualMoveError extends Error {}
 export class AttendanceError extends Error {}
 export class SwapError extends Error {}
 export class RestoreError extends Error {}
+
+// FR-7.7: thrown instead of applying a write whose expectedRevision no longer matches the
+// version's current one -- the fresh, up-to-date planVersion is attached so the caller can
+// refresh the UI with it directly rather than making a second round-trip.
+export class PlanVersionConflictError extends Error {
+  planVersion: PlanVersionDetail;
+  constructor(message: string, planVersion: PlanVersionDetail) {
+    super(message);
+    this.planVersion = planVersion;
+  }
+}
+
+// FR-7.7: shared by every write that accepts an optional expectedRevision. Locks the plan
+// version's row (FOR UPDATE, inside the caller's own open transaction) so no other write can
+// interleave, then compares its current revision against what the caller last saw. A mismatch
+// means someone else's save landed first -- rather than proceeding on stale data, this throws
+// PlanVersionConflictError with the fresh, currently-committed plan version attached (a plain
+// read from a second connection isn't blocked by our row lock, so it safely sees the latest
+// committed state); the caller's existing catch-and-ROLLBACK handles the rest. A caller that
+// passes no expectedRevision at all (an internal/legacy call site) skips the check entirely.
+async function checkPlanVersionRevision(
+  client: { query: (text: string, params?: unknown[]) => Promise<{ rows: Record<string, unknown>[] }> },
+  planVersionId: string,
+  weddingId: string,
+  expectedRevision: number | undefined
+): Promise<void> {
+  const { rows } = await client.query(
+    `SELECT revision FROM "plan_versions" WHERE id = $1 FOR UPDATE`,
+    [planVersionId]
+  );
+  const currentRevision = (rows[0]?.revision as number | undefined) ?? 0;
+  if (expectedRevision !== undefined && currentRevision !== expectedRevision) {
+    const fresh = await getPlanVersionDetail(planVersionId, weddingId);
+    throw new PlanVersionConflictError(
+      "This plan changed since you loaded it — someone else's change landed first. It's been refreshed with the latest — please try again.",
+      fresh!
+    );
+  }
+}
 
 export interface RestorePreview {
   sourceVersionNumber: number;
@@ -203,7 +245,7 @@ export async function recomputeCurrentPlanCompleteness(weddingId: string): Promi
 export async function listPlanVersionsForWedding(weddingId: string): Promise<PlanVersionRow[]> {
   const { rows } = await pool.query(
     `SELECT pv.id, pv."weddingId", pv."versionNumber", pv.label, pv.status, pv."isComplete",
-            pv."approvedAt", pv."createdAt",
+            pv."approvedAt", pv."createdAt", pv.revision,
             (pv."versionNumber" = (SELECT MAX("versionNumber") FROM "plan_versions" WHERE "weddingId" = pv."weddingId")) AS "isCurrent",
             COALESCE(sa.count, 0)::int AS "assignedGuestCount",
             GREATEST(
@@ -258,7 +300,8 @@ export async function setPlanVersionStatus(
   id: string,
   weddingId: string,
   newStatus: PlanVersionStatusValue,
-  actorUserId: string
+  actorUserId: string,
+  expectedRevision?: number
 ): Promise<PlanVersionDetail | null> {
   if (!(await isCurrentVersion(id, weddingId))) {
     throw new PlanVersionStatusError(
@@ -270,13 +313,21 @@ export async function setPlanVersionStatus(
   try {
     await client.query("BEGIN");
     const { rows } = await client.query(
-      `SELECT status, "isComplete" FROM "plan_versions" WHERE id = $1 AND "weddingId" = $2 FOR UPDATE`,
+      `SELECT status, "isComplete", revision FROM "plan_versions" WHERE id = $1 AND "weddingId" = $2 FOR UPDATE`,
       [id, weddingId]
     );
     const current = rows[0];
     if (!current) {
       await client.query("ROLLBACK");
       return null;
+    }
+    if (expectedRevision !== undefined && current.revision !== expectedRevision) {
+      await client.query("ROLLBACK");
+      const fresh = await getPlanVersionDetail(id, weddingId);
+      throw new PlanVersionConflictError(
+        "This plan changed since you loaded it — someone else's change landed first. It's been refreshed with the latest — please try again.",
+        fresh!
+      );
     }
 
     if (newStatus === "APPROVED" && !current.isComplete) {
@@ -292,7 +343,8 @@ export async function setPlanVersionStatus(
     await client.query(
       `UPDATE "plan_versions"
        SET status = $1::"PlanVersionStatus",
-           "approvedAt" = CASE WHEN $1::"PlanVersionStatus" = 'APPROVED' THEN now() ELSE NULL END
+           "approvedAt" = CASE WHEN $1::"PlanVersionStatus" = 'APPROVED' THEN now() ELSE NULL END,
+           revision = revision + 1
        WHERE id = $2`,
       [newStatus, id]
     );
@@ -332,7 +384,7 @@ export async function getPlanVersionDetail(
 ): Promise<PlanVersionDetail | null> {
   const { rows: versionRows } = await pool.query(
     `SELECT pv.id, pv."weddingId", pv."versionNumber", pv.label, pv.status, pv."isComplete",
-            pv."approvedAt", pv."createdAt", pv."sideMixingSetting", pv."ruleConfigVersion",
+            pv."approvedAt", pv."createdAt", pv."sideMixingSetting", pv."ruleConfigVersion", pv.revision,
             (pv."versionNumber" = (SELECT MAX("versionNumber") FROM "plan_versions" WHERE "weddingId" = $2)) AS "isCurrent",
             restored_from."versionNumber" AS "restoredFromVersionNumber"
      FROM "plan_versions" pv
@@ -416,7 +468,8 @@ export async function moveGuestAssignment(
   weddingId: string,
   guestId: string,
   targetTableId: string,
-  actorUserId: string
+  actorUserId: string,
+  expectedRevision?: number
 ): Promise<ManualMoveResult> {
   if (!(await isCurrentVersion(planVersionId, weddingId))) {
     throw new ManualMoveError(
@@ -602,6 +655,7 @@ export async function moveGuestAssignment(
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
+    await checkPlanVersionRevision(client, planVersionId, weddingId, expectedRevision);
     for (const member of unit) {
       await client.query(
         `INSERT INTO "seat_assignments" (id, "planVersionId", "guestId", "seatingTableId", "needsReassignment", "updatedAt")
@@ -628,10 +682,10 @@ export async function moveGuestAssignment(
     );
     const isComplete =
       unassignedCountRows[0].count === 0 && unassignedCountRows[0].needsReassignmentCount === 0;
-    await client.query(`UPDATE "plan_versions" SET "isComplete" = $1 WHERE id = $2`, [
-      isComplete,
-      planVersionId,
-    ]);
+    await client.query(
+      `UPDATE "plan_versions" SET "isComplete" = $1, revision = revision + 1 WHERE id = $2`,
+      [isComplete, planVersionId]
+    );
 
     const description = `Moved ${unit.map((g) => g.name).join(", ")} to "${targetTable.label}"`;
     await client.query(
@@ -713,7 +767,8 @@ export async function unassignGuestFromPlan(
   planVersionId: string,
   weddingId: string,
   guestId: string,
-  actorUserId: string
+  actorUserId: string,
+  expectedRevision?: number
 ): Promise<ManualMoveResult> {
   if (!(await isCurrentVersion(planVersionId, weddingId))) {
     throw new ManualMoveError(
@@ -731,6 +786,7 @@ export async function unassignGuestFromPlan(
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
+    await checkPlanVersionRevision(client, planVersionId, weddingId, expectedRevision);
     for (const member of unit) {
       await client.query(
         `DELETE FROM "seat_assignments" WHERE "planVersionId" = $1 AND "guestId" = $2`,
@@ -751,10 +807,10 @@ export async function unassignGuestFromPlan(
     );
     const isComplete =
       unassignedCountRows[0].count === 0 && unassignedCountRows[0].needsReassignmentCount === 0;
-    await client.query(`UPDATE "plan_versions" SET "isComplete" = $1 WHERE id = $2`, [
-      isComplete,
-      planVersionId,
-    ]);
+    await client.query(
+      `UPDATE "plan_versions" SET "isComplete" = $1, revision = revision + 1 WHERE id = $2`,
+      [isComplete, planVersionId]
+    );
 
     const description = `Unassigned ${unit.map((g) => g.name).join(", ")}`;
     await client.query(
@@ -906,7 +962,8 @@ export async function swapGuestAssignments(
   weddingId: string,
   guestAId: string,
   guestBId: string,
-  actorUserId: string
+  actorUserId: string,
+  expectedRevision?: number
 ): Promise<ManualMoveResult> {
   if (!(await isCurrentVersion(planVersionId, weddingId))) {
     throw new SwapError(
@@ -1133,6 +1190,7 @@ export async function swapGuestAssignments(
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
+    await checkPlanVersionRevision(client, planVersionId, weddingId, expectedRevision);
     for (const member of unitB) {
       await client.query(
         `UPDATE "seat_assignments" SET "seatingTableId" = $1, "needsReassignment" = false, "updatedAt" = now()
@@ -1147,6 +1205,10 @@ export async function swapGuestAssignments(
         [tableBId, planVersionId, member.id]
       );
     }
+
+    await client.query(`UPDATE "plan_versions" SET revision = revision + 1 WHERE id = $1`, [
+      planVersionId,
+    ]);
 
     const description =
       `Swapped ${unitA.map((g) => g.name).join(", ")} (was at "${tableA.label}") with ` +
@@ -1422,14 +1484,29 @@ export async function restorePlanVersion(
 export async function setPlanVersionLabel(
   id: string,
   weddingId: string,
-  label: string
+  label: string,
+  expectedRevision?: number
 ): Promise<PlanVersionDetail | null> {
   const trimmed = label.trim();
-  const { rows } = await pool.query(
-    `UPDATE "plan_versions" SET label = $1 WHERE id = $2 AND "weddingId" = $3 RETURNING id`,
-    [trimmed.length > 0 ? trimmed : null, id, weddingId]
-  );
-  if (rows.length === 0) return null;
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await checkPlanVersionRevision(client, id, weddingId, expectedRevision);
+    const { rows } = await client.query(
+      `UPDATE "plan_versions" SET label = $1, revision = revision + 1 WHERE id = $2 AND "weddingId" = $3 RETURNING id`,
+      [trimmed.length > 0 ? trimmed : null, id, weddingId]
+    );
+    if (rows.length === 0) {
+      await client.query("ROLLBACK");
+      return null;
+    }
+    await client.query("COMMIT");
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
   return getPlanVersionDetail(id, weddingId);
 }
 

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { swapGuestAssignmentsSchema } from "@seatwise/shared";
-import { swapGuestAssignments, SwapError } from "@seatwise/db";
+import { swapGuestAssignments, SwapError, PlanVersionConflictError } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
 import { errorResponse, zodErrorResponse } from "@/lib/api-response";
 import { requireAccess } from "@/lib/access";
@@ -29,10 +29,17 @@ export async function POST(req: NextRequest, { params }: Params) {
       weddingId,
       parsed.data.guestAId,
       parsed.data.guestBId,
-      user.id
+      user.id,
+      parsed.data.expectedRevision
     );
     return NextResponse.json({ planVersion, warnings });
   } catch (err) {
+    if (err instanceof PlanVersionConflictError) {
+      return NextResponse.json(
+        { error: err.message, planVersion: err.planVersion },
+        { status: 409 }
+      );
+    }
     if (err instanceof SwapError) {
       return errorResponse(err.message, 409);
     }

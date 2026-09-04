@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getPlanVersionDetail, setPlanVersionLabel } from "@seatwise/db";
+import { getPlanVersionDetail, setPlanVersionLabel, PlanVersionConflictError } from "@seatwise/db";
 import { setPlanVersionLabelSchema } from "@seatwise/shared";
 import { getAuthUser } from "@/lib/session";
 import { errorResponse, zodErrorResponse } from "@/lib/api-response";
@@ -36,8 +36,22 @@ export async function PATCH(req: NextRequest, { params }: Params) {
   const parsed = setPlanVersionLabelSchema.safeParse(body);
   if (!parsed.success) return zodErrorResponse(parsed.error);
 
-  const planVersion = await setPlanVersionLabel(planVersionId, weddingId, parsed.data.label);
-  if (!planVersion) return errorResponse("Plan version not found", 404);
-
-  return NextResponse.json({ planVersion });
+  try {
+    const planVersion = await setPlanVersionLabel(
+      planVersionId,
+      weddingId,
+      parsed.data.label,
+      parsed.data.expectedRevision
+    );
+    if (!planVersion) return errorResponse("Plan version not found", 404);
+    return NextResponse.json({ planVersion });
+  } catch (err) {
+    if (err instanceof PlanVersionConflictError) {
+      return NextResponse.json(
+        { error: err.message, planVersion: err.planVersion },
+        { status: 409 }
+      );
+    }
+    throw err;
+  }
 }

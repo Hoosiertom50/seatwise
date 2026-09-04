@@ -124,6 +124,15 @@ export function DayOfTab({
     }
   }
 
+  // FR-7.7: a 409 here carries the fresh, currently-committed plan version -- refresh the view
+  // with it instead of leaving stale data on screen after a conflicting save elsewhere.
+  function conflictPlanVersion(err: unknown): PlanVersionDetailDTO | null {
+    if (err instanceof ApiError && err.status === 409 && err.data?.planVersion) {
+      return err.data.planVersion as PlanVersionDetailDTO;
+    }
+    return null;
+  }
+
   async function onSeatGuest(guestId: string, tableId: string) {
     if (!detail || !tableId) return;
     setError(null);
@@ -132,11 +141,13 @@ export function DayOfTab({
     try {
       const res = await api.post<{ planVersion: PlanVersionDetailDTO; warnings: string[] }>(
         `/api/v1/weddings/${weddingId}/plan-versions/${detail.id}/assignments`,
-        { guestId, tableId }
+        { guestId, tableId, expectedRevision: detail.revision }
       );
       setDetail(res.planVersion);
       if (res.warnings.length > 0) setNotice(res.warnings.join(" "));
     } catch (err) {
+      const fresh = conflictPlanVersion(err);
+      if (fresh) setDetail(fresh);
       setError(err instanceof ApiError ? err.message : "Couldn't seat that guest.");
     } finally {
       setBusyGuestId(null);
@@ -160,7 +171,7 @@ export function DayOfTab({
       if (walkInTableId && detail) {
         const res = await api.post<{ planVersion: PlanVersionDetailDTO; warnings: string[] }>(
           `/api/v1/weddings/${weddingId}/plan-versions/${detail.id}/assignments`,
-          { guestId: guest.id, tableId: walkInTableId }
+          { guestId: guest.id, tableId: walkInTableId, expectedRevision: detail.revision }
         );
         setDetail(res.planVersion);
         setNotice(
@@ -174,6 +185,8 @@ export function DayOfTab({
       setWalkInLast("");
       setWalkInTableId("");
     } catch (err) {
+      const fresh = conflictPlanVersion(err);
+      if (fresh) setDetail(fresh);
       setError(err instanceof ApiError ? err.message : "Couldn't add that walk-in.");
     } finally {
       setAddingWalkIn(false);
@@ -188,13 +201,15 @@ export function DayOfTab({
     try {
       const res = await api.post<{ planVersion: PlanVersionDetailDTO; warnings: string[] }>(
         `/api/v1/weddings/${weddingId}/plan-versions/${detail.id}/assignments/swap`,
-        { guestAId: swapAId, guestBId: swapBId }
+        { guestAId: swapAId, guestBId: swapBId, expectedRevision: detail.revision }
       );
       setDetail(res.planVersion);
       setNotice("Swapped." + (res.warnings.length > 0 ? ` ${res.warnings.join(" ")}` : ""));
       setSwapAId("");
       setSwapBId("");
     } catch (err) {
+      const fresh = conflictPlanVersion(err);
+      if (fresh) setDetail(fresh);
       setError(err instanceof ApiError ? err.message : "Couldn't complete that swap.");
     } finally {
       setSwapping(false);

@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { moveGuestAssignmentSchema } from "@seatwise/shared";
-import { moveGuestAssignment, unassignGuestFromPlan, ManualMoveError } from "@seatwise/db";
+import {
+  moveGuestAssignment,
+  unassignGuestFromPlan,
+  ManualMoveError,
+  PlanVersionConflictError,
+} from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
 import { errorResponse, zodErrorResponse } from "@/lib/api-response";
 import { requireAccess } from "@/lib/access";
@@ -29,16 +34,32 @@ export async function POST(req: NextRequest, { params }: Params) {
     // manually-offered "unassign" control, but a real distinct action from moving between tables.
     const { planVersion, warnings } =
       parsed.data.tableId === null
-        ? await unassignGuestFromPlan(planVersionId, weddingId, parsed.data.guestId, user.id)
+        ? await unassignGuestFromPlan(
+            planVersionId,
+            weddingId,
+            parsed.data.guestId,
+            user.id,
+            parsed.data.expectedRevision
+          )
         : await moveGuestAssignment(
             planVersionId,
             weddingId,
             parsed.data.guestId,
             parsed.data.tableId,
-            user.id
+            user.id,
+            parsed.data.expectedRevision
           );
     return NextResponse.json({ planVersion, warnings });
   } catch (err) {
+    // FR-7.7: a stale expectedRevision means someone else's save landed first — the fresh,
+    // currently-committed plan version rides along so the client can refresh without a second
+    // round-trip, rather than silently reapplying this move on top of what changed.
+    if (err instanceof PlanVersionConflictError) {
+      return NextResponse.json(
+        { error: err.message, planVersion: err.planVersion },
+        { status: 409 }
+      );
+    }
     if (err instanceof ManualMoveError) {
       return errorResponse(err.message, 409);
     }

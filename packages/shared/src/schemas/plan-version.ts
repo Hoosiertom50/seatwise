@@ -3,8 +3,13 @@ import type { SideMixing } from "./wedding";
 
 export type PlanVersionStatusValue = "DRAFT" | "IN_REVIEW" | "APPROVED";
 
+// FR-7.7: every plan-version write accepts the revision the client last saw, so the server can
+// detect a save that landed on top of a newer one instead of silently overwriting it.
+const expectedRevisionField = z.number().int().nonnegative().optional();
+
 export const planVersionStatusSchema = z.object({
   status: z.enum(["DRAFT", "IN_REVIEW", "APPROVED"]),
+  expectedRevision: expectedRevisionField,
 });
 
 // FR-9.4/TS-10: a plan version's label is a free-text nickname ("Family-approved draft",
@@ -12,6 +17,7 @@ export const planVersionStatusSchema = z.object({
 // Empty string clears the label back to none.
 export const setPlanVersionLabelSchema = z.object({
   label: z.string().trim().max(100),
+  expectedRevision: expectedRevisionField,
 });
 export type SetPlanVersionLabelInput = z.infer<typeof setPlanVersionLabelSchema>;
 
@@ -39,6 +45,9 @@ export interface PlanVersionDTO {
   // effect when this version was generated — null on a version created before this existed.
   sideMixingSetting: SideMixing | null;
   ruleConfigVersion: number | null;
+  // FR-7.7: an optimistic-concurrency counter — send this back as expectedRevision on a write to
+  // this version so the server can detect and refuse a save based on stale data.
+  revision: number;
 }
 
 export interface PlanVersionAssignmentDTO {
@@ -68,6 +77,7 @@ export const moveGuestAssignmentSchema = z.object({
   // to unassigned -- tableId: null means exactly that (never exposed as a manual "unassign"
   // button; only the undo/redo stack calls it directly today).
   tableId: z.string().min(1).nullable(),
+  expectedRevision: expectedRevisionField,
 });
 export type MoveGuestAssignmentInput = z.infer<typeof moveGuestAssignmentSchema>;
 
@@ -75,6 +85,7 @@ export type MoveGuestAssignmentInput = z.infer<typeof moveGuestAssignmentSchema>
 export const swapGuestAssignmentsSchema = z.object({
   guestAId: z.string().min(1),
   guestBId: z.string().min(1),
+  expectedRevision: expectedRevisionField,
 });
 export type SwapGuestAssignmentsInput = z.infer<typeof swapGuestAssignmentsSchema>;
 

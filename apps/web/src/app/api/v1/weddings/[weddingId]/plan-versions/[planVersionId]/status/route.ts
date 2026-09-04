@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { planVersionStatusSchema } from "@seatwise/shared";
-import { setPlanVersionStatus, PlanVersionStatusError } from "@seatwise/db";
+import {
+  setPlanVersionStatus,
+  PlanVersionStatusError,
+  PlanVersionConflictError,
+} from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
 import { errorResponse, zodErrorResponse } from "@/lib/api-response";
 import { requireAccess } from "@/lib/access";
@@ -29,11 +33,18 @@ export async function POST(req: NextRequest, { params }: Params) {
       planVersionId,
       weddingId,
       parsed.data.status,
-      user.id
+      user.id,
+      parsed.data.expectedRevision
     );
     if (!planVersion) return errorResponse("Plan version not found", 404);
     return NextResponse.json({ planVersion });
   } catch (err) {
+    if (err instanceof PlanVersionConflictError) {
+      return NextResponse.json(
+        { error: err.message, planVersion: err.planVersion },
+        { status: 409 }
+      );
+    }
     if (err instanceof PlanVersionStatusError) {
       return errorResponse(err.message, 409);
     }

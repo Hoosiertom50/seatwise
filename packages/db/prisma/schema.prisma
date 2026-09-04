@@ -347,6 +347,9 @@ model PlanVersion {
   sideMixingSetting SideMixingSetting?
   ruleConfigVersion Int?
   createdAt      DateTime          @default(now())
+  // FR-7.7: bumped by every write that touches this version's assignments, status, or label --
+  // an optimistic-concurrency guard so a stale client can't silently overwrite a newer save.
+  revision       Int               @default(0)
 
   seatAssignments SeatAssignment[]
   changeHistory   ChangeHistoryEntry[]

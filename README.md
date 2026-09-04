@@ -264,6 +264,21 @@ up for it.
     before; the assignment endpoint now accepts `tableId: null` for exactly this (never exposed
     as its own "Unassign" button, only used by undo/redo today), which itself takes the same
     must-sit-together unit the forward move would.
+  - **FR-7.7** (scoped to the Current Plan Version — see below): every write that touches the
+    Current Plan Version's assignments, status, or label (move, unassign, swap, status change,
+    relabel) now carries a `revision` counter. A client sends back the revision it last loaded;
+    if someone else's save has moved it on, the write is rejected outright — with a 409 and the
+    fresh, currently-committed plan version attached — instead of silently overwriting what they
+    just did. The rejected user sees "This plan changed since you loaded it — someone else's
+    change landed first," the view refreshes to the real state automatically (no page reload),
+    and their own attempted change is simply not applied, so they can look at what's there now
+    and retry deliberately. Separately, the Seating plan tab polls for a newer revision every 4
+    seconds while a Current Plan Version is open (paused while a move/undo/redo/status/label save
+    of your own is in flight, so it can't race your own write) and merges in whatever a
+    collaborator has since saved — meeting the "visible within five seconds without a manual
+    refresh" requirement without needing websocket/SSE infrastructure. `expectedRevision` is
+    optional on every one of these endpoints, so this is purely additive: a caller that omits it
+    gets the exact old behavior.
   - Guests forced together by "must sit together" always move as one unit — moving one member
     brings the rest along automatically.
   - A move that would break a hard rule (capacity, must-not-sit-together with whoever's already
@@ -509,19 +524,25 @@ collaborator (not just the owner) can move a plan's status, standing in for "Pla
 Couple user with Comment/Edit" — Comment-level users can comment but not change status, matching
 the permission model FR-6.2/6.3 describe.
 
-**TS-10 is only partially built.** What's there: manual moves with full hard/soft-rule
-validation, locks, change history, FR-7.1's guest-drag-onto-table floor plan, and — since this
-pass — FR-7.5's session-scoped undo/redo, all described above. What's deliberately deferred, and
-why: FR-7.7 (sub-5-second concurrent-edit sync with conflict detection) is left out — it needs
-either a live connection (websockets/polling) or a broader optimistic-concurrency version-check
-layer across every write, substantial enough to be its own slice; today, two users editing the
-same plan at the same time can each save a change, and the second simply overwrites what the
-first saw (no conflict warning yet) — except for undo/redo's own narrow case: before replaying,
-it re-checks the one guest an undo/redo entry is about and refuses if their seat has changed
-since (see the FR-7.5 bullet above). That's real protection for the case undo/redo itself can
-cause, but it's not FR-7.7's fuller picture — a live, sub-5-second refresh across every
-collaborator, or conflict detection on a rule, table, floor-plan position, comment, status, or
-version change that didn't go through undo/redo at all.
+**TS-10 is now built for the scope FR-7.1–FR-7.7 actually describe: the Current Plan Version.**
+What's there: manual moves with full hard/soft-rule validation, locks, change history, FR-7.1's
+guest-drag-onto-table floor plan, FR-7.5's session-scoped undo/redo, and — since this pass —
+FR-7.7's revision-based conflict detection and 4-second polling sync, all described above. Two
+users editing the same Current Plan Version at the same time now get exactly the behavior FR-7.7
+asks for: the second save is rejected rather than silently overwriting the first, an on-screen
+explanation appears, the view refreshes to the real state, and the newer collaborator's own
+change becomes visible elsewhere within a few seconds without a manual refresh — verified with a
+real two-browser Playwright test (`test_live_sync.py`) alongside the API-level conflict checks
+(`test_concurrent_conflict.py`). What's still deliberately out of scope, and why: FR-7.7's own
+list of what a conflict can be about — "guest, rule, table, floor-plan, comment, status, version,
+or assignment data" — reads broader than just the Current Plan Version's own writes; this pass
+covers status, version (label), and assignment (move/unassign/swap) for that one entity, since
+that's what TS-10's own requirement grouping and the "Manual Override" section are actually about.
+Editing a guest, a rule, a table, or a comment concurrently still has no optimistic-concurrency
+check of its own — the second save there simply wins, same as before this pass — since each of
+those is really its own entity with its own edit surface (TS-3/TS-5/TS-6/TS-7/TS-13), and giving
+each one the same revision-counter treatment is realistically its own slice of work rather than a
+few hours' extension of this one.
 
 **TS-11 (Day-of Mode) is built**, described above. What's deliberately left out, and why: change
 history entries are recorded for every day-of action (and every manual move / status change
@@ -597,9 +618,11 @@ to every field FR-2.9 names — see the FR-2.9 bullet above and the TS-5 paragra
 Version labeling and side-by-side comparison are now built (described above) — that closes the
 last gap TS-12 had left open, and permission-aware UI hiding (described above) closes the last gap
 TS-13 had left open. All three gaps TS-15 originally surfaced or that TS-7 depended on (bulk guest
-import, Side-Mixing, and the visual floor plan) are also closed, so what's left across the whole
-app is: TS-10's live concurrent-edit sync (FR-7.7 — FR-7.1's guest-drag-onto-table interaction
-and FR-7.5's undo/redo are now both built, described above) and a real email provider.
+import, Side-Mixing, and the visual floor plan) are also closed. TS-10 is now built for the Current
+Plan Version scope FR-7.1–FR-7.7 describe (FR-7.1's floor-plan drag, FR-7.5's undo/redo, and
+FR-7.7's concurrent-edit sync and conflict detection are all in, described above; entity-level
+conflict detection for guests/rules/tables/comments remains a documented, deliberate gap — see the
+TS-10 paragraph above), so what's left across the whole app is a real email provider.
 
 ## Mobile later
 
