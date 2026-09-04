@@ -5,6 +5,7 @@ import {
   listGuestsByWedding,
   listRelationshipsForWedding,
   listSeatingTablesForWedding,
+  getLatestAssignmentsForWedding,
   createPlanVersionWithAssignments,
   getPlanVersionDetail,
 } from "@seatwise/db";
@@ -21,10 +22,11 @@ export async function POST(req: NextRequest, { params }: Params) {
   const wedding = await getWeddingForOwner(weddingId, user.id);
   if (!wedding) return errorResponse("Wedding not found", 404);
 
-  const [guests, relationships, tables] = await Promise.all([
+  const [guests, relationships, tables, currentAssignments] = await Promise.all([
     listGuestsByWedding(weddingId),
     listRelationshipsForWedding(weddingId),
     listSeatingTablesForWedding(weddingId),
+    getLatestAssignmentsForWedding(weddingId),
   ]);
 
   if (guests.length === 0) {
@@ -40,13 +42,17 @@ export async function POST(req: NextRequest, { params }: Params) {
       name: `${g.firstName} ${g.lastName}`,
       headcount: g.headcount,
       requiresAccessibleTable: g.requiresAccessibleTable,
+      isLocked: g.isLocked,
+      currentTableId: currentAssignments.get(g.id) ?? null,
     })),
     relationships.map((r) => ({ guestAId: r.guestAId, guestBId: r.guestBId, type: r.type })),
     tables.map((t) => ({
       id: t.id,
+      label: t.label,
       capacity: t.capacity,
       isRestricted: t.isRestricted,
       isAccessible: t.isAccessible,
+      isLocked: t.isLocked,
     }))
   );
 

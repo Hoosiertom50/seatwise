@@ -84,6 +84,9 @@ model Guest {
   tier                    GuestTier  @default(OTHER)
   rsvpStatus              RsvpStatus @default(PENDING)
   requiresAccessibleTable Boolean    @default(false)
+  // FR-7.4: when locked, automated (re)generation keeps this guest at their current table
+  // instead of reshuffling them; manual moves and hard-rule checks are never affected by a lock.
+  isLocked                Boolean    @default(false)
   notes                   String?
   createdAt               DateTime   @default(now())
   updatedAt               DateTime   @updatedAt
@@ -131,6 +134,10 @@ model SeatingTable {
   capacity     Int
   isRestricted Boolean  @default(false)
   isAccessible Boolean  @default(false)
+  // FR-7.4: when locked, automated (re)generation won't assign new guests here — reserved for
+  // whoever's already seated here (or a locked guest pinned here). Manual moves can still target
+  // a locked table, and hard-rule checks are never affected by a lock.
+  isLocked     Boolean  @default(false)
   purpose      String?
   positionX    Float?
   positionY    Float?

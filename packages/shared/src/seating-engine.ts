@@ -1,4 +1,4 @@
-// Automated seat assignment engine (FR-8 / TS-8).
+// Automated seat assignment engine (FR-8 / TS-8, extended for locks in TS-10 / FR-7.4).
 //
 // This is a pure function over plain data — no database access — so it can be unit tested on
 // its own and reused wherever a seating plan needs to be computed or previewed.
@@ -15,6 +15,12 @@
 //   - Restricted tables (a specific required guest list) are excluded from automatic
 //     assignment for now — the schema tracks "isRestricted" but not yet a per-table required
 //     list, so those tables are reserved for manual assignment (a later story).
+//   - Locked guests (FR-7.4) keep their current table when regenerating rather than being
+//     reshuffled, and locked tables are reserved — excluded from the general candidate pool —
+//     so automatic generation doesn't fill them with new guests. If a lock can no longer be
+//     honored (the table's gone, or honoring it would break a hard rule), the affected guests
+//     fall back to normal automatic placement with a warning explaining why, rather than being
+//     left unassigned just because a stale lock couldn't be kept.
 
 export type EngineRelationshipType =
   | "MUST_SIT_TOGETHER"
@@ -27,6 +33,9 @@ export interface EngineGuest {
   name: string;
   headcount: number;
   requiresAccessibleTable: boolean;
+  // FR-7.4: if locked and currently seated somewhere, generation tries to keep them there.
+  isLocked: boolean;
+  currentTableId?: string | null;
 }
 
 export interface EngineRelationship {
@@ -37,9 +46,11 @@ export interface EngineRelationship {
 
 export interface EngineTable {
   id: string;
+  label: string;
   capacity: number;
   isRestricted: boolean;
   isAccessible: boolean;
+  isLocked: boolean;
 }
 
 export interface SeatingPlanAssignment {
@@ -59,6 +70,7 @@ interface Unit {
   guestIds: string[];
   totalHeadcount: number;
   requiresAccessible: boolean;
+  pinnedTableId: string | null;
 }
 
 class UnionFind {
@@ -93,6 +105,7 @@ export function generateSeatingPlan(
   const warnings: string[] = [];
   const guestById = new Map(guests.map((g) => [g.id, g]));
   const guestName = (id: string) => guestById.get(id)?.name ?? id;
+  const tablesById = new Map(tables.map((t) => [t.id, t]));
 
   // 1. Group guests forced together by MUST_SIT_TOGETHER into units.
   const uf = new UnionFind();
@@ -121,12 +134,17 @@ export function generateSeatingPlan(
     const root = uf.find(g.id);
     let unit = unitsByRoot.get(root);
     if (!unit) {
-      unit = { guestIds: [], totalHeadcount: 0, requiresAccessible: false };
+      unit = { guestIds: [], totalHeadcount: 0, requiresAccessible: false, pinnedTableId: null };
       unitsByRoot.set(root, unit);
     }
     unit.guestIds.push(g.id);
     unit.totalHeadcount += g.headcount;
     if (g.requiresAccessibleTable) unit.requiresAccessible = true;
+    // FR-7.4: if any locked guest in this unit has a current table, pin the whole unit there.
+    // (Unit members are always seated together, so one locked member's table is the unit's.)
+    if (g.isLocked && g.currentTableId && !unit.pinnedTableId) {
+      unit.pinnedTableId = g.currentTableId;
+    }
   }
   const units = [...unitsByRoot.values()];
 
@@ -155,50 +173,31 @@ export function generateSeatingPlan(
     }
   }
 
-  // 3. Bin-pack units into tables, largest unit first (first-fit-decreasing), restricted
-  // tables excluded from the automatic pool.
-  const candidateTables = tables.filter((t) => !t.isRestricted);
-  const remainingCapacity = new Map(candidateTables.map((t) => [t.id, t.capacity]));
-  const occupants = new Map<string, string[]>(candidateTables.map((t) => [t.id, []]));
+  // 3. Bin-pack units into tables, largest unit first (first-fit-decreasing). Restricted and
+  // locked tables are excluded from the *general* candidate pool — locked tables are reserved,
+  // restricted tables need manual assignment (TS-8 scoping) — but a unit pinned to one of them
+  // by a lock can still land there; capacity/occupancy tracking covers every table so a pin can
+  // target any of them.
+  const candidateTables = tables.filter((t) => !t.isRestricted && !t.isLocked);
+  const remainingCapacity = new Map(tables.map((t) => [t.id, t.capacity]));
+  const occupants = new Map<string, string[]>(tables.map((t) => [t.id, []]));
 
-  const sortedUnits = [...units].sort((a, b) => b.totalHeadcount - a.totalHeadcount);
-  const assignments: SeatingPlanAssignment[] = [];
-  const unassignedGuestIds: string[] = [];
+  const hasMustNotConflict = (unit: Unit, tableId: string) =>
+    occupants.get(tableId)!.some((occupantId) =>
+      unit.guestIds.some((guestId) => mustNotMap.get(guestId)?.has(occupantId))
+    );
 
-  for (const unit of sortedUnits) {
-    const hasMustNotConflict = (t: string) =>
-      occupants.get(t)!.some((occupantId) =>
-        unit.guestIds.some((guestId) => mustNotMap.get(guestId)?.has(occupantId))
-      );
-
-    const capacityFeasible = candidateTables.filter((t) => {
+  // Attempts to place `unit` at the best of `pool`; returns the chosen table, or null if no
+  // table in `pool` can hold it without breaking a hard rule. Mutates remainingCapacity/
+  // occupants/assignments/warnings only on success.
+  function attemptPlace(unit: Unit, pool: EngineTable[]): EngineTable | null {
+    const capacityFeasible = pool.filter((t) => {
       if ((remainingCapacity.get(t.id) ?? 0) < unit.totalHeadcount) return false;
       if (unit.requiresAccessible && !t.isAccessible) return false;
       return true;
     });
-    // MUST_NOT_SIT_TOGETHER is a hard rule: never seat this unit at a table that already
-    // holds someone they must not sit with, even if capacity and accessibility both allow it.
-    const feasible = capacityFeasible.filter((t) => !hasMustNotConflict(t.id));
-
-    if (feasible.length === 0) {
-      unassignedGuestIds.push(...unit.guestIds);
-      let reason: string;
-      if (capacityFeasible.length === 0) {
-        reason = unit.requiresAccessible
-          ? "no accessible table has enough remaining capacity"
-          : "no table has enough remaining capacity";
-      } else {
-        reason =
-          "every table with enough remaining capacity already seats someone they have a " +
-          '"must not sit together" rule with';
-      }
-      warnings.push(
-        `Couldn't seat ${unit.guestIds.length === 1 ? "guest" : "guests"} ${unit.guestIds
-          .map(guestName)
-          .join(", ")} — ${reason}.`
-      );
-      continue;
-    }
+    const feasible = capacityFeasible.filter((t) => !hasMustNotConflict(unit, t.id));
+    if (feasible.length === 0) return null;
 
     // Score each feasible table: fewer AVOID conflicts and more PREFER_NEAR satisfactions is
     // better; tie-break toward the tightest fit (least leftover capacity) to reduce
@@ -227,12 +226,12 @@ export function generateSeatingPlan(
       assignments.push({ guestId, tableId: best.id });
     }
     remainingCapacity.set(best.id, (remainingCapacity.get(best.id) ?? 0) - unit.totalHeadcount);
+    const existingBefore = [...occupants.get(best.id)!];
     occupants.get(best.id)!.push(...unit.guestIds);
 
     // Surface any AVOID conflicts this placement couldn't avoid (soft rule — non-blocking).
-    const existing = occupants.get(best.id)!.filter((id) => !unit.guestIds.includes(id));
     for (const guestId of unit.guestIds) {
-      for (const other of existing) {
+      for (const other of existingBefore) {
         if (avoidMap.get(guestId)?.has(other)) {
           warnings.push(
             `${guestName(guestId)} and ${guestName(other)} were seated at the same table ` +
@@ -240,6 +239,72 @@ export function generateSeatingPlan(
           );
         }
       }
+    }
+    return best;
+  }
+
+  function unassignedReason(unit: Unit): string {
+    const capacityFeasible = candidateTables.filter((t) => {
+      if ((remainingCapacity.get(t.id) ?? 0) < unit.totalHeadcount) return false;
+      if (unit.requiresAccessible && !t.isAccessible) return false;
+      return true;
+    });
+    if (capacityFeasible.length === 0) {
+      return unit.requiresAccessible
+        ? "no accessible table has enough remaining capacity"
+        : "no table has enough remaining capacity";
+    }
+    return (
+      "every table with enough remaining capacity already seats someone they have a " +
+      '"must not sit together" rule with'
+    );
+  }
+
+  // Pinned (locked) units are placed first, so their reserved capacity isn't grabbed by other
+  // units first; unpinned units then follow the existing largest-first heuristic.
+  const pinnedUnits = units.filter((u) => u.pinnedTableId);
+  const unpinnedUnits = [...units.filter((u) => !u.pinnedTableId)].sort(
+    (a, b) => b.totalHeadcount - a.totalHeadcount
+  );
+
+  const assignments: SeatingPlanAssignment[] = [];
+  const unassignedGuestIds: string[] = [];
+
+  for (const unit of pinnedUnits) {
+    const target = unit.pinnedTableId ? tablesById.get(unit.pinnedTableId) : undefined;
+    const placedAt = target ? attemptPlace(unit, [target]) : null;
+    if (placedAt) continue;
+
+    // The lock couldn't be honored (table deleted, or it would now break a hard rule) — fall
+    // back to normal automatic placement rather than leaving a locked guest stranded just
+    // because their specific pin is no longer possible.
+    warnings.push(
+      `${unit.guestIds.length === 1 ? "Guest" : "Guests"} ${unit.guestIds
+        .map(guestName)
+        .join(", ")} ${unit.guestIds.length === 1 ? "is" : "are"} locked to ` +
+        `${target ? `"${target.label}"` : "a table that no longer exists"}, but that's no ` +
+        `longer possible — seated automatically instead.`
+    );
+    const fallback = attemptPlace(unit, candidateTables);
+    if (!fallback) {
+      unassignedGuestIds.push(...unit.guestIds);
+      warnings.push(
+        `Couldn't seat ${unit.guestIds.length === 1 ? "guest" : "guests"} ${unit.guestIds
+          .map(guestName)
+          .join(", ")} — ${unassignedReason(unit)}.`
+      );
+    }
+  }
+
+  for (const unit of unpinnedUnits) {
+    const placedAt = attemptPlace(unit, candidateTables);
+    if (!placedAt) {
+      unassignedGuestIds.push(...unit.guestIds);
+      warnings.push(
+        `Couldn't seat ${unit.guestIds.length === 1 ? "guest" : "guests"} ${unit.guestIds
+          .map(guestName)
+          .join(", ")} — ${unassignedReason(unit)}.`
+      );
     }
   }
 

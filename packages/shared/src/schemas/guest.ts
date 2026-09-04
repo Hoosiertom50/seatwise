@@ -14,6 +14,7 @@ export const createGuestSchema = z.object({
   tier: guestTierEnum.default("OTHER"),
   rsvpStatus: rsvpStatusEnum.default("PENDING"),
   requiresAccessibleTable: z.boolean().default(false),
+  isLocked: z.boolean().default(false),
   notes: z.string().max(2000).optional().nullable(),
 });
 export type CreateGuestInput = z.infer<typeof createGuestSchema>;
@@ -31,6 +32,7 @@ export interface GuestDTO {
   tier: GuestTier;
   rsvpStatus: RsvpStatus;
   requiresAccessibleTable: boolean;
+  isLocked: boolean;
   notes: string | null;
   createdAt: string;
   updatedAt: string;

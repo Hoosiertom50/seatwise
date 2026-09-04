@@ -77,6 +77,17 @@ export function GuestsTab({
     }
   }
 
+  async function onToggleLock(guestId: string, isLocked: boolean) {
+    const prev = guests;
+    setGuests(guests.map((g) => (g.id === guestId ? { ...g, isLocked } : g)));
+    try {
+      await api.patch(`/api/v1/weddings/${weddingId}/guests/${guestId}`, { isLocked });
+    } catch {
+      setGuests(prev);
+      setError("Couldn't update that guest's lock.");
+    }
+  }
+
   return (
     <div>
       <h2 className="mb-3 text-lg font-medium">Add a guest</h2>
@@ -190,6 +201,14 @@ export function GuestsTab({
                       accessible table
                     </span>
                   )}
+                  {g.isLocked && (
+                    <span
+                      className="ml-2 rounded bg-neutral-800 px-1.5 py-0.5 text-xs text-white"
+                      title="Locked — automated seating won't move this guest to a different table."
+                    >
+                      locked
+                    </span>
+                  )}
                 </p>
                 <p className="text-sm text-neutral-500">
                   {g.partyName ? `${g.partyName} · ` : ""}
@@ -208,6 +227,13 @@ export function GuestsTab({
                     </option>
                   ))}
                 </select>
+                <button
+                  onClick={() => onToggleLock(g.id, !g.isLocked)}
+                  title="Locking keeps this guest at their current table when a new plan is generated."
+                  className="rounded-md border border-neutral-300 px-2 py-1 text-sm hover:bg-neutral-50"
+                >
+                  {g.isLocked ? "Unlock" : "Lock"}
+                </button>
                 <button
                   onClick={() => onDeleteGuest(g.id)}
                   className="rounded-md border border-neutral-300 px-2 py-1 text-sm text-red-600 hover:bg-red-50"

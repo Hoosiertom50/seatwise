@@ -5,6 +5,7 @@ export const createTableSchema = z.object({
   capacity: z.number().int().min(1).max(50),
   isRestricted: z.boolean().default(false),
   isAccessible: z.boolean().default(false),
+  isLocked: z.boolean().default(false),
   purpose: z.string().max(200).optional().nullable(),
 });
 export type CreateTableInput = z.infer<typeof createTableSchema>;
@@ -19,6 +20,7 @@ export interface SeatingTableDTO {
   capacity: number;
   isRestricted: boolean;
   isAccessible: boolean;
+  isLocked: boolean;
   purpose: string | null;
   createdAt: string;
   updatedAt: string;

@@ -7,6 +7,7 @@ import type {
   PlanVersionDTO,
   PlanVersionDetailDTO,
   PlanVersionStatusValue,
+  SeatingTableDTO,
 } from "@seatwise/shared";
 
 const STATUS_LABEL: Record<PlanVersionStatusValue, string> = {
@@ -24,10 +25,13 @@ const STATUS_BADGE_CLASS: Record<PlanVersionStatusValue, string> = {
 export function PlanTab({ weddingId, guests }: { weddingId: string; guests: GuestDTO[] }) {
   const [versions, setVersions] = useState<PlanVersionDTO[]>([]);
   const [detail, setDetail] = useState<PlanVersionDetailDTO | null>(null);
+  const [tables, setTables] = useState<SeatingTableDTO[]>([]);
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
   const [statusUpdating, setStatusUpdating] = useState(false);
+  const [movingGuestId, setMovingGuestId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [moveWarnings, setMoveWarnings] = useState<string[]>([]);
   const [conflicts, setConflicts] = useState<string[]>([]);
 
   const guestName = (id: string) => {
@@ -52,7 +56,12 @@ export function PlanTab({ weddingId, guests }: { weddingId: string; guests: Gues
   }
 
   useEffect(() => {
-    loadVersions()
+    Promise.all([
+      loadVersions(),
+      api
+        .get<{ tables: SeatingTableDTO[] }>(`/api/v1/weddings/${weddingId}/tables`)
+        .then((res) => setTables(res.tables)),
+    ])
       .catch(() => setError("Couldn't load seating plans."))
       .finally(() => setLoading(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -61,6 +70,7 @@ export function PlanTab({ weddingId, guests }: { weddingId: string; guests: Gues
   async function onGenerate() {
     setError(null);
     setConflicts([]);
+    setMoveWarnings([]);
     setGenerating(true);
     try {
       const res = await api.post<{ planVersion: PlanVersionDetailDTO }>(
@@ -79,10 +89,31 @@ export function PlanTab({ weddingId, guests }: { weddingId: string; guests: Gues
   }
 
   async function onSelectVersion(id: string) {
+    setMoveWarnings([]);
     const d = await api.get<{ planVersion: PlanVersionDetailDTO }>(
       `/api/v1/weddings/${weddingId}/plan-versions/${id}`
     );
     setDetail(d.planVersion);
+  }
+
+  async function onMoveGuest(guestId: string, tableId: string) {
+    if (!detail || !tableId) return;
+    setError(null);
+    setMoveWarnings([]);
+    setMovingGuestId(guestId);
+    try {
+      const res = await api.post<{ planVersion: PlanVersionDetailDTO; warnings: string[] }>(
+        `/api/v1/weddings/${weddingId}/plan-versions/${detail.id}/assignments`,
+        { guestId, tableId }
+      );
+      setDetail(res.planVersion);
+      setVersions((vs) => vs.map((v) => (v.id === res.planVersion.id ? res.planVersion : v)));
+      setMoveWarnings(res.warnings);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Couldn't move that guest.");
+    } finally {
+      setMovingGuestId(null);
+    }
   }
 
   async function onSetStatus(newStatus: PlanVersionStatusValue) {
@@ -105,13 +136,17 @@ export function PlanTab({ weddingId, guests }: { weddingId: string; guests: Gues
 
   if (loading) return <p className="text-sm text-neutral-500">Loading seating plans...</p>;
 
-  const grouped = new Map<string, { tableLabel: string; guests: string[] }>();
+  const grouped = new Map<
+    string,
+    { tableLabel: string; guests: { guestId: string; guestName: string }[] }
+  >();
   if (detail) {
     for (const a of detail.assignments) {
       if (!grouped.has(a.tableId)) grouped.set(a.tableId, { tableLabel: a.tableLabel, guests: [] });
-      grouped.get(a.tableId)!.guests.push(a.guestName);
+      grouped.get(a.tableId)!.guests.push({ guestId: a.guestId, guestName: a.guestName });
     }
   }
+  const canEdit = Boolean(detail?.isCurrent);
 
   return (
     <div>
@@ -266,20 +301,85 @@ export function PlanTab({ weddingId, guests }: { weddingId: string; guests: Gues
             </div>
           )}
 
+          {moveWarnings.length > 0 && (
+            <div className="mb-6 rounded-lg border border-amber-200 bg-amber-50 p-4">
+              <p className="mb-2 text-sm font-medium text-amber-800">
+                That move was made, but note:
+              </p>
+              <ul className="list-inside list-disc text-sm text-amber-700">
+                {moveWarnings.map((w, i) => (
+                  <li key={i}>{w}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {!canEdit && (
+            <p className="mb-4 text-sm text-neutral-500">
+              This is a past version — guests can only be manually moved on the current one.
+            </p>
+          )}
+
           {detail.unassignedGuestIds.length > 0 && (
             <div className="mb-6 rounded-lg border border-neutral-200 p-4">
               <p className="mb-2 text-sm font-medium">Unassigned guests</p>
-              <p className="text-sm text-neutral-600">
-                {detail.unassignedGuestIds.map(guestName).join(", ")}
-              </p>
+              <ul className="flex flex-col gap-2">
+                {detail.unassignedGuestIds.map((id) => (
+                  <li key={id} className="flex items-center justify-between gap-2 text-sm">
+                    <span>{guestName(id)}</span>
+                    {canEdit && (
+                      <select
+                        className="rounded-md border border-neutral-300 px-2 py-1 text-sm disabled:opacity-50"
+                        value=""
+                        disabled={movingGuestId === id}
+                        onChange={(e) => onMoveGuest(id, e.target.value)}
+                      >
+                        <option value="" disabled>
+                          {movingGuestId === id ? "Seating..." : "Seat at..."}
+                        </option>
+                        {tables.map((t) => (
+                          <option key={t.id} value={t.id}>
+                            {t.label}
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                  </li>
+                ))}
+              </ul>
             </div>
           )}
 
           <div className="flex flex-col gap-3">
             {[...grouped.entries()].map(([tableId, t]) => (
               <div key={tableId} className="rounded-lg border border-neutral-200 px-4 py-3">
-                <p className="font-medium">{t.tableLabel}</p>
-                <p className="text-sm text-neutral-600">{t.guests.join(", ")}</p>
+                <p className="mb-2 font-medium">{t.tableLabel}</p>
+                <ul className="flex flex-col gap-1.5">
+                  {t.guests.map((g) => (
+                    <li key={g.guestId} className="flex items-center justify-between gap-2 text-sm">
+                      <span>{g.guestName}</span>
+                      {canEdit && (
+                        <select
+                          className="rounded-md border border-neutral-300 px-2 py-1 text-xs disabled:opacity-50"
+                          value=""
+                          disabled={movingGuestId === g.guestId}
+                          onChange={(e) => onMoveGuest(g.guestId, e.target.value)}
+                        >
+                          <option value="" disabled>
+                            {movingGuestId === g.guestId ? "Moving..." : "Move to..."}
+                          </option>
+                          {tables
+                            .filter((table) => table.id !== tableId)
+                            .map((table) => (
+                              <option key={table.id} value={table.id}>
+                                {table.label}
+                              </option>
+                            ))}
+                        </select>
+                      )}
+                    </li>
+                  ))}
+                </ul>
               </div>
             ))}
           </div>

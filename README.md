@@ -137,6 +137,27 @@ up for it.
   status back to Draft or In Review clears that indicator without deleting the underlying
   history. Every status change is recorded as an immutable Change History entry (user,
   timestamp, from → to).
+- **Manual adjustment** (TS-10, partial — see below): on the Seating plan tab, every seated and
+  unassigned guest gets a "Move to.../Seat at..." control to manually place them at a different
+  table within the Current Plan Version, without generating a new version:
+  - Guests forced together by "must sit together" always move as one unit — moving one member
+    brings the rest along automatically.
+  - A move that would break a hard rule (capacity, must-not-sit-together with whoever's already
+    at the target table, or requires-accessible-table) is rejected outright with a specific,
+    named explanation, and nothing changes (FR-7.2) — verified for all three cases.
+  - A move that only conflicts with a soft "avoid" preference is allowed and comes back with a
+    visible, non-blocking warning naming who's affected (FR-7.3).
+  - Unlike automatic generation, a manual move can target a restricted table — that's the point
+    of "manual assignment" for those tables.
+  - Every successful move is recorded as an immutable Change History entry (user, timestamp,
+    guests, table) without creating a new plan version (FR-7.6).
+  - A guest or table can be locked (FR-7.4): a locked guest keeps their current table the next
+    time a plan is generated instead of being reshuffled, and a locked table is reserved —
+    generation won't seat new guests there. Locks are visible (a "locked" badge on the Guests
+    and Tables tabs) and never affect manual moves or hard-rule checks. If a lock can no longer
+    be honored (its table was deleted, or keeping it would now break a hard rule), the guest
+    falls back to normal automatic placement with a warning explaining why, rather than being
+    stranded over a stale pin.
 - Every list/detail endpoint enforces ownership — you can't read or modify another account's
   wedding, guests, rules, tables, or plan versions by guessing an ID, and a seating rule can't be
   created between guests from two different weddings even if you have access to both.
@@ -146,22 +167,33 @@ up for it.
 **TS-9 is only partially built.** What's there: the Draft/In Review/Approved status workflow
 above (FR-6.4, FR-6.5, FR-6.6). What's deliberately deferred, and why: FR-6.1's full
 Assigned/Unassigned/**Needs Reassignment**/**Not Attending** distinction depends on concepts
-(day-of attendance changes, manual edits that can invalidate a seat) that don't exist yet —
-they're TS-10 (Manual Adjustment) and TS-11 (Day-Of Mode); the schema already has a
-`needsReassignment` flag on each seat assignment ready for that. FR-6.2 (sharing a plan with
-in-app/email notifications) and FR-6.3 (comments on a table or guest assignment, gated by
-View/Comment/Edit permission) are left out entirely for now — they need a real
+(day-of attendance changes) that don't exist yet — that's TS-11 (Day-Of Mode); the schema
+already has a `needsReassignment` flag on each seat assignment ready for that. FR-6.2 (sharing a
+plan with in-app/email notifications) and FR-6.3 (comments on a table or guest assignment, gated
+by View/Comment/Edit permission) are left out entirely for now — they need a real
 collaborator/permissions model (inviting other accounts to a wedding with a permission level),
 which is substantial enough to be its own slice rather than something to fake with the
 single-owner model this app has today. Approve is currently allowed for any signed-in owner,
 standing in for "Planner/Owner or a Couple user with Comment/Edit" until that permissions model
 exists.
 
-Table/venue *visual* layout (drag-and-drop floor plan), manual adjustment, day-of mode,
-export/print, collaboration & notifications, and richer plan-versioning (labeling/comparing/
-restoring versions) are modeled in `schema.prisma` already and map to the remaining Jira stories
-(TS-7's visual piece, TS-10 through TS-15, and the rest of TS-9). Each can be built as its own
-vertical slice on top of this foundation.
+**TS-10 is only partially built.** What's there: manual moves with full hard/soft-rule
+validation, locks, and change history, described above. What's deliberately deferred, and why:
+FR-7.1 asks for dragging a guest between tables in a *visual* floor-plan view — there's no visual
+floor plan yet (that's TS-7's drag-and-drop piece), so this pass uses an equivalent
+select-a-table control on the existing list-based seating plan view instead; the same validated
+move endpoint is exactly what a future drag interaction would call. FR-7.5 (session-scoped
+undo/redo) and FR-7.7 (sub-5-second concurrent-edit sync with conflict detection) are left out —
+they need client-side state and either a live connection (websockets/polling) or optimistic-
+concurrency version checks that are substantial enough to be their own slice; today, two users
+editing the same plan at the same time can each save a change, and the second simply overwrites
+what the first saw (no conflict warning yet).
+
+Table/venue *visual* layout (drag-and-drop floor plan), day-of mode, export/print, collaboration
+& notifications, and richer plan-versioning (labeling/comparing/restoring versions) are modeled
+in `schema.prisma` already and map to the remaining Jira stories (TS-7's visual piece, TS-11
+through TS-15, and the rest of TS-9/TS-10). Each can be built as its own vertical slice on top of
+this foundation.
 
 ## Mobile later
 

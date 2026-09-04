@@ -46,3 +46,9 @@ export interface GeneratePlanResponse {
   planVersion: PlanVersionDetailDTO;
   errors: string[];
 }
+
+export const moveGuestAssignmentSchema = z.object({
+  guestId: z.string().min(1),
+  tableId: z.string().min(1),
+});
+export type MoveGuestAssignmentInput = z.infer<typeof moveGuestAssignmentSchema>;

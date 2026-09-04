@@ -11,13 +11,14 @@ export interface GuestRow {
   tier: string;
   rsvpStatus: string;
   requiresAccessibleTable: boolean;
+  isLocked: boolean;
   notes: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
 
 const COLUMNS = `id, "weddingId", "firstName", "lastName", "partyName", headcount, tier,
-  "rsvpStatus", "requiresAccessibleTable", notes, "createdAt", "updatedAt"`;
+  "rsvpStatus", "requiresAccessibleTable", "isLocked", notes, "createdAt", "updatedAt"`;
 
 export interface CreateGuestData {
   firstName: string;
@@ -27,6 +28,7 @@ export interface CreateGuestData {
   tier?: string;
   rsvpStatus?: string;
   requiresAccessibleTable?: boolean;
+  isLocked?: boolean;
   notes?: string | null;
 }
 
@@ -34,8 +36,8 @@ export async function createGuest(weddingId: string, input: CreateGuestData): Pr
   const id = randomUUID();
   const { rows } = await pool.query(
     `INSERT INTO "guests"
-       (id, "weddingId", "firstName", "lastName", "partyName", headcount, tier, "rsvpStatus", "requiresAccessibleTable", notes, "updatedAt")
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now())
+       (id, "weddingId", "firstName", "lastName", "partyName", headcount, tier, "rsvpStatus", "requiresAccessibleTable", "isLocked", notes, "updatedAt")
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, now())
      RETURNING ${COLUMNS}`,
     [
       id,
@@ -47,6 +49,7 @@ export async function createGuest(weddingId: string, input: CreateGuestData): Pr
       input.tier ?? "OTHER",
       input.rsvpStatus ?? "PENDING",
       input.requiresAccessibleTable ?? false,
+      input.isLocked ?? false,
       input.notes ?? null,
     ]
   );
@@ -82,6 +85,7 @@ export async function updateGuestForWedding(
     tier: `tier`,
     rsvpStatus: `"rsvpStatus"`,
     requiresAccessibleTable: `"requiresAccessibleTable"`,
+    isLocked: `"isLocked"`,
     notes: `notes`,
   };
   const fields: string[] = [];

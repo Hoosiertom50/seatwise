@@ -56,6 +56,17 @@ export function TablesTab({ weddingId }: { weddingId: string }) {
     }
   }
 
+  async function onToggleLock(id: string, isLocked: boolean) {
+    const prev = tables;
+    setTables(tables.map((t) => (t.id === id ? { ...t, isLocked } : t)));
+    try {
+      await api.patch(`/api/v1/weddings/${weddingId}/tables/${id}`, { isLocked });
+    } catch {
+      setTables(prev);
+      setError("Couldn't update that table's lock.");
+    }
+  }
+
   if (loading) return <p className="text-sm text-neutral-500">Loading tables...</p>;
 
   const totalCapacity = tables.reduce((sum, t) => sum + t.capacity, 0);
@@ -149,18 +160,35 @@ export function TablesTab({ weddingId }: { weddingId: string }) {
                       accessible
                     </span>
                   )}
+                  {t.isLocked && (
+                    <span
+                      className="ml-2 rounded bg-neutral-800 px-1.5 py-0.5 text-xs text-white"
+                      title="Locked — automated seating won't assign new guests here."
+                    >
+                      locked
+                    </span>
+                  )}
                 </p>
                 <p className="text-sm text-neutral-500">
                   Seats {t.capacity}
                   {t.purpose ? ` · ${t.purpose}` : ""}
                 </p>
               </div>
-              <button
-                onClick={() => onRemove(t.id)}
-                className="rounded-md border border-neutral-300 px-2 py-1 text-sm text-red-600 hover:bg-red-50"
-              >
-                Remove
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => onToggleLock(t.id, !t.isLocked)}
+                  title="Locking reserves this table for its current guests during automated seating."
+                  className="rounded-md border border-neutral-300 px-2 py-1 text-sm hover:bg-neutral-50"
+                >
+                  {t.isLocked ? "Unlock" : "Lock"}
+                </button>
+                <button
+                  onClick={() => onRemove(t.id)}
+                  className="rounded-md border border-neutral-300 px-2 py-1 text-sm text-red-600 hover:bg-red-50"
+                >
+                  Remove
+                </button>
+              </div>
             </li>
           ))}
         </ul>
