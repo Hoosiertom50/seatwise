@@ -5,3 +5,7 @@ export * from "./queries/guests";
 export * from "./queries/relationships";
 export * from "./queries/tables";
 export * from "./queries/plan-versions";
+export * from "./queries/collaborators";
+export * from "./queries/comments";
+export * from "./queries/activity";
+export * from "./queries/notifications";

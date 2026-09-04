@@ -1,12 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createTableSchema } from "@seatwise/shared";
-import { createSeatingTable, listSeatingTablesForWedding } from "@seatwise/db";
+import { addCollaboratorSchema } from "@seatwise/shared";
+import { listCollaboratorsForWedding, addCollaborator, CollaboratorError } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
 import { errorResponse, zodErrorResponse } from "@/lib/api-response";
 import { requireAccess } from "@/lib/access";
 
 type Params = { params: Promise<{ weddingId: string }> };
 
+// TS-13 (Collaboration & Notifications, FR-10.x): viewing who has access is available to anyone
+// with access; managing collaborators (inviting/removing/changing level) is owner-only.
 export async function GET(req: NextRequest, { params }: Params) {
   const user = await getAuthUser(req);
   if (!user) return errorResponse("Not authenticated", 401);
@@ -15,8 +17,8 @@ export async function GET(req: NextRequest, { params }: Params) {
   const access = await requireAccess(weddingId, user.id, "VIEW");
   if ("error" in access) return access.error;
 
-  const tables = await listSeatingTablesForWedding(weddingId);
-  return NextResponse.json({ tables });
+  const collaborators = await listCollaboratorsForWedding(weddingId);
+  return NextResponse.json({ collaborators });
 }
 
 export async function POST(req: NextRequest, { params }: Params) {
@@ -24,13 +26,20 @@ export async function POST(req: NextRequest, { params }: Params) {
   if (!user) return errorResponse("Not authenticated", 401);
 
   const { weddingId } = await params;
-  const access = await requireAccess(weddingId, user.id, "EDIT");
+  const access = await requireAccess(weddingId, user.id, "OWNER");
   if ("error" in access) return access.error;
 
   const body = await req.json().catch(() => null);
-  const parsed = createTableSchema.safeParse(body);
+  const parsed = addCollaboratorSchema.safeParse(body);
   if (!parsed.success) return zodErrorResponse(parsed.error);
 
-  const table = await createSeatingTable(weddingId, parsed.data);
-  return NextResponse.json({ table }, { status: 201 });
+  try {
+    const collaborator = await addCollaborator(weddingId, user.id, parsed.data.email, parsed.data.permissionLevel);
+    return NextResponse.json({ collaborator }, { status: 201 });
+  } catch (err) {
+    if (err instanceof CollaboratorError) {
+      return errorResponse(err.message, err.code === "NOT_FOUND" ? 404 : 409);
+    }
+    throw err;
+  }
 }

@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { moveGuestAssignmentSchema } from "@seatwise/shared";
-import { getWeddingForOwner, moveGuestAssignment, ManualMoveError } from "@seatwise/db";
+import { moveGuestAssignment, ManualMoveError } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
 import { errorResponse, zodErrorResponse } from "@/lib/api-response";
+import { requireAccess } from "@/lib/access";
 
 type Params = { params: Promise<{ weddingId: string; planVersionId: string }> };
 
@@ -16,8 +17,8 @@ export async function POST(req: NextRequest, { params }: Params) {
   if (!user) return errorResponse("Not authenticated", 401);
 
   const { weddingId, planVersionId } = await params;
-  const wedding = await getWeddingForOwner(weddingId, user.id);
-  if (!wedding) return errorResponse("Wedding not found", 404);
+  const access = await requireAccess(weddingId, user.id, "EDIT");
+  if ("error" in access) return access.error;
 
   const body = await req.json().catch(() => null);
   const parsed = moveGuestAssignmentSchema.safeParse(body);

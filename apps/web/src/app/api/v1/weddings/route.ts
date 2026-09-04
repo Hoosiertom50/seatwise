@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createWeddingSchema } from "@seatwise/shared";
-import { createWedding, listWeddingsByOwner } from "@seatwise/db";
+import { createWedding, listWeddingsAccessibleToUser } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
 import { errorResponse, zodErrorResponse } from "@/lib/api-response";
 
@@ -8,7 +8,7 @@ export async function GET(req: NextRequest) {
   const user = await getAuthUser(req);
   if (!user) return errorResponse("Not authenticated", 401);
 
-  const weddings = await listWeddingsByOwner(user.id);
+  const weddings = await listWeddingsAccessibleToUser(user.id);
   return NextResponse.json({ weddings });
 }
 

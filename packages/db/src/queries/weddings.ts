@@ -9,13 +9,14 @@ export interface WeddingRow {
   venueName: string | null;
   status: string;
   guestCount: number;
+  emailNotificationsEnabled: boolean;
   createdAt: Date;
   updatedAt: Date;
 }
 
 const SELECT_WITH_GUEST_COUNT = `
   SELECT w.id, w."ownerId", w.name, w."eventDate"::text AS "eventDate", w."venueName", w.status,
-         w."createdAt", w."updatedAt",
+         w."emailNotificationsEnabled", w."createdAt", w."updatedAt",
          COALESCE(g.count, 0)::int AS "guestCount"
   FROM "weddings" w
   LEFT JOIN (
@@ -31,7 +32,8 @@ export async function createWedding(
   const { rows } = await pool.query(
     `INSERT INTO "weddings" (id, "ownerId", name, "eventDate", "venueName", "updatedAt")
      VALUES ($1, $2, $3, $4, $5, now())
-     RETURNING id, "ownerId", name, "eventDate"::text AS "eventDate", "venueName", status, "createdAt", "updatedAt"`,
+     RETURNING id, "ownerId", name, "eventDate"::text AS "eventDate", "venueName", status,
+               "emailNotificationsEnabled", "createdAt", "updatedAt"`,
     [id, ownerId, input.name, input.eventDate ?? null, input.venueName ?? null]
   );
   return { ...rows[0], guestCount: 0 };
@@ -51,6 +53,34 @@ export async function getWeddingForOwner(id: string, ownerId: string): Promise<W
     [id, ownerId]
   );
   return rows[0] ?? null;
+}
+
+// TS-13: unlike getWeddingForOwner, this doesn't check ownership — callers pair it with
+// getWeddingAccessLevel() so a View/Comment/Edit collaborator (not just the owner) can load it.
+export async function getWeddingById(id: string): Promise<WeddingRow | null> {
+  const { rows } = await pool.query(`${SELECT_WITH_GUEST_COUNT} WHERE w.id = $1`, [id]);
+  return rows[0] ?? null;
+}
+
+// TS-13: the dashboard's "your weddings" list needs to include weddings a user has been given
+// collaborator access to, not only ones they own.
+export async function listWeddingsAccessibleToUser(userId: string): Promise<WeddingRow[]> {
+  const { rows } = await pool.query(
+    `${SELECT_WITH_GUEST_COUNT}
+     WHERE w."ownerId" = $1
+        OR w.id IN (SELECT "weddingId" FROM "wedding_collaborators" WHERE "userId" = $1)
+     ORDER BY w."createdAt" DESC`,
+    [userId]
+  );
+  return rows;
+}
+
+export async function setEmailNotificationsEnabled(id: string, ownerId: string, enabled: boolean): Promise<boolean> {
+  const { rowCount } = await pool.query(
+    `UPDATE "weddings" SET "emailNotificationsEnabled" = $1, "updatedAt" = now() WHERE id = $2 AND "ownerId" = $3`,
+    [enabled, id, ownerId]
+  );
+  return (rowCount ?? 0) > 0;
 }
 
 export async function updateWeddingForOwner(

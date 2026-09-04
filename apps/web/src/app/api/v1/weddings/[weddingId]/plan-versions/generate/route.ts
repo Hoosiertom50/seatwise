@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { generateSeatingPlan } from "@seatwise/shared";
 import {
-  getWeddingForOwner,
   listGuestsByWedding,
   listRelationshipsForWedding,
   listSeatingTablesForWedding,
@@ -11,6 +10,7 @@ import {
 } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
 import { errorResponse } from "@/lib/api-response";
+import { requireAccess } from "@/lib/access";
 
 type Params = { params: Promise<{ weddingId: string }> };
 
@@ -19,8 +19,8 @@ export async function POST(req: NextRequest, { params }: Params) {
   if (!user) return errorResponse("Not authenticated", 401);
 
   const { weddingId } = await params;
-  const wedding = await getWeddingForOwner(weddingId, user.id);
-  if (!wedding) return errorResponse("Wedding not found", 404);
+  const access = await requireAccess(weddingId, user.id, "EDIT");
+  if ("error" in access) return access.error;
 
   const [guests, relationships, tables, currentAssignments] = await Promise.all([
     listGuestsByWedding(weddingId),

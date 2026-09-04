@@ -26,6 +26,11 @@ model User {
   updatedAt    DateTime @updatedAt
 
   weddings Wedding[]
+  // TS-13 (Collaboration & Notifications): access another owner's wedding grants, comments this
+  // user has authored, and in-app notifications addressed to this user.
+  collaboratingOn WeddingCollaborator[]
+  comments        Comment[]
+  notifications   Notification[]
 
   @@map("users")
 }
@@ -46,6 +51,9 @@ model Wedding {
   eventDate DateTime?     @db.Date
   venueName String?
   status    WeddingStatus @default(PLANNING)
+  // FR-10.2: email delivery is opt-out per wedding — this flips it off entirely for this
+  // wedding's notifications; the in-app notification itself always still fires.
+  emailNotificationsEnabled Boolean @default(true)
   createdAt DateTime      @default(now())
   updatedAt DateTime      @updatedAt
 
@@ -54,9 +62,99 @@ model Wedding {
   tables        SeatingTable[]
   planVersions  PlanVersion[]
   ruleConfigs   RuleWeightConfig[]
+  collaborators WeddingCollaborator[]
+  comments      Comment[]
+  notifications Notification[]
 
   @@index([ownerId])
   @@map("weddings")
+}
+
+// --- Collaboration & notifications (FR-10.x) ------------------------------
+
+// "View/Comment/Edit" from the requirements doc, in increasing order of what's allowed. The
+// owner is implicitly above Edit (can manage collaborators, rename/delete the wedding) and isn't
+// itself a row in this table.
+enum CollaboratorPermission {
+  VIEW
+  COMMENT
+  EDIT
+}
+
+model WeddingCollaborator {
+  id              String                 @id @default(cuid())
+  weddingId       String
+  wedding         Wedding                @relation(fields: [weddingId], references: [id], onDelete: Cascade)
+  userId          String
+  user            User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  permissionLevel CollaboratorPermission @default(VIEW)
+  invitedByUserId String?
+  createdAt       DateTime               @default(now())
+
+  @@unique([weddingId, userId])
+  @@index([userId])
+  @@map("wedding_collaborators")
+}
+
+enum CommentTargetType {
+  GUEST
+  TABLE
+}
+
+model Comment {
+  id               String            @id @default(cuid())
+  weddingId        String
+  wedding          Wedding           @relation(fields: [weddingId], references: [id], onDelete: Cascade)
+  targetType       CommentTargetType
+  guestId          String?
+  guest            Guest?            @relation(fields: [guestId], references: [id], onDelete: SetNull)
+  tableId          String?
+  table            SeatingTable?     @relation(fields: [tableId], references: [id], onDelete: SetNull)
+  // FR-10.3: captured once at creation so the comment stays understandable even after its guest
+  // or table is renamed or removed — "stays attached to that historical target rather than being
+  // silently reassigned". If guestId/tableId is null but targetType still says GUEST/TABLE, the
+  // original target was removed; targetLabel is what's shown in its place.
+  targetLabel      String
+  body             String
+  authorUserId     String
+  author           User              @relation(fields: [authorUserId], references: [id], onDelete: Cascade)
+  parentCommentId  String?
+  parentComment    Comment?          @relation("CommentReplies", fields: [parentCommentId], references: [id])
+  replies          Comment[]         @relation("CommentReplies")
+  resolvedAt       DateTime?
+  resolvedByUserId String?
+  createdAt        DateTime          @default(now())
+
+  @@index([weddingId])
+  @@index([guestId])
+  @@index([tableId])
+  @@map("comments")
+}
+
+enum NotificationType {
+  PLAN_SHARED
+  COMMENT_REPLY
+  TABLE_CHANGED
+  GUEST_ADDED
+  GUEST_REMOVED
+  ATTENDANCE_CHANGED
+  STATUS_CHANGED
+}
+
+model Notification {
+  id              String           @id @default(cuid())
+  weddingId       String
+  wedding         Wedding          @relation(fields: [weddingId], references: [id], onDelete: Cascade)
+  recipientUserId String
+  recipient       User             @relation(fields: [recipientUserId], references: [id], onDelete: Cascade)
+  type            NotificationType
+  message         String
+  isRead          Boolean          @default(false)
+  createdAt       DateTime         @default(now())
+
+  @@index([recipientUserId])
+  @@index([weddingId])
+  @@map("notifications")
 }
 
 enum GuestTier {
@@ -102,6 +200,7 @@ model Guest {
   relationshipsFrom GuestRelationship[] @relation("relationshipGuestA")
   relationshipsTo   GuestRelationship[] @relation("relationshipGuestB")
   seatAssignments   SeatAssignment[]
+  comments          Comment[]
 
   @@index([weddingId])
   @@map("guests")
@@ -153,6 +252,7 @@ model SeatingTable {
   updatedAt    DateTime @updatedAt
 
   seatAssignments SeatAssignment[]
+  comments        Comment[]
 
   @@index([weddingId])
   @@map("seating_tables")

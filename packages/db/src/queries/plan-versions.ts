@@ -1,5 +1,6 @@
 import { randomUUID } from "crypto";
 import { pool } from "../pool";
+import { notifyWeddingCollaborators } from "./notifications";
 
 export interface PlanVersionRow {
   id: string;
@@ -164,6 +165,17 @@ export async function listPlanVersionsForWedding(weddingId: string): Promise<Pla
   return rows;
 }
 
+// TS-13/FR-10.2: several notification triggers ("post-approval") need to know whether the
+// wedding's Current Plan Version is currently Approved — used by guest add/remove routes, which
+// otherwise have no reason to touch plan_versions at all.
+export async function getCurrentPlanVersionStatus(weddingId: string): Promise<string | null> {
+  const { rows } = await pool.query(
+    `SELECT status FROM "plan_versions" WHERE "weddingId" = $1 ORDER BY "versionNumber" DESC LIMIT 1`,
+    [weddingId]
+  );
+  return rows[0]?.status ?? null;
+}
+
 // FR-6.4: status can only ever change on the Current Plan Version (the highest versionNumber
 // for the wedding) — approving or reviewing an old, superseded version makes no sense and isn't
 // allowed.
@@ -240,6 +252,17 @@ export async function setPlanVersionStatus(
   } finally {
     client.release();
   }
+
+  // FR-10.2: a status change to IN_REVIEW is "the plan is shared for review"; any other status
+  // transition is notified as a plain status change.
+  await notifyWeddingCollaborators(
+    weddingId,
+    actorUserId,
+    newStatus === "IN_REVIEW" ? "PLAN_SHARED" : "STATUS_CHANGED",
+    newStatus === "IN_REVIEW"
+      ? "The seating plan was shared for review."
+      : `The seating plan status changed to ${newStatus}.`
+  );
 
   return getPlanVersionDetail(id, weddingId);
 }
@@ -521,6 +544,18 @@ export async function moveGuestAssignment(
   const planVersion = await getPlanVersionDetail(planVersionId, weddingId);
   if (!planVersion) throw new ManualMoveError("Plan version not found after move.");
   planVersion.warnings = warnings;
+
+  // FR-10.2: table changes are only notification-worthy once the plan has been approved (a Draft
+  // is expected to be edited constantly and would otherwise spam everyone).
+  if (planVersion.status === "APPROVED") {
+    await notifyWeddingCollaborators(
+      weddingId,
+      actorUserId,
+      "TABLE_CHANGED",
+      `${unit.map((g) => g.name).join(", ")} moved to "${targetTable.label}".`
+    );
+  }
+
   return { planVersion, warnings };
 }
 
@@ -607,7 +642,21 @@ export async function setGuestAttendance(
     client.release();
   }
 
-  return currentPlanVersionId ? getPlanVersionDetail(currentPlanVersionId, weddingId) : null;
+  const detail = currentPlanVersionId ? await getPlanVersionDetail(currentPlanVersionId, weddingId) : null;
+
+  // FR-10.2: attendance changes are only notification-worthy once the plan has been approved.
+  if (detail?.status === "APPROVED") {
+    await notifyWeddingCollaborators(
+      weddingId,
+      actorUserId,
+      "ATTENDANCE_CHANGED",
+      attendance === "NOT_ATTENDING"
+        ? `${guest.name} was marked not attending.`
+        : `${guest.name} was marked attending again.`
+    );
+  }
+
+  return detail;
 }
 
 // FR-8.1 (Day-Of Mode): swap two guests' (or their forced-together units') tables in one atomic
@@ -873,6 +922,17 @@ export async function swapGuestAssignments(
   const planVersion = await getPlanVersionDetail(planVersionId, weddingId);
   if (!planVersion) throw new SwapError("Plan version not found after swap.");
   planVersion.warnings = warnings;
+
+  // FR-10.2: same "only once approved" gating as a plain move.
+  if (planVersion.status === "APPROVED") {
+    await notifyWeddingCollaborators(
+      weddingId,
+      actorUserId,
+      "TABLE_CHANGED",
+      `Swapped ${unitA.map((g) => g.name).join(", ")} with ${unitB.map((g) => g.name).join(", ")}.`
+    );
+  }
+
   return { planVersion, warnings };
 }
 

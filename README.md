@@ -212,24 +212,47 @@ up for it.
     actually commits it — a "must sit together" rule added since the snapshot is a genuine tension
     with "restore exactly what v2 looked like," so rather than silently reshuffling the copied
     layout to fix it, that case is surfaced as a non-blocking warning instead.
-- Every list/detail endpoint enforces ownership — you can't read or modify another account's
-  wedding, guests, rules, tables, or plan versions by guessing an ID, and a seating rule can't be
-  created between guests from two different weddings even if you have access to both.
+- **Collaboration & Notifications** (TS-13, FR-10.1–FR-10.3): a real multi-user model on top of
+  the single-owner one every earlier story used.
+  - A wedding's owner can invite any other existing Seatwise account by email at **View**,
+    **Comment**, or **Edit** access (each level includes everything below it; the owner is
+    implicitly above Edit and never has their own row in the collaborator table). Every existing
+    endpoint — guests, tables, rules, plan versions, manual moves, day-of mode, export, restore —
+    now checks this access level instead of pure ownership: reads need View, writes need Edit;
+    renaming/deleting the wedding and managing collaborators stay owner-only.
+  - **Comments** (FR-10.3) attach to a specific guest or table, support one level of threaded
+    replies, and can be resolved by the original commenter or anyone with Edit access (nobody
+    else). A comment's target label (e.g. "Guest: Jane Doe") is captured once at creation, so if
+    that guest or table is later renamed or removed, the comment stays understandable instead of
+    silently losing its context or breaking — it's just shown as historical ("removed").
+  - **Activity log** (FR-10.1): a single chronological feed across *every* plan version of a
+    wedding (every earlier story's Change History entries were only ever queryable one version at
+    a time) — status changes, manual moves/swaps, attendance changes, and restores, newest first,
+    each with who did it and when.
+  - **In-app notifications** (FR-10.2): the owner and every other collaborator (except whoever
+    caused it) gets a notification when a plan is shared for review, a comment gets a reply, or —
+    once the Current version is Approved — a guest's table changes, a guest is added or removed,
+    or attendance changes; any other status transition also notifies. A bell in the header (every
+    page) shows the unread count and a dropdown to read/mark-read. Each wedding has a per-wedding
+    email opt-out (on by default); a stubbed "email send" logs what it would have sent (there's no
+    real provider wired up in this environment) and is written so a failed send can never block
+    the in-app notification or the action that triggered it.
+- Every list/detail endpoint enforces access — you can't read or modify a wedding, guests, rules,
+  tables, or plan versions you don't own or collaborate on by guessing an ID, and a seating rule
+  can't be created between guests from two different weddings even if you have access to both.
 
 ## What's next
 
 **TS-9 is only partially built.** What's there: the Draft/In Review/Approved status workflow
-above (FR-6.4, FR-6.5, FR-6.6). What's deliberately deferred, and why: FR-6.1's full
+above (FR-6.4, FR-6.5, FR-6.6), and — since TS-13 — FR-6.2's sharing notification (moving to In
+Review notifies every collaborator) and FR-6.3's comments, both described in the TS-13 bullet
+above. What's still deliberately deferred, and why: FR-6.1's full
 Assigned/Unassigned/**Needs Reassignment**/**Not Attending** distinction depends on concepts
 (day-of attendance changes) that don't exist yet — that's TS-11 (Day-Of Mode); the schema
-already has a `needsReassignment` flag on each seat assignment ready for that. FR-6.2 (sharing a
-plan with in-app/email notifications) and FR-6.3 (comments on a table or guest assignment, gated
-by View/Comment/Edit permission) are left out entirely for now — they need a real
-collaborator/permissions model (inviting other accounts to a wedding with a permission level),
-which is substantial enough to be its own slice rather than something to fake with the
-single-owner model this app has today. Approve is currently allowed for any signed-in owner,
-standing in for "Planner/Owner or a Couple user with Comment/Edit" until that permissions model
-exists.
+already has a `needsReassignment` flag on each seat assignment ready for that. Any Edit-level
+collaborator (not just the owner) can move a plan's status, standing in for "Planner/Owner or a
+Couple user with Comment/Edit" — Comment-level users can comment but not change status, matching
+the permission model FR-6.2/6.3 describe.
 
 **TS-10 is only partially built.** What's there: manual moves with full hard/soft-rule
 validation, locks, and change history, described above. What's deliberately deferred, and why:
@@ -260,10 +283,23 @@ sets it — versions are only ever referred to by number today). The place-card 
 columns x 4 rows per page for readability; a denser layout or a stationery-brand-matched template
 would be a styling pass on the same `pdf-lib` code, not a new feature.
 
-Table/venue *visual* layout (drag-and-drop floor plan), collaboration & notifications, and
-version labeling/comparison are modeled in `schema.prisma` already and map to the remaining Jira
-stories (TS-7's visual piece, TS-13 through TS-15, and the rest of TS-9/TS-10). Each can be built
-as its own vertical slice on top of this foundation.
+**TS-13 (Collaboration & Notifications) is built**, described above. What's deliberately left
+out, and why: the existing tabs (Guests, Tables, Rules, Seating plan, Day-of mode) don't yet
+*hide* controls a View/Comment-level collaborator can't use — server-side enforcement is complete
+and verified (a 403 comes back for every disallowed write), but e.g. a View-only collaborator
+still sees an "Add guest" button that then fails with that 403 rather than being hidden or
+disabled up front. Making every existing tab permission-aware in the UI, not just the API, is a
+straightforward follow-on pass, not a new capability. Notifications are polled (the bell refetches
+every 30s) rather than pushed over a live connection — same tradeoff TS-10 already made for
+concurrent-edit sync, and for the same reason (no websocket/SSE infrastructure in this pass).
+There's no real email provider wired up — `sendEmailNotification` is a stand-in that logs what it
+would send; swapping in Resend/SendGrid/SES means replacing that one function's body, not any of
+its call sites or the notification logic around it.
+
+Table/venue *visual* layout (drag-and-drop floor plan) and version labeling/comparison are
+modeled in `schema.prisma` already and map to the remaining Jira stories (TS-7's visual piece,
+TS-14, TS-15, and the rest of TS-10). Each can be built as its own vertical slice on top of this
+foundation.
 
 ## Mobile later
 

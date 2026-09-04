@@ -5,10 +5,12 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { api, ApiError } from "@/lib/api-client";
 import type { WeddingDTO } from "@seatwise/shared";
+import { NotificationsBell } from "@/components/NotificationsBell";
 
 export default function DashboardPage() {
   const router = useRouter();
   const [userName, setUserName] = useState<string | null>(null);
+  const [userId, setUserId] = useState<string | null>(null);
   const [weddings, setWeddings] = useState<WeddingDTO[]>([]);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
@@ -20,8 +22,9 @@ export default function DashboardPage() {
   useEffect(() => {
     (async () => {
       try {
-        const me = await api.get<{ user: { name: string } }>("/api/v1/auth/me");
+        const me = await api.get<{ user: { id: string; name: string } }>("/api/v1/auth/me");
         setUserName(me.user.name);
+        setUserId(me.user.id);
         const list = await api.get<{ weddings: WeddingDTO[] }>("/api/v1/weddings");
         setWeddings(list.weddings);
       } catch (err) {
@@ -73,12 +76,15 @@ export default function DashboardPage() {
           <h1 className="text-2xl font-semibold">Your weddings</h1>
           {userName && <p className="text-sm text-neutral-500">Signed in as {userName}</p>}
         </div>
-        <button
-          onClick={onLogout}
-          className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm hover:bg-neutral-50"
-        >
-          Log out
-        </button>
+        <div className="flex items-center gap-2">
+          <NotificationsBell />
+          <button
+            onClick={onLogout}
+            className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm hover:bg-neutral-50"
+          >
+            Log out
+          </button>
+        </div>
       </div>
 
       <form
@@ -136,7 +142,14 @@ export default function DashboardPage() {
                 className="flex items-center justify-between rounded-lg border border-neutral-200 px-4 py-3 hover:border-neutral-400"
               >
                 <div>
-                  <p className="font-medium">{w.name}</p>
+                  <p className="font-medium">
+                    {w.name}
+                    {userId && w.ownerId !== userId && (
+                      <span className="ml-2 rounded-full bg-neutral-100 px-2 py-0.5 text-xs font-normal text-neutral-500">
+                        Shared with you
+                      </span>
+                    )}
+                  </p>
                   <p className="text-sm text-neutral-500">
                     {w.eventDate ? new Date(w.eventDate).toLocaleDateString() : "No date set"}
                     {w.venueName ? ` · ${w.venueName}` : ""}
