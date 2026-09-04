@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { generateSeatingPlan } from "@seatwise/shared";
+import { generateSeatingPlan, RULE_WEIGHT_CONFIG_VERSION, type EngineSideMixing } from "@seatwise/shared";
 import {
   listGuestsByWedding,
   listRelationshipsForWedding,
@@ -7,6 +7,7 @@ import {
   getLatestAssignmentsForWedding,
   createPlanVersionWithAssignments,
   getPlanVersionDetail,
+  getWeddingById,
 } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
 import { errorResponse } from "@/lib/api-response";
@@ -22,12 +23,15 @@ export async function POST(req: NextRequest, { params }: Params) {
   const access = await requireAccess(weddingId, user.id, "EDIT");
   if ("error" in access) return access.error;
 
-  const [guests, relationships, tables, currentAssignments] = await Promise.all([
+  const [wedding, guests, relationships, tables, currentAssignments] = await Promise.all([
+    getWeddingById(weddingId),
     listGuestsByWedding(weddingId),
     listRelationshipsForWedding(weddingId),
     listSeatingTablesForWedding(weddingId),
     getLatestAssignmentsForWedding(weddingId),
   ]);
+  if (!wedding) return errorResponse("Wedding not found", 404);
+  const sideMixing = wedding.sideMixing as EngineSideMixing;
 
   if (guests.length === 0) {
     return errorResponse("Add some guests before generating a seating plan.", 422);
@@ -46,6 +50,12 @@ export async function POST(req: NextRequest, { params }: Params) {
     (r) => attendingIds.has(r.guestAId) && attendingIds.has(r.guestBId)
   );
 
+  // FR-3.7a: which Restricted table (if any) requires each guest — a hard pin at generation time.
+  const requiredTableByGuestId = new Map<string, string>();
+  for (const t of tables) {
+    for (const guestId of t.requiredGuestIds) requiredTableByGuestId.set(guestId, t.id);
+  }
+
   const result = generateSeatingPlan(
     attendingGuests.map((g) => ({
       id: g.id,
@@ -54,6 +64,8 @@ export async function POST(req: NextRequest, { params }: Params) {
       requiresAccessibleTable: g.requiresAccessibleTable,
       isLocked: g.isLocked,
       currentTableId: currentAssignments.get(g.id) ?? null,
+      side: g.side as "BRIDE" | "GROOM" | "BOTH",
+      requiredTableId: requiredTableByGuestId.get(g.id) ?? null,
     })),
     attendingRelationships.map((r) => ({ guestAId: r.guestAId, guestBId: r.guestBId, type: r.type })),
     tables.map((t) => ({
@@ -63,7 +75,9 @@ export async function POST(req: NextRequest, { params }: Params) {
       isRestricted: t.isRestricted,
       isAccessible: t.isAccessible,
       isLocked: t.isLocked,
-    }))
+      singleSideOnly: t.singleSideOnly,
+    })),
+    sideMixing
   );
 
   if (result.errors.length > 0) {
@@ -79,6 +93,8 @@ export async function POST(req: NextRequest, { params }: Params) {
     warnings: result.warnings,
     assignments: result.assignments,
     unassignedGuestIds: result.unassignedGuestIds,
+    sideMixingSetting: sideMixing,
+    ruleConfigVersion: RULE_WEIGHT_CONFIG_VERSION,
   });
 
   const planVersion = await getPlanVersionDetail(planVersionId, weddingId);

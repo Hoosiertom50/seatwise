@@ -10,13 +10,15 @@ export interface WeddingRow {
   status: string;
   guestCount: number;
   emailNotificationsEnabled: boolean;
+  // FR-3.4
+  sideMixing: string;
   createdAt: Date;
   updatedAt: Date;
 }
 
 const SELECT_WITH_GUEST_COUNT = `
   SELECT w.id, w."ownerId", w.name, w."eventDate"::text AS "eventDate", w."venueName", w.status,
-         w."emailNotificationsEnabled", w."createdAt", w."updatedAt",
+         w."emailNotificationsEnabled", w."sideMixing", w."createdAt", w."updatedAt",
          COALESCE(g.count, 0)::int AS "guestCount"
   FROM "weddings" w
   LEFT JOIN (
@@ -26,15 +28,15 @@ const SELECT_WITH_GUEST_COUNT = `
 
 export async function createWedding(
   ownerId: string,
-  input: { name: string; eventDate?: string | null; venueName?: string | null }
+  input: { name: string; eventDate?: string | null; venueName?: string | null; sideMixing?: string }
 ): Promise<WeddingRow> {
   const id = randomUUID();
   const { rows } = await pool.query(
-    `INSERT INTO "weddings" (id, "ownerId", name, "eventDate", "venueName", "updatedAt")
-     VALUES ($1, $2, $3, $4, $5, now())
+    `INSERT INTO "weddings" (id, "ownerId", name, "eventDate", "venueName", "sideMixing", "updatedAt")
+     VALUES ($1, $2, $3, $4, $5, COALESCE($6::"SideMixingSetting", 'BALANCED_MIX'), now())
      RETURNING id, "ownerId", name, "eventDate"::text AS "eventDate", "venueName", status,
-               "emailNotificationsEnabled", "createdAt", "updatedAt"`,
-    [id, ownerId, input.name, input.eventDate ?? null, input.venueName ?? null]
+               "emailNotificationsEnabled", "sideMixing", "createdAt", "updatedAt"`,
+    [id, ownerId, input.name, input.eventDate ?? null, input.venueName ?? null, input.sideMixing ?? null]
   );
   return { ...rows[0], guestCount: 0 };
 }
@@ -86,7 +88,7 @@ export async function setEmailNotificationsEnabled(id: string, ownerId: string, 
 export async function updateWeddingForOwner(
   id: string,
   ownerId: string,
-  input: Partial<{ name: string; eventDate: string | null; venueName: string | null }>
+  input: Partial<{ name: string; eventDate: string | null; venueName: string | null; sideMixing: string }>
 ): Promise<boolean> {
   const fields: string[] = [];
   const values: unknown[] = [];
@@ -102,6 +104,10 @@ export async function updateWeddingForOwner(
   if (input.venueName !== undefined) {
     fields.push(`"venueName" = $${i++}`);
     values.push(input.venueName);
+  }
+  if (input.sideMixing !== undefined) {
+    fields.push(`"sideMixing" = $${i++}::"SideMixingSetting"`);
+    values.push(input.sideMixing);
   }
   fields.push(`"updatedAt" = now()`);
   values.push(id, ownerId);

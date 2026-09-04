@@ -1,6 +1,7 @@
 import { randomUUID } from "crypto";
 import { pool } from "../pool";
 import { notifyWeddingCollaborators } from "./notifications";
+import { RULE_WEIGHT_CONFIG } from "@seatwise/shared";
 
 export interface PlanVersionRow {
   id: string;
@@ -17,6 +18,10 @@ export interface PlanVersionRow {
   // FR-9.4: set when this version was created by restoring an earlier one — the number (not the
   // id) is what's useful to show, so the UI never has to cross-reference another version's row.
   restoredFromVersionNumber: number | null;
+  // FR-3.4 AC: the wedding's Side-Mixing setting and the soft-rule weighting-config version in
+  // effect when this version was generated — null on a version created before this field existed.
+  sideMixingSetting: string | null;
+  ruleConfigVersion: number | null;
 }
 
 export interface ModifiedSinceApproval {
@@ -75,6 +80,10 @@ export async function createPlanVersionWithAssignments(
     warnings: string[];
     assignments: { guestId: string; tableId: string }[];
     unassignedGuestIds: string[];
+    // FR-3.4 AC: "each Plan Version records the setting and weighting-configuration version
+    // used" -- optional so older call sites (and tests) that don't pass these still work.
+    sideMixingSetting?: string;
+    ruleConfigVersion?: number;
   }
 ): Promise<string> {
   const client = await pool.connect();
@@ -89,10 +98,30 @@ export async function createPlanVersionWithAssignments(
 
     const planVersionId = randomUUID();
     await client.query(
-      `INSERT INTO "plan_versions" (id, "weddingId", "versionNumber", status, "isComplete")
-       VALUES ($1, $2, $3, 'DRAFT', $4)`,
-      [planVersionId, weddingId, versionNumber, input.isComplete]
+      `INSERT INTO "plan_versions" (id, "weddingId", "versionNumber", status, "isComplete", "sideMixingSetting", "ruleConfigVersion")
+       VALUES ($1, $2, $3, 'DRAFT', $4, $5, $6)`,
+      [
+        planVersionId,
+        weddingId,
+        versionNumber,
+        input.isComplete,
+        input.sideMixingSetting ?? null,
+        input.ruleConfigVersion ?? null,
+      ]
     );
+
+    // FR-3.4 AC: make sure this ruleConfigVersion's actual weighting config is on record for this
+    // wedding (idempotent -- a version that's already there from an earlier generation is left
+    // untouched, since the whole point of versioning it is that past plans keep pointing at the
+    // config that actually produced them).
+    if (input.ruleConfigVersion !== undefined) {
+      await client.query(
+        `INSERT INTO "rule_weight_configs" (id, "weddingId", version, config)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT ("weddingId", version) DO NOTHING`,
+        [randomUUID(), weddingId, input.ruleConfigVersion, JSON.stringify(RULE_WEIGHT_CONFIG)]
+      );
+    }
 
     for (const a of input.assignments) {
       await client.query(
@@ -273,7 +302,7 @@ export async function getPlanVersionDetail(
 ): Promise<PlanVersionDetail | null> {
   const { rows: versionRows } = await pool.query(
     `SELECT pv.id, pv."weddingId", pv."versionNumber", pv.label, pv.status, pv."isComplete",
-            pv."approvedAt", pv."createdAt",
+            pv."approvedAt", pv."createdAt", pv."sideMixingSetting", pv."ruleConfigVersion",
             (pv."versionNumber" = (SELECT MAX("versionNumber") FROM "plan_versions" WHERE "weddingId" = $2)) AS "isCurrent",
             restored_from."versionNumber" AS "restoredFromVersionNumber"
      FROM "plan_versions" pv
@@ -379,11 +408,28 @@ export async function moveGuestAssignment(
   }
 
   const { rows: tableRows } = await pool.query(
-    `SELECT id, label, capacity, "isAccessible" FROM "seating_tables" WHERE id = $1 AND "weddingId" = $2`,
+    `SELECT id, label, capacity, "isAccessible", "isRestricted" FROM "seating_tables" WHERE id = $1 AND "weddingId" = $2`,
     [targetTableId, weddingId]
   );
   const targetTable = tableRows[0];
   if (!targetTable) throw new ManualMoveError("Table not found.");
+
+  // FR-3.7a: every wedding-wide required-table membership (at most one row per guest -- enforced
+  // by a DB unique constraint) -- used below to block either side of a Restricted table's
+  // required list being violated by a manual move.
+  const { rows: requiredRows } = await pool.query(
+    `SELECT rtg."guestId", rtg."tableId", t.label AS "tableLabel"
+     FROM "restricted_table_guests" rtg
+     JOIN "seating_tables" t ON t.id = rtg."tableId"
+     WHERE t."weddingId" = $1`,
+    [weddingId]
+  );
+  const requiredTableByGuestId = new Map<string, { tableId: string; tableLabel: string }>(
+    requiredRows.map((r) => [r.guestId, { tableId: r.tableId, tableLabel: r.tableLabel }])
+  );
+  const requiredGuestIdsForTargetTable = new Set(
+    requiredRows.filter((r) => r.tableId === targetTableId).map((r) => r.guestId)
+  );
 
   // The guest's forced-together unit: everyone connected to them by a chain of
   // MUST_SIT_TOGETHER rules always shares a table, so moving "just" this guest really means
@@ -480,6 +526,30 @@ export async function moveGuestAssignment(
       throw new ManualMoveError(
         `${member.name} has a "must not sit together" rule with ${conflictingOccupant.name}, ` +
           `who's already seated at "${targetTable.label}".`
+      );
+    }
+  }
+  // FR-3.7a: a guest required at a Restricted table can only ever be moved to that exact table
+  // (or unassigned) -- never anywhere else, since that would "remove" them from the list's
+  // seating without actually taking them off the list.
+  for (const member of unit) {
+    const required = requiredTableByGuestId.get(member.id);
+    if (required && required.tableId !== targetTableId) {
+      throw new ManualMoveError(
+        `${member.name} is required at "${required.tableLabel}" and can't be moved elsewhere ` +
+          `while they're on its required-guest list.`
+      );
+    }
+  }
+  // FR-3.7a: a Restricted table can only ever hold the guests on its required list -- moving
+  // anyone else there is blocked, the same as moving a listed guest away from it above.
+  if (targetTable.isRestricted) {
+    const unlisted = unit.filter((member) => !requiredGuestIdsForTargetTable.has(member.id));
+    if (unlisted.length > 0) {
+      const names = unlisted.map((g) => g.name).join(", ");
+      throw new ManualMoveError(
+        `"${targetTable.label}" is a Restricted table — only guests on its required-guest list ` +
+          `can be seated there, and ${names} ${unlisted.length === 1 ? "isn't" : "aren't"} on it.`
       );
     }
   }
@@ -758,13 +828,25 @@ export async function swapGuestAssignments(
   }
 
   const { rows: tableRows } = await pool.query(
-    `SELECT id, label, capacity, "isAccessible" FROM "seating_tables" WHERE id = ANY($1::text[]) AND "weddingId" = $2`,
+    `SELECT id, label, capacity, "isAccessible", "isRestricted" FROM "seating_tables" WHERE id = ANY($1::text[]) AND "weddingId" = $2`,
     [[tableAId, tableBId], weddingId]
   );
   const tablesById = new Map(tableRows.map((t) => [t.id, t]));
   const tableA = tablesById.get(tableAId);
   const tableB = tablesById.get(tableBId);
   if (!tableA || !tableB) throw new SwapError("Table not found.");
+
+  // FR-3.7a: a Restricted table's required-guest list can only change through the dedicated
+  // required-guests endpoint -- swapping would move a required guest off their table (or an
+  // unlisted guest onto one), either of which "violates either side of the list", so a swap
+  // touching either table is blocked outright rather than trying to special-case it.
+  if (tableA.isRestricted || tableB.isRestricted) {
+    const restrictedLabel = tableA.isRestricted ? tableA.label : tableB.label;
+    throw new SwapError(
+      `"${restrictedLabel}" is a Restricted table — its required-guest list can't be changed by ` +
+        `swapping guests in or out of it.`
+    );
+  }
 
   const mustNotByGuest = new Map<string, Set<string>>();
   const avoidByGuest = new Map<string, Set<string>>();

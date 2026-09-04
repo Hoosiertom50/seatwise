@@ -125,9 +125,10 @@ up for it.
     ever guessed or silently dropped.
   - Every generation creates a new numbered version; past versions stay viewable from the
     dropdown on the Seating plan tab.
-  - Restricted tables (a specific required guest list, e.g. a reserved family table) are left
-    out of automatic assignment for now — the schema tracks the flag, but seating those is a
-    manual/later step, since a per-table required-guest list isn't modeled yet.
+  - Restricted tables with a required-guest list (FR-3.7a, closed as part of the TS-6 gap-closing
+    pass below) *are* seated automatically: every listed guest is pinned to that table at
+    generation time, the same way a locked guest is pinned to theirs, with the same
+    graceful-fallback-with-warning behavior if the pin can no longer be honored.
 - **Plan review status** (TS-9, partial — see below): the Current Plan Version (the latest one
   generated) moves through Draft → In Review → Approved. Approving requires a complete plan
   (FR-0.1) and only ever applies to the current version — an older, superseded version's status
@@ -316,12 +317,42 @@ up for it.
     other's guest or table, and each wedding's Activity log and comments never mention the other's
     guests.
   - **Scope note:** the acceptance criteria as originally written mention two things this codebase
-    doesn't have — bulk CSV/Excel guest import (FR-2.4/2.4a, a TS-5 gap) and a wedding-level
-    Side-Mixing setting (FR-3.4, a TS-6 gap). Neither exists anywhere in the schema or API
-    (confirmed by inspection, not assumed), so rather than fake them, the end-to-end script stands
-    in for "import a spreadsheet" by adding guests through the existing create-guest endpoint (the
-    same end state — 100 guest records in the wedding) and skips Side-Mixing entirely. Every other
-    piece of every acceptance criterion is exercised for real.
+    didn't have at the time — bulk CSV/Excel guest import (FR-2.4/2.4a, a TS-5 gap) and a
+    wedding-level Side-Mixing setting (FR-3.4, a TS-6 gap, closed below). Neither existed anywhere
+    in the schema or API at the time (confirmed by inspection, not assumed), so rather than fake
+    them, the end-to-end script stood in for "import a spreadsheet" by adding guests through the
+    existing create-guest endpoint (the same end state — 100 guest records in the wedding) and
+    skipped Side-Mixing entirely. Every other piece of every acceptance criterion was exercised for
+    real. (Bulk guest import, FR-2.4/2.4a, remains open — see "What's next".)
+- **Relationships & Seating Rules gap-closing** (TS-6, FR-3.4 and FR-3.7a): TS-15's own testing
+  surfaced two acceptance-criteria gaps in TS-6 (see the scope note just above); this pass closes
+  the two of them that were in scope for TS-6 itself.
+  - **Side-Mixing setting** (FR-3.4): a per-wedding `sideMixing` setting — Keep Separate, Balanced
+    Mix (the default), or Fully Mixed — controls how strongly automatic generation favors or avoids
+    seating Bride-side and Groom-side guests at the same table. Every guest has a `side` (Bride /
+    Groom / Both — "Both" never counts toward either side, e.g. a mutual friend or a couple already
+    in the family). It's always a *soft* preference, never a hard rule: Keep Separate penalizes an
+    opposite-side guest at the same table in the scoring function, Fully Mixed rewards it (and
+    lightly penalizes same-side clustering), Balanced Mix rewards it more mildly. A table can
+    independently be marked `singleSideOnly`, a soft override that prefers keeping whichever side
+    is already established there, regardless of the wedding's own setting. Every generated plan
+    version records the exact `sideMixingSetting` and a `ruleConfigVersion` (a versioned snapshot of
+    the scoring weights used, persisted alongside it) it was generated under, per FR-3.4's
+    acceptance criterion that this be auditable after the fact — not just applied silently.
+  - **Restricted table required-guest list** (FR-3.7a): a Restricted table can now be given an
+    explicit required-guest list (`PUT .../tables/:tableId/required-guests`) — the guests who *must*
+    sit there (e.g. the reserved family table mentioned in the FR-3.7a acceptance criteria). A
+    guest can be required at only one Restricted table wedding-wide, enforced at the database level
+    (not just in application code), and the list is validated and saved atomically: an
+    over-capacity list, an unknown guest, or a guest already required at a different Restricted
+    table is rejected outright with a specific reason, and nothing is saved. At generation time,
+    every listed guest is a hard pin to their table (reusing the same pinned-placement machinery
+    locked guests already use, with a fallback-with-warning if a pin can no longer be honored — see
+    the earlier note under "Automated seat assignment engine"). Manual moves and swaps respect the
+    list going forward too: a listed guest can't be manually moved off their required table, an
+    unlisted guest can't be manually moved onto a Restricted table, and a swap is blocked outright
+    if either table involved is Restricted (a scope-limiting simplification — partial-list
+    consistency during a swap was judged not worth the added complexity for this pass).
 
 ## What's next
 
@@ -391,16 +422,26 @@ attempted, not about hiding buttons a lower-access collaborator can't use.
 
 **TS-15 (Integration / End-to-End Scenarios) is built**, described above. Its own description is
 explicit that it "has no requirements of its own" — it validates every other story working
-together, so there's nothing to defer here in the usual sense. The one real gap it surfaced (and
-documented, rather than working around silently) is that the acceptance criteria assume two
-features — bulk guest import and Side-Mixing — that were never built as part of TS-5/TS-6. Closing
-those remains future work on those specific stories, not on TS-15.
+together, so there's nothing to defer here in the usual sense. It surfaced two acceptance-criteria
+gaps — bulk guest import (a TS-5 gap) and Side-Mixing (a TS-6 gap) — that were never built as part
+of TS-5/TS-6. The Side-Mixing gap has since been closed (see the TS-6 paragraph below); bulk guest
+import remains open as a TS-5 gap.
+
+**TS-6 (Relationships & Seating Rules) is now fully built**, aside from one deliberately deferred
+stretch goal. What's there, beyond the original must/must-not-sit-together/prefer-near/avoid rules
+described above: the Side-Mixing setting (FR-3.4) and the Restricted table required-guest list
+(FR-3.7a), both described in their own bullet above — these were the two gaps TS-15's own testing
+surfaced. What's still deliberately left out, and why: FR-3.7's fuller idea of *structured*
+seating criteria on a table's "purpose" (e.g. a table's purpose implying a preferred side, tier, or
+age category as its own soft-preference input, beyond the plain free-text `purpose` field that
+already exists) was scoped out as a stretch goal relative to the two gaps above — it wasn't
+something TS-15's testing actually blocked on, and free-text `purpose` already covers the same
+need for a human reading the table list, just without the engine reading it as a preference input.
 
 Table/venue *visual* layout (drag-and-drop floor plan) and version labeling/comparison are
 modeled in `schema.prisma` already and map to the remaining Jira stories (TS-7's visual piece, and
 the rest of TS-10). Each can be built as its own vertical slice on top of this foundation. Bulk
-guest import (FR-2.4/2.4a) and the Side-Mixing setting (FR-3.4) — the two gaps TS-15 surfaced
-above — would round out TS-5 and TS-6 respectively.
+guest import (FR-2.4/2.4a) — the one gap TS-15 surfaced that's still open — would round out TS-5.
 
 ## Mobile later
 

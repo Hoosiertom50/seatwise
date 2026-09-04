@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { SideMixing } from "./wedding";
 
 export type PlanVersionStatusValue = "DRAFT" | "IN_REVIEW" | "APPROVED";
 
@@ -26,6 +27,10 @@ export interface PlanVersionDTO {
   unassignedGuestCount: number;
   // FR-9.4: set when this version was created by restoring an earlier one.
   restoredFromVersionNumber: number | null;
+  // FR-3.4 AC: the wedding's Side-Mixing setting and the soft-rule weighting-config version in
+  // effect when this version was generated — null on a version created before this existed.
+  sideMixingSetting: SideMixing | null;
+  ruleConfigVersion: number | null;
 }
 
 export interface PlanVersionAssignmentDTO {

@@ -28,6 +28,13 @@ export type EngineRelationshipType =
   | "PREFER_NEAR"
   | "AVOID";
 
+// FR-3.4: which side of the wedding a guest belongs to. BOTH never counts toward either side.
+export type EngineGuestSide = "BRIDE" | "GROOM" | "BOTH";
+
+// FR-3.4: how much generation weights table composition toward mixing the two sides. Always a
+// soft preference (see the side-mixing scoring in attemptPlace below) -- never a hard rule.
+export type EngineSideMixing = "KEEP_SEPARATE" | "BALANCED_MIX" | "FULLY_MIXED";
+
 export interface EngineGuest {
   id: string;
   name: string;
@@ -36,6 +43,13 @@ export interface EngineGuest {
   // FR-7.4: if locked and currently seated somewhere, generation tries to keep them there.
   isLocked: boolean;
   currentTableId?: string | null;
+  // FR-3.4
+  side: EngineGuestSide;
+  // FR-3.7a: set when this guest is on a Restricted table's required-guest list -- a hard pin,
+  // stronger than a lock (a lock falls back gracefully if it can't be honored; a required-table
+  // guest is only ever supposed to reach generation already validated to fit, but the same
+  // graceful-fallback path is reused defensively if the table shrank since the list was saved).
+  requiredTableId?: string | null;
 }
 
 export interface EngineRelationship {
@@ -51,6 +65,9 @@ export interface EngineTable {
   isRestricted: boolean;
   isAccessible: boolean;
   isLocked: boolean;
+  // FR-3.4: a table-level override favoring one side only, regardless of the wedding's overall
+  // Side-Mixing setting. Still just a soft preference.
+  singleSideOnly: boolean;
 }
 
 export interface SeatingPlanAssignment {
@@ -71,7 +88,28 @@ interface Unit {
   totalHeadcount: number;
   requiresAccessible: boolean;
   pinnedTableId: string | null;
+  pinReason: "lock" | "required" | null;
+  // FR-3.4: BRIDE/GROOM if every non-BOTH member of the unit agrees; BOTH if the unit is all BOTH
+  // guests, or mixes BRIDE and GROOM members (a forced-together group already overrides any
+  // side-mixing preference for its own members, so it's neutral for scoring purposes).
+  side: EngineGuestSide;
 }
+
+// FR-0.2 / FR-3.4: the soft-rule weighting constants below, versioned. Bump the version whenever
+// these numbers (or the formula that uses them) change, so a Plan Version's stored
+// ruleConfigVersion always identifies exactly what produced it (FR-3.4's acceptance criterion).
+export const RULE_WEIGHT_CONFIG_VERSION = 1;
+export const RULE_WEIGHT_CONFIG = {
+  preferNearBonus: 10,
+  avoidPenalty: 10,
+  leftoverCapacityWeight: 0.01,
+  sideMixing: {
+    keepSeparateOppositeSidePenalty: 8,
+    balancedMixOppositeSideBonus: 3,
+    fullyMixedOppositeSideBonus: 8,
+    singleSideOnlyMismatchPenalty: 6,
+  },
+} as const;
 
 class UnionFind {
   private parent = new Map<string, string>();
@@ -99,7 +137,8 @@ class UnionFind {
 export function generateSeatingPlan(
   guests: EngineGuest[],
   relationships: EngineRelationship[],
-  tables: EngineTable[]
+  tables: EngineTable[],
+  sideMixing: EngineSideMixing = "BALANCED_MIX"
 ): SeatingPlanResult {
   const errors: string[] = [];
   const warnings: string[] = [];
@@ -134,16 +173,34 @@ export function generateSeatingPlan(
     const root = uf.find(g.id);
     let unit = unitsByRoot.get(root);
     if (!unit) {
-      unit = { guestIds: [], totalHeadcount: 0, requiresAccessible: false, pinnedTableId: null };
+      unit = {
+        guestIds: [],
+        totalHeadcount: 0,
+        requiresAccessible: false,
+        pinnedTableId: null,
+        pinReason: null,
+        side: "BOTH",
+      };
       unitsByRoot.set(root, unit);
     }
     unit.guestIds.push(g.id);
     unit.totalHeadcount += g.headcount;
     if (g.requiresAccessibleTable) unit.requiresAccessible = true;
-    // FR-7.4: if any locked guest in this unit has a current table, pin the whole unit there.
-    // (Unit members are always seated together, so one locked member's table is the unit's.)
-    if (g.isLocked && g.currentTableId && !unit.pinnedTableId) {
+    // FR-3.4: BRIDE/GROOM only sticks if every non-BOTH member agrees; a mix (or all-BOTH) stays
+    // neutral. First non-BOTH member sets it, a later *conflicting* one resets to neutral.
+    if (g.side !== "BOTH") {
+      if (unit.side === "BOTH") unit.side = g.side;
+      else if (unit.side !== g.side) unit.side = "BOTH";
+    }
+    // FR-3.7a: a required-table pin takes priority over a lock (it's a hard rule, a lock is a
+    // soft "keep them where they were"); either way the whole unit is pinned, since forced-
+    // together members are always seated as one.
+    if (g.requiredTableId && unit.pinReason !== "required") {
+      unit.pinnedTableId = g.requiredTableId;
+      unit.pinReason = "required";
+    } else if (g.isLocked && g.currentTableId && !unit.pinnedTableId) {
       unit.pinnedTableId = g.currentTableId;
+      unit.pinReason = "lock";
     }
   }
   const units = [...unitsByRoot.values()];
@@ -187,6 +244,19 @@ export function generateSeatingPlan(
       unit.guestIds.some((guestId) => mustNotMap.get(guestId)?.has(occupantId))
     );
 
+  // FR-3.4: how many BRIDE/GROOM guests (never BOTH) currently sit at a table -- used both for
+  // side-mixing scoring and to know a Single-Side-Only table's "established" side.
+  function sideCounts(tableId: string): { bride: number; groom: number } {
+    let bride = 0;
+    let groom = 0;
+    for (const guestId of occupants.get(tableId)!) {
+      const side = guestById.get(guestId)?.side;
+      if (side === "BRIDE") bride++;
+      else if (side === "GROOM") groom++;
+    }
+    return { bride, groom };
+  }
+
   // Attempts to place `unit` at the best of `pool`; returns the chosen table, or null if no
   // table in `pool` can hold it without breaking a hard rule. Mutates remainingCapacity/
   // occupants/assignments/warnings only on success.
@@ -200,8 +270,10 @@ export function generateSeatingPlan(
     if (feasible.length === 0) return null;
 
     // Score each feasible table: fewer AVOID conflicts and more PREFER_NEAR satisfactions is
-    // better; tie-break toward the tightest fit (least leftover capacity) to reduce
-    // fragmentation.
+    // better, weighted toward the wedding's Side-Mixing setting (FR-3.4, always secondary to the
+    // guest-to-guest preferences above), tie-broken toward the tightest fit (least leftover
+    // capacity) to reduce fragmentation.
+    const w = RULE_WEIGHT_CONFIG;
     let best = feasible[0];
     let bestScore = -Infinity;
     for (const t of feasible) {
@@ -215,7 +287,35 @@ export function generateSeatingPlan(
         }
       }
       const leftover = (remainingCapacity.get(t.id) ?? 0) - unit.totalHeadcount;
-      const score = preferHits * 10 - avoidHits * 10 - leftover * 0.01;
+      let score =
+        preferHits * w.preferNearBonus - avoidHits * w.avoidPenalty - leftover * w.leftoverCapacityWeight;
+
+      // FR-3.4: guests marked Both never count toward either side, so a BOTH unit is neutral
+      // here regardless of setting or of who's already seated at a candidate table.
+      if (unit.side !== "BOTH") {
+        const counts = sideCounts(t.id);
+        const sameSide = unit.side === "BRIDE" ? counts.bride : counts.groom;
+        const oppositeSide = unit.side === "BRIDE" ? counts.groom : counts.bride;
+        if (sideMixing === "KEEP_SEPARATE") {
+          score -= oppositeSide * w.sideMixing.keepSeparateOppositeSidePenalty;
+        } else if (sideMixing === "FULLY_MIXED") {
+          // Actively push toward an even mix: reward the other side being there, and mildly
+          // penalize a table that's already stacked with this unit's own side.
+          score += oppositeSide * w.sideMixing.fullyMixedOppositeSideBonus;
+          score -= sameSide * (w.sideMixing.fullyMixedOppositeSideBonus * 0.5);
+        } else {
+          score += oppositeSide * w.sideMixing.balancedMixOppositeSideBonus;
+        }
+        // A Single-Side-Only table is a table-level override of the wedding's setting: once it
+        // has an established side (someone BRIDE- or GROOM-only already seated there), seating
+        // the *other* side there is an unmet preference, not a hard block (FR-3.4).
+        if (t.singleSideOnly) {
+          const established = counts.bride > 0 && counts.groom === 0 ? "BRIDE" : counts.groom > 0 && counts.bride === 0 ? "GROOM" : null;
+          if (established && established !== unit.side) {
+            score -= w.sideMixing.singleSideOnlyMismatchPenalty;
+          }
+        }
+      }
       if (score > bestScore) {
         bestScore = score;
         best = t;
@@ -228,6 +328,30 @@ export function generateSeatingPlan(
     remainingCapacity.set(best.id, (remainingCapacity.get(best.id) ?? 0) - unit.totalHeadcount);
     const existingBefore = [...occupants.get(best.id)!];
     occupants.get(best.id)!.push(...unit.guestIds);
+
+    // FR-3.4: surface an unmet Single-Side-Only preference (soft — non-blocking) the same way an
+    // AVOID conflict is surfaced below.
+    if (unit.side !== "BOTH" && best.singleSideOnly) {
+      const countsBefore = { bride: 0, groom: 0 };
+      for (const guestId of existingBefore) {
+        const side = guestById.get(guestId)?.side;
+        if (side === "BRIDE") countsBefore.bride++;
+        else if (side === "GROOM") countsBefore.groom++;
+      }
+      const established =
+        countsBefore.bride > 0 && countsBefore.groom === 0
+          ? "BRIDE"
+          : countsBefore.groom > 0 && countsBefore.bride === 0
+            ? "GROOM"
+            : null;
+      if (established && established !== unit.side) {
+        warnings.push(
+          `${unit.guestIds.map(guestName).join(", ")} ${unit.guestIds.length === 1 ? "was" : "were"} ` +
+            `seated at "${best.label}" (Single-Side-Only) despite being on the other side — no other ` +
+            `table had room.`
+        );
+      }
+    }
 
     // Surface any AVOID conflicts this placement couldn't avoid (soft rule — non-blocking).
     for (const guestId of unit.guestIds) {
@@ -272,16 +396,23 @@ export function generateSeatingPlan(
 
   for (const unit of pinnedUnits) {
     const target = unit.pinnedTableId ? tablesById.get(unit.pinnedTableId) : undefined;
+    // A required-table pin targets its own restricted table directly (attemptPlace doesn't
+    // filter by isRestricted -- only the *general* candidateTables pool excludes it), same as a
+    // locked pin targeting any table.
     const placedAt = target ? attemptPlace(unit, [target]) : null;
     if (placedAt) continue;
 
-    // The lock couldn't be honored (table deleted, or it would now break a hard rule) — fall
-    // back to normal automatic placement rather than leaving a locked guest stranded just
-    // because their specific pin is no longer possible.
+    // The pin couldn't be honored (table deleted/shrunk, or it would now break a hard rule) —
+    // fall back to normal automatic placement rather than leaving the guest(s) stranded just
+    // because their specific pin is no longer possible. FR-3.7a's own validation (at save time)
+    // means this should be rare for a required-table pin -- it only fires if the table's
+    // capacity was reduced, or another hard rule now conflicts, after the list was saved.
+    const isRequired = unit.pinReason === "required";
     warnings.push(
       `${unit.guestIds.length === 1 ? "Guest" : "Guests"} ${unit.guestIds
         .map(guestName)
-        .join(", ")} ${unit.guestIds.length === 1 ? "is" : "are"} locked to ` +
+        .join(", ")} ${unit.guestIds.length === 1 ? "is" : "are"} ` +
+        `${isRequired ? "required at" : "locked to"} ` +
         `${target ? `"${target.label}"` : "a table that no longer exists"}, but that's no ` +
         `longer possible — seated automatically instead.`
     );

@@ -11,6 +11,11 @@ export type RsvpStatus = z.infer<typeof rsvpStatusEnum>;
 export const dayOfAttendanceEnum = z.enum(["ATTENDING", "NOT_ATTENDING"]);
 export type DayOfAttendance = z.infer<typeof dayOfAttendanceEnum>;
 
+// FR-3.4: which side of the wedding a guest belongs to. BOTH (the default) never counts toward
+// either side for Side-Mixing purposes.
+export const guestSideEnum = z.enum(["BRIDE", "GROOM", "BOTH"]);
+export type GuestSide = z.infer<typeof guestSideEnum>;
+
 export const createGuestSchema = z.object({
   firstName: z.string().min(1, "First name is required").max(100),
   lastName: z.string().min(1, "Last name is required").max(100),
@@ -22,6 +27,7 @@ export const createGuestSchema = z.object({
   isLocked: z.boolean().default(false),
   dayOfAttendance: dayOfAttendanceEnum.default("ATTENDING"),
   notes: z.string().max(2000).optional().nullable(),
+  side: guestSideEnum.default("BOTH"),
 });
 export type CreateGuestInput = z.infer<typeof createGuestSchema>;
 
@@ -41,6 +47,10 @@ export interface GuestDTO {
   isLocked: boolean;
   dayOfAttendance: DayOfAttendance;
   notes: string | null;
+  // FR-3.4
+  side: GuestSide;
+  // FR-3.7a: the Restricted table this guest is a required member of, if any (null otherwise).
+  requiredTableId: string | null;
   createdAt: string;
   updatedAt: string;
 }

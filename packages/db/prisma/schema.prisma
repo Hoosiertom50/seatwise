@@ -43,6 +43,15 @@ enum WeddingStatus {
   ARCHIVED
 }
 
+// FR-3.4: one wedding-level setting weighting how much generation mixes the two sides at a
+// table. Always a soft preference (FR-3.4 is explicit it's never a hard rule) — see
+// seating-engine.ts's side-mixing scoring.
+enum SideMixingSetting {
+  KEEP_SEPARATE
+  BALANCED_MIX
+  FULLY_MIXED
+}
+
 model Wedding {
   id        String        @id @default(cuid())
   ownerId   String
@@ -54,6 +63,8 @@ model Wedding {
   // FR-10.2: email delivery is opt-out per wedding — this flips it off entirely for this
   // wedding's notifications; the in-app notification itself always still fires.
   emailNotificationsEnabled Boolean @default(true)
+  // FR-3.4
+  sideMixing SideMixingSetting @default(BALANCED_MIX)
   createdAt DateTime      @default(now())
   updatedAt DateTime      @updatedAt
 
@@ -165,6 +176,14 @@ enum GuestTier {
   OTHER
 }
 
+// FR-3.4: which side of the wedding a guest belongs to, for Side-Mixing weighting. BOTH (the
+// default) is the "invited by/close to both" case and never counts toward either side.
+enum GuestSide {
+  BRIDE
+  GROOM
+  BOTH
+}
+
 enum RsvpStatus {
   PENDING
   CONFIRMED
@@ -189,6 +208,8 @@ model Guest {
   tier                    GuestTier  @default(OTHER)
   rsvpStatus              RsvpStatus @default(PENDING)
   requiresAccessibleTable Boolean    @default(false)
+  // FR-3.4
+  side                    GuestSide  @default(BOTH)
   // FR-7.4: when locked, automated (re)generation keeps this guest at their current table
   // instead of reshuffling them; manual moves and hard-rule checks are never affected by a lock.
   isLocked                Boolean    @default(false)
@@ -201,6 +222,9 @@ model Guest {
   relationshipsTo   GuestRelationship[] @relation("relationshipGuestB")
   seatAssignments   SeatAssignment[]
   comments          Comment[]
+  // FR-3.7a: at most one restricted table can require this guest, wedding-wide (enforced by the
+  // @@unique([guestId]) below, not just app logic).
+  requiredAtTable   RestrictedTableGuest?
 
   @@index([weddingId])
   @@map("guests")
@@ -246,6 +270,9 @@ model SeatingTable {
   // a locked table, and hard-rule checks are never affected by a lock.
   isLocked     Boolean  @default(false)
   purpose      String?
+  // FR-3.4: a table-level override — favor seating only one side here, regardless of the
+  // wedding's overall Side-Mixing setting. Still only ever a soft preference (see engine).
+  singleSideOnly Boolean @default(false)
   positionX    Float?
   positionY    Float?
   createdAt    DateTime @default(now())
@@ -253,9 +280,29 @@ model SeatingTable {
 
   seatAssignments SeatAssignment[]
   comments        Comment[]
+  // FR-3.7a: this table's explicit required-guest list, when isRestricted is true.
+  requiredGuests  RestrictedTableGuest[]
 
   @@index([weddingId])
   @@map("seating_tables")
+}
+
+// FR-3.7a: a Restricted table's explicit required guest list — a hard rule, not a preference.
+// Every listed Attending guest must be seated at exactly this table; a guest may be required at
+// only one Restricted table wedding-wide (the @@unique([guestId]) below enforces that at the
+// database level, not just in application code); manual moves can't violate either side of the
+// list (see moveGuestAssignment in plan-versions.ts).
+model RestrictedTableGuest {
+  id        String       @id @default(cuid())
+  tableId   String
+  table     SeatingTable @relation(fields: [tableId], references: [id], onDelete: Cascade)
+  guestId   String
+  guest     Guest        @relation(fields: [guestId], references: [id], onDelete: Cascade)
+  createdAt DateTime     @default(now())
+
+  @@unique([tableId, guestId])
+  @@unique([guestId])
+  @@map("restricted_table_guests")
 }
 
 // --- Plan versions & change history (FR-9.4) ------------------------------
@@ -284,6 +331,10 @@ model PlanVersion {
   restoredFromId String?
   restoredFrom   PlanVersion?      @relation("restoredFrom", fields: [restoredFromId], references: [id])
   restoredInto   PlanVersion[]     @relation("restoredFrom")
+  // FR-3.4 AC: "each Plan Version records the setting and weighting-configuration version used" —
+  // null on a version restored/created before this field existed.
+  sideMixingSetting SideMixingSetting?
+  ruleConfigVersion Int?
   createdAt      DateTime          @default(now())
 
   seatAssignments SeatAssignment[]

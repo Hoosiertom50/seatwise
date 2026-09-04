@@ -15,12 +15,21 @@ export interface GuestRow {
   isLocked: boolean;
   dayOfAttendance: string;
   notes: string | null;
+  // FR-3.4
+  side: string;
+  // FR-3.7a: the Restricted table this guest is a required member of, if any.
+  requiredTableId: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
 
-const COLUMNS = `id, "weddingId", "firstName", "lastName", "partyName", headcount, tier,
-  "rsvpStatus", "requiresAccessibleTable", "isLocked", "dayOfAttendance", notes, "createdAt", "updatedAt"`;
+// Joined against restricted_table_guests so every read can surface requiredTableId (FR-3.7a)
+// without a second round-trip; a plain INSERT ... RETURNING can't do that join, so createGuest
+// below fills it in as null itself (a brand-new guest can't already be on a required list).
+const COLUMNS = `g.id, g."weddingId", g."firstName", g."lastName", g."partyName", g.headcount, g.tier,
+  g."rsvpStatus", g."requiresAccessibleTable", g."isLocked", g."dayOfAttendance", g.notes, g.side,
+  rtg."tableId" AS "requiredTableId", g."createdAt", g."updatedAt"`;
+const FROM_JOINED = `FROM "guests" g LEFT JOIN "restricted_table_guests" rtg ON rtg."guestId" = g.id`;
 
 export interface CreateGuestData {
   firstName: string;
@@ -33,6 +42,7 @@ export interface CreateGuestData {
   isLocked?: boolean;
   dayOfAttendance?: string;
   notes?: string | null;
+  side?: string;
 }
 
 // NFR-9.3b: `notes` is where free-text dietary/accessibility details actually end up, so it's the
@@ -42,9 +52,11 @@ export async function createGuest(weddingId: string, input: CreateGuestData): Pr
   const id = randomUUID();
   const { rows } = await pool.query(
     `INSERT INTO "guests"
-       (id, "weddingId", "firstName", "lastName", "partyName", headcount, tier, "rsvpStatus", "requiresAccessibleTable", "isLocked", "dayOfAttendance", notes, "updatedAt")
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, now())
-     RETURNING ${COLUMNS}`,
+       (id, "weddingId", "firstName", "lastName", "partyName", headcount, tier, "rsvpStatus", "requiresAccessibleTable", "isLocked", "dayOfAttendance", notes, side, "updatedAt")
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, now())
+     RETURNING id, "weddingId", "firstName", "lastName", "partyName", headcount, tier,
+               "rsvpStatus", "requiresAccessibleTable", "isLocked", "dayOfAttendance", notes, side,
+               "createdAt", "updatedAt"`,
     [
       id,
       weddingId,
@@ -58,14 +70,15 @@ export async function createGuest(weddingId: string, input: CreateGuestData): Pr
       input.isLocked ?? false,
       input.dayOfAttendance ?? "ATTENDING",
       encryptText(input.notes ?? null),
+      input.side ?? "BOTH",
     ]
   );
-  return { ...rows[0], notes: decryptText(rows[0].notes) };
+  return { ...rows[0], notes: decryptText(rows[0].notes), requiredTableId: null };
 }
 
 export async function listGuestsByWedding(weddingId: string): Promise<GuestRow[]> {
   const { rows } = await pool.query(
-    `SELECT ${COLUMNS} FROM "guests" WHERE "weddingId" = $1 ORDER BY "lastName", "firstName"`,
+    `SELECT ${COLUMNS} ${FROM_JOINED} WHERE g."weddingId" = $1 ORDER BY g."lastName", g."firstName"`,
     [weddingId]
   );
   return rows.map((r) => ({ ...r, notes: decryptText(r.notes) }));
@@ -73,7 +86,7 @@ export async function listGuestsByWedding(weddingId: string): Promise<GuestRow[]
 
 export async function getGuestForWedding(id: string, weddingId: string): Promise<GuestRow | null> {
   const { rows } = await pool.query(
-    `SELECT ${COLUMNS} FROM "guests" WHERE id = $1 AND "weddingId" = $2`,
+    `SELECT ${COLUMNS} ${FROM_JOINED} WHERE g.id = $1 AND g."weddingId" = $2`,
     [id, weddingId]
   );
   if (!rows[0]) return null;
@@ -96,6 +109,7 @@ export async function updateGuestForWedding(
     isLocked: `"isLocked"`,
     dayOfAttendance: `"dayOfAttendance"`,
     notes: `notes`,
+    side: `side`,
   };
   const fields: string[] = [];
   const values: unknown[] = [];
