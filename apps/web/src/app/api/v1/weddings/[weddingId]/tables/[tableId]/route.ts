@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { updateTableSchema } from "@seatwise/shared";
-import { updateSeatingTableForWedding, deleteSeatingTableForWedding } from "@seatwise/db";
+import {
+  updateSeatingTableForWedding,
+  getSeatingTableForWedding,
+  syncAccessibleTableReassignment,
+  deleteSeatingTableForWedding,
+} from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
 import { errorResponse, zodErrorResponse } from "@/lib/api-response";
 import { requireAccess } from "@/lib/access";
@@ -22,7 +27,20 @@ export async function PATCH(req: NextRequest, { params }: Params) {
   const updated = await updateSeatingTableForWedding(tableId, weddingId, parsed.data);
   if (!updated) return errorResponse("Table not found", 404);
 
-  return NextResponse.json({ ok: true });
+  // FR-4.6: an isAccessible change (either direction) re-checks anyone currently assigned here
+  // who requires an accessible table -- flagging or clearing Needs Reassignment and keeping the
+  // current plan version's completeness in sync, in both directions.
+  let warnings: string[] = [];
+  if (parsed.data.isAccessible !== undefined) {
+    const { affectedGuestNames } = await syncAccessibleTableReassignment(weddingId, tableId);
+    warnings = affectedGuestNames.map(
+      (name) =>
+        `${name} requires an accessible table and this one no longer is one — flagged as Needs Reassignment.`
+    );
+  }
+
+  const table = await getSeatingTableForWedding(tableId, weddingId);
+  return NextResponse.json({ ok: true, table, warnings });
 }
 
 export async function DELETE(req: NextRequest, { params }: Params) {

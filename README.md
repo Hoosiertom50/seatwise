@@ -129,10 +129,38 @@ up for it.
   with the FR-0.1 hard-rule invariant enforced server-side: a pair of guests can't simultaneously
   be required to sit together and forbidden from it — that's blocked outright with a clear error,
   not just left to the UI to prevent.
-- Tables: create/update/delete tables for a wedding with a name, seat capacity, optional purpose
-  (e.g. "Kids table"), a restricted flag, and an accessible-seating flag. (A visual drag-and-drop
-  floor plan is a follow-on enhancement — this pass is the data layer plus a straightforward
-  list-based UI.)
+- **Table & Venue Layout** (TS-7, FR-4.1–FR-4.7): create/update/delete tables for a wedding with a
+  name, seat capacity, optional purpose (e.g. "Kids table"), a restricted flag, and an
+  accessible-seating flag, plus:
+  - **Shape** (FR-4.1): Round, Rectangular, Square, Oval, or Other — affects only how the floor
+    plan (below) draws the table; changing it never touches generated assignments or rule
+    results.
+  - **Quick-create a standard set** (FR-4.2): "12 round tables of 8" in one action
+    (`POST .../tables/quick-create`) — every table gets a distinct name, numbered to continue
+    after any tables that already exist so a repeated quick-create never collides with an
+    earlier one.
+  - **Optional visual floor plan** (FR-4.3): a "Floor plan" view (alongside the original list
+    view) on the Tables tab where each table can be dragged into position. Every table gets a
+    sensible default grid position the moment it's created — dragging just moves it from there —
+    and the position is saved purely for display; it's never read by the seating engine,
+    generation, Prefer-Near/Avoid, or tier grouping in any way, confirmed by generating a plan,
+    moving a table, and regenerating: the assignments are byte-for-byte identical either way.
+  - **Capacity enforcement** (FR-4.4): unchanged from the engine and manual-move behavior
+    described below — a table is never overbooked, whether by automated generation or a manual
+    edit.
+  - **Capacity overview** (FR-4.5): the Tables tab shows Attending guest count, total capacity,
+    assigned count, and remaining capacity at a glance, excluding Not Attending guests from the
+    count entirely; when guests exceed capacity, the exact shortfall is called out.
+  - **Accessible-flag re-check** (FR-4.6): unmarking a table Accessible re-checks FR-0.1 for
+    anyone currently seated there who requires one — they're flagged **Needs Reassignment**
+    (the `needsReassignment` field on a plan version's assignments, previously unused anywhere in
+    the app) and the current plan version is marked incomplete until it's fixed, rather than
+    silently leaving them in a now-invalid seat. Re-marking the table Accessible again clears the
+    flag and restores completeness (as long as nothing else is wrong). With no affected guest, the
+    flag toggles freely either way — no warning, no incompleteness.
+  - **Table-level assignment only** (FR-4.7): confirmed by inspection across every planning,
+    review, day-of, and export interface — there's no chair/seat-position concept anywhere in the
+    schema, API, or UI; "available seat" always means available table capacity.
 - **Automated seat assignment engine** (TS-8): a "Generate new plan" button on a wedding's
   Seating plan tab groups guests into tables, respecting every hard rule and never silently
   breaking one:
@@ -398,10 +426,12 @@ the permission model FR-6.2/6.3 describe.
 
 **TS-10 is only partially built.** What's there: manual moves with full hard/soft-rule
 validation, locks, and change history, described above. What's deliberately deferred, and why:
-FR-7.1 asks for dragging a guest between tables in a *visual* floor-plan view — there's no visual
-floor plan yet (that's TS-7's drag-and-drop piece), so this pass uses an equivalent
-select-a-table control on the existing list-based seating plan view instead; the same validated
-move endpoint is exactly what a future drag interaction would call. FR-7.5 (session-scoped
+FR-7.1 asks for dragging a *guest* between tables in a visual view. TS-7's floor plan (described
+above) is a real visual, drag-based view now — but it's tables being dragged into position for
+the room layout, not guests being dragged onto tables to seat them; the Seating plan tab itself
+is still the list-based select-a-table control this pass built. The same validated move endpoint
+is exactly what a future guest-drag interaction on top of the floor plan would call, so FR-7.1
+is a natural next layer on this foundation rather than a rebuild. FR-7.5 (session-scoped
 undo/redo) and FR-7.7 (sub-5-second concurrent-edit sync with conflict detection) are left out —
 they need client-side state and either a live connection (websockets/polling) or optimistic-
 concurrency version checks that are substantial enough to be their own slice; today, two users
@@ -460,11 +490,13 @@ there beyond the original individual add/edit/remove flow described above: bulk 
 export (FR-2.4/FR-2.4a), described in its own bullet near the top of "What's implemented" — the
 one gap TS-15's testing surfaced. What's still deliberately left out, and why: FR-2.9 asks that
 editing or importing a change to a guest re-checks their current seat assignment against hard
-rules, flipping them to "Needs Reassignment" if it's no longer valid. That state isn't wired up
-anywhere in the app yet (see the standing TS-9/TS-11 note above — the schema's
-`needsReassignment` flag on `seat_assignments` exists but nothing sets it), so this pass doesn't
-introduce a one-off version of it just for imports; it would properly belong to whatever future
-pass builds FR-6.1's full Assigned/Unassigned/Needs Reassignment/Not Attending picture.
+rules, flipping them to "Needs Reassignment" if it's no longer valid. The `needsReassignment`
+flag on `seat_assignments` is no longer purely theoretical — TS-7 (below) wires it up for one
+specific trigger (a table losing its Accessible flag) — but a guest *edit or import* still doesn't
+trigger the same re-check for any other field (side, tier, household, age category). Generalizing
+it to every field FR-2.9 names is a bigger, standalone piece (properly FR-6.1's full
+Assigned/Unassigned/Needs Reassignment/Not Attending picture), not a one-off special case worth
+adding just for imports.
 
 **TS-6 (Relationships & Seating Rules) is now fully built**, aside from one deliberately deferred
 stretch goal. What's there, beyond the original must/must-not-sit-together/prefer-near/avoid rules
@@ -477,14 +509,23 @@ already exists) was scoped out as a stretch goal relative to the two gaps above 
 something TS-15's testing actually blocked on, and free-text `purpose` already covers the same
 need for a human reading the table list, just without the engine reading it as a preference input.
 
-Table/venue *visual* layout (drag-and-drop floor plan) and version labeling/comparison are
-modeled in `schema.prisma` already and map to the remaining Jira stories (TS-7's visual piece, and
-the rest of TS-10) — each can be built as its own vertical slice on top of this foundation. Both
-gaps TS-15 originally surfaced (bulk guest import and Side-Mixing) are now closed, so what's left
-across the whole app is: TS-7's visual floor plan, the rest of TS-10 (undo/redo, live
-concurrent-edit sync), and the smaller deliberately-deferred items called out story-by-story
-above (version labeling/comparison, permission-aware UI hiding, a real email provider, and the
-FR-2.9/FR-6.1 Needs Reassignment state).
+**TS-7 (Table & Venue Layout) is now fully built** across all seven of its requirements, described
+in its own bullet above — shape, quick-create, the optional drag-and-drop floor plan, capacity
+enforcement and its overview display, the Accessible-flag re-check, and table-level-only
+assignment. Nothing here was deferred as a stretch goal; the one thing worth flagging is that the
+Needs Reassignment flag FR-4.6 introduces is specifically scoped to the accessible-flag trigger —
+see the TS-5 paragraph above for how that same flag stays unwired for every other field FR-2.9
+names.
+
+Version labeling is modeled in `schema.prisma` already (`PlanVersion.label`) but nothing sets it
+yet, and there's still no side-by-side version comparison view — both can be built as their own
+vertical slice on top of this foundation. All three gaps TS-15 originally surfaced or that TS-7
+depended on (bulk guest import, Side-Mixing, and the visual floor plan) are now closed, so what's
+left across the whole app is: FR-7.1's guest-drag-onto-table interaction on top of the
+now-existing floor plan, the rest of TS-10 (undo/redo, live concurrent-edit sync), version
+labeling/comparison, and the smaller deliberately-deferred items called out story-by-story above
+(permission-aware UI hiding, a real email provider, and the FR-2.9/FR-6.1 Needs Reassignment
+state beyond FR-4.6's one wired trigger).
 
 ## Mobile later
 

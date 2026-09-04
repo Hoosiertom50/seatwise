@@ -184,6 +184,15 @@ enum GuestSide {
   BOTH
 }
 
+// FR-4.1: a table's shape, for the floor-plan drawing only -- never read by seating logic.
+enum TableShape {
+  ROUND
+  RECTANGULAR
+  SQUARE
+  OVAL
+  OTHER
+}
+
 enum RsvpStatus {
   PENDING
   CONFIRMED
@@ -265,6 +274,8 @@ model SeatingTable {
   capacity     Int
   isRestricted Boolean  @default(false)
   isAccessible Boolean  @default(false)
+  // FR-4.1: affects only the floor-plan drawing (FR-4.3), never seating logic.
+  shape        TableShape @default(ROUND)
   // FR-7.4: when locked, automated (re)generation won't assign new guests here — reserved for
   // whoever's already seated here (or a locked guest pinned here). Manual moves can still target
   // a locked table, and hard-rule checks are never affected by a lock.

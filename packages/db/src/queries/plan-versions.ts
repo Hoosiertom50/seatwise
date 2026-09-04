@@ -583,14 +583,21 @@ export async function moveGuestAssignment(
     }
 
     const { rows: unassignedCountRows } = await client.query(
-      `SELECT COUNT(*)::int AS "count" FROM "guests" g
-       WHERE g."weddingId" = $1 AND g."dayOfAttendance" = 'ATTENDING'
-         AND NOT EXISTS (
-           SELECT 1 FROM "seat_assignments" sa WHERE sa."planVersionId" = $2 AND sa."guestId" = g.id
-         )`,
+      `SELECT
+         (SELECT COUNT(*)::int FROM "guests" g WHERE g."weddingId" = $1 AND g."dayOfAttendance" = 'ATTENDING'
+            AND NOT EXISTS (
+              SELECT 1 FROM "seat_assignments" sa WHERE sa."planVersionId" = $2 AND sa."guestId" = g.id
+            )
+         ) AS "count",
+         -- FR-4.6: a guest flagged Needs Reassignment elsewhere in this plan (e.g. a table they
+         -- need was unmarked Accessible) also keeps the plan incomplete -- this move alone
+         -- shouldn't silently clear an unrelated outstanding issue.
+         (SELECT COUNT(*)::int FROM "seat_assignments" WHERE "planVersionId" = $2 AND "needsReassignment" = true)
+           AS "needsReassignmentCount"`,
       [weddingId, planVersionId]
     );
-    const isComplete = unassignedCountRows[0].count === 0;
+    const isComplete =
+      unassignedCountRows[0].count === 0 && unassignedCountRows[0].needsReassignmentCount === 0;
     await client.query(`UPDATE "plan_versions" SET "isComplete" = $1 WHERE id = $2`, [
       isComplete,
       planVersionId,
@@ -680,14 +687,20 @@ export async function setGuestAttendance(
       // just became NOT_ATTENDING can no longer make the plan "incomplete" by being unseated,
       // and one who just became ATTENDING again can.
       const { rows: unassignedCountRows } = await client.query(
-        `SELECT COUNT(*)::int AS "count" FROM "guests" g
-         WHERE g."weddingId" = $1 AND g."dayOfAttendance" = 'ATTENDING'
-           AND NOT EXISTS (
-             SELECT 1 FROM "seat_assignments" sa WHERE sa."planVersionId" = $2 AND sa."guestId" = g.id
-           )`,
+        `SELECT
+           (SELECT COUNT(*)::int FROM "guests" g WHERE g."weddingId" = $1 AND g."dayOfAttendance" = 'ATTENDING'
+              AND NOT EXISTS (
+                SELECT 1 FROM "seat_assignments" sa WHERE sa."planVersionId" = $2 AND sa."guestId" = g.id
+              )
+           ) AS "count",
+           -- FR-4.6: don't let an attendance change silently clear an unrelated Needs
+           -- Reassignment flag from elsewhere in the plan.
+           (SELECT COUNT(*)::int FROM "seat_assignments" WHERE "planVersionId" = $2 AND "needsReassignment" = true)
+             AS "needsReassignmentCount"`,
         [weddingId, currentPlanVersionId]
       );
-      const isComplete = unassignedCountRows[0].count === 0;
+      const isComplete =
+        unassignedCountRows[0].count === 0 && unassignedCountRows[0].needsReassignmentCount === 0;
       await client.query(`UPDATE "plan_versions" SET "isComplete" = $1 WHERE id = $2`, [
         isComplete,
         currentPlanVersionId,

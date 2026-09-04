@@ -12,19 +12,23 @@ export interface SeatingTableRow {
   purpose: string | null;
   // FR-3.4
   singleSideOnly: boolean;
+  // FR-4.1: drawing-only -- never read by seating logic.
+  shape: string;
+  // FR-4.3: null until this table has been placed on the floor plan at least once.
+  positionX: number | null;
+  positionY: number | null;
   // FR-3.7a: only ever populated for a Restricted table.
   requiredGuestIds: string[];
   createdAt: Date;
   updatedAt: Date;
 }
 
-const COLUMNS = `id, "weddingId", label, capacity, "isRestricted", "isAccessible", "isLocked", purpose, "singleSideOnly", "createdAt", "updatedAt"`;
-
 // Every read joins in the current required-guest list (FR-3.7a) as an aggregated array, so
 // callers never need a second round-trip just to show a Restricted table's list.
 const SELECT_WITH_REQUIRED = `
   SELECT t.id, t."weddingId", t.label, t.capacity, t."isRestricted", t."isAccessible", t."isLocked",
-         t.purpose, t."singleSideOnly", t."createdAt", t."updatedAt",
+         t.purpose, t."singleSideOnly", t.shape, t."positionX", t."positionY",
+         t."createdAt", t."updatedAt",
          COALESCE(rtg."guestIds", ARRAY[]::text[]) AS "requiredGuestIds"
   FROM "seating_tables" t
   LEFT JOIN (
@@ -40,19 +44,38 @@ export interface CreateSeatingTableData {
   isLocked?: boolean;
   purpose?: string | null;
   singleSideOnly?: boolean;
+  shape?: string;
+  positionX?: number | null;
+  positionY?: number | null;
 }
 
 export class RestrictedTableError extends Error {}
+
+// FR-4.3: a simple grid fallback position for a table that's never been explicitly placed --
+// four columns, spaced widely enough for the floor-plan's table boxes not to overlap. Purely a
+// starting point the planner can drag from; never read by seating logic.
+function gridPosition(index: number): { x: number; y: number } {
+  const col = index % 4;
+  const row = Math.floor(index / 4);
+  return { x: 40 + col * 180, y: 40 + row * 180 };
+}
 
 export async function createSeatingTable(
   weddingId: string,
   input: CreateSeatingTableData
 ): Promise<SeatingTableRow> {
   const id = randomUUID();
+  const { rows: countRows } = await pool.query(
+    `SELECT COUNT(*)::int AS count FROM "seating_tables" WHERE "weddingId" = $1`,
+    [weddingId]
+  );
+  const { x, y } = gridPosition(countRows[0].count);
   const { rows } = await pool.query(
-    `INSERT INTO "seating_tables" (id, "weddingId", label, capacity, "isRestricted", "isAccessible", "isLocked", purpose, "singleSideOnly", "updatedAt")
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now())
-     RETURNING ${COLUMNS}`,
+    `INSERT INTO "seating_tables"
+       (id, "weddingId", label, capacity, "isRestricted", "isAccessible", "isLocked", purpose,
+        "singleSideOnly", shape, "positionX", "positionY", "updatedAt")
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::"TableShape", $11, $12, now())
+     RETURNING ${"id, \"weddingId\", label, capacity, \"isRestricted\", \"isAccessible\", \"isLocked\", purpose, \"singleSideOnly\", shape, \"positionX\", \"positionY\", \"createdAt\", \"updatedAt\""}`,
     [
       id,
       weddingId,
@@ -63,9 +86,51 @@ export async function createSeatingTable(
       input.isLocked ?? false,
       input.purpose ?? null,
       input.singleSideOnly ?? false,
+      input.shape ?? "ROUND",
+      input.positionX ?? x,
+      input.positionY ?? y,
     ]
   );
   return { ...rows[0], requiredGuestIds: [] };
+}
+
+// FR-4.2: create a standard set of same-shape, same-capacity tables in one action (e.g. "12 round
+// tables of 8"). Numbering continues after any tables that already exist, so a repeated
+// quick-create (or one run after tables were added by hand) never collides with earlier labels.
+export async function quickCreateSeatingTables(
+  weddingId: string,
+  input: { count: number; capacity: number; shape: string; labelPrefix: string }
+): Promise<SeatingTableRow[]> {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const { rows: countRows } = await client.query(
+      `SELECT COUNT(*)::int AS count FROM "seating_tables" WHERE "weddingId" = $1`,
+      [weddingId]
+    );
+    const startIndex = countRows[0].count as number;
+    const created: SeatingTableRow[] = [];
+    for (let i = 0; i < input.count; i++) {
+      const id = randomUUID();
+      const { x, y } = gridPosition(startIndex + i);
+      const { rows } = await client.query(
+        `INSERT INTO "seating_tables"
+           (id, "weddingId", label, capacity, shape, "positionX", "positionY", "updatedAt")
+         VALUES ($1, $2, $3, $4, $5::"TableShape", $6, $7, now())
+         RETURNING id, "weddingId", label, capacity, "isRestricted", "isAccessible", "isLocked",
+                   purpose, "singleSideOnly", shape, "positionX", "positionY", "createdAt", "updatedAt"`,
+        [id, weddingId, `${input.labelPrefix} ${startIndex + i + 1}`, input.capacity, input.shape, x, y]
+      );
+      created.push({ ...rows[0], requiredGuestIds: [] });
+    }
+    await client.query("COMMIT");
+    return created;
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 
 export async function listSeatingTablesForWedding(weddingId: string): Promise<SeatingTableRow[]> {
@@ -119,6 +184,18 @@ export async function updateSeatingTableForWedding(
   if (input.singleSideOnly !== undefined) {
     fields.push(`"singleSideOnly" = $${i++}`);
     values.push(input.singleSideOnly);
+  }
+  if (input.shape !== undefined) {
+    fields.push(`shape = $${i++}::"TableShape"`);
+    values.push(input.shape);
+  }
+  if (input.positionX !== undefined) {
+    fields.push(`"positionX" = $${i++}`);
+    values.push(input.positionX);
+  }
+  if (input.positionY !== undefined) {
+    fields.push(`"positionY" = $${i++}`);
+    values.push(input.positionY);
   }
   if (fields.length === 0) return true;
   fields.push(`"updatedAt" = now()`);
@@ -215,4 +292,73 @@ export async function setRequiredGuestsForTable(
   const updated = await getSeatingTableForWedding(tableId, weddingId);
   if (!updated) throw new RestrictedTableError("Table not found after update.");
   return updated;
+}
+
+// FR-4.6: unmarking a table Accessible re-checks FR-0.1 for anyone currently seated there who
+// requires an accessible table -- they become Needs Reassignment (rather than silently staying
+// put) and the plan is marked incomplete until it's fixed. Marking a table Accessible again
+// clears the flag for anyone it affected here (the constraint they were flagged for no longer
+// applies), and the plan goes back to complete if nothing else is wrong. Scoped to only this
+// table's assignments in the wedding's current plan version -- a table with no plan generated
+// yet, or no affected guests, is simply a no-op.
+export async function syncAccessibleTableReassignment(
+  weddingId: string,
+  tableId: string
+): Promise<{ affectedGuestNames: string[] }> {
+  const { rows: tableRows } = await pool.query(
+    `SELECT "isAccessible" FROM "seating_tables" WHERE id = $1 AND "weddingId" = $2`,
+    [tableId, weddingId]
+  );
+  const table = tableRows[0];
+  if (!table) return { affectedGuestNames: [] };
+
+  const { rows: planRows } = await pool.query(
+    `SELECT id FROM "plan_versions" WHERE "weddingId" = $1 ORDER BY "versionNumber" DESC LIMIT 1`,
+    [weddingId]
+  );
+  const currentPlanVersionId: string | undefined = planRows[0]?.id;
+  if (!currentPlanVersionId) return { affectedGuestNames: [] };
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+
+    // Sync every assignment at this table to whether it *should* be flagged given the table's
+    // current accessible state -- true only when the table is no longer accessible and the guest
+    // needs one; false (cleared) otherwise, including when the table is accessible again.
+    const { rows: affectedRows } = await client.query(
+      `UPDATE "seat_assignments" sa
+       SET "needsReassignment" = (NOT $1 AND g."requiresAccessibleTable"), "updatedAt" = now()
+       FROM "guests" g
+       WHERE sa."guestId" = g.id AND sa."planVersionId" = $2 AND sa."seatingTableId" = $3
+         AND sa."needsReassignment" IS DISTINCT FROM (NOT $1 AND g."requiresAccessibleTable")
+       RETURNING g.id, (g."firstName" || ' ' || g."lastName") AS name, sa."needsReassignment" AS "nowFlagged"`,
+      [table.isAccessible, currentPlanVersionId, tableId]
+    );
+
+    const { rows: countRows } = await client.query(
+      `SELECT
+         (SELECT COUNT(*)::int FROM "guests" g WHERE g."weddingId" = $1 AND g."dayOfAttendance" = 'ATTENDING'
+            AND NOT EXISTS (SELECT 1 FROM "seat_assignments" sa WHERE sa."planVersionId" = $2 AND sa."guestId" = g.id)
+         ) AS "unassignedCount",
+         (SELECT COUNT(*)::int FROM "seat_assignments" WHERE "planVersionId" = $2 AND "needsReassignment" = true)
+           AS "needsReassignmentCount"`,
+      [weddingId, currentPlanVersionId]
+    );
+    const isComplete = countRows[0].unassignedCount === 0 && countRows[0].needsReassignmentCount === 0;
+    await client.query(`UPDATE "plan_versions" SET "isComplete" = $1 WHERE id = $2`, [
+      isComplete,
+      currentPlanVersionId,
+    ]);
+
+    await client.query("COMMIT");
+    return {
+      affectedGuestNames: affectedRows.filter((r) => r.nowFlagged).map((r) => r.name as string),
+    };
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
 }
