@@ -291,6 +291,37 @@ up for it.
     connection" half of this requirement directly. Uptime monitoring and planned-maintenance
     scheduling are hosting/ops concerns with nothing to build in application code in this
     environment — scoped out the same way TLS and infrastructure-level encryption are above.
+- **Integration / End-to-End Scenarios** (TS-15): TS-15 has no requirements of its own — it
+  validates that every feature-area story above actually works together across a full planner
+  workflow, so this pass added no new application code, only two new end-to-end test scripts
+  exercising the live API/database as a single continuous story:
+  - A new wedding is built up (~100 guests, must-sit/must-not-sit/prefer-near/avoid rules, 10
+    quick-created tables), generated (fully seated, hard rules genuinely honored), shared (Draft →
+    In Review), has a blocked edit explained (a specific, named error, nothing changed), and is
+    approved by an invited Edit-level ("Couple") collaborator rather than the owner — ending
+    Approved, fully seated, with no unresolved issues.
+  - On that Approved plan: 2 guests marked Not Attending and 1 late guest manually seated all land
+    on the *same* plan version (no full regeneration), the plan stays Approved with the "Modified
+    Since Approval" indicator now active (first/latest timestamps), and all 3 changes appear in the
+    Activity log.
+  - A no-show is marked and two guests are swapped in day-of mode — a swap that would violate a
+    hard rule is blocked exactly like a regular manual move, a valid one succeeds, and both are
+    recorded in Activity — while re-exporting the seating chart PDF afterward produces different
+    bytes than one exported before the changes, demonstrating an export is a snapshot at
+    generation time rather than something that updates itself after the fact.
+  - Two weddings owned by the same planner, each independently built, generated, and approved by
+    its *own* distinct collaborator, are confirmed to share no data whatsoever: cross-wedding
+    access is a 404 in both directions, a guest/table ID from one is meaningless under the other's
+    endpoints, a seating rule can't be created across them, a manual move can't reference the
+    other's guest or table, and each wedding's Activity log and comments never mention the other's
+    guests.
+  - **Scope note:** the acceptance criteria as originally written mention two things this codebase
+    doesn't have — bulk CSV/Excel guest import (FR-2.4/2.4a, a TS-5 gap) and a wedding-level
+    Side-Mixing setting (FR-3.4, a TS-6 gap). Neither exists anywhere in the schema or API
+    (confirmed by inspection, not assumed), so rather than fake them, the end-to-end script stands
+    in for "import a spreadsheet" by adding guests through the existing create-guest endpoint (the
+    same end state — 100 guest records in the wedding) and skips Side-Mixing entirely. Every other
+    piece of every acceptance criterion is exercised for real.
 
 ## What's next
 
@@ -358,10 +389,18 @@ The existing tabs' hide-controls-by-permission gap noted under TS-13 above is un
 story — NFR-9.2's plain-language requirement is about the messages shown when an action *is*
 attempted, not about hiding buttons a lower-access collaborator can't use.
 
+**TS-15 (Integration / End-to-End Scenarios) is built**, described above. Its own description is
+explicit that it "has no requirements of its own" — it validates every other story working
+together, so there's nothing to defer here in the usual sense. The one real gap it surfaced (and
+documented, rather than working around silently) is that the acceptance criteria assume two
+features — bulk guest import and Side-Mixing — that were never built as part of TS-5/TS-6. Closing
+those remains future work on those specific stories, not on TS-15.
+
 Table/venue *visual* layout (drag-and-drop floor plan) and version labeling/comparison are
-modeled in `schema.prisma` already and map to the remaining Jira stories (TS-7's visual piece,
-TS-15, and the rest of TS-10). Each can be built as its own vertical slice on top of this
-foundation.
+modeled in `schema.prisma` already and map to the remaining Jira stories (TS-7's visual piece, and
+the rest of TS-10). Each can be built as its own vertical slice on top of this foundation. Bulk
+guest import (FR-2.4/2.4a) and the Side-Mixing setting (FR-3.4) — the two gaps TS-15 surfaced
+above — would round out TS-5 and TS-6 respectively.
 
 ## Mobile later
 
