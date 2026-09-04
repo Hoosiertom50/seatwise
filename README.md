@@ -236,6 +236,17 @@ up for it.
 - **Manual adjustment** (TS-10, partial — see below): on the Seating plan tab, every seated and
   unassigned guest gets a "Move to.../Seat at..." control to manually place them at a different
   table within the Current Plan Version, without generating a new version:
+  - **FR-7.1**: the Seating plan tab has its own "List / Floor plan" toggle, mirroring the Tables
+    tab's. Its floor plan reuses each table's saved room position (so both tabs agree on the
+    layout) and shows every seated guest as a small chip inside their table's box, plus an
+    "Unassigned" dock above the canvas. Dragging a guest chip onto a different table box moves
+    them — dragging one onto their own table is a no-op, and dragging an unassigned guest onto a
+    table seats them. This calls the exact same move endpoint the "Move to..." dropdown uses, so
+    every rule below (hard-rule blocking, soft-rule warnings, must-sit-together groups moving
+    together, locks, Change History) applies identically whichever UI made the move — dragging
+    is a second way to trigger the same validated action, not a second code path. Disabled the
+    same way the dropdowns are: view-only for a past version, and turned off entirely for a
+    Comment/View-level collaborator (the chips simply aren't draggable).
   - Guests forced together by "must sit together" always move as one unit — moving one member
     brings the rest along automatically.
   - A move that would break a hard rule (capacity, must-not-sit-together with whoever's already
@@ -482,13 +493,8 @@ Couple user with Comment/Edit" — Comment-level users can comment but not chang
 the permission model FR-6.2/6.3 describe.
 
 **TS-10 is only partially built.** What's there: manual moves with full hard/soft-rule
-validation, locks, and change history, described above. What's deliberately deferred, and why:
-FR-7.1 asks for dragging a *guest* between tables in a visual view. TS-7's floor plan (described
-above) is a real visual, drag-based view now — but it's tables being dragged into position for
-the room layout, not guests being dragged onto tables to seat them; the Seating plan tab itself
-is still the list-based select-a-table control this pass built. The same validated move endpoint
-is exactly what a future guest-drag interaction on top of the floor plan would call, so FR-7.1
-is a natural next layer on this foundation rather than a rebuild. FR-7.5 (session-scoped
+validation, locks, change history, and — since this pass — FR-7.1's guest-drag-onto-table
+floor plan, described above. What's deliberately deferred, and why: FR-7.5 (session-scoped
 undo/redo) and FR-7.7 (sub-5-second concurrent-edit sync with conflict detection) are left out —
 they need client-side state and either a live connection (websockets/polling) or optimistic-
 concurrency version checks that are substantial enough to be their own slice; today, two users
@@ -570,8 +576,8 @@ Version labeling and side-by-side comparison are now built (described above) —
 last gap TS-12 had left open, and permission-aware UI hiding (described above) closes the last gap
 TS-13 had left open. All three gaps TS-15 originally surfaced or that TS-7 depended on (bulk guest
 import, Side-Mixing, and the visual floor plan) are also closed, so what's left across the whole
-app is: FR-7.1's guest-drag-onto-table interaction on top of the now-existing floor plan, the rest
-of TS-10 (undo/redo, live concurrent-edit sync), and a real email provider.
+app is: the rest of TS-10 (undo/redo, live concurrent-edit sync — FR-7.1's guest-drag-onto-table
+interaction is now built, described above) and a real email provider.
 
 ## Mobile later
 

@@ -30,6 +30,12 @@ function versionOptionLabel(v: PlanVersionDTO): string {
   return `v${v.versionNumber}${v.label ? ` — ${v.label}` : ""} (${new Date(v.createdAt).toLocaleDateString()})`;
 }
 
+// FR-7.1: the floor-plan boxes reuse each table's saved (positionX, positionY) from the Tables
+// tab's own floor plan (FR-4.3) so both views agree on where a table sits in the room -- only its
+// footprint differs here, since this view also needs room to list the guests seated at it.
+const PLAN_BOX_WIDTH = 168;
+const PLAN_BOX_MIN_HEIGHT = 92;
+
 const STATUS_LABEL: Record<PlanVersionStatusValue, string> = {
   DRAFT: "Draft",
   IN_REVIEW: "In review",
@@ -73,6 +79,7 @@ export function PlanTab({
   const [comparison, setComparison] = useState<PlanVersionComparisonDTO | null>(null);
   const [comparing, setComparing] = useState(false);
   const [compareError, setCompareError] = useState<string | null>(null);
+  const [planView, setPlanView] = useState<"list" | "floorplan">("list");
 
   const guestName = (id: string) => {
     const g = guests.find((g) => g.id === id);
@@ -677,7 +684,7 @@ export function PlanTab({
             </p>
           )}
 
-          {detail.unassignedGuestIds.length > 0 && (
+          {planView === "list" && detail.unassignedGuestIds.length > 0 && (
             <div className="mb-6 rounded-lg border border-neutral-200 p-4">
               <p className="mb-2 text-sm font-medium">Unassigned guests</p>
               <ul className="flex flex-col gap-2">
@@ -708,52 +715,208 @@ export function PlanTab({
             </div>
           )}
 
-          <div className="flex flex-col gap-3">
-            {[...grouped.entries()].map(([tableId, t]) => (
-              <div key={tableId} className="rounded-lg border border-neutral-200 px-4 py-3">
-                <p className="mb-2 font-medium">{t.tableLabel}</p>
-                <ul className="flex flex-col gap-1.5">
-                  {t.guests.map((g) => (
-                    <li key={g.guestId} className="flex items-center justify-between gap-2 text-sm">
-                      <span>
-                        {g.guestName}
-                        {g.needsReassignment && (
-                          <span
-                            className="ml-2 rounded bg-amber-50 px-1.5 py-0.5 text-xs font-medium text-amber-700"
-                            title="This guest's current table no longer fits a hard rule for them (e.g. an edited field, or a table setting changed) — move them to fix it."
-                          >
-                            needs reassignment
-                          </span>
-                        )}
-                      </span>
-                      {canEditThisVersion && (
-                        <select
-                          aria-label={`Move ${g.guestName} to a different table`}
-                          className="min-h-11 rounded-md border border-neutral-300 px-2 py-1 text-xs disabled:opacity-50"
-                          value=""
-                          disabled={movingGuestId === g.guestId}
-                          onChange={(e) => onMoveGuest(g.guestId, e.target.value)}
-                        >
-                          <option value="" disabled>
-                            {movingGuestId === g.guestId ? "Moving..." : "Move to..."}
-                          </option>
-                          {tables
-                            .filter((table) => table.id !== tableId)
-                            .map((table) => (
-                              <option key={table.id} value={table.id}>
-                                {table.label}
-                              </option>
-                            ))}
-                        </select>
-                      )}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            ))}
+          <div className="mb-3 flex items-center justify-between">
+            <h3 className="text-sm font-medium text-neutral-700">Tables</h3>
+            <div className="flex gap-1 rounded-md border border-neutral-300 p-0.5 text-sm">
+              <button
+                onClick={() => setPlanView("list")}
+                className={`rounded px-2 py-1 ${planView === "list" ? "bg-neutral-900 text-white" : "hover:bg-neutral-50"}`}
+              >
+                List
+              </button>
+              <button
+                onClick={() => setPlanView("floorplan")}
+                className={`rounded px-2 py-1 ${planView === "floorplan" ? "bg-neutral-900 text-white" : "hover:bg-neutral-50"}`}
+              >
+                Floor plan
+              </button>
+            </div>
           </div>
+
+          {planView === "floorplan" ? (
+            <PlanFloorPlan
+              tables={tables}
+              grouped={grouped}
+              unassignedGuestIds={detail.unassignedGuestIds}
+              guestName={guestName}
+              onMoveGuest={onMoveGuest}
+              canEditThisVersion={canEditThisVersion}
+              movingGuestId={movingGuestId}
+            />
+          ) : (
+            <div className="flex flex-col gap-3">
+              {[...grouped.entries()].map(([tableId, t]) => (
+                <div key={tableId} className="rounded-lg border border-neutral-200 px-4 py-3">
+                  <p className="mb-2 font-medium">{t.tableLabel}</p>
+                  <ul className="flex flex-col gap-1.5">
+                    {t.guests.map((g) => (
+                      <li key={g.guestId} className="flex items-center justify-between gap-2 text-sm">
+                        <span>
+                          {g.guestName}
+                          {g.needsReassignment && (
+                            <span
+                              className="ml-2 rounded bg-amber-50 px-1.5 py-0.5 text-xs font-medium text-amber-700"
+                              title="This guest's current table no longer fits a hard rule for them (e.g. an edited field, or a table setting changed) — move them to fix it."
+                            >
+                              needs reassignment
+                            </span>
+                          )}
+                        </span>
+                        {canEditThisVersion && (
+                          <select
+                            aria-label={`Move ${g.guestName} to a different table`}
+                            className="min-h-11 rounded-md border border-neutral-300 px-2 py-1 text-xs disabled:opacity-50"
+                            value=""
+                            disabled={movingGuestId === g.guestId}
+                            onChange={(e) => onMoveGuest(g.guestId, e.target.value)}
+                          >
+                            <option value="" disabled>
+                              {movingGuestId === g.guestId ? "Moving..." : "Move to..."}
+                            </option>
+                            {tables
+                              .filter((table) => table.id !== tableId)
+                              .map((table) => (
+                                <option key={table.id} value={table.id}>
+                                  {table.label}
+                                </option>
+                              ))}
+                          </select>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ))}
+            </div>
+          )}
         </>
       )}
+    </div>
+  );
+}
+
+// FR-7.1: a user with Edit permission can drag a guest from one table to another in a visual
+// view. Uses the native HTML5 drag-and-drop API -- a guest chip is the drag source, a table box
+// is the drop target -- and always calls the same onMoveGuest handler the list view's "Move
+// to..." dropdown uses, so FR-7.2 (hard-rule blocking) and FR-7.3 (soft-rule warnings) are
+// enforced identically no matter which UI made the move.
+function PlanFloorPlan({
+  tables,
+  grouped,
+  unassignedGuestIds,
+  guestName,
+  onMoveGuest,
+  canEditThisVersion,
+  movingGuestId,
+}: {
+  tables: SeatingTableDTO[];
+  grouped: Map<string, { tableLabel: string; guests: { guestId: string; guestName: string; needsReassignment: boolean }[] }>;
+  unassignedGuestIds: string[];
+  guestName: (id: string) => string;
+  onMoveGuest: (guestId: string, tableId: string) => void;
+  canEditThisVersion: boolean;
+  movingGuestId: string | null;
+}) {
+  const [dragOverTableId, setDragOverTableId] = useState<string | null>(null);
+
+  function onGuestDragStart(e: React.DragEvent<HTMLSpanElement>, guestId: string) {
+    if (!canEditThisVersion) return;
+    e.dataTransfer.setData("text/plain", guestId);
+    e.dataTransfer.effectAllowed = "move";
+  }
+
+  function onTableDrop(e: React.DragEvent<HTMLDivElement>, tableId: string) {
+    e.preventDefault();
+    setDragOverTableId(null);
+    if (!canEditThisVersion) return;
+    const guestId = e.dataTransfer.getData("text/plain");
+    if (guestId) onMoveGuest(guestId, tableId);
+  }
+
+  const width = Math.max(760, ...tables.map((t) => (t.positionX ?? 40) + PLAN_BOX_WIDTH + 40));
+  const height = Math.max(480, ...tables.map((t) => (t.positionY ?? 40) + PLAN_BOX_MIN_HEIGHT + 40));
+
+  return (
+    <div>
+      <p className="mb-3 text-sm text-neutral-500">
+        {canEditThisVersion
+          ? "Drag a guest onto a different table to move them — hard rules are enforced exactly as with the dropdowns above."
+          : "View-only — dragging guests between tables is turned off for your access level."}
+      </p>
+      {unassignedGuestIds.length > 0 && (
+        <div className="mb-4 rounded-lg border border-neutral-200 p-3">
+          <p className="mb-2 text-xs font-medium text-neutral-500">Unassigned — drag onto a table</p>
+          <div className="flex flex-wrap gap-1.5">
+            {unassignedGuestIds.map((id) => (
+              <span
+                key={id}
+                data-guest-id={id}
+                draggable={canEditThisVersion}
+                onDragStart={(e) => onGuestDragStart(e, id)}
+                className={`rounded-full border border-dashed border-neutral-300 bg-white px-2 py-1 text-xs ${
+                  canEditThisVersion ? "cursor-grab active:cursor-grabbing" : ""
+                } ${movingGuestId === id ? "opacity-50" : ""}`}
+              >
+                {guestName(id)}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+      <div
+        style={{ width: "100%", height, maxWidth: width }}
+        className="relative overflow-auto rounded-lg border border-neutral-200 bg-neutral-50"
+      >
+        {tables.map((t) => {
+          const entry = grouped.get(t.id);
+          const tableGuests = entry?.guests ?? [];
+          return (
+            <div
+              key={t.id}
+              data-table-id={t.id}
+              onDragOver={(e) => {
+                if (!canEditThisVersion) return;
+                e.preventDefault();
+                setDragOverTableId(t.id);
+              }}
+              onDragLeave={() => setDragOverTableId((cur) => (cur === t.id ? null : cur))}
+              onDrop={(e) => onTableDrop(e, t.id)}
+              style={{
+                left: t.positionX ?? 40,
+                top: t.positionY ?? 40,
+                width: PLAN_BOX_WIDTH,
+                minHeight: PLAN_BOX_MIN_HEIGHT,
+              }}
+              className={`absolute flex flex-col rounded-md border-2 bg-white p-2 text-xs shadow-sm ${
+                dragOverTableId === t.id ? "border-blue-500 bg-blue-50" : "border-neutral-300"
+              }`}
+            >
+              <p className="mb-1 truncate font-medium" title={t.label}>
+                {t.label}
+              </p>
+              <div className="flex max-h-24 flex-col gap-1 overflow-y-auto">
+                {tableGuests.length === 0 && <span className="text-neutral-400">Empty</span>}
+                {tableGuests.map((g) => (
+                  <span
+                    key={g.guestId}
+                    data-guest-id={g.guestId}
+                    draggable={canEditThisVersion}
+                    onDragStart={(e) => onGuestDragStart(e, g.guestId)}
+                    title={g.needsReassignment ? "Needs reassignment — this table no longer fits a hard rule for them" : undefined}
+                    className={`truncate rounded px-1.5 py-0.5 ${
+                      g.needsReassignment ? "bg-amber-50 text-amber-700" : "bg-neutral-100"
+                    } ${canEditThisVersion ? "cursor-grab active:cursor-grabbing" : ""} ${
+                      movingGuestId === g.guestId ? "opacity-50" : ""
+                    }`}
+                  >
+                    {g.guestName}
+                  </span>
+                ))}
+              </div>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
