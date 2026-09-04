@@ -1,11 +1,28 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { api, ApiError } from "@/lib/api-client";
-import type { GuestDTO, GuestTier, RsvpStatus } from "@seatwise/shared";
+import type { GuestDTO, GuestImportField, GuestImportPreview, GuestTier, RsvpStatus } from "@seatwise/shared";
+import { parseCsv } from "@seatwise/shared";
 
 const TIERS: GuestTier[] = ["VIP", "FAMILY", "FRIEND", "PLUS_ONE", "OTHER"];
 const RSVP_STATUSES: RsvpStatus[] = ["PENDING", "CONFIRMED", "DECLINED"];
+
+// FR-2.4: which guest fields a column can map to, and how each is labeled in the mapping form.
+// firstName/lastName are the only two that must be mapped before a preview can be requested.
+const IMPORT_FIELDS: { field: GuestImportField; label: string; required?: boolean }[] = [
+  { field: "guestId", label: "Guest ID (to update an existing guest)" },
+  { field: "firstName", label: "First name", required: true },
+  { field: "lastName", label: "Last name", required: true },
+  { field: "partyName", label: "Party / household" },
+  { field: "headcount", label: "Headcount" },
+  { field: "tier", label: "Tier" },
+  { field: "rsvpStatus", label: "RSVP status" },
+  { field: "requiresAccessibleTable", label: "Requires accessible table (yes/no)" },
+  { field: "dayOfAttendance", label: "Attendance (Attending/Not Attending)" },
+  { field: "side", label: "Side (Bride/Groom/Both)" },
+  { field: "notes", label: "Notes" },
+];
 
 export function GuestsTab({
   weddingId,
@@ -25,6 +42,119 @@ export function GuestsTab({
   const [requiresAccessibleTable, setRequiresAccessibleTable] = useState(false);
   const [adding, setAdding] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // FR-2.4/2.4a: bulk import. CSV headers are parsed client-side the moment a file is chosen (so
+  // the mapping dropdowns can be shown immediately); the raw CSV text plus the confirmed mapping
+  // are what actually get sent to the server for preview and, later, commit.
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [csvText, setCsvText] = useState<string | null>(null);
+  const [csvFileName, setCsvFileName] = useState<string | null>(null);
+  const [csvHeaders, setCsvHeaders] = useState<string[]>([]);
+  const [mapping, setMapping] = useState<Partial<Record<GuestImportField, string>>>({});
+  const [importPreview, setImportPreview] = useState<GuestImportPreview | null>(null);
+  const [previewing, setPreviewing] = useState(false);
+  const [committing, setCommitting] = useState(false);
+  const [importError, setImportError] = useState<string | null>(null);
+  const [importResult, setImportResult] = useState<{ createdCount: number; updatedCount: number } | null>(null);
+
+  function resetImport() {
+    setCsvText(null);
+    setCsvFileName(null);
+    setCsvHeaders([]);
+    setMapping({});
+    setImportPreview(null);
+    setImportError(null);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  }
+
+  async function onFileSelected(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setImportError(null);
+    setImportResult(null);
+    setImportPreview(null);
+    try {
+      const text = await file.text();
+      const { headers } = parseCsv(text);
+      if (headers.length === 0) {
+        setImportError("Couldn't find a header row in that file.");
+        return;
+      }
+      setCsvText(text);
+      setCsvFileName(file.name);
+      setCsvHeaders(headers);
+      // Best-effort auto-mapping: a column whose header matches a field name/label loosely.
+      const guess: Partial<Record<GuestImportField, string>> = {};
+      for (const { field, label } of IMPORT_FIELDS) {
+        const match = headers.find((h) => {
+          const normalized = h.trim().toLowerCase().replace(/[^a-z]/g, "");
+          return (
+            normalized === field.toLowerCase() ||
+            normalized === label.toLowerCase().replace(/[^a-z]/g, "").split("(")[0]
+          );
+        });
+        if (match) guess[field] = match;
+      }
+      setMapping(guess);
+    } catch {
+      setImportError("Couldn't read that file.");
+    }
+  }
+
+  function onMappingChange(field: GuestImportField, header: string) {
+    setMapping((prev) => {
+      const next = { ...prev };
+      if (header === "") delete next[field];
+      else next[field] = header;
+      return next;
+    });
+    setImportPreview(null);
+  }
+
+  function cleanMapping(): Partial<Record<GuestImportField, string>> {
+    const cleaned: Partial<Record<GuestImportField, string>> = {};
+    for (const [field, header] of Object.entries(mapping)) {
+      if (header) cleaned[field as GuestImportField] = header;
+    }
+    return cleaned;
+  }
+
+  async function onRequestPreview() {
+    if (!csvText) return;
+    setImportError(null);
+    setImportResult(null);
+    setPreviewing(true);
+    try {
+      const { preview } = await api.post<{ preview: GuestImportPreview }>(
+        `/api/v1/weddings/${weddingId}/guests/import/preview`,
+        { csv: csvText, mapping: cleanMapping() }
+      );
+      setImportPreview(preview);
+    } catch (err) {
+      setImportError(err instanceof ApiError ? err.message : "Couldn't preview that file.");
+    } finally {
+      setPreviewing(false);
+    }
+  }
+
+  async function onConfirmImport() {
+    if (!csvText) return;
+    setImportError(null);
+    setCommitting(true);
+    try {
+      const { result, guests: updatedGuests } = await api.post<{
+        result: { createdCount: number; updatedCount: number };
+        guests: GuestDTO[];
+      }>(`/api/v1/weddings/${weddingId}/guests/import/commit`, { csv: csvText, mapping: cleanMapping() });
+      setGuests(updatedGuests.sort((a, b) => a.lastName.localeCompare(b.lastName)));
+      setImportResult(result);
+      resetImport();
+    } catch (err) {
+      setImportError(err instanceof ApiError ? err.message : "Couldn't complete that import.");
+    } finally {
+      setCommitting(false);
+    }
+  }
 
   async function onAddGuest(e: React.FormEvent) {
     e.preventDefault();
@@ -197,6 +327,143 @@ export function GuestsTab({
       </form>
 
       {error && <p className="mb-4 text-sm text-red-600">{error}</p>}
+
+      <div className="mb-8 rounded-lg border border-neutral-200 p-4">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-lg font-medium">Bulk import guests (CSV)</h2>
+          <a
+            href={`/api/v1/weddings/${weddingId}/guests/export`}
+            className="rounded-md border border-neutral-300 min-h-11 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50"
+          >
+            Export current guest list (CSV)
+          </a>
+        </div>
+        <p className="mb-3 text-sm text-neutral-500">
+          Add many guests at once, or update existing ones. Map a &quot;Guest ID&quot; column
+          (from a prior export) to update those exact guests instead of creating new ones — a
+          blank cell leaves that guest&apos;s existing value alone; type <code>CLEAR</code> in a
+          Party/household or Notes cell to blank it out explicitly. Nothing is saved until you
+          confirm the preview below, and either everything imports or nothing does.
+        </p>
+
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".csv,text/csv"
+          onChange={onFileSelected}
+          className="mb-3 block text-sm"
+        />
+
+        {csvHeaders.length > 0 && (
+          <div className="mb-4">
+            <p className="mb-2 text-sm font-medium">
+              {csvFileName} — map columns to guest fields:
+            </p>
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+              {IMPORT_FIELDS.map(({ field, label, required }) => (
+                <div key={field}>
+                  <label className="mb-1 block text-xs font-medium text-neutral-600">
+                    {label}
+                    {required && <span className="text-red-600"> *</span>}
+                  </label>
+                  <select
+                    className="w-full rounded-md border border-neutral-300 px-2 py-1.5 text-sm"
+                    value={mapping[field] ?? ""}
+                    onChange={(e) => onMappingChange(field, e.target.value)}
+                  >
+                    <option value="">— not in file —</option>
+                    {csvHeaders.map((h) => (
+                      <option key={h} value={h}>
+                        {h}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              ))}
+            </div>
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <button
+                onClick={onRequestPreview}
+                disabled={previewing || !mapping.firstName || !mapping.lastName}
+                className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 disabled:opacity-50"
+              >
+                {previewing ? "Checking..." : "Preview import"}
+              </button>
+              <button
+                onClick={resetImport}
+                className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm hover:bg-neutral-50"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+
+        {importError && <p className="mb-3 text-sm text-red-600">{importError}</p>}
+        {importResult && (
+          <p className="mb-3 text-sm text-green-700">
+            Import complete: {importResult.createdCount} guest(s) added, {importResult.updatedCount}{" "}
+            updated.
+          </p>
+        )}
+
+        {importPreview && (
+          <div>
+            <p className="mb-2 text-sm">
+              <strong>{importPreview.summary.newCount}</strong> new,{" "}
+              <strong>{importPreview.summary.updatingCount}</strong> updating,{" "}
+              <strong>{importPreview.summary.errorCount}</strong> with errors (of{" "}
+              {importPreview.summary.totalRows} row(s)).
+            </p>
+            <ul className="mb-3 max-h-64 overflow-y-auto rounded-md border border-neutral-200">
+              {importPreview.rows.map((r) => (
+                <li
+                  key={r.rowNumber}
+                  className={`flex flex-wrap items-center gap-2 border-b border-neutral-100 px-2 py-1.5 text-sm last:border-b-0 ${
+                    r.kind === "error" ? "bg-red-50" : r.kind === "update" ? "bg-blue-50" : ""
+                  }`}
+                >
+                  <span className="w-12 shrink-0 text-neutral-400">Row {r.rowNumber}</span>
+                  <span
+                    className={`shrink-0 rounded px-1.5 py-0.5 text-xs font-medium ${
+                      r.kind === "error"
+                        ? "bg-red-100 text-red-700"
+                        : r.kind === "update"
+                          ? "bg-blue-100 text-blue-700"
+                          : "bg-neutral-100 text-neutral-700"
+                    }`}
+                  >
+                    {r.kind}
+                  </span>
+                  {r.kind === "error" ? (
+                    <span className="text-red-700">{r.reason}</span>
+                  ) : (
+                    <span>
+                      {r.preview.firstName} {r.preview.lastName}
+                      {r.kind === "update" ? " (updating existing guest)" : ""}
+                    </span>
+                  )}
+                </li>
+              ))}
+            </ul>
+            <button
+              onClick={onConfirmImport}
+              disabled={committing || importPreview.summary.errorCount > 0 || importPreview.summary.totalRows === 0}
+              className="rounded-md bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-700 disabled:opacity-50"
+            >
+              {committing
+                ? "Importing..."
+                : `Confirm import (${importPreview.summary.newCount + importPreview.summary.updatingCount} guest(s))`}
+            </button>
+            {importPreview.summary.errorCount > 0 && (
+              <p className="mt-2 text-sm text-red-600">
+                Fix the error row(s) above (or unmap the offending column) before importing —
+                nothing saves until every row is clean.
+              </p>
+            )}
+          </div>
+        )}
+      </div>
 
       <h2 className="mb-3 text-lg font-medium">
         Guests ({guests.reduce((sum, g) => sum + g.headcount, 0)})

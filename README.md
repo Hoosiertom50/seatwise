@@ -97,6 +97,34 @@ up for it.
 - Create/list weddings, scoped to the signed-in owner.
 - Add/list/update (RSVP status)/remove guests within a wedding, with tier, party/household
   grouping, headcount, and an accessible-table flag.
+- **Bulk guest import & export** (TS-5, FR-2.4/FR-2.4a): the last remaining gap TS-15 surfaced,
+  now closed.
+  - **Export** (`GET .../guests/export`): every guest as a CSV, including a Guest ID column — the
+    only place a planner ever sees one, since IDs aren't shown anywhere else in the UI. It exists
+    specifically so a later *update* import has something to map back.
+  - **Import preview** (`POST .../guests/import/preview`): given raw CSV text and an explicit
+    column mapping (which CSV header corresponds to which guest field — first/last name are the
+    only two that must be mapped), classifies every data row as **new**, **updating**, or
+    **error** without writing anything. A mapped "Guest ID" column is the *only* way a row targets
+    an existing guest (never by name, per FR-2.4a) — an ID that doesn't exist in this wedding, or
+    that's referenced by more than one row in the same file, is its own specific row error rather
+    than a silent guess. Every other validation failure (bad headcount, an enum value that doesn't
+    match Tier/RSVP/Attendance/Side, etc.) is reported with the row number and a specific reason.
+  - **Import commit** (`POST .../guests/import/commit`): re-validates from scratch (never trusts
+    whatever the client last saw in its preview) and applies as one all-or-nothing transaction —
+    if a single row still has an error, nothing is written at all. On an update row, a blank cell
+    leaves that guest's existing value alone; a literal `CLEAR` in a nullable text cell
+    (Party/household, Notes) explicitly blanks it — a distinction blank-means-unchanged alone
+    can't express. No guest is ever deleted by an import.
+  - The Guests tab has a matching UI: pick a `.csv` file (headers are read client-side so the
+    mapping dropdowns appear immediately), map columns, preview, then confirm — the confirm
+    button is disabled while any row still has an error.
+  - **Deliberately left out:** Excel (`.xlsx`) isn't parsed, only CSV — spreadsheet software
+    exports CSV directly, and adding a binary-format parser for the same acceptance criteria
+    wasn't judged worth a new dependency for this pass. FR-2.9's re-check-hard-rules-on-edit
+    behavior (an edited/imported guest whose assignment becomes invalid should flip to "Needs
+    Reassignment") isn't wired up here either — consistent with the standing TS-9/TS-11 decision
+    already documented below that nothing in the app sets that flag yet.
 - Seating rules between guests (must sit together / must not sit together / prefer near / avoid),
   with the FR-0.1 hard-rule invariant enforced server-side: a pair of guests can't simultaneously
   be required to sit together and forbidden from it — that's blocked outright with a clear error,
@@ -323,7 +351,8 @@ up for it.
     them, the end-to-end script stood in for "import a spreadsheet" by adding guests through the
     existing create-guest endpoint (the same end state — 100 guest records in the wedding) and
     skipped Side-Mixing entirely. Every other piece of every acceptance criterion was exercised for
-    real. (Bulk guest import, FR-2.4/2.4a, remains open — see "What's next".)
+    real. (Both gaps — bulk guest import, FR-2.4/2.4a, and Side-Mixing, FR-3.4 — have since been
+    closed; see the bulk-import bullet near the top of this list and the TS-6 bullet just below.)
 - **Relationships & Seating Rules gap-closing** (TS-6, FR-3.4 and FR-3.7a): TS-15's own testing
   surfaced two acceptance-criteria gaps in TS-6 (see the scope note just above); this pass closes
   the two of them that were in scope for TS-6 itself.
@@ -424,8 +453,18 @@ attempted, not about hiding buttons a lower-access collaborator can't use.
 explicit that it "has no requirements of its own" — it validates every other story working
 together, so there's nothing to defer here in the usual sense. It surfaced two acceptance-criteria
 gaps — bulk guest import (a TS-5 gap) and Side-Mixing (a TS-6 gap) — that were never built as part
-of TS-5/TS-6. The Side-Mixing gap has since been closed (see the TS-6 paragraph below); bulk guest
-import remains open as a TS-5 gap.
+of TS-5/TS-6. Both have since been closed — see the TS-5 and TS-6 paragraphs below.
+
+**TS-5 (Guest List Management) is now fully built**, aside from FR-2.9's re-check behavior. What's
+there beyond the original individual add/edit/remove flow described above: bulk CSV import and
+export (FR-2.4/FR-2.4a), described in its own bullet near the top of "What's implemented" — the
+one gap TS-15's testing surfaced. What's still deliberately left out, and why: FR-2.9 asks that
+editing or importing a change to a guest re-checks their current seat assignment against hard
+rules, flipping them to "Needs Reassignment" if it's no longer valid. That state isn't wired up
+anywhere in the app yet (see the standing TS-9/TS-11 note above — the schema's
+`needsReassignment` flag on `seat_assignments` exists but nothing sets it), so this pass doesn't
+introduce a one-off version of it just for imports; it would properly belong to whatever future
+pass builds FR-6.1's full Assigned/Unassigned/Needs Reassignment/Not Attending picture.
 
 **TS-6 (Relationships & Seating Rules) is now fully built**, aside from one deliberately deferred
 stretch goal. What's there, beyond the original must/must-not-sit-together/prefer-near/avoid rules
@@ -440,8 +479,12 @@ need for a human reading the table list, just without the engine reading it as a
 
 Table/venue *visual* layout (drag-and-drop floor plan) and version labeling/comparison are
 modeled in `schema.prisma` already and map to the remaining Jira stories (TS-7's visual piece, and
-the rest of TS-10). Each can be built as its own vertical slice on top of this foundation. Bulk
-guest import (FR-2.4/2.4a) — the one gap TS-15 surfaced that's still open — would round out TS-5.
+the rest of TS-10) — each can be built as its own vertical slice on top of this foundation. Both
+gaps TS-15 originally surfaced (bulk guest import and Side-Mixing) are now closed, so what's left
+across the whole app is: TS-7's visual floor plan, the rest of TS-10 (undo/redo, live
+concurrent-edit sync), and the smaller deliberately-deferred items called out story-by-story
+above (version labeling/comparison, permission-aware UI hiding, a real email provider, and the
+FR-2.9/FR-6.1 Needs Reassignment state).
 
 ## Mobile later
 
