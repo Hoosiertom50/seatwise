@@ -33,7 +33,7 @@ function versionOptionLabel(v: PlanVersionDTO): string {
 // FR-7.1: the floor-plan boxes reuse each table's saved (positionX, positionY) from the Tables
 // tab's own floor plan (FR-4.3) so both views agree on where a table sits in the room -- only its
 // footprint differs here, since this view also needs room to list the guests seated at it.
-const PLAN_BOX_WIDTH = 168;
+const PLAN_BOX_WIDTH = 224;
 const PLAN_BOX_MIN_HEIGHT = 92;
 
 // FR-7.5: one manual-move action, as recorded for undo/redo. `toTableId` is the table the guest's
@@ -1168,7 +1168,7 @@ function PlanFloorPlan({
               <p className="mb-1 truncate font-medium" title={t.label}>
                 {t.label}
               </p>
-              <div className="flex max-h-24 flex-col gap-1 overflow-y-auto">
+              <div className="flex max-h-36 flex-col gap-1 overflow-y-auto">
                 {tableGuests.length === 0 && <span className="text-neutral-400">Empty</span>}
                 {tableGuests.map((g) => (
                   <span
@@ -1176,7 +1176,8 @@ function PlanFloorPlan({
                     data-guest-id={g.guestId}
                     draggable={canEditThisVersion}
                     onDragStart={(e) => onGuestDragStart(e, g.guestId)}
-                    className={`truncate rounded px-1.5 py-0.5 bg-neutral-100 ${
+                    title={g.guestName}
+                    className={`truncate rounded px-1.5 py-0.5 bg-neutral-100 text-neutral-900 ${
                       canEditThisVersion ? "cursor-grab active:cursor-grabbing" : ""
                     } ${movingGuestId === g.guestId ? "opacity-50" : ""}`}
                   >
