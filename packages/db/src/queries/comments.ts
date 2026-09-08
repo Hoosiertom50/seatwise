@@ -131,13 +131,15 @@ export async function createComment(
   return rows[0];
 }
 
-// FR-10.3: only the original commenter or someone with Edit access may resolve a thread.
+// FR-10.3: only the original commenter or someone with Edit access may resolve a thread. Returns
+// the updated comment (rather than void) so the caller can sync its local state -- including
+// resolvedByName, which the client has no other way to know -- instead of guessing at the result.
 export async function resolveComment(
   weddingId: string,
   commentId: string,
   requesterId: string,
   requesterCanEdit: boolean
-): Promise<void> {
+): Promise<CommentRow> {
   const { rows } = await pool.query(
     `SELECT "authorUserId" FROM "comments" WHERE id = $1 AND "weddingId" = $2`,
     [commentId, weddingId]
@@ -151,4 +153,17 @@ export async function resolveComment(
     `UPDATE "comments" SET "resolvedAt" = now(), "resolvedByUserId" = $1 WHERE id = $2`,
     [requesterId, commentId]
   );
+
+  const { rows: updatedRows } = await pool.query(
+    `SELECT c.id, c."weddingId", c."targetType", c."guestId", c."tableId", c."targetLabel",
+            (c."guestId" IS NULL AND c."tableId" IS NULL) AS "targetRemoved",
+            c.body, c."authorUserId", author.name AS "authorName", c."parentCommentId",
+            c."resolvedAt", c."resolvedByUserId", resolver.name AS "resolvedByName", c."createdAt"
+     FROM "comments" c
+     JOIN "users" author ON author.id = c."authorUserId"
+     LEFT JOIN "users" resolver ON resolver.id = c."resolvedByUserId"
+     WHERE c.id = $1`,
+    [commentId]
+  );
+  return updatedRows[0];
 }

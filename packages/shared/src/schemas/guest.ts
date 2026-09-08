@@ -37,7 +37,13 @@ export const createGuestSchema = z.object({
 });
 export type CreateGuestInput = z.infer<typeof createGuestSchema>;
 
-export const updateGuestSchema = createGuestSchema.partial();
+// FR-7.7, extended to guests: every edit accepts the revision the client last saw, so the server
+// can detect a save that landed on top of a newer one instead of silently overwriting it.
+const expectedRevisionField = z.number().int().nonnegative().optional();
+
+export const updateGuestSchema = createGuestSchema.partial().extend({
+  expectedRevision: expectedRevisionField,
+});
 export type UpdateGuestInput = z.infer<typeof updateGuestSchema>;
 
 export interface GuestDTO {
@@ -61,4 +67,7 @@ export interface GuestDTO {
   requiredTableId: string | null;
   createdAt: string;
   updatedAt: string;
+  // FR-7.7: an optimistic-concurrency counter -- send this back as expectedRevision on an edit to
+  // this guest so the server can detect and refuse a save based on stale data.
+  revision: number;
 }

@@ -195,14 +195,35 @@ export function TablesTab({
     }
   }
 
+  // FR-7.7, extended to seating tables: a 409 conflict carries the fresh, currently-committed
+  // table alongside the message -- pulling it out lets every edit handler refresh that one row in
+  // one step instead of a second round-trip, and shows the user the latest instead of a bare error.
+  function conflictTable(err: unknown): SeatingTableDTO | null {
+    if (err instanceof ApiError && err.status === 409 && err.data?.table) {
+      return err.data.table as SeatingTableDTO;
+    }
+    return null;
+  }
+
   async function onToggleLock(id: string, isLocked: boolean) {
     const prev = tables;
-    setTables(tables.map((t) => (t.id === id ? { ...t, isLocked } : t)));
+    const expectedRevision = prev.find((t) => t.id === id)?.revision;
+    setTables(prev.map((t) => (t.id === id ? { ...t, isLocked } : t)));
     try {
-      await api.patch(`/api/v1/weddings/${weddingId}/tables/${id}`, { isLocked });
-    } catch {
-      setTables(prev);
-      setError("Couldn't update that table's lock.");
+      const { table } = await api.patch<{ table: SeatingTableDTO }>(
+        `/api/v1/weddings/${weddingId}/tables/${id}`,
+        { isLocked, expectedRevision }
+      );
+      setTables(prev.map((t) => (t.id === id ? table : t)));
+    } catch (err) {
+      const fresh = conflictTable(err);
+      if (fresh) {
+        setTables(prev.map((t) => (t.id === id ? fresh : t)));
+        setError(`"${fresh.label}" was just edited elsewhere — showing the latest. Try again if you still want to make this change.`);
+      } else {
+        setTables(prev);
+        setError(err instanceof ApiError ? err.message : "Couldn't update that table's lock.");
+      }
     }
   }
 
@@ -211,17 +232,24 @@ export function TablesTab({
   // this just surfaces whatever warning message came back.
   async function onToggleAccessible(id: string, next: boolean) {
     const prev = tables;
-    setTables(tables.map((t) => (t.id === id ? { ...t, isAccessible: next } : t)));
+    const expectedRevision = prev.find((t) => t.id === id)?.revision;
+    setTables(prev.map((t) => (t.id === id ? { ...t, isAccessible: next } : t)));
     try {
       const res = await api.patch<{ table: SeatingTableDTO; warnings: string[] }>(
         `/api/v1/weddings/${weddingId}/tables/${id}`,
-        { isAccessible: next }
+        { isAccessible: next, expectedRevision }
       );
       setTables((cur) => cur.map((t) => (t.id === id ? res.table : t)));
       setTableWarnings(res.warnings ?? []);
-    } catch {
-      setTables(prev);
-      setError("Couldn't update that table's accessible flag.");
+    } catch (err) {
+      const fresh = conflictTable(err);
+      if (fresh) {
+        setTables(prev.map((t) => (t.id === id ? fresh : t)));
+        setError(`"${fresh.label}" was just edited elsewhere — showing the latest. Try again if you still want to make this change.`);
+      } else {
+        setTables(prev);
+        setError(err instanceof ApiError ? err.message : "Couldn't update that table's accessible flag.");
+      }
     }
   }
 
@@ -229,21 +257,47 @@ export function TablesTab({
   // a hard-rule reassignment side effect, so there's nothing else to surface here.
   async function onToggleSingleSideOnly(id: string, next: boolean) {
     const prev = tables;
-    setTables(tables.map((t) => (t.id === id ? { ...t, singleSideOnly: next } : t)));
+    const expectedRevision = prev.find((t) => t.id === id)?.revision;
+    setTables(prev.map((t) => (t.id === id ? { ...t, singleSideOnly: next } : t)));
     try {
-      await api.patch(`/api/v1/weddings/${weddingId}/tables/${id}`, { singleSideOnly: next });
-    } catch {
-      setTables(prev);
-      setError("Couldn't update that table's Single-Side-Only setting.");
+      const { table } = await api.patch<{ table: SeatingTableDTO }>(
+        `/api/v1/weddings/${weddingId}/tables/${id}`,
+        { singleSideOnly: next, expectedRevision }
+      );
+      setTables(prev.map((t) => (t.id === id ? table : t)));
+    } catch (err) {
+      const fresh = conflictTable(err);
+      if (fresh) {
+        setTables(prev.map((t) => (t.id === id ? fresh : t)));
+        setError(`"${fresh.label}" was just edited elsewhere — showing the latest. Try again if you still want to make this change.`);
+      } else {
+        setTables(prev);
+        setError(err instanceof ApiError ? err.message : "Couldn't update that table's Single-Side-Only setting.");
+      }
     }
   }
 
   async function onMove(id: string, x: number, y: number) {
+    const expectedRevision = tables.find((t) => t.id === id)?.revision;
     setTables((cur) => cur.map((t) => (t.id === id ? { ...t, positionX: x, positionY: y } : t)));
     try {
-      await api.patch(`/api/v1/weddings/${weddingId}/tables/${id}`, { positionX: x, positionY: y });
-    } catch {
-      setError("Couldn't save that table's position.");
+      const { table } = await api.patch<{ table: SeatingTableDTO }>(
+        `/api/v1/weddings/${weddingId}/tables/${id}`,
+        { positionX: x, positionY: y, expectedRevision }
+      );
+      // FR-7.7: sync the server's incremented revision back so the *next* drag's expectedRevision
+      // is still accurate -- without this, every move after the first would be rejected as stale.
+      setTables((cur) => cur.map((t) => (t.id === id ? table : t)));
+    } catch (err) {
+      // A position conflict is low-stakes (nobody's seating was affected) and dragging is a
+      // frequent, low-friction gesture -- silently re-sync to the fresh table instead of
+      // interrupting the user with an error for something this minor.
+      const fresh = conflictTable(err);
+      if (fresh) {
+        setTables((cur) => cur.map((t) => (t.id === id ? fresh : t)));
+      } else {
+        setError(err instanceof ApiError ? err.message : "Couldn't save that table's position.");
+      }
     }
   }
 

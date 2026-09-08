@@ -23,6 +23,9 @@ export interface GuestRow {
   requiredTableId: string | null;
   createdAt: Date;
   updatedAt: Date;
+  // FR-7.7: an optimistic-concurrency counter for this guest -- an edit that names an
+  // expectedRevision the server no longer matches is rejected as stale.
+  revision: number;
 }
 
 // Joined against restricted_table_guests so every read can surface requiredTableId (FR-3.7a)
@@ -30,8 +33,19 @@ export interface GuestRow {
 // below fills it in as null itself (a brand-new guest can't already be on a required list).
 const COLUMNS = `g.id, g."weddingId", g."firstName", g."lastName", g."partyName", g.headcount, g.tier,
   g."rsvpStatus", g."requiresAccessibleTable", g."isLocked", g."dayOfAttendance", g.notes, g.side,
-  g."ageCategory", rtg."tableId" AS "requiredTableId", g."createdAt", g."updatedAt"`;
+  g."ageCategory", g.revision, rtg."tableId" AS "requiredTableId", g."createdAt", g."updatedAt"`;
 const FROM_JOINED = `FROM "guests" g LEFT JOIN "restricted_table_guests" rtg ON rtg."guestId" = g.id`;
+
+// FR-7.7: thrown instead of applying an edit whose expectedRevision no longer matches the guest's
+// current one -- the fresh, up-to-date guest is attached so the caller can refresh the UI with it
+// directly rather than making a second round-trip.
+export class GuestConflictError extends Error {
+  guest: GuestRow;
+  constructor(message: string, guest: GuestRow) {
+    super(message);
+    this.guest = guest;
+  }
+}
 
 export interface CreateGuestData {
   firstName: string;
@@ -59,7 +73,7 @@ export async function createGuest(weddingId: string, input: CreateGuestData): Pr
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, now())
      RETURNING id, "weddingId", "firstName", "lastName", "partyName", headcount, tier,
                "rsvpStatus", "requiresAccessibleTable", "isLocked", "dayOfAttendance", notes, side,
-               "ageCategory", "createdAt", "updatedAt"`,
+               "ageCategory", revision, "createdAt", "updatedAt"`,
     [
       id,
       weddingId,
@@ -97,10 +111,18 @@ export async function getGuestForWedding(id: string, weddingId: string): Promise
   return { ...rows[0], notes: decryptText(rows[0].notes) };
 }
 
+// FR-7.7, extended to guests: an optional expectedRevision locks the guest's row (FOR UPDATE,
+// inside this function's own transaction) and compares it against the current revision before
+// writing anything. A mismatch means someone else's edit landed first -- rather than proceeding
+// on stale data, this throws GuestConflictError with the fresh, currently-committed guest attached
+// (a plain read from a second connection isn't blocked by the row lock, so it safely sees the
+// latest committed state) and writes nothing. A caller that passes no expectedRevision at all
+// (an internal/legacy call site) skips the check entirely, matching the plan-version pattern.
 export async function updateGuestForWedding(
   id: string,
   weddingId: string,
-  input: Partial<CreateGuestData>
+  input: Partial<CreateGuestData>,
+  expectedRevision?: number
 ): Promise<boolean> {
   const columnMap: Record<string, string> = {
     firstName: `"firstName"`,
@@ -126,14 +148,42 @@ export async function updateGuestForWedding(
       values.push(key === "notes" ? encryptText(value as string | null) : value);
     }
   }
-  if (fields.length === 0) return true;
-  fields.push(`"updatedAt" = now()`);
-  values.push(id, weddingId);
-  const { rowCount } = await pool.query(
-    `UPDATE "guests" SET ${fields.join(", ")} WHERE id = $${i++} AND "weddingId" = $${i}`,
-    values
-  );
-  return (rowCount ?? 0) > 0;
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const { rows } = await client.query(
+      `SELECT revision FROM "guests" WHERE id = $1 AND "weddingId" = $2 FOR UPDATE`,
+      [id, weddingId]
+    );
+    const current = rows[0];
+    if (!current) {
+      await client.query("ROLLBACK");
+      return false;
+    }
+    if (expectedRevision !== undefined && current.revision !== expectedRevision) {
+      const fresh = await getGuestForWedding(id, weddingId);
+      throw new GuestConflictError(
+        "This guest changed since you loaded them — someone else's edit landed first. It's been refreshed with the latest — please try again.",
+        fresh!
+      );
+    }
+    if (fields.length > 0) {
+      fields.push(`"updatedAt" = now()`, `revision = revision + 1`);
+      values.push(id, weddingId);
+      await client.query(
+        `UPDATE "guests" SET ${fields.join(", ")} WHERE id = $${i++} AND "weddingId" = $${i}`,
+        values
+      );
+    }
+    await client.query("COMMIT");
+    return true;
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 
 export async function deleteGuestForWedding(id: string, weddingId: string): Promise<boolean> {

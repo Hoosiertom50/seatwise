@@ -243,14 +243,37 @@ export function GuestsTab({
     }
   }
 
+  // FR-7.7, extended to guests: a 409 conflict carries the fresh, currently-committed guest
+  // alongside the message -- pulling it out lets every edit handler refresh that one row in one
+  // step instead of a second round-trip, and shows the user the latest instead of a bare error.
+  function conflictGuest(err: unknown): GuestDTO | null {
+    if (err instanceof ApiError && err.status === 409 && err.data?.guest) {
+      return err.data.guest as GuestDTO;
+    }
+    return null;
+  }
+
   async function onUpdateRsvp(guestId: string, newStatus: RsvpStatus) {
     const prev = guests;
-    setGuests(guests.map((g) => (g.id === guestId ? { ...g, rsvpStatus: newStatus } : g)));
+    const expectedRevision = prev.find((g) => g.id === guestId)?.revision;
+    setGuests(prev.map((g) => (g.id === guestId ? { ...g, rsvpStatus: newStatus } : g)));
     try {
-      await api.patch(`/api/v1/weddings/${weddingId}/guests/${guestId}`, { rsvpStatus: newStatus });
-    } catch {
-      setGuests(prev);
-      setError("Couldn't update RSVP status.");
+      const { guest } = await api.patch<{ guest: GuestDTO }>(
+        `/api/v1/weddings/${weddingId}/guests/${guestId}`,
+        { rsvpStatus: newStatus, expectedRevision }
+      );
+      setGuests(prev.map((g) => (g.id === guestId ? guest : g)));
+    } catch (err) {
+      const fresh = conflictGuest(err);
+      if (fresh) {
+        setGuests(prev.map((g) => (g.id === guestId ? fresh : g)));
+        setError(
+          `${fresh.firstName} ${fresh.lastName} was just edited elsewhere — showing the latest. Try again if you still want to make this change.`
+        );
+      } else {
+        setGuests(prev);
+        setError(err instanceof ApiError ? err.message : "Couldn't update RSVP status.");
+      }
     }
   }
 
@@ -258,23 +281,49 @@ export function GuestsTab({
   // labels only affect how that value is displayed (see SIDE_OPTIONS above).
   async function onUpdateSide(guestId: string, newSide: GuestSide) {
     const prev = guests;
-    setGuests(guests.map((g) => (g.id === guestId ? { ...g, side: newSide } : g)));
+    const expectedRevision = prev.find((g) => g.id === guestId)?.revision;
+    setGuests(prev.map((g) => (g.id === guestId ? { ...g, side: newSide } : g)));
     try {
-      await api.patch(`/api/v1/weddings/${weddingId}/guests/${guestId}`, { side: newSide });
-    } catch {
-      setGuests(prev);
-      setError("Couldn't update that guest's side.");
+      const { guest } = await api.patch<{ guest: GuestDTO }>(
+        `/api/v1/weddings/${weddingId}/guests/${guestId}`,
+        { side: newSide, expectedRevision }
+      );
+      setGuests(prev.map((g) => (g.id === guestId ? guest : g)));
+    } catch (err) {
+      const fresh = conflictGuest(err);
+      if (fresh) {
+        setGuests(prev.map((g) => (g.id === guestId ? fresh : g)));
+        setError(
+          `${fresh.firstName} ${fresh.lastName} was just edited elsewhere — showing the latest. Try again if you still want to make this change.`
+        );
+      } else {
+        setGuests(prev);
+        setError(err instanceof ApiError ? err.message : "Couldn't update that guest's side.");
+      }
     }
   }
 
   async function onToggleLock(guestId: string, isLocked: boolean) {
     const prev = guests;
-    setGuests(guests.map((g) => (g.id === guestId ? { ...g, isLocked } : g)));
+    const expectedRevision = prev.find((g) => g.id === guestId)?.revision;
+    setGuests(prev.map((g) => (g.id === guestId ? { ...g, isLocked } : g)));
     try {
-      await api.patch(`/api/v1/weddings/${weddingId}/guests/${guestId}`, { isLocked });
-    } catch {
-      setGuests(prev);
-      setError("Couldn't update that guest's lock.");
+      const { guest } = await api.patch<{ guest: GuestDTO }>(
+        `/api/v1/weddings/${weddingId}/guests/${guestId}`,
+        { isLocked, expectedRevision }
+      );
+      setGuests(prev.map((g) => (g.id === guestId ? guest : g)));
+    } catch (err) {
+      const fresh = conflictGuest(err);
+      if (fresh) {
+        setGuests(prev.map((g) => (g.id === guestId ? fresh : g)));
+        setError(
+          `${fresh.firstName} ${fresh.lastName} was just edited elsewhere — showing the latest. Try again if you still want to make this change.`
+        );
+      } else {
+        setGuests(prev);
+        setError(err instanceof ApiError ? err.message : "Couldn't update that guest's lock.");
+      }
     }
   }
 

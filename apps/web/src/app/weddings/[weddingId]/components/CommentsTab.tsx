@@ -105,14 +105,24 @@ export function CommentsTab({
     }
   }
 
+  // Comments have no delete, so resolve's own "not found" case can only really mean a bad id --
+  // there's no other-user action that can pull the row out from under this one the way a delete
+  // could. Still, sync from the server's returned comment rather than guessing at
+  // resolvedAt/resolvedByName, and revert the optimistic update on any failure (a gap the
+  // optimistic update here previously left open).
   async function onResolve(commentId: string) {
+    const prev = comments;
     setComments(
       comments.map((c) => (c.id === commentId ? { ...c, resolvedAt: new Date().toISOString() } : c))
     );
     try {
-      await api.post(`/api/v1/weddings/${weddingId}/comments/${commentId}/resolve`);
-    } catch {
-      setError("Couldn't resolve that comment.");
+      const { comment } = await api.post<{ comment: CommentDTO }>(
+        `/api/v1/weddings/${weddingId}/comments/${commentId}/resolve`
+      );
+      setComments(prev.map((c) => (c.id === commentId ? comment : c)));
+    } catch (err) {
+      setComments(prev);
+      setError(err instanceof ApiError ? err.message : "Couldn't resolve that comment.");
     }
   }
 
