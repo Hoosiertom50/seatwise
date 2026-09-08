@@ -59,11 +59,14 @@ export class RestrictedTableError extends Error {}
 
 // FR-4.3: a simple grid fallback position for a table that's never been explicitly placed --
 // four columns, spaced widely enough for the floor-plan's table boxes not to overlap. Purely a
-// starting point the planner can drag from; never read by seating logic.
+// starting point the planner can drag from; never read by seating logic. Column/row spacing here
+// must stay wider than the frontend's PLAN_BOX_WIDTH (224px) and fixed table-box height (200px)
+// respectively, plus a real gap -- these two constants aren't shared code across the frontend/
+// backend boundary, so keep them in sync by hand if either box size changes.
 function gridPosition(index: number): { x: number; y: number } {
   const col = index % 4;
   const row = Math.floor(index / 4);
-  return { x: 40 + col * 180, y: 40 + row * 180 };
+  return { x: 40 + col * 264, y: 40 + row * 240 };
 }
 
 export async function createSeatingTable(
