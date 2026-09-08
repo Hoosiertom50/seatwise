@@ -101,7 +101,10 @@ up for it.
   same owner — cross-wedding access is a 404 in both directions (FR-1.2, verified in
   `test_e2e_isolation.py`). A collaborator's access (added under TS-13, below) is re-checked
   fresh against the database on every request rather than cached, so a permission change or
-  revocation is enforced on that user's very next action (FR-1.5, FR-1.6 partial).
+  revocation is enforced on that user's very next action (FR-1.5), and the wedding page itself
+  polls its own access level every 4 seconds so an already-open, idle browser tab picks up a
+  change within the same 5-second requirement, without the user taking any action (FR-1.6 — see
+  below).
   - **FR-1.3a — per-wedding side labels**: each wedding names its own two sides
     (`sideLabel1`/`sideLabel2`, default "Bride"/"Groom") — set on the Collaborators tab's new
     "Side labels" panel (owner-only), shown everywhere a guest's side is set or displayed (the
@@ -111,15 +114,22 @@ up for it.
     seat assignment — verified by renaming mid-test and confirming every guest's id and stored
     side value are byte-for-byte unchanged, and that plan generation (whose Side-Mixing scoring
     only ever reads the underlying value) still works afterward (`test_side_labels.py`).
+  - **FR-1.6 — live permission enforcement on an already-open tab**: the wedding detail page
+    polls `GET /api/v1/weddings/:weddingId` every 4 seconds (comfortably under the 5-second
+    requirement) and compares the returned access level against the last-seen one. A level change
+    (e.g. Edit → View) updates the page's state immediately — write controls disappear without a
+    reload — and shows a dismissable notice; full revocation (removed as a collaborator entirely)
+    shows a blocking full-page message and redirects to the dashboard after a few seconds, rather
+    than letting the now-inaccessible tabs fail confusingly against a 404. Verified end-to-end
+    with two real browser sessions — one collaborator with the wedding already open and idle,
+    the other the owner changing/removing that access out-of-band — confirming both cases land
+    well within 5 seconds (`test_live_permission.py`).
   - **Still deliberately left out, and why:** FR-1.4/FR-1.4a ask for a distinct
     Couple-vs-Collaborator role separate from permission level, plus a full invite lifecycle (an
     emailed invite carrying no guest data, with pending/accepted/expired/revoked states) — what's
     built instead (TS-13) is simpler: an owner adds an already-registered account directly by
     email at a permission level, with access granted immediately and no invite token or pending
-    state. FR-1.6's "even for a wedding already open in the user's browser" half isn't fully met
-    either — the frontend reads its access level once on page load and doesn't re-check it, so an
-    already-open, idle tab doesn't proactively reflect a revocation within five seconds (though
-    the user's next actual request is still correctly blocked). Both are being worked next.
+    state. This is next.
 - Add/list/update (RSVP status)/remove guests within a wedding, with tier, party/household
   grouping, headcount, and an accessible-table flag.
 - **Bulk guest import & export** (TS-5, FR-2.4/FR-2.4a): the last remaining gap TS-15 surfaced,
@@ -547,16 +557,14 @@ up for it.
 
 **TS-4 is only partially built.** What's there: signup/login, per-owner wedding creation, full
 cross-wedding data isolation, a collaborator's access being re-checked fresh on every request, and
-— since this pass — FR-1.3a's per-wedding renameable side labels (FR-1.1, FR-1.2, FR-1.3 minus its
-note field, FR-1.3a, FR-1.5, FR-1.6's next-request half) — all described above. What's still
-deliberately deferred, and why: FR-1.4/FR-1.4a's fuller invite model (a Couple-vs-Collaborator role
-distinct from permission level, plus a real invite-with-expiry/revocation lifecycle) hasn't been
-built yet — TS-13's simpler "add an existing account by email, access granted immediately" stands
-in for it today, which covers the permission-gating half of TS-13's own scope but not TS-4's
-original, more specific invite-flow requirement. FR-1.6's already-open-browser-tab half is also
-still open — access is enforced immediately on the *next request* a revoked user makes, but
-nothing yet proactively refreshes an idle, already-open tab within five seconds. Both are real,
-buildable next slices, being worked next.
+— since this pass — FR-1.3a's per-wedding renameable side labels and FR-1.6's live enforcement on
+an already-open browser tab (FR-1.1, FR-1.2, FR-1.3 minus its note field, FR-1.3a, FR-1.5, FR-1.6)
+— all described above. What's still deliberately deferred, and why: FR-1.4/FR-1.4a's fuller invite
+model (a Couple-vs-Collaborator role distinct from permission level, plus a real
+invite-with-expiry/revocation lifecycle) hasn't been built yet — TS-13's simpler "add an existing
+account by email, access granted immediately" stands in for it today, which covers the
+permission-gating half of TS-13's own scope but not TS-4's original, more specific invite-flow
+requirement. That's a real, buildable next slice, being worked next.
 
 **TS-9 is only partially built.** What's there: the Draft/In Review/Approved status workflow
 above (FR-6.4, FR-6.5, FR-6.6), and — since TS-13 — FR-6.2's sharing notification (moving to In
@@ -670,9 +678,9 @@ a documented, deliberate gap — see the TS-10 paragraph above). TS-4 (Account &
 was found, on a dev-notes audit, to have been missing its own paragraph here entirely despite
 being the earliest-built story — three real, previously undocumented gaps surfaced from that audit
 (per-wedding renameable side labels, a full invite lifecycle distinct from today's immediate
-add-by-email, and live enforcement on an already-open browser tab), and the first of the three
-(FR-1.3a's side labels) is now closed, described above. The remaining two (FR-1.4/FR-1.4a's invite
-lifecycle, FR-1.6's open-tab enforcement) are being worked next. With that, every story in the
+add-by-email, and live enforcement on an already-open browser tab), and two of the three (FR-1.3a's
+side labels, FR-1.6's open-tab enforcement) are now closed, described above. The remaining one
+(FR-1.4/FR-1.4a's invite lifecycle) is being worked next. With that, every story in the
 original requirements doc has a paragraph here reflecting the scope actually built, with every
 deliberate gap named and explained rather than left silent.
 

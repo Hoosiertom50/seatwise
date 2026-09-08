@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { api, ApiError } from "@/lib/api-client";
@@ -41,6 +41,12 @@ export default function WeddingDetailPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>("guests");
+  // FR-1.6: "a change [to a collaborator's access] takes effect within five seconds, even for a
+  // wedding already open in the user's browser." accessLevelRef lets the poll below compare
+  // against the latest value without the interval's closure going stale between ticks.
+  const accessLevelRef = useRef<AccessLevel | null>(null);
+  const [accessNotice, setAccessNotice] = useState<string | null>(null);
+  const [accessRevoked, setAccessRevoked] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -52,6 +58,7 @@ export default function WeddingDetailPage() {
         ]);
         setWedding(w.wedding);
         setAccessLevel(w.accessLevel);
+        accessLevelRef.current = w.accessLevel;
         setGuests(g.guests);
         setCurrentUserId(me.user.id);
       } catch (err) {
@@ -71,6 +78,49 @@ export default function WeddingDetailPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [weddingId]);
 
+  // FR-1.6: poll this page's own access level every 4s (comfortably under the 5s requirement) so
+  // a permission change or revocation made by the owner is reflected here even if this browser
+  // tab was already open and idle -- not just enforced on this user's next request, which was
+  // already true before this. Stops once access has been detected as fully revoked (nothing left
+  // to poll for) or the page errored out on initial load.
+  useEffect(() => {
+    if (error) return;
+    const interval = setInterval(async () => {
+      try {
+        const res = await api.get<{ wedding: WeddingDTO; accessLevel: AccessLevel }>(
+          `/api/v1/weddings/${weddingId}`
+        );
+        if (res.accessLevel !== accessLevelRef.current) {
+          const previous = accessLevelRef.current;
+          accessLevelRef.current = res.accessLevel;
+          setAccessLevel(res.accessLevel);
+          setWedding(res.wedding);
+          if (previous !== null) {
+            const label =
+              res.accessLevel === "OWNER"
+                ? "Owner"
+                : res.accessLevel === "EDIT"
+                  ? "Edit"
+                  : res.accessLevel === "COMMENT"
+                    ? "Comment"
+                    : "View";
+            setAccessNotice(`Your access to this wedding was changed to ${label}.`);
+          }
+        }
+      } catch (err) {
+        if (err instanceof ApiError && (err.status === 404 || err.status === 401)) {
+          setAccessRevoked(true);
+          setAccessNotice("Your access to this wedding has been removed.");
+          clearInterval(interval);
+          setTimeout(() => router.push("/dashboard"), 3000);
+        }
+        // A transient network error is ignored -- the next tick tries again.
+      }
+    }, 4000);
+    return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [weddingId, error]);
+
   if (loading) {
     return <main className="flex flex-1 items-center justify-center text-neutral-500">Loading...</main>;
   }
@@ -81,6 +131,21 @@ export default function WeddingDetailPage() {
         <p className="text-sm text-red-600">{error}</p>
         <Link href="/dashboard" className="text-sm underline">
           Back to dashboard
+        </Link>
+      </main>
+    );
+  }
+
+  // FR-1.6: access was revoked entirely while this page was already open -- stop rendering the
+  // tabs below (their own data is no longer ours to see) rather than let them fail confusingly
+  // against a 404, and explain what happened before redirecting.
+  if (accessRevoked) {
+    return (
+      <main className="flex flex-1 flex-col items-center justify-center gap-3">
+        <p className="text-sm text-red-600">{accessNotice}</p>
+        <p className="text-sm text-neutral-500">Taking you back to your dashboard...</p>
+        <Link href="/dashboard" className="text-sm underline">
+          Go now
         </Link>
       </main>
     );
@@ -98,6 +163,20 @@ export default function WeddingDetailPage() {
         </Link>
         <NotificationsBell />
       </div>
+      {accessNotice && !accessRevoked && (
+        // FR-1.6: access changed (but was not revoked entirely) while this tab was already open --
+        // a non-blocking notice, dismissable by the user, rather than the full-page redirect used
+        // for a full revocation above.
+        <div className="mt-3 flex items-center justify-between gap-3 rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-800">
+          <span>{accessNotice}</span>
+          <button
+            onClick={() => setAccessNotice(null)}
+            className="shrink-0 text-amber-800 underline hover:no-underline"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
       <h1 className="mt-2 mb-1 text-2xl font-semibold">{wedding?.name}</h1>
       <p className="mb-6 text-sm text-neutral-500">
         {wedding?.eventDate ? new Date(wedding.eventDate).toLocaleDateString() : "No date set"}
