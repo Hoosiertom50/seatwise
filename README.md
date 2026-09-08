@@ -78,6 +78,28 @@ Seating rules and Tables tabs on a wedding's page. To try collaboration, invite 
 from the Collaborators tab (the invite link is printed to the terminal running `pnpm dev` if
 `RESEND_API_KEY` is unset) and accept it while signed in as that second account.
 
+### Turning on real email delivery
+
+No code is needed for this — the app is already fully wired to send real email through
+[Resend](https://resend.com); it's off only because no `RESEND_API_KEY` is set yet. To turn it on:
+
+1. Sign up for a free Resend account at resend.com (their free tier is plenty for trying this out
+   — 100 emails/day, 3,000/month at the time of writing).
+2. Verify a sending domain or address in Resend's dashboard (Domains → Add Domain, or use the
+   sandbox `onboarding@resend.dev` address Resend gives every new account for testing before a
+   domain is verified).
+3. Create an API key (API Keys → Create API Key).
+4. In `apps/web/.env`, set:
+   ```
+   RESEND_API_KEY="re_..."
+   RESEND_FROM_EMAIL="Seatwise <onboarding@resend.dev>"
+   ```
+   (swap in your verified domain/address once you have one).
+5. Restart `pnpm dev` so it picks up the new env vars.
+
+That's it — invite emails, plan-shared notifications, and everything else under FR-10.2 will now
+send for real instead of falling back to the console-log stand-in.
+
 ### A note on how the database layer was built and verified here
 
 The sandbox this was built in blocks outbound network access to Prisma's binary CDN
