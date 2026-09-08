@@ -437,16 +437,21 @@ export function PlanTab({
 
   if (loading) return <p className="text-sm text-neutral-500">Loading seating plans...</p>;
 
-  const grouped = new Map<
-    string,
-    { tableLabel: string; guests: { guestId: string; guestName: string; needsReassignment: boolean }[] }
-  >();
+  // FR-6.1: "Unassigned/Needs Reassignment guests appear in a separate prominent area rather than
+  // a false valid table." A Needs Reassignment guest's seat assignment row still exists (they're
+  // not literally unassigned), but showing them nested under their no-longer-valid table would
+  // read as a normal, rule-respecting placement -- so both views pull them out into their own
+  // area, same as Unassigned, rather than leaving them in `grouped` with just an inline badge.
+  const grouped = new Map<string, { tableLabel: string; guests: { guestId: string; guestName: string }[] }>();
+  const needsReassignmentGuests: { guestId: string; guestName: string; tableId: string; tableLabel: string }[] = [];
   if (detail) {
     for (const a of detail.assignments) {
+      if (a.needsReassignment) {
+        needsReassignmentGuests.push({ guestId: a.guestId, guestName: a.guestName, tableId: a.tableId, tableLabel: a.tableLabel });
+        continue;
+      }
       if (!grouped.has(a.tableId)) grouped.set(a.tableId, { tableLabel: a.tableLabel, guests: [] });
-      grouped
-        .get(a.tableId)!
-        .guests.push({ guestId: a.guestId, guestName: a.guestName, needsReassignment: a.needsReassignment });
+      grouped.get(a.tableId)!.guests.push({ guestId: a.guestId, guestName: a.guestName });
     }
   }
   const canEditThisVersion = canEdit && Boolean(detail?.isCurrent);
@@ -925,6 +930,47 @@ export function PlanTab({
             </div>
           )}
 
+          {planView === "list" && needsReassignmentGuests.length > 0 && (
+            <div className="mb-6 rounded-lg border border-amber-200 bg-amber-50/40 p-4">
+              <p className="mb-1 text-sm font-medium text-amber-800">Needs reassignment</p>
+              <p className="mb-3 text-xs text-neutral-500">
+                Their current table no longer fits a hard rule for them (e.g. an edited field, or a
+                table setting changed) — shown here rather than under that table, since it&apos;s no
+                longer a valid placement for them.
+              </p>
+              <ul className="flex flex-col gap-2">
+                {needsReassignmentGuests.map((g) => (
+                  <li key={g.guestId} className="flex items-center justify-between gap-2 text-sm">
+                    <span>
+                      {g.guestName}{" "}
+                      <span className="text-xs text-neutral-400">(currently at {g.tableLabel})</span>
+                    </span>
+                    {canEditThisVersion && (
+                      <select
+                        aria-label={`Move ${g.guestName} to a different table`}
+                        className="min-h-11 rounded-md border border-neutral-300 px-2 py-1 text-sm disabled:opacity-50"
+                        value=""
+                        disabled={movingGuestId === g.guestId}
+                        onChange={(e) => onMoveGuest(g.guestId, e.target.value)}
+                      >
+                        <option value="" disabled>
+                          {movingGuestId === g.guestId ? "Moving..." : "Move to..."}
+                        </option>
+                        {tables
+                          .filter((t) => t.id !== g.tableId)
+                          .map((t) => (
+                            <option key={t.id} value={t.id}>
+                              {t.label}
+                            </option>
+                          ))}
+                      </select>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
           <div className="mb-3 flex items-center justify-between">
             <h3 className="text-sm font-medium text-neutral-700">Tables</h3>
             <div className="flex gap-1 rounded-md border border-neutral-300 p-0.5 text-sm">
@@ -948,6 +994,7 @@ export function PlanTab({
               tables={tables}
               grouped={grouped}
               unassignedGuestIds={detail.unassignedGuestIds}
+              needsReassignmentGuests={needsReassignmentGuests}
               guestName={guestName}
               onMoveGuest={onMoveGuest}
               canEditThisVersion={canEditThisVersion}
@@ -961,17 +1008,7 @@ export function PlanTab({
                   <ul className="flex flex-col gap-1.5">
                     {t.guests.map((g) => (
                       <li key={g.guestId} className="flex items-center justify-between gap-2 text-sm">
-                        <span>
-                          {g.guestName}
-                          {g.needsReassignment && (
-                            <span
-                              className="ml-2 rounded bg-amber-50 px-1.5 py-0.5 text-xs font-medium text-amber-700"
-                              title="This guest's current table no longer fits a hard rule for them (e.g. an edited field, or a table setting changed) — move them to fix it."
-                            >
-                              needs reassignment
-                            </span>
-                          )}
-                        </span>
+                        <span>{g.guestName}</span>
                         {canEditThisVersion && (
                           <select
                             aria-label={`Move ${g.guestName} to a different table`}
@@ -1014,14 +1051,16 @@ function PlanFloorPlan({
   tables,
   grouped,
   unassignedGuestIds,
+  needsReassignmentGuests,
   guestName,
   onMoveGuest,
   canEditThisVersion,
   movingGuestId,
 }: {
   tables: SeatingTableDTO[];
-  grouped: Map<string, { tableLabel: string; guests: { guestId: string; guestName: string; needsReassignment: boolean }[] }>;
+  grouped: Map<string, { tableLabel: string; guests: { guestId: string; guestName: string }[] }>;
   unassignedGuestIds: string[];
+  needsReassignmentGuests: { guestId: string; guestName: string; tableId: string; tableLabel: string }[];
   guestName: (id: string) => string;
   onMoveGuest: (guestId: string, tableId: string) => void;
   canEditThisVersion: boolean;
@@ -1073,6 +1112,31 @@ function PlanFloorPlan({
           </div>
         </div>
       )}
+      {/* FR-6.1: same "separate prominent area" treatment as the list view -- a Needs
+          Reassignment guest is pulled out of their (no-longer-valid) table box entirely rather
+          than shown there with a badge, so the floor plan never implies a placement that's no
+          longer rule-compliant. */}
+      {needsReassignmentGuests.length > 0 && (
+        <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50/40 p-3">
+          <p className="mb-2 text-xs font-medium text-amber-800">Needs reassignment — drag onto a table</p>
+          <div className="flex flex-wrap gap-1.5">
+            {needsReassignmentGuests.map((g) => (
+              <span
+                key={g.guestId}
+                data-guest-id={g.guestId}
+                draggable={canEditThisVersion}
+                onDragStart={(e) => onGuestDragStart(e, g.guestId)}
+                title={`Currently at ${g.tableLabel}, which no longer fits a hard rule for them`}
+                className={`rounded-full border border-dashed border-amber-300 bg-white px-2 py-1 text-xs text-amber-800 ${
+                  canEditThisVersion ? "cursor-grab active:cursor-grabbing" : ""
+                } ${movingGuestId === g.guestId ? "opacity-50" : ""}`}
+              >
+                {g.guestName}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
       <div
         style={{ width: "100%", height, maxWidth: width }}
         className="relative overflow-auto rounded-lg border border-neutral-200 bg-neutral-50"
@@ -1112,12 +1176,9 @@ function PlanFloorPlan({
                     data-guest-id={g.guestId}
                     draggable={canEditThisVersion}
                     onDragStart={(e) => onGuestDragStart(e, g.guestId)}
-                    title={g.needsReassignment ? "Needs reassignment — this table no longer fits a hard rule for them" : undefined}
-                    className={`truncate rounded px-1.5 py-0.5 ${
-                      g.needsReassignment ? "bg-amber-50 text-amber-700" : "bg-neutral-100"
-                    } ${canEditThisVersion ? "cursor-grab active:cursor-grabbing" : ""} ${
-                      movingGuestId === g.guestId ? "opacity-50" : ""
-                    }`}
+                    className={`truncate rounded px-1.5 py-0.5 bg-neutral-100 ${
+                      canEditThisVersion ? "cursor-grab active:cursor-grabbing" : ""
+                    } ${movingGuestId === g.guestId ? "opacity-50" : ""}`}
                   >
                     {g.guestName}
                   </span>

@@ -289,8 +289,8 @@ up for it.
     pass below) *are* seated automatically: every listed guest is pinned to that table at
     generation time, the same way a locked guest is pinned to theirs, with the same
     graceful-fallback-with-warning behavior if the pin can no longer be honored.
-- **Plan review status** (TS-9, partial — see below): the Current Plan Version (the latest one
-  generated) moves through Draft → In Review → Approved. Approving requires a complete plan
+- **Plan review status** (TS-9 — now fully built, see below): the Current Plan Version (the latest
+  one generated) moves through Draft → In Review → Approved. Approving requires a complete plan
   (FR-0.1) and only ever applies to the current version — an older, superseded version's status
   can no longer be changed. Approving is a checkpoint, not a lock: nothing about assignments,
   rules, guests, or tables becomes read-only. If the plan is edited after approval, it stays
@@ -298,6 +298,18 @@ up for it.
   status back to Draft or In Review clears that indicator without deleting the underlying
   history. Every status change is recorded as an immutable Change History entry (user,
   timestamp, from → to).
+  - **FR-6.1**: the Seating plan tab (both List and Floor plan views) never shows a guest nested
+    inside a table's guest list unless that placement genuinely respects every current hard rule.
+    Unassigned guests have always had their own "Unassigned" area; a seated guest whose table no
+    longer fits a hard rule for them (e.g. a field was edited, or a table's Accessible flag was
+    turned off after they were seated there) is now pulled out of that table's box the same way —
+    into its own amber "Needs reassignment" area (with a "currently at {table}" note and a "Move
+    to..." control filtered to exclude that same table) — rather than staying listed inside the
+    now-invalid table with just a badge, which would still read as a placement the plan considers
+    valid. A guest marked Not Attending (FR-8.1/TS-11) is excluded entirely rather than shown as
+    unassigned or needing reassignment, since they were never a seat to fill. Verified with
+    `test_plan_reassignment_ui.py`, a two-view Playwright check confirming the guest appears only
+    in the separate area, never inside their old table's list, in both views.
 - **Manual adjustment** (TS-10, partial — see below): on the Seating plan tab, every seated and
   unassigned guest gets a "Move to.../Seat at..." control to manually place them at a different
   table within the Current Plan Version, without generating a new version:
@@ -593,16 +605,18 @@ field) — all described above. Nothing is deliberately deferred on this ticket 
 field on FR-1.3 (couple's names/date/venue/note) is the one small, never-built field, mentioned
 above for completeness rather than as a planned next step.
 
-**TS-9 is only partially built.** What's there: the Draft/In Review/Approved status workflow
-above, and — since TS-13 — FR-6.2's sharing notification (moving to In Review notifies every
+**TS-9 is now fully built.** What's there: the Draft/In Review/Approved status workflow above,
+and — since TS-13 — FR-6.2's sharing notification (moving to In Review notifies every
 collaborator) and FR-6.3's comments, both described in the TS-13 bullet above. FR-6.4's approval
 authority is now enforced for real (closed alongside TS-4's invite-lifecycle work, above): any
 Edit-level user can move Draft↔In Review, but Approve is narrower — only the wedding's owner, or a
 Couple-role collaborator with at least Comment access, may Approve; a plain Collaborator, even at
-Edit level, is refused. What's still deliberately deferred, and why: FR-6.1's full
-Assigned/Unassigned/**Needs Reassignment**/**Not Attending** distinction depends on concepts
-(day-of attendance changes) that don't exist yet — that's TS-11 (Day-Of Mode); the schema
-already has a `needsReassignment` flag on each seat assignment ready for that.
+Edit level, is refused. FR-6.1's Assigned/Unassigned/Needs Reassignment/Not Attending distinction
+(described in its own sub-bullet above) is closed too, now that TS-11's day-of attendance concepts
+exist for "Not Attending" to key off of: Unassigned and Needs Reassignment guests each get their
+own separate, prominent area in both Plan views rather than a badge inside a nominally-valid
+table, and Not Attending guests are excluded outright. Nothing is deliberately left out on this
+ticket anymore.
 
 **TS-10 is now built for the scope FR-7.1–FR-7.7 actually describe: the Current Plan Version.**
 What's there: manual moves with full hard/soft-rule validation, locks, change history, FR-7.1's
@@ -628,10 +642,10 @@ few hours' extension of this one.
 history entries are recorded for every day-of action (and every manual move / status change
 before it), but there's still no UI anywhere to *view* that history — it's all sitting in the
 `change_history_entries` table, verified directly, waiting on a "History" panel that's really a
-piece of its own (arguably part of TS-9's fuller FR-6.1 status/reassignment picture). The
-`needsReassignment` flag on `seat_assignments` exists in the schema but isn't touched by an
-attendance change today — a Not Attending guest's seat is deleted outright rather than flagged,
-since FR-8.1 doesn't ask for a "this needs a look" state for them, just an immediately-free seat.
+piece of its own. The `needsReassignment` flag on `seat_assignments` exists in the schema but
+isn't touched by an attendance change today — a Not Attending guest's seat is deleted outright
+rather than flagged, since FR-8.1 doesn't ask for a "this needs a look" state for them, just an
+immediately-free seat.
 
 **TS-12 (Export & Print) is built**, described above, including the version labeling and
 side-by-side comparison view (described in its own bullet above) that was originally deferred here
@@ -708,7 +722,10 @@ being the earliest-built story — three real, previously undocumented gaps surf
 invite lifecycle distinct from the original immediate add-by-email), and all three are now closed,
 described above — TS-4 is fully built. Closing the invite-lifecycle gap also let FR-6.4's approval
 authority (under TS-9) be enforced for real, rather than the "any Edit user" simplification that
-stood in for it before a Couple role existed to check. With that, every story in the
+stood in for it before a Couple role existed to check. FR-6.1, the one piece TS-9 still had open,
+is closed too — Unassigned and Needs Reassignment guests each get their own separate, prominent
+area in both Plan views rather than an inline badge inside a table the plan no longer considers
+valid for them, and TS-9 is now fully built. With that, every story in the
 original requirements doc has a paragraph here reflecting the scope actually built, with every
 deliberate gap named and explained rather than left silent.
 
