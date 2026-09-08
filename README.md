@@ -349,21 +349,24 @@ up for it.
     before; the assignment endpoint now accepts `tableId: null` for exactly this (never exposed
     as its own "Unassign" button, only used by undo/redo today), which itself takes the same
     must-sit-together unit the forward move would.
-  - **FR-7.7** (scoped to the Current Plan Version — see below): every write that touches the
-    Current Plan Version's assignments, status, or label (move, unassign, swap, status change,
-    relabel) now carries a `revision` counter. A client sends back the revision it last loaded;
-    if someone else's save has moved it on, the write is rejected outright — with a 409 and the
-    fresh, currently-committed plan version attached — instead of silently overwriting what they
-    just did. The rejected user sees "This plan changed since you loaded it — someone else's
-    change landed first," the view refreshes to the real state automatically (no page reload),
-    and their own attempted change is simply not applied, so they can look at what's there now
-    and retry deliberately. Separately, the Seating plan tab polls for a newer revision every 4
+  - **FR-7.7** (originally scoped to the Current Plan Version, since extended — see below): every
+    write that touches the Current Plan Version's assignments, status, or label (move, unassign,
+    swap, status change, relabel) carries a `revision` counter. A client sends back the revision it
+    last loaded; if someone else's save has moved it on, the write is rejected outright — with a
+    409 and the fresh, currently-committed plan version attached — instead of silently overwriting
+    what they just did. The rejected user sees "This plan changed since you loaded it — someone
+    else's change landed first," the view refreshes to the real state automatically (no page
+    reload), and their own attempted change is simply not applied, so they can look at what's there
+    now and retry deliberately. Separately, the Seating plan tab polls for a newer revision every 4
     seconds while a Current Plan Version is open (paused while a move/undo/redo/status/label save
     of your own is in flight, so it can't race your own write) and merges in whatever a
     collaborator has since saved — meeting the "visible within five seconds without a manual
     refresh" requirement without needing websocket/SSE infrastructure. `expectedRevision` is
     optional on every one of these endpoints, so this is purely additive: a caller that omits it
-    gets the exact old behavior.
+    gets the exact old behavior. Guests and seating tables now carry the same `revision` counter
+    and `expectedRevision` contract on their own edit endpoints (see the TS-10 paragraph below) —
+    editing a guest's tier, side, or lock, or a table's lock/accessible/single-side/position, is
+    protected exactly the same way.
   - Guests forced together by "must sit together" always move as one unit — moving one member
     brings the rest along automatically.
   - A move that would break a hard rule (capacity, must-not-sit-together with whoever's already
@@ -643,25 +646,29 @@ own separate, prominent area in both Plan views rather than a badge inside a nom
 table, and Not Attending guests are excluded outright. Nothing is deliberately left out on this
 ticket anymore.
 
-**TS-10 is now built for the scope FR-7.1–FR-7.7 actually describe: the Current Plan Version.**
-What's there: manual moves with full hard/soft-rule validation, locks, change history, FR-7.1's
-guest-drag-onto-table floor plan, FR-7.5's session-scoped undo/redo, and — since this pass —
-FR-7.7's revision-based conflict detection and 4-second polling sync, all described above. Two
-users editing the same Current Plan Version at the same time now get exactly the behavior FR-7.7
-asks for: the second save is rejected rather than silently overwriting the first, an on-screen
-explanation appears, the view refreshes to the real state, and the newer collaborator's own
-change becomes visible elsewhere within a few seconds without a manual refresh — verified with a
-real two-browser Playwright test (`test_live_sync.py`) alongside the API-level conflict checks
-(`test_concurrent_conflict.py`). What's still deliberately out of scope, and why: FR-7.7's own
-list of what a conflict can be about — "guest, rule, table, floor-plan, comment, status, version,
-or assignment data" — reads broader than just the Current Plan Version's own writes; this pass
-covers status, version (label), and assignment (move/unassign/swap) for that one entity, since
-that's what TS-10's own requirement grouping and the "Manual Override" section are actually about.
-Editing a guest, a rule, a table, or a comment concurrently still has no optimistic-concurrency
-check of its own — the second save there simply wins, same as before this pass — since each of
-those is really its own entity with its own edit surface (TS-3/TS-5/TS-6/TS-7/TS-13), and giving
-each one the same revision-counter treatment is realistically its own slice of work rather than a
-few hours' extension of this one.
+**TS-10 is now built for the full scope FR-7.1–FR-7.7 describe, including FR-7.7's own list of
+what a conflict can be about** — "guest, rule, table, floor-plan, comment, status, version, or
+assignment data." What's there: manual moves with full hard/soft-rule validation, locks, change
+history, FR-7.1's guest-drag-onto-table floor plan, FR-7.5's session-scoped undo/redo, FR-7.7's
+revision-based conflict detection and 4-second polling sync for the Current Plan Version itself
+(status, version/label, and assignment data — move/unassign/swap), all described above, and — since
+this pass — the same revision-based protection extended to guests and seating tables. Two users
+editing the same Current Plan Version, guest, or table at the same time now get exactly the
+behavior FR-7.7 asks for: the second save is rejected rather than silently overwriting the first,
+an on-screen explanation appears, the view refreshes to the real state, and (for the Current Plan
+Version) the newer collaborator's own change becomes visible elsewhere within a few seconds without
+a manual refresh — verified with a real two-browser Playwright test (`test_live_sync.py`) alongside
+the API-level conflict checks (`test_concurrent_conflict.py` for the plan version, and the new
+`test_entity_concurrency.py` for guests, tables, rules, and comments together). Seating rules and
+comments deliberately do *not* get their own `revision` column: a rule has no edit verb at all
+(only add/remove), and a duplicate or conflicting rule is already rejected up front by validation
+in `relationships.ts`; a comment is append-only plus a one-way, idempotent resolve. Neither has an
+in-place write a revision counter would be protecting against — so instead, deleting a seating rule
+that another collaborator already removed now returns a clean, explained 404 rather than a generic
+error that silently puts the (already-gone) row back in the list only to fail again on retry, and
+resolving a comment now returns the full updated row (including who resolved it) so every
+collaborator's view can sync exactly instead of guessing. This is the intentionally different, but
+equally deliberate, shape of protection each entity's actual edit surface calls for — not a gap.
 
 **TS-11 (Day-of Mode) is built**, described above. What's deliberately left out, and why: the
 `needsReassignment` flag on `seat_assignments` exists in the schema but isn't touched by an
@@ -734,10 +741,11 @@ Version labeling and side-by-side comparison are now built (described above) —
 last gap TS-12 had left open, and permission-aware UI hiding and real email delivery (both
 described above) close the last gaps TS-13 had left open. All three gaps TS-15 originally surfaced
 or that TS-7 depended on (bulk guest import, Side-Mixing, and the visual floor plan) are also
-closed. TS-10 is now built for the Current Plan Version scope FR-7.1–FR-7.7 describe (FR-7.1's
-floor-plan drag, FR-7.5's undo/redo, and FR-7.7's concurrent-edit sync and conflict detection are
-all in, described above; entity-level conflict detection for guests/rules/tables/comments remains
-a documented, deliberate gap — see the TS-10 paragraph above). TS-4 (Account & Wedding Management)
+closed. TS-10 is now built for the full scope FR-7.1–FR-7.7 describe (FR-7.1's floor-plan drag,
+FR-7.5's undo/redo, and FR-7.7's concurrent-edit sync and conflict detection are all in, described
+above; entity-level conflict detection now also covers guests and seating tables directly, with
+rules and comments getting the differently-shaped protection their own add/remove/resolve-only edit
+surface actually calls for — see the TS-10 paragraph above). TS-4 (Account & Wedding Management)
 was found, on a dev-notes audit, to have been missing its own paragraph here entirely despite
 being the earliest-built story — three real, previously undocumented gaps surfaced from that audit
 (per-wedding renameable side labels, live enforcement on an already-open browser tab, and a full
@@ -757,6 +765,16 @@ flag (FR-3.4) was fully built everywhere except the Tables tab UI, which had no 
 and TS-6 is now fully built. With that, every story in the
 original requirements doc has a paragraph here reflecting the scope actually built, with every
 deliberate gap named and explained rather than left silent.
+
+Most recently, TS-10's one remaining documented gap — FR-7.7's optimistic-concurrency conflict
+detection for entities other than the Current Plan Version itself — is closed too: guests and
+seating tables now carry the same `revision`/`expectedRevision` contract, and seating rules and
+comments get the differently-shaped "already gone" protection their add/remove/resolve-only edit
+surface actually calls for, rather than a revision counter with nothing to count (see the TS-10
+paragraph above, and `test_entity_concurrency.py`). Real email delivery itself needs no more code
+at all — it's been fully wired to Resend since the TS-13 pass described above — the only remaining
+step is an account-level one: sign up for a free Resend account, verify a sending domain/address,
+and set `RESEND_API_KEY`/`RESEND_FROM_EMAIL` in `apps/web/.env` (see the setup section above).
 
 ## Mobile later
 
