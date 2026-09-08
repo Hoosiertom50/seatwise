@@ -43,11 +43,20 @@ PostgreSQL server (local install, Docker, or a hosted one like Supabase/Neon).
 pnpm install
 ```
 
-Create `apps/web/.env` (copy `.env.example` at the repo root):
+Create `apps/web/.env` (copy `.env.example` at the repo root — it has the full list with
+comments):
 
 ```
 DATABASE_URL="postgresql://user:password@localhost:5432/seatwise_dev?schema=public"
 JWT_SECRET="a long random string"
+ENCRYPTION_KEY="a different long random string"
+# Optional -- leave RESEND_API_KEY unset to use a console-log stand-in for email instead of
+# sending real mail (fine for just trying the app out locally).
+RESEND_API_KEY=""
+RESEND_FROM_EMAIL="Seatwise <notifications@yourdomain.com>"
+# Only needs to change if you're not running on localhost:3000 (e.g. deployed somewhere) --
+# it's used to build the link in an invite email.
+APP_URL="http://localhost:3000"
 ```
 
 Apply the database schema. On a normal machine, Prisma's CLI will download what it needs on
@@ -65,7 +74,9 @@ pnpm dev
 ```
 
 and open http://localhost:3000 — sign up, create a wedding, add some guests, and try the
-Seating rules and Tables tabs on a wedding's page.
+Seating rules and Tables tabs on a wedding's page. To try collaboration, invite a second account
+from the Collaborators tab (the invite link is printed to the terminal running `pnpm dev` if
+`RESEND_API_KEY` is unset) and accept it while signed in as that second account.
 
 ### A note on how the database layer was built and verified here
 
@@ -83,10 +94,12 @@ a generated Prisma Client. The full signup → create wedding → add/edit/remov
 tested end-to-end against a local Postgres this way, including both the cookie-auth and
 Bearer-token auth paths.
 
-`schema.prisma` stays the source of truth for the data model either way. Once you run
-`prisma migrate dev` on your machine (or in CI), Prisma will want to create its own migration
-history; either let it do that fresh, or run `npx prisma migrate resolve --applied 0001_init`
-first so it recognizes the hand-applied migration as already done. If you'd rather adopt Prisma
+`schema.prisma` stays the source of truth for the data model either way. On a fresh database (the
+normal case — a new Postgres instance on your machine or elsewhere), `prisma migrate dev` just
+applies every migration folder under `packages/db/prisma/migrations/` in order and builds its own
+tracking table as it goes — nothing special to do. The "resolve as already applied" caveat only
+matters if you ever point Prisma's CLI at *this sandbox's* database specifically, since its first
+migration was applied by hand before any tracking table existed there. If you'd rather adopt Prisma
 Client for the query layer instead of the current `pg`-based one, that's a reasonable next step
 once `prisma generate` can run — the schema and `@prisma/adapter-pg` (already installed) are set
 up for it.
