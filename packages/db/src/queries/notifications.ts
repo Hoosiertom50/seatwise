@@ -31,7 +31,10 @@ function getResendClient(): Resend | null {
   return resendClient;
 }
 
-async function sendEmailNotification(toEmail: string, subject: string, body: string): Promise<void> {
+// Exported so other flows that need to send a real (or stubbed) email outside the in-app
+// notification system -- FR-1.4a's invite email, specifically -- can reuse the same Resend
+// wiring, fallback stub, and never-throws guarantee instead of duplicating it.
+export async function sendEmailNotification(toEmail: string, subject: string, body: string): Promise<void> {
   try {
     const client = getResendClient();
     if (!client) {

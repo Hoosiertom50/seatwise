@@ -93,7 +93,7 @@ up for it.
 
 ## What's implemented
 
-- **Account & Wedding Management** (TS-4, partial — see below): email/password signup and login,
+- **Account & Wedding Management** (TS-4 — now fully built, see below): email/password signup and login,
   JWT issued on both, session check endpoint. One account holds any number of weddings
   (FR-1.1), each scoped to its owner with a name, optional event date, and venue name (FR-1.3,
   partial — there's no separate "note" field). Every wedding's guests, rules, tables, plan
@@ -124,12 +124,29 @@ up for it.
     with two real browser sessions — one collaborator with the wedding already open and idle,
     the other the owner changing/removing that access out-of-band — confirming both cases land
     well within 5 seconds (`test_live_permission.py`).
-  - **Still deliberately left out, and why:** FR-1.4/FR-1.4a ask for a distinct
-    Couple-vs-Collaborator role separate from permission level, plus a full invite lifecycle (an
-    emailed invite carrying no guest data, with pending/accepted/expired/revoked states) — what's
-    built instead (TS-13) is simpler: an owner adds an already-registered account directly by
-    email at a permission level, with access granted immediately and no invite token or pending
-    state. This is next.
+  - **FR-1.4/FR-1.4a — Couple-vs-Collaborator role and a real invite lifecycle**: inviting someone
+    now sends a real invite (`wedding_invites`: an opaque token, `PENDING`/`ACCEPTED`/`REVOKED`
+    status, a 7-day expiry that's derived rather than stored — see `isInviteExpired`-equivalent
+    logic in `packages/db/src/queries/invites.ts`) instead of granting access immediately. The
+    invite carries a role — Couple or Collaborator, stored on `wedding_collaborators` separately
+    from permission level — and no guest data at all: the accept page (`/invites/:token`) shows
+    only the wedding's name, role, and level once the invite is confirmed `PENDING` and (once
+    someone's signed in) their address matches the invited one; an expired, revoked,
+    already-accepted, or mismatched-account invite reveals only that status, never the wedding's
+    name. Accepting requires being signed in (or creating an account) with the exact invited
+    address — attempting it signed in as anyone else is refused the same way the preview hides
+    data. Re-inviting the same address auto-revokes the invite it supersedes, so at most one
+    stays active per address. A Couple member's approval authority now follows FR-6.4 for real:
+    only the wedding's owner, or a Couple-role collaborator with at least Comment access, can
+    Approve a plan — a plain Collaborator, even at Edit level, is refused (closing a simplification
+    TS-9's own section below used to call out). The old instant "add an existing account by email"
+    endpoint still exists underneath (mainly as fast test scaffolding and a quick-add path) but the
+    Collaborators tab's actual "Invite a collaborator" UI now goes through the token flow.
+    Full lifecycle (send, list, revoke, re-invite, preview every status, accept, role/approval
+    enforcement) verified against the live API in `test_invites.py`, with the Collaborators tab UI
+    and the accept page itself driven end-to-end in `test_invites_ui.py`.
+  - **Nothing left deliberately out on this ticket anymore** — all three gaps a dev-notes audit
+    surfaced (FR-1.3a, FR-1.6, FR-1.4/FR-1.4a) are now closed.
 - Add/list/update (RSVP status)/remove guests within a wedding, with tier, party/household
   grouping, headcount, and an accessible-table flag.
 - **Bulk guest import & export** (TS-5, FR-2.4/FR-2.4a): the last remaining gap TS-15 surfaced,
@@ -555,27 +572,24 @@ up for it.
 
 ## What's next
 
-**TS-4 is only partially built.** What's there: signup/login, per-owner wedding creation, full
-cross-wedding data isolation, a collaborator's access being re-checked fresh on every request, and
-— since this pass — FR-1.3a's per-wedding renameable side labels and FR-1.6's live enforcement on
-an already-open browser tab (FR-1.1, FR-1.2, FR-1.3 minus its note field, FR-1.3a, FR-1.5, FR-1.6)
-— all described above. What's still deliberately deferred, and why: FR-1.4/FR-1.4a's fuller invite
-model (a Couple-vs-Collaborator role distinct from permission level, plus a real
-invite-with-expiry/revocation lifecycle) hasn't been built yet — TS-13's simpler "add an existing
-account by email, access granted immediately" stands in for it today, which covers the
-permission-gating half of TS-13's own scope but not TS-4's original, more specific invite-flow
-requirement. That's a real, buildable next slice, being worked next.
+**TS-4 is now fully built** — signup/login, per-owner wedding creation, full cross-wedding data
+isolation, a collaborator's access re-checked fresh on every request and enforced within 5 seconds
+even on an already-open tab, per-wedding renameable side labels, and (this pass) a real
+Couple-vs-Collaborator role and invite lifecycle (FR-1.1 through FR-1.6, FR-1.3 minus its note
+field) — all described above. Nothing is deliberately deferred on this ticket anymore; the note
+field on FR-1.3 (couple's names/date/venue/note) is the one small, never-built field, mentioned
+above for completeness rather than as a planned next step.
 
 **TS-9 is only partially built.** What's there: the Draft/In Review/Approved status workflow
-above (FR-6.4, FR-6.5, FR-6.6), and — since TS-13 — FR-6.2's sharing notification (moving to In
-Review notifies every collaborator) and FR-6.3's comments, both described in the TS-13 bullet
-above. What's still deliberately deferred, and why: FR-6.1's full
+above, and — since TS-13 — FR-6.2's sharing notification (moving to In Review notifies every
+collaborator) and FR-6.3's comments, both described in the TS-13 bullet above. FR-6.4's approval
+authority is now enforced for real (closed alongside TS-4's invite-lifecycle work, above): any
+Edit-level user can move Draft↔In Review, but Approve is narrower — only the wedding's owner, or a
+Couple-role collaborator with at least Comment access, may Approve; a plain Collaborator, even at
+Edit level, is refused. What's still deliberately deferred, and why: FR-6.1's full
 Assigned/Unassigned/**Needs Reassignment**/**Not Attending** distinction depends on concepts
 (day-of attendance changes) that don't exist yet — that's TS-11 (Day-Of Mode); the schema
-already has a `needsReassignment` flag on each seat assignment ready for that. Any Edit-level
-collaborator (not just the owner) can move a plan's status, standing in for "Planner/Owner or a
-Couple user with Comment/Edit" — Comment-level users can comment but not change status, matching
-the permission model FR-6.2/6.3 describe.
+already has a `needsReassignment` flag on each seat assignment ready for that.
 
 **TS-10 is now built for the scope FR-7.1–FR-7.7 actually describe: the Current Plan Version.**
 What's there: manual moves with full hard/soft-rule validation, locks, change history, FR-7.1's
@@ -677,10 +691,11 @@ all in, described above; entity-level conflict detection for guests/rules/tables
 a documented, deliberate gap — see the TS-10 paragraph above). TS-4 (Account & Wedding Management)
 was found, on a dev-notes audit, to have been missing its own paragraph here entirely despite
 being the earliest-built story — three real, previously undocumented gaps surfaced from that audit
-(per-wedding renameable side labels, a full invite lifecycle distinct from today's immediate
-add-by-email, and live enforcement on an already-open browser tab), and two of the three (FR-1.3a's
-side labels, FR-1.6's open-tab enforcement) are now closed, described above. The remaining one
-(FR-1.4/FR-1.4a's invite lifecycle) is being worked next. With that, every story in the
+(per-wedding renameable side labels, live enforcement on an already-open browser tab, and a full
+invite lifecycle distinct from the original immediate add-by-email), and all three are now closed,
+described above — TS-4 is fully built. Closing the invite-lifecycle gap also let FR-6.4's approval
+authority (under TS-9) be enforced for real, rather than the "any Edit user" simplification that
+stood in for it before a Couple role existed to check. With that, every story in the
 original requirements doc has a paragraph here reflecting the scope actually built, with every
 deliberate gap named and explained rather than left silent.
 

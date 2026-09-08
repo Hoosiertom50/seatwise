@@ -80,6 +80,7 @@ model Wedding {
   planVersions  PlanVersion[]
   ruleConfigs   RuleWeightConfig[]
   collaborators WeddingCollaborator[]
+  invites       WeddingInvite[]
   comments      Comment[]
   notifications Notification[]
 
@@ -98,12 +99,23 @@ enum CollaboratorPermission {
   EDIT
 }
 
+// FR-1.4: a role assigned at invite time, separate from -- and orthogonal to -- the permission
+// level above. A Couple member's approval authority (FR-6.4: only the Planner/Owner or a Couple
+// user with Comment/Edit permission may Approve a plan) is the only place this is currently read;
+// otherwise a Couple and a Collaborator with the same permission level can do exactly the same
+// things.
+enum CollaboratorRole {
+  COUPLE
+  COLLABORATOR
+}
+
 model WeddingCollaborator {
   id              String                 @id @default(cuid())
   weddingId       String
   wedding         Wedding                @relation(fields: [weddingId], references: [id], onDelete: Cascade)
   userId          String
   user            User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role            CollaboratorRole       @default(COLLABORATOR)
   permissionLevel CollaboratorPermission @default(VIEW)
   invitedByUserId String?
   createdAt       DateTime               @default(now())
@@ -111,6 +123,37 @@ model WeddingCollaborator {
   @@unique([weddingId, userId])
   @@index([userId])
   @@map("wedding_collaborators")
+}
+
+// FR-1.4a: a real invite lifecycle -- an invite carries no guest data, is looked up only by its
+// opaque token, and must be accepted by someone signed in with the exact invited address. Status
+// is PENDING until accepted or revoked; "expired" is derived from expiresAt rather than its own
+// stored transition, since it isn't an action anyone takes, just time passing (see isInviteExpired
+// in packages/db/src/queries/invites.ts). A wedding may have at most one active (PENDING) invite
+// per email at a time -- re-inviting the same address revokes the previous invite first.
+enum WeddingInviteStatus {
+  PENDING
+  ACCEPTED
+  REVOKED
+}
+
+model WeddingInvite {
+  id              String                 @id @default(cuid())
+  weddingId       String
+  wedding         Wedding                @relation(fields: [weddingId], references: [id], onDelete: Cascade)
+  email           String
+  role            CollaboratorRole
+  permissionLevel CollaboratorPermission
+  token           String                 @unique
+  status          WeddingInviteStatus    @default(PENDING)
+  invitedByUserId String
+  expiresAt       DateTime
+  acceptedAt      DateTime?
+  createdAt       DateTime               @default(now())
+
+  @@index([weddingId])
+  @@index([email])
+  @@map("wedding_invites")
 }
 
 enum CommentTargetType {
