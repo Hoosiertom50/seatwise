@@ -17,6 +17,9 @@ export default function DashboardPage() {
   const [newName, setNewName] = useState("");
   const [newDate, setNewDate] = useState("");
   const [newVenue, setNewVenue] = useState("");
+  // FR-1.3: "an optional note" -- always fine left blank.
+  const [newNote, setNewNote] = useState("");
+  const [showNote, setShowNote] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -48,11 +51,14 @@ export default function DashboardPage() {
         name: newName,
         eventDate: newDate || null,
         venueName: newVenue || null,
+        note: newNote || null,
       });
       setWeddings((prev) => [wedding, ...prev]);
       setNewName("");
       setNewDate("");
       setNewVenue("");
+      setNewNote("");
+      setShowNote(false);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't create the wedding.");
     } finally {
@@ -89,51 +95,78 @@ export default function DashboardPage() {
 
       <form
         onSubmit={onCreate}
-        className="mb-8 flex flex-col gap-3 rounded-lg border border-neutral-200 p-4 sm:flex-row sm:items-end"
+        className="mb-8 flex flex-col gap-3 rounded-lg border border-neutral-200 p-4"
       >
-        <div className="flex-1">
-          <label htmlFor="new-wedding-name" className="mb-1 block text-sm font-medium">
-            Wedding name
-          </label>
-          <input
-            id="new-wedding-name"
-            className="w-full rounded-md border border-neutral-300 px-3 py-2 text-sm"
-            placeholder="Alex &amp; Jordan's Wedding"
-            value={newName}
-            onChange={(e) => setNewName(e.target.value)}
-            required
-          />
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+          <div className="flex-1">
+            <label htmlFor="new-wedding-name" className="mb-1 block text-sm font-medium">
+              Wedding name
+            </label>
+            <input
+              id="new-wedding-name"
+              className="w-full rounded-md border border-neutral-300 px-3 py-2 text-sm"
+              placeholder="Alex &amp; Jordan's Wedding"
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+              required
+            />
+          </div>
+          <div>
+            <label htmlFor="new-wedding-date" className="mb-1 block text-sm font-medium">
+              Date
+            </label>
+            <input
+              id="new-wedding-date"
+              type="date"
+              className="rounded-md border border-neutral-300 px-3 py-2 text-sm"
+              value={newDate}
+              onChange={(e) => setNewDate(e.target.value)}
+            />
+          </div>
+          <div className="flex-1">
+            <label htmlFor="new-wedding-venue" className="mb-1 block text-sm font-medium">
+              Venue
+            </label>
+            <input
+              id="new-wedding-venue"
+              className="w-full rounded-md border border-neutral-300 px-3 py-2 text-sm"
+              value={newVenue}
+              onChange={(e) => setNewVenue(e.target.value)}
+            />
+          </div>
+          <button
+            type="submit"
+            disabled={creating}
+            className="rounded-md bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-700 disabled:opacity-50"
+          >
+            {creating ? "Adding..." : "Add wedding"}
+          </button>
         </div>
-        <div>
-          <label htmlFor="new-wedding-date" className="mb-1 block text-sm font-medium">
-            Date
-          </label>
-          <input
-            id="new-wedding-date"
-            type="date"
-            className="rounded-md border border-neutral-300 px-3 py-2 text-sm"
-            value={newDate}
-            onChange={(e) => setNewDate(e.target.value)}
-          />
-        </div>
-        <div className="flex-1">
-          <label htmlFor="new-wedding-venue" className="mb-1 block text-sm font-medium">
-            Venue
-          </label>
-          <input
-            id="new-wedding-venue"
-            className="w-full rounded-md border border-neutral-300 px-3 py-2 text-sm"
-            value={newVenue}
-            onChange={(e) => setNewVenue(e.target.value)}
-          />
-        </div>
-        <button
-          type="submit"
-          disabled={creating}
-          className="rounded-md bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-700 disabled:opacity-50"
-        >
-          {creating ? "Adding..." : "Add wedding"}
-        </button>
+        {/* FR-1.3: "an optional note" -- tucked behind a toggle so the quick-add row above stays
+            uncluttered for the common case of not needing one. */}
+        {showNote ? (
+          <div>
+            <label htmlFor="new-wedding-note" className="mb-1 block text-sm font-medium">
+              Note (optional)
+            </label>
+            <textarea
+              id="new-wedding-note"
+              className="w-full rounded-md border border-neutral-300 px-3 py-2 text-sm"
+              rows={2}
+              placeholder="Anything worth remembering about this wedding"
+              value={newNote}
+              onChange={(e) => setNewNote(e.target.value)}
+            />
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setShowNote(true)}
+            className="self-start text-sm text-neutral-500 underline hover:text-neutral-700"
+          >
+            + Add a note
+          </button>
+        )}
       </form>
 
       {error && <p className="mb-4 text-sm text-red-600">{error}</p>}

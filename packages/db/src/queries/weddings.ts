@@ -7,6 +7,8 @@ export interface WeddingRow {
   name: string;
   eventDate: string | null;
   venueName: string | null;
+  // FR-1.3
+  note: string | null;
   status: string;
   guestCount: number;
   emailNotificationsEnabled: boolean;
@@ -20,8 +22,8 @@ export interface WeddingRow {
 }
 
 const SELECT_WITH_GUEST_COUNT = `
-  SELECT w.id, w."ownerId", w.name, w."eventDate"::text AS "eventDate", w."venueName", w.status,
-         w."emailNotificationsEnabled", w."sideMixing", w."sideLabel1", w."sideLabel2",
+  SELECT w.id, w."ownerId", w.name, w."eventDate"::text AS "eventDate", w."venueName", w.note,
+         w.status, w."emailNotificationsEnabled", w."sideMixing", w."sideLabel1", w."sideLabel2",
          w."createdAt", w."updatedAt",
          COALESCE(g.count, 0)::int AS "guestCount"
   FROM "weddings" w
@@ -36,6 +38,7 @@ export async function createWedding(
     name: string;
     eventDate?: string | null;
     venueName?: string | null;
+    note?: string | null;
     sideMixing?: string;
     sideLabel1?: string;
     sideLabel2?: string;
@@ -43,9 +46,9 @@ export async function createWedding(
 ): Promise<WeddingRow> {
   const id = randomUUID();
   const { rows } = await pool.query(
-    `INSERT INTO "weddings" (id, "ownerId", name, "eventDate", "venueName", "sideMixing", "sideLabel1", "sideLabel2", "updatedAt")
-     VALUES ($1, $2, $3, $4, $5, COALESCE($6::"SideMixingSetting", 'BALANCED_MIX'), COALESCE($7, 'Bride'), COALESCE($8, 'Groom'), now())
-     RETURNING id, "ownerId", name, "eventDate"::text AS "eventDate", "venueName", status,
+    `INSERT INTO "weddings" (id, "ownerId", name, "eventDate", "venueName", note, "sideMixing", "sideLabel1", "sideLabel2", "updatedAt")
+     VALUES ($1, $2, $3, $4, $5, $6, COALESCE($7::"SideMixingSetting", 'BALANCED_MIX'), COALESCE($8, 'Bride'), COALESCE($9, 'Groom'), now())
+     RETURNING id, "ownerId", name, "eventDate"::text AS "eventDate", "venueName", note, status,
                "emailNotificationsEnabled", "sideMixing", "sideLabel1", "sideLabel2", "createdAt", "updatedAt"`,
     [
       id,
@@ -53,6 +56,7 @@ export async function createWedding(
       input.name,
       input.eventDate ?? null,
       input.venueName ?? null,
+      input.note ?? null,
       input.sideMixing ?? null,
       input.sideLabel1 ?? null,
       input.sideLabel2 ?? null,
@@ -112,6 +116,7 @@ export async function updateWeddingForOwner(
     name: string;
     eventDate: string | null;
     venueName: string | null;
+    note: string | null;
     sideMixing: string;
     sideLabel1: string;
     sideLabel2: string;
@@ -131,6 +136,10 @@ export async function updateWeddingForOwner(
   if (input.venueName !== undefined) {
     fields.push(`"venueName" = $${i++}`);
     values.push(input.venueName);
+  }
+  if (input.note !== undefined) {
+    fields.push(`note = $${i++}`);
+    values.push(input.note);
   }
   if (input.sideMixing !== undefined) {
     fields.push(`"sideMixing" = $${i++}::"SideMixingSetting"`);

@@ -108,16 +108,24 @@ up for it.
 
 - **Account & Wedding Management** (TS-4 — now fully built, see below): email/password signup and login,
   JWT issued on both, session check endpoint. One account holds any number of weddings
-  (FR-1.1), each scoped to its owner with a name, optional event date, and venue name (FR-1.3,
-  partial — there's no separate "note" field). Every wedding's guests, rules, tables, plan
-  versions, comments, and activity are fully isolated from every other wedding, even under the
-  same owner — cross-wedding access is a 404 in both directions (FR-1.2, verified in
-  `test_e2e_isolation.py`). A collaborator's access (added under TS-13, below) is re-checked
-  fresh against the database on every request rather than cached, so a permission change or
-  revocation is enforced on that user's very next action (FR-1.5), and the wedding page itself
-  polls its own access level every 4 seconds so an already-open, idle browser tab picks up a
-  change within the same 5-second requirement, without the user taking any action (FR-1.6 — see
-  below).
+  (FR-1.1), each scoped to its owner with couple's names (via the wedding's own free-text `name`,
+  e.g. "Alex & Jordan's Wedding"), optional event date, venue name, and an optional note (FR-1.3).
+  Every wedding's guests, rules, tables, plan versions, comments, and activity are fully isolated
+  from every other wedding, even under the same owner — cross-wedding access is a 404 in both
+  directions (FR-1.2, verified in `test_e2e_isolation.py`). A collaborator's access (added under
+  TS-13, below) is re-checked fresh against the database on every request rather than cached, so a
+  permission change or revocation is enforced on that user's very next action (FR-1.5), and the
+  wedding page itself polls its own access level every 4 seconds so an already-open, idle browser
+  tab picks up a change within the same 5-second requirement, without the user taking any action
+  (FR-1.6 — see below).
+  - **FR-1.3 — the note field**: the one field of the four FR-1.3 names (couple's names, date,
+    venue, note) that had never been built. Always optional — creating a wedding with it left
+    blank saves with no error, same as before. Set at creation via a toggle-revealed "+ Add a
+    note" field on the dashboard's create form (kept out of the way for the common case of not
+    needing one), and editable afterwards from the Collaborators tab's owner-only "Note" panel
+    (same save-on-blur pattern as the side labels below); a non-owner collaborator, even at Edit
+    level, is refused. Verified at the API level (`test_wedding_note.py`) and end-to-end through
+    both the create form and the edit panel (`test_wedding_note_ui.py`).
   - **FR-1.3a — per-wedding side labels**: each wedding names its own two sides
     (`sideLabel1`/`sideLabel2`, default "Bride"/"Groom") — set on the Collaborators tab's new
     "Side labels" panel (owner-only), shown everywhere a guest's side is set or displayed (the
@@ -599,11 +607,10 @@ up for it.
 
 **TS-4 is now fully built** — signup/login, per-owner wedding creation, full cross-wedding data
 isolation, a collaborator's access re-checked fresh on every request and enforced within 5 seconds
-even on an already-open tab, per-wedding renameable side labels, and (this pass) a real
-Couple-vs-Collaborator role and invite lifecycle (FR-1.1 through FR-1.6, FR-1.3 minus its note
-field) — all described above. Nothing is deliberately deferred on this ticket anymore; the note
-field on FR-1.3 (couple's names/date/venue/note) is the one small, never-built field, mentioned
-above for completeness rather than as a planned next step.
+even on an already-open tab, per-wedding renameable side labels, a real Couple-vs-Collaborator role
+and invite lifecycle, and (this pass) FR-1.3's last never-built field, the optional note (FR-1.1
+through FR-1.6, all four requirements of FR-1.3) — all described above. Nothing is deliberately
+deferred on this ticket anymore.
 
 **TS-9 is now fully built.** What's there: the Draft/In Review/Approved status workflow above,
 and — since TS-13 — FR-6.2's sharing notification (moving to In Review notifies every
@@ -638,14 +645,14 @@ those is really its own entity with its own edit surface (TS-3/TS-5/TS-6/TS-7/TS
 each one the same revision-counter treatment is realistically its own slice of work rather than a
 few hours' extension of this one.
 
-**TS-11 (Day-of Mode) is built**, described above. What's deliberately left out, and why: change
-history entries are recorded for every day-of action (and every manual move / status change
-before it), but there's still no UI anywhere to *view* that history — it's all sitting in the
-`change_history_entries` table, verified directly, waiting on a "History" panel that's really a
-piece of its own. The `needsReassignment` flag on `seat_assignments` exists in the schema but
-isn't touched by an attendance change today — a Not Attending guest's seat is deleted outright
-rather than flagged, since FR-8.1 doesn't ask for a "this needs a look" state for them, just an
-immediately-free seat.
+**TS-11 (Day-of Mode) is built**, described above. What's deliberately left out, and why: the
+`needsReassignment` flag on `seat_assignments` exists in the schema but isn't touched by an
+attendance change today — a Not Attending guest's seat is deleted outright rather than flagged,
+since FR-8.1 doesn't ask for a "this needs a look" state for them, just an immediately-free seat.
+(An earlier version of this paragraph noted that day-of change history entries had no UI to view
+them — that gap was already closed by FR-10.1's Activity log, below, which surfaces every
+`change_history_entries` row, including `ATTENDANCE_CHANGE`, across the whole wedding; this note
+was just never removed from here until now.)
 
 **TS-12 (Export & Print) is built**, described above, including the version labeling and
 side-by-side comparison view (described in its own bullet above) that was originally deferred here
@@ -725,7 +732,10 @@ authority (under TS-9) be enforced for real, rather than the "any Edit user" sim
 stood in for it before a Couple role existed to check. FR-6.1, the one piece TS-9 still had open,
 is closed too — Unassigned and Needs Reassignment guests each get their own separate, prominent
 area in both Plan views rather than an inline badge inside a table the plan no longer considers
-valid for them, and TS-9 is now fully built. With that, every story in the
+valid for them, and TS-9 is now fully built. FR-1.3's last never-built field, an optional note on
+the wedding itself, is closed too (settable at creation, editable afterwards from the
+Collaborators tab, owner-only) — TS-4 has nothing left deferred at all now, not even the small
+field mentioned above for completeness. With that, every story in the
 original requirements doc has a paragraph here reflecting the scope actually built, with every
 deliberate gap named and explained rather than left silent.
 

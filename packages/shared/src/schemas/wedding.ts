@@ -9,6 +9,9 @@ export const createWeddingSchema = z.object({
   name: z.string().min(1, "Wedding name is required").max(200),
   eventDate: z.string().date().optional().nullable(),
   venueName: z.string().max(200).optional().nullable(),
+  // FR-1.3: "an optional note" -- always optional, blank is fine (AC: creating with the note left
+  // blank saves with no error).
+  note: z.string().max(2000).optional().nullable(),
   sideMixing: sideMixingEnum.default("BALANCED_MIX"),
   // FR-1.3a: this wedding's own name for each side (e.g. "Bride"/"Groom") -- a display label
   // only. Renaming never touches the underlying GuestSide value (BRIDE/GROOM/BOTH) stored on any
@@ -27,6 +30,8 @@ export interface WeddingDTO {
   name: string;
   eventDate: string | null;
   venueName: string | null;
+  // FR-1.3
+  note: string | null;
   guestCount: number;
   // FR-10.2: per-wedding opt-out for the email side of notifications (the in-app notification
   // itself always fires regardless).

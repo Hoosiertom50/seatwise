@@ -69,6 +69,10 @@ export function CollaboratorsTab({
   const [sideLabel1, setSideLabel1] = useState(wedding?.sideLabel1 ?? "Bride");
   const [sideLabel2, setSideLabel2] = useState(wedding?.sideLabel2 ?? "Groom");
   const [savingLabels, setSavingLabels] = useState(false);
+  // FR-1.3: the wedding's optional free-text note -- same local-input-then-save-on-blur pattern
+  // as the side labels above.
+  const [note, setNote] = useState(wedding?.note ?? "");
+  const [savingNote, setSavingNote] = useState(false);
 
   useEffect(() => {
     api
@@ -102,6 +106,7 @@ export function CollaboratorsTab({
     if (wedding) {
       setSideLabel1(wedding.sideLabel1);
       setSideLabel2(wedding.sideLabel2);
+      setNote(wedding.note ?? "");
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [wedding?.id]);
@@ -127,6 +132,28 @@ export function CollaboratorsTab({
       setSideLabel2(wedding.sideLabel2);
     } finally {
       setSavingLabels(false);
+    }
+  }
+
+  // FR-1.3: the wedding's optional note -- same save-on-blur pattern as the side labels above.
+  async function onSaveNote() {
+    if (!wedding) return;
+    const trimmed = note.trim();
+    if (trimmed === (wedding.note ?? "")) return;
+    setSavingNote(true);
+    setError(null);
+    try {
+      const { wedding: updated } = await api.patch<{ wedding: WeddingDTO }>(
+        `/api/v1/weddings/${weddingId}`,
+        { note: trimmed || null }
+      );
+      setWedding(updated);
+      setNote(updated.note ?? "");
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Couldn't save the note.");
+      setNote(wedding.note ?? "");
+    } finally {
+      setSavingNote(false);
     }
   }
 
@@ -370,6 +397,28 @@ export function CollaboratorsTab({
                   />
                 </div>
               </div>
+            </div>
+          )}
+
+          {wedding && (
+            <div className="mb-8 rounded-lg border border-neutral-200 p-4">
+              <h3 className="mb-1 text-sm font-medium">Note</h3>
+              <p className="mb-3 text-sm text-neutral-500">
+                An optional free-text note about this wedding — owner-only, same as the settings
+                above.
+              </p>
+              <textarea
+                id="wedding-note"
+                aria-label="Wedding note"
+                className="w-full rounded-md border border-neutral-300 px-3 py-2 text-sm disabled:opacity-50"
+                rows={3}
+                maxLength={2000}
+                value={note}
+                onChange={(e) => setNote(e.target.value)}
+                onBlur={onSaveNote}
+                disabled={savingNote}
+                placeholder="Nothing noted yet"
+              />
             </div>
           )}
         </>
