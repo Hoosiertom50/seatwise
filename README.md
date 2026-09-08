@@ -93,8 +93,28 @@ up for it.
 
 ## What's implemented
 
-- Email/password signup and login, JWT issued on both, session check endpoint.
-- Create/list weddings, scoped to the signed-in owner.
+- **Account & Wedding Management** (TS-4, partial — see below): email/password signup and login,
+  JWT issued on both, session check endpoint. One account holds any number of weddings
+  (FR-1.1), each scoped to its owner with a name, optional event date, and venue name (FR-1.3,
+  partial — there's no separate "note" field). Every wedding's guests, rules, tables, plan
+  versions, comments, and activity are fully isolated from every other wedding, even under the
+  same owner — cross-wedding access is a 404 in both directions (FR-1.2, verified in
+  `test_e2e_isolation.py`). A collaborator's access (added under TS-13, below) is re-checked
+  fresh against the database on every request rather than cached, so a permission change or
+  revocation is enforced on that user's very next action (FR-1.5, FR-1.6 partial).
+  - **Deliberately left out, and why:** FR-1.3a asks for wedding-specific, renameable side labels
+    ("each wedding sets its own two side labels plus Both") — what's built instead (TS-6, FR-3.4)
+    is a fixed three-value enum (Bride/Groom/Both), not renameable per wedding. FR-1.4/FR-1.4a ask
+    for a distinct Couple-vs-Collaborator role separate from permission level, plus a full invite
+    lifecycle (an emailed invite carrying no guest data, with pending/accepted/expired/revoked
+    states) — what's built instead (TS-13) is simpler: an owner adds an already-registered
+    account directly by email at a permission level, with access granted immediately and no
+    invite token or pending state. FR-1.6's "even for a wedding already open in the user's
+    browser" half isn't fully met either — the frontend reads its access level once on page load
+    and doesn't re-check it, so an already-open, idle tab doesn't proactively reflect a
+    revocation within five seconds (though the user's next actual request is still correctly
+    blocked). These three were previously undocumented gaps, surfaced now rather than left
+    silent.
 - Add/list/update (RSVP status)/remove guests within a wedding, with tier, party/household
   grouping, headcount, and an accessible-table flag.
 - **Bulk guest import & export** (TS-5, FR-2.4/FR-2.4a): the last remaining gap TS-15 surfaced,
@@ -520,6 +540,21 @@ up for it.
 
 ## What's next
 
+**TS-4 is only partially built.** What's there: signup/login, per-owner wedding creation, full
+cross-wedding data isolation, and a collaborator's access being re-checked fresh on every request
+(FR-1.1, FR-1.2, FR-1.3 minus its note field, FR-1.5, FR-1.6's next-request half) — all described
+above. What's deliberately deferred, and why: FR-1.3a's per-wedding renameable side labels weren't
+built — TS-6 shipped a fixed Bride/Groom/Both enum instead, which was enough for Side-Mixing
+scoring but doesn't let a wedding rename those labels. FR-1.4/FR-1.4a's fuller invite model (a
+Couple-vs-Collaborator role distinct from permission level, plus a real invite-with-expiry/
+revocation lifecycle) was never built — TS-13's simpler "add an existing account by email,
+access granted immediately" stood in for it, which covers the permission-gating half of TS-13's
+own scope but not TS-4's original, more specific invite-flow requirement. FR-1.6's
+already-open-browser-tab half is also open — access is enforced immediately on the *next request*
+a revoked user makes, but nothing proactively refreshes an idle, already-open tab within five
+seconds. None of these three were visible as open work anywhere until now; all three are
+real, buildable next slices rather than deployment concerns.
+
 **TS-9 is only partially built.** What's there: the Draft/In Review/Approved status workflow
 above (FR-6.4, FR-6.5, FR-6.6), and — since TS-13 — FR-6.2's sharing notification (moving to In
 Review notifies every collaborator) and FR-6.3's comments, both described in the TS-13 bullet
@@ -628,9 +663,13 @@ or that TS-7 depended on (bulk guest import, Side-Mixing, and the visual floor p
 closed. TS-10 is now built for the Current Plan Version scope FR-7.1–FR-7.7 describe (FR-7.1's
 floor-plan drag, FR-7.5's undo/redo, and FR-7.7's concurrent-edit sync and conflict detection are
 all in, described above; entity-level conflict detection for guests/rules/tables/comments remains
-a documented, deliberate gap — see the TS-10 paragraph above). With that, every story in the
-original requirements doc has been built to the scope its own requirements describe, with every
-deliberate gap named and explained in its own paragraph above rather than left silent.
+a documented, deliberate gap — see the TS-10 paragraph above). TS-4 (Account & Wedding Management)
+was found, on a dev-notes audit, to have been missing its own paragraph here entirely despite
+being the earliest-built story — it's now documented above, including three real, previously
+undocumented gaps (per-wedding renameable side labels, a full invite lifecycle distinct from
+today's immediate add-by-email, and live enforcement on an already-open browser tab). With that,
+every story in the original requirements doc has a paragraph here reflecting the scope actually
+built, with every deliberate gap named and explained rather than left silent.
 
 ## Mobile later
 
