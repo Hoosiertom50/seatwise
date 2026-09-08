@@ -21,6 +21,10 @@
 //     honored (the table's gone, or honoring it would break a hard rule), the affected guests
 //     fall back to normal automatic placement with a warning explaining why, rather than being
 //     left unassigned just because a stale lock couldn't be kept.
+//   - A Purpose table's structured criterion (FR-3.7 — Side, Relationship Tier, or Age Category)
+//     is a soft preference like prefer-near/avoid: it nudges a matching guest toward that table
+//     but never blocks a non-matching guest from being seated there, and overflow beyond the
+//     table's capacity is simply placed elsewhere rather than failing generation.
 
 export type EngineRelationshipType =
   | "MUST_SIT_TOGETHER"
@@ -30,6 +34,13 @@ export type EngineRelationshipType =
 
 // FR-3.4: which side of the wedding a guest belongs to. BOTH never counts toward either side.
 export type EngineGuestSide = "BRIDE" | "GROOM" | "BOTH";
+
+// FR-3.7: a guest's relationship tier -- read here only for a Purpose table's TIER criterion;
+// never otherwise scored.
+export type EngineGuestTier = "VIP" | "FAMILY" | "FRIEND" | "PLUS_ONE" | "OTHER";
+
+// FR-3.7: lets a Purpose table's Age Category criterion (e.g. "Kids' Table") mean something.
+export type EngineAgeCategory = "ADULT" | "CHILD" | "INFANT";
 
 // FR-3.4: how much generation weights table composition toward mixing the two sides. Always a
 // soft preference (see the side-mixing scoring in attemptPlace below) -- never a hard rule.
@@ -45,11 +56,22 @@ export interface EngineGuest {
   currentTableId?: string | null;
   // FR-3.4
   side: EngineGuestSide;
+  // FR-3.7: read only for a Purpose table's TIER/AGE_CATEGORY criterion.
+  tier: EngineGuestTier;
+  ageCategory: EngineAgeCategory;
   // FR-3.7a: set when this guest is on a Restricted table's required-guest list -- a hard pin,
   // stronger than a lock (a lock falls back gracefully if it can't be honored; a required-table
   // guest is only ever supposed to reach generation already validated to fit, but the same
   // graceful-fallback path is reused defensively if the table shrank since the list was saved).
   requiredTableId?: string | null;
+}
+
+// FR-3.7: a Purpose table's structured criterion -- a soft preference only; a non-matching guest
+// can still be seated there when needed (it's never part of hard-rule feasibility filtering).
+export type EnginePurposeCriterionType = "SIDE" | "TIER" | "AGE_CATEGORY";
+export interface EnginePurposeCriterion {
+  type: EnginePurposeCriterionType;
+  value: string;
 }
 
 export interface EngineRelationship {
@@ -68,6 +90,9 @@ export interface EngineTable {
   // FR-3.4: a table-level override favoring one side only, regardless of the wedding's overall
   // Side-Mixing setting. Still just a soft preference.
   singleSideOnly: boolean;
+  // FR-3.7: this table's structured Purpose criterion, if any -- a soft preference (see
+  // attemptPlace's scoring below), never a factor in hard-rule feasibility.
+  purposeCriterion?: EnginePurposeCriterion | null;
 }
 
 export interface SeatingPlanAssignment {
@@ -95,10 +120,10 @@ interface Unit {
   side: EngineGuestSide;
 }
 
-// FR-0.2 / FR-3.4: the soft-rule weighting constants below, versioned. Bump the version whenever
-// these numbers (or the formula that uses them) change, so a Plan Version's stored
+// FR-0.2 / FR-3.4 / FR-3.7: the soft-rule weighting constants below, versioned. Bump the version
+// whenever these numbers (or the formula that uses them) change, so a Plan Version's stored
 // ruleConfigVersion always identifies exactly what produced it (FR-3.4's acceptance criterion).
-export const RULE_WEIGHT_CONFIG_VERSION = 1;
+export const RULE_WEIGHT_CONFIG_VERSION = 2;
 export const RULE_WEIGHT_CONFIG = {
   preferNearBonus: 10,
   avoidPenalty: 10,
@@ -109,6 +134,14 @@ export const RULE_WEIGHT_CONFIG = {
     fullyMixedOppositeSideBonus: 8,
     singleSideOnlyMismatchPenalty: 6,
   },
+  // FR-3.7: a bonus per unit member matching a Purpose table's structured criterion -- meaningful
+  // enough to steer placement toward that table, but (unlike a hard rule) never a requirement.
+  // The mismatch penalty is deliberately small (a third of the bonus): without it, a small
+  // Purpose table's plain leftover-capacity tie-break alone would make it look attractive to
+  // *any* guest regardless of match (smaller tables always "win" that tie-break), quietly
+  // defeating "the criterion favors children" by letting non-matching guests fill it first.
+  purposeCriterionBonus: 6,
+  purposeCriterionMismatchPenalty: 2,
 } as const;
 
 class UnionFind {
@@ -316,6 +349,24 @@ export function generateSeatingPlan(
           }
         }
       }
+
+      // FR-3.7: a Purpose table's structured criterion (Side/Tier/Age Category) favors this table
+      // for a matching unit member, and mildly disfavors it (never blocks -- feasibility above
+      // never filters on this) for a non-matching one, per guest in the unit.
+      if (t.purposeCriterion) {
+        const { type, value } = t.purposeCriterion;
+        let matches = 0;
+        let mismatches = 0;
+        for (const guestId of unit.guestIds) {
+          const guest = guestById.get(guestId);
+          if (!guest) continue;
+          const fieldValue = type === "SIDE" ? guest.side : type === "TIER" ? guest.tier : guest.ageCategory;
+          if (fieldValue === value) matches++;
+          else mismatches++;
+        }
+        score += matches * w.purposeCriterionBonus - mismatches * w.purposeCriterionMismatchPenalty;
+      }
+
       if (score > bestScore) {
         bestScore = score;
         best = t;

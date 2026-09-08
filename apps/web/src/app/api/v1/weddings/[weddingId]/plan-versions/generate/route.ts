@@ -1,5 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
-import { generateSeatingPlan, RULE_WEIGHT_CONFIG_VERSION, type EngineSideMixing } from "@seatwise/shared";
+import {
+  generateSeatingPlan,
+  RULE_WEIGHT_CONFIG_VERSION,
+  type EngineSideMixing,
+  type EngineGuestTier,
+  type EngineAgeCategory,
+  type EnginePurposeCriterionType,
+} from "@seatwise/shared";
 import {
   listGuestsByWedding,
   listRelationshipsForWedding,
@@ -65,6 +72,8 @@ export async function POST(req: NextRequest, { params }: Params) {
       isLocked: g.isLocked,
       currentTableId: currentAssignments.get(g.id) ?? null,
       side: g.side as "BRIDE" | "GROOM" | "BOTH",
+      tier: g.tier as EngineGuestTier,
+      ageCategory: g.ageCategory as EngineAgeCategory,
       requiredTableId: requiredTableByGuestId.get(g.id) ?? null,
     })),
     attendingRelationships.map((r) => ({ guestAId: r.guestAId, guestBId: r.guestBId, type: r.type })),
@@ -76,6 +85,15 @@ export async function POST(req: NextRequest, { params }: Params) {
       isAccessible: t.isAccessible,
       isLocked: t.isLocked,
       singleSideOnly: t.singleSideOnly,
+      // FR-3.7: a soft-preference input for generation only when both the type and value were
+      // actually set on this table.
+      purposeCriterion:
+        t.purposeCriterionType && t.purposeCriterionValue
+          ? {
+              type: t.purposeCriterionType as EnginePurposeCriterionType,
+              value: t.purposeCriterionValue,
+            }
+          : null,
     })),
     sideMixing
   );

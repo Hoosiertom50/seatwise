@@ -602,6 +602,24 @@ up for it.
     unlisted guest can't be manually moved onto a Restricted table, and a swap is blocked outright
     if either table involved is Restricted (a scope-limiting simplification — partial-list
     consistency during a swap was judged not worth the added complexity for this pass).
+  - **Purpose table structured criteria** (FR-3.7): a table's free-text `purpose` label (e.g.
+    "Kids' Table") now has an optional structured criterion alongside it — Side, Relationship Tier,
+    or Age Category — that generation treats as its own soft-preference scoring input, the same way
+    Side-Mixing and single-side-only already are: a matching guest is favored for that table, a
+    non-matching guest is mildly disfavored (never blocked), and overflow beyond the table's
+    capacity is placed elsewhere without ever failing generation on that account alone. A brand-new
+    `ageCategory` field (Adult / Child / Infant, defaulting to Adult) was added to guests for the Age
+    Category criterion to match against — set from the guest form or bulk CSV import, same as Side
+    and Relationship Tier. Finding the right balance took an extra iteration: an early version scored
+    only a bonus for a match, and testing (a 4-children-vs-2-seat "Kids' Table" scenario, matching
+    the FR-3.7 acceptance criteria) caught that with no penalty for a mismatch, the engine's existing
+    leftover-capacity tie-break could still steer non-matching guests into the small criterion table
+    ahead of the guests it was actually meant for; a small mismatch penalty (a third of the match
+    bonus) fixed it without turning the preference into a hard rule. Also fixed alongside this: the
+    pre-existing `singleSideOnly` table flag (FR-3.4) was fully built in the engine, schema, and API
+    but had no control anywhere in the Tables tab — it was only ever settable by calling the API
+    directly. It's now a checkbox on the create-table form and on every existing table's row, with a
+    badge reflecting its state, matching how every other table flag already works.
 
 ## What's next
 
@@ -697,16 +715,13 @@ Relationship Tier, household, or Requires Accessible Table field, or removing th
 re-checks their current seat assignment against hard rules for both the individual guest-edit
 endpoint and bulk import, closing the last gap this story had left open.
 
-**TS-6 (Relationships & Seating Rules) is now fully built**, aside from one deliberately deferred
-stretch goal. What's there, beyond the original must/must-not-sit-together/prefer-near/avoid rules
-described above: the Side-Mixing setting (FR-3.4) and the Restricted table required-guest list
-(FR-3.7a), both described in their own bullet above — these were the two gaps TS-15's own testing
-surfaced. What's still deliberately left out, and why: FR-3.7's fuller idea of *structured*
-seating criteria on a table's "purpose" (e.g. a table's purpose implying a preferred side, tier, or
-age category as its own soft-preference input, beyond the plain free-text `purpose` field that
-already exists) was scoped out as a stretch goal relative to the two gaps above — it wasn't
-something TS-15's testing actually blocked on, and free-text `purpose` already covers the same
-need for a human reading the table list, just without the engine reading it as a preference input.
+**TS-6 (Relationships & Seating Rules) is now fully built.** What's there, beyond the original
+must/must-not-sit-together/prefer-near/avoid rules described above: the Side-Mixing setting
+(FR-3.4) and the Restricted table required-guest list (FR-3.7a) — the two gaps TS-15's own testing
+surfaced — and, this pass, FR-3.7's structured Purpose table criteria (Side, Relationship Tier, or
+Age Category, scored as a soft preference alongside the free-text `purpose` label) plus the
+previously API-only `singleSideOnly` flag now exposed in the Tables tab UI, both described in their
+own bullet above. Nothing is deliberately deferred on this ticket anymore.
 
 **TS-7 (Table & Venue Layout) is now fully built** across all seven of its requirements, described
 in its own bullet above — shape, quick-create, the optional drag-and-drop floor plan, capacity
@@ -735,7 +750,11 @@ area in both Plan views rather than an inline badge inside a table the plan no l
 valid for them, and TS-9 is now fully built. FR-1.3's last never-built field, an optional note on
 the wedding itself, is closed too (settable at creation, editable afterwards from the
 Collaborators tab, owner-only) — TS-4 has nothing left deferred at all now, not even the small
-field mentioned above for completeness. With that, every story in the
+field mentioned above for completeness. TS-6's one remaining deferred piece, FR-3.7's structured
+Purpose table criteria, is closed too (Side/Tier/Age Category as a soft-preference scoring input),
+alongside a small previously-undocumented gap the same pass turned up — the `singleSideOnly` table
+flag (FR-3.4) was fully built everywhere except the Tables tab UI, which had no control for it —
+and TS-6 is now fully built. With that, every story in the
 original requirements doc has a paragraph here reflecting the scope actually built, with every
 deliberate gap named and explained rather than left silent.
 

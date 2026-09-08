@@ -8,6 +8,7 @@ import {
   rsvpStatusEnum,
   dayOfAttendanceEnum,
   guestSideEnum,
+  ageCategoryEnum,
   type GuestImportMapping,
   type GuestImportRow,
   type GuestImportRowPreview,
@@ -121,6 +122,16 @@ function parseRow(
       errors.push(`Side "${sideRaw}" isn't one of ${guestSideEnum.options.join(", ")}.`);
     } else {
       data.side = normalized;
+    }
+  }
+
+  const ageCategoryRaw = cellFor("ageCategory");
+  if (ageCategoryRaw !== undefined && ageCategoryRaw !== "") {
+    const normalized = normalizeEnumValue(ageCategoryRaw, ageCategoryEnum.options);
+    if (!normalized) {
+      errors.push(`Age category "${ageCategoryRaw}" isn't one of ${ageCategoryEnum.options.join(", ")}.`);
+    } else {
+      data.ageCategory = normalized;
     }
   }
 
@@ -241,8 +252,8 @@ export async function commitGuestImport(
         await client.query(
           `INSERT INTO "guests"
              (id, "weddingId", "firstName", "lastName", "partyName", headcount, tier, "rsvpStatus",
-              "requiresAccessibleTable", "dayOfAttendance", notes, side, "updatedAt")
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, now())`,
+              "requiresAccessibleTable", "dayOfAttendance", notes, side, "ageCategory", "updatedAt")
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, now())`,
           [
             randomUUID(),
             weddingId,
@@ -256,6 +267,7 @@ export async function commitGuestImport(
             p.dayOfAttendance ?? "ATTENDING",
             encryptText(p.notes ?? null),
             p.side ?? "BOTH",
+            p.ageCategory ?? "ADULT",
           ]
         );
         createdCount++;
@@ -298,6 +310,10 @@ export async function commitGuestImport(
         if (p.side !== undefined) {
           fields.push(`side = $${i++}`);
           values.push(p.side);
+        }
+        if (p.ageCategory !== undefined) {
+          fields.push(`"ageCategory" = $${i++}`);
+          values.push(p.ageCategory);
         }
         if ("notes" in p) {
           fields.push(`notes = $${i++}`);

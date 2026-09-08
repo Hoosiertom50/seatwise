@@ -247,6 +247,21 @@ enum TableShape {
   OTHER
 }
 
+// FR-3.7: one of the three structured criteria a Purpose table can favor, as a soft preference.
+enum TablePurposeCriterionType {
+  SIDE
+  TIER
+  AGE_CATEGORY
+}
+
+// FR-3.7: lets a Purpose table's Age Category criterion (e.g. "Kids' Table") mean something --
+// nothing else in the schema categorized a guest by age before this.
+enum AgeCategory {
+  ADULT
+  CHILD
+  INFANT
+}
+
 enum RsvpStatus {
   PENDING
   CONFIRMED
@@ -273,6 +288,9 @@ model Guest {
   requiresAccessibleTable Boolean    @default(false)
   // FR-3.4
   side                    GuestSide  @default(BOTH)
+  // FR-3.7: lets a Purpose table's Age Category criterion mean something (e.g. a "Kids' Table"
+  // favoring CHILD guests). A soft-preference input only -- never a hard rule.
+  ageCategory             AgeCategory @default(ADULT)
   // FR-7.4: when locked, automated (re)generation keeps this guest at their current table
   // instead of reshuffling them; manual moves and hard-rule checks are never affected by a lock.
   isLocked                Boolean    @default(false)
@@ -335,6 +353,14 @@ model SeatingTable {
   // a locked table, and hard-rule checks are never affected by a lock.
   isLocked     Boolean  @default(false)
   purpose      String?
+  // FR-3.7: a Purpose table's structured criterion, on top of its free-text `purpose` label
+  // (which has no algorithmic effect on its own). At most one of Side/Tier/Age Category at a
+  // time; `purposeCriterionValue` holds that criterion's specific value (e.g. "CHILD" when the
+  // type is AGE_CATEGORY) as plain text rather than three separate nullable enum columns, since
+  // only one is ever meaningful at once -- validated against the right enum at the app layer.
+  // Always a soft preference for generation (see the seating engine), never a hard rule.
+  purposeCriterionType  TablePurposeCriterionType?
+  purposeCriterionValue String?
   // FR-3.4: a table-level override — favor seating only one side here, regardless of the
   // wedding's overall Side-Mixing setting. Still only ever a soft preference (see engine).
   singleSideOnly Boolean @default(false)

@@ -16,6 +16,7 @@ export const guestImportFieldEnum = z.enum([
   "requiresAccessibleTable",
   "dayOfAttendance",
   "side",
+  "ageCategory",
   "notes",
 ]);
 export type GuestImportField = z.infer<typeof guestImportFieldEnum>;
@@ -41,6 +42,7 @@ export interface GuestImportRowPreview {
   requiresAccessibleTable?: boolean;
   dayOfAttendance?: string;
   side?: string;
+  ageCategory?: string;
   notes?: string | null;
 }
 

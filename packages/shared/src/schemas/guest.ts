@@ -16,6 +16,11 @@ export type DayOfAttendance = z.infer<typeof dayOfAttendanceEnum>;
 export const guestSideEnum = z.enum(["BRIDE", "GROOM", "BOTH"]);
 export type GuestSide = z.infer<typeof guestSideEnum>;
 
+// FR-3.7: lets a Purpose table's Age Category criterion (e.g. "Kids' Table") mean something --
+// always a soft-preference input for generation, never a hard rule of its own.
+export const ageCategoryEnum = z.enum(["ADULT", "CHILD", "INFANT"]);
+export type AgeCategory = z.infer<typeof ageCategoryEnum>;
+
 export const createGuestSchema = z.object({
   firstName: z.string().min(1, "First name is required").max(100),
   lastName: z.string().min(1, "Last name is required").max(100),
@@ -28,6 +33,7 @@ export const createGuestSchema = z.object({
   dayOfAttendance: dayOfAttendanceEnum.default("ATTENDING"),
   notes: z.string().max(2000).optional().nullable(),
   side: guestSideEnum.default("BOTH"),
+  ageCategory: ageCategoryEnum.default("ADULT"),
 });
 export type CreateGuestInput = z.infer<typeof createGuestSchema>;
 
@@ -49,6 +55,8 @@ export interface GuestDTO {
   notes: string | null;
   // FR-3.4
   side: GuestSide;
+  // FR-3.7
+  ageCategory: AgeCategory;
   // FR-3.7a: the Restricted table this guest is a required member of, if any (null otherwise).
   requiredTableId: string | null;
   createdAt: string;

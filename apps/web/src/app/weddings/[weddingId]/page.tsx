@@ -214,7 +214,9 @@ export default function WeddingDetailPage() {
         />
       )}
       {tab === "rules" && <RulesTab weddingId={weddingId} guests={guests} canEdit={canEdit} />}
-      {tab === "tables" && <TablesTab weddingId={weddingId} guests={guests} canEdit={canEdit} />}
+      {tab === "tables" && (
+        <TablesTab weddingId={weddingId} wedding={wedding} guests={guests} canEdit={canEdit} />
+      )}
       {tab === "plan" && <PlanTab weddingId={weddingId} guests={guests} canEdit={canEdit} />}
       {tab === "dayof" && (
         <DayOfTab weddingId={weddingId} guests={guests} setGuests={setGuests} canEdit={canEdit} />

@@ -10,6 +10,9 @@ export interface SeatingTableRow {
   isAccessible: boolean;
   isLocked: boolean;
   purpose: string | null;
+  // FR-3.7
+  purposeCriterionType: string | null;
+  purposeCriterionValue: string | null;
   // FR-3.4
   singleSideOnly: boolean;
   // FR-4.1: drawing-only -- never read by seating logic.
@@ -27,7 +30,8 @@ export interface SeatingTableRow {
 // callers never need a second round-trip just to show a Restricted table's list.
 const SELECT_WITH_REQUIRED = `
   SELECT t.id, t."weddingId", t.label, t.capacity, t."isRestricted", t."isAccessible", t."isLocked",
-         t.purpose, t."singleSideOnly", t.shape, t."positionX", t."positionY",
+         t.purpose, t."purposeCriterionType", t."purposeCriterionValue", t."singleSideOnly", t.shape,
+         t."positionX", t."positionY",
          t."createdAt", t."updatedAt",
          COALESCE(rtg."guestIds", ARRAY[]::text[]) AS "requiredGuestIds"
   FROM "seating_tables" t
@@ -43,6 +47,8 @@ export interface CreateSeatingTableData {
   isAccessible?: boolean;
   isLocked?: boolean;
   purpose?: string | null;
+  purposeCriterionType?: string | null;
+  purposeCriterionValue?: string | null;
   singleSideOnly?: boolean;
   shape?: string;
   positionX?: number | null;
@@ -73,9 +79,10 @@ export async function createSeatingTable(
   const { rows } = await pool.query(
     `INSERT INTO "seating_tables"
        (id, "weddingId", label, capacity, "isRestricted", "isAccessible", "isLocked", purpose,
-        "singleSideOnly", shape, "positionX", "positionY", "updatedAt")
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::"TableShape", $11, $12, now())
-     RETURNING ${"id, \"weddingId\", label, capacity, \"isRestricted\", \"isAccessible\", \"isLocked\", purpose, \"singleSideOnly\", shape, \"positionX\", \"positionY\", \"createdAt\", \"updatedAt\""}`,
+        "purposeCriterionType", "purposeCriterionValue", "singleSideOnly", shape, "positionX", "positionY", "updatedAt")
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::"TablePurposeCriterionType", $10, $11, $12::"TableShape", $13, $14, now())
+     RETURNING id, "weddingId", label, capacity, "isRestricted", "isAccessible", "isLocked", purpose,
+               "purposeCriterionType", "purposeCriterionValue", "singleSideOnly", shape, "positionX", "positionY", "createdAt", "updatedAt"`,
     [
       id,
       weddingId,
@@ -85,6 +92,8 @@ export async function createSeatingTable(
       input.isAccessible ?? false,
       input.isLocked ?? false,
       input.purpose ?? null,
+      input.purposeCriterionType ?? null,
+      input.purposeCriterionValue ?? null,
       input.singleSideOnly ?? false,
       input.shape ?? "ROUND",
       input.positionX ?? x,
@@ -118,7 +127,8 @@ export async function quickCreateSeatingTables(
            (id, "weddingId", label, capacity, shape, "positionX", "positionY", "updatedAt")
          VALUES ($1, $2, $3, $4, $5::"TableShape", $6, $7, now())
          RETURNING id, "weddingId", label, capacity, "isRestricted", "isAccessible", "isLocked",
-                   purpose, "singleSideOnly", shape, "positionX", "positionY", "createdAt", "updatedAt"`,
+                   purpose, "purposeCriterionType", "purposeCriterionValue", "singleSideOnly", shape,
+                   "positionX", "positionY", "createdAt", "updatedAt"`,
         [id, weddingId, `${input.labelPrefix} ${startIndex + i + 1}`, input.capacity, input.shape, x, y]
       );
       created.push({ ...rows[0], requiredGuestIds: [] });
@@ -180,6 +190,16 @@ export async function updateSeatingTableForWedding(
   if (input.purpose !== undefined) {
     fields.push(`purpose = $${i++}`);
     values.push(input.purpose);
+  }
+  // FR-3.7: always written together (validated as a pair at the schema level) -- a table's
+  // criterion is replaced wholesale rather than patched field-by-field.
+  if (input.purposeCriterionType !== undefined) {
+    fields.push(`"purposeCriterionType" = $${i++}::"TablePurposeCriterionType"`);
+    values.push(input.purposeCriterionType);
+  }
+  if (input.purposeCriterionValue !== undefined) {
+    fields.push(`"purposeCriterionValue" = $${i++}`);
+    values.push(input.purposeCriterionValue);
   }
   if (input.singleSideOnly !== undefined) {
     fields.push(`"singleSideOnly" = $${i++}`);

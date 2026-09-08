@@ -3,6 +3,7 @@
 import { useRef, useState } from "react";
 import { api, ApiError } from "@/lib/api-client";
 import type {
+  AgeCategory,
   GuestDTO,
   GuestImportField,
   GuestImportPreview,
@@ -15,6 +16,9 @@ import { parseCsv } from "@seatwise/shared";
 
 const TIERS: GuestTier[] = ["VIP", "FAMILY", "FRIEND", "PLUS_ONE", "OTHER"];
 const RSVP_STATUSES: RsvpStatus[] = ["PENDING", "CONFIRMED", "DECLINED"];
+// FR-3.7: lets a Purpose table's Age Category criterion (e.g. "Kids' Table") mean something --
+// always just a soft-preference input for generation, never a hard rule of its own.
+const AGE_CATEGORIES: AgeCategory[] = ["ADULT", "CHILD", "INFANT"];
 
 // FR-2.4: which guest fields a column can map to, and how each is labeled in the mapping form.
 // firstName/lastName are the only two that must be mapped before a preview can be requested.
@@ -35,6 +39,7 @@ function buildImportFields(
     { field: "requiresAccessibleTable", label: "Requires accessible table (yes/no)" },
     { field: "dayOfAttendance", label: "Attendance (Attending/Not Attending)" },
     { field: "side", label: `Side (${sideLabel1}/${sideLabel2}/Both)` },
+    { field: "ageCategory", label: "Age category (Adult/Child/Infant)" },
     { field: "notes", label: "Notes" },
   ];
 }
@@ -73,6 +78,7 @@ export function GuestsTab({
   const [rsvpStatus, setRsvpStatus] = useState<RsvpStatus>("PENDING");
   const [requiresAccessibleTable, setRequiresAccessibleTable] = useState(false);
   const [side, setSide] = useState<GuestSide>("BOTH");
+  const [ageCategory, setAgeCategory] = useState<AgeCategory>("ADULT");
   const [adding, setAdding] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -207,6 +213,7 @@ export function GuestsTab({
         rsvpStatus,
         requiresAccessibleTable,
         side,
+        ageCategory,
       });
       setGuests([...guests, guest].sort((a, b) => a.lastName.localeCompare(b.lastName)));
       setFirstName("");
@@ -217,6 +224,7 @@ export function GuestsTab({
       setRsvpStatus("PENDING");
       setRequiresAccessibleTable(false);
       setSide("BOTH");
+      setAgeCategory("ADULT");
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't add that guest.");
     } finally {
@@ -385,6 +393,27 @@ export function GuestsTab({
               </option>
             ))}
           </select>
+        </div>
+        <div>
+          <label htmlFor="guest-age-category" className="mb-1 block text-sm font-medium">
+            Age category
+          </label>
+          <select
+            id="guest-age-category"
+            className="w-full rounded-md border border-neutral-300 px-3 py-2 text-sm"
+            value={ageCategory}
+            onChange={(e) => setAgeCategory(e.target.value as AgeCategory)}
+          >
+            {AGE_CATEGORIES.map((a) => (
+              <option key={a} value={a}>
+                {a.charAt(0) + a.slice(1).toLowerCase()}
+              </option>
+            ))}
+          </select>
+          <p className="mt-1 text-xs text-neutral-500">
+            Only used as a soft preference for a Purpose table&apos;s Age Category criterion
+            (e.g. a &quot;Kids&apos; Table&quot;).
+          </p>
         </div>
         <label className="flex items-center gap-2 text-sm sm:col-span-2">
           <input
@@ -597,6 +626,7 @@ export function GuestsTab({
                   {g.partyName ? `${g.partyName} · ` : ""}
                   {g.tier.replace("_", " ")}
                   {g.side !== "BOTH" ? ` · ${sideLabelFor(g.side)}` : ""}
+                  {g.ageCategory !== "ADULT" ? ` · ${g.ageCategory.charAt(0)}${g.ageCategory.slice(1).toLowerCase()}` : ""}
                 </p>
               </div>
               <div className="flex items-center gap-2">

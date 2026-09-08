@@ -2,9 +2,43 @@
 
 import { useEffect, useRef, useState } from "react";
 import { api, ApiError } from "@/lib/api-client";
-import type { GuestDTO, PlanVersionDTO, PlanVersionDetailDTO, SeatingTableDTO, TableShape } from "@seatwise/shared";
+import type {
+  GuestDTO,
+  PlanVersionDTO,
+  PlanVersionDetailDTO,
+  SeatingTableDTO,
+  TableShape,
+  TablePurposeCriterionType,
+  WeddingDTO,
+} from "@seatwise/shared";
 
 const SHAPES: TableShape[] = ["ROUND", "RECTANGULAR", "SQUARE", "OVAL", "OTHER"];
+
+// FR-3.7: which structured criterion (if any) a Purpose table favors as a soft preference --
+// "None" means it's just a free-text label with no algorithmic effect, same as before this field
+// existed.
+const CRITERION_TYPES: { value: TablePurposeCriterionType | ""; label: string }[] = [
+  { value: "", label: "None (label only)" },
+  { value: "SIDE", label: "Side" },
+  { value: "TIER", label: "Relationship tier" },
+  { value: "AGE_CATEGORY", label: "Age category" },
+];
+const TIER_VALUES = ["VIP", "FAMILY", "FRIEND", "PLUS_ONE", "OTHER"] as const;
+const AGE_CATEGORY_VALUES = ["ADULT", "CHILD", "INFANT"] as const;
+
+// FR-3.7: a human-readable label for a Purpose table's criterion value, in the badge shown on
+// each table row -- `sideValues` carries this wedding's own side labels (FR-1.3a) rather than a
+// hardcoded "Bride"/"Groom".
+function criterionValueLabel(
+  type: TablePurposeCriterionType,
+  value: string | null,
+  sideValues: { value: string; label: string }[]
+): string {
+  if (!value) return "";
+  if (type === "SIDE") return sideValues.find((o) => o.value === value)?.label ?? value;
+  if (type === "TIER") return value.replace("_", " ");
+  return value.charAt(0) + value.slice(1).toLowerCase();
+}
 
 // FR-4.1: shape only ever affects this drawing -- never seating logic.
 const SHAPE_STYLE: Record<TableShape, string> = {
@@ -19,13 +53,25 @@ const BOX_SIZE = 96; // px -- the floor-plan table box's footprint, used for dra
 
 export function TablesTab({
   weddingId,
+  wedding,
   guests,
   canEdit,
 }: {
   weddingId: string;
+  wedding: WeddingDTO | null;
   guests: GuestDTO[];
   canEdit: boolean;
 }) {
+  const sideLabel1 = wedding?.sideLabel1 ?? "Bride";
+  const sideLabel2 = wedding?.sideLabel2 ?? "Groom";
+  // FR-1.3a: BRIDE/GROOM/BOTH are the stored values -- these are only the labels shown for a
+  // Side criterion's value picker, mirroring GuestsTab's own SIDE_OPTIONS.
+  const SIDE_VALUES: { value: string; label: string }[] = [
+    { value: "BRIDE", label: sideLabel1 },
+    { value: "GROOM", label: sideLabel2 },
+    { value: "BOTH", label: "Both" },
+  ];
+
   const [tables, setTables] = useState<SeatingTableDTO[]>([]);
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState<"list" | "floorplan">("list");
@@ -35,6 +81,9 @@ export function TablesTab({
   const [purpose, setPurpose] = useState("");
   const [isRestricted, setIsRestricted] = useState(false);
   const [isAccessible, setIsAccessible] = useState(false);
+  const [singleSideOnly, setSingleSideOnly] = useState(false);
+  const [criterionType, setCriterionType] = useState<TablePurposeCriterionType | "">("");
+  const [criterionValue, setCriterionValue] = useState("");
   const [shape, setShape] = useState<TableShape>("ROUND");
   const [adding, setAdding] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -89,7 +138,17 @@ export function TablesTab({
     try {
       const { table } = await api.post<{ table: SeatingTableDTO }>(
         `/api/v1/weddings/${weddingId}/tables`,
-        { label, capacity, purpose: purpose || null, isRestricted, isAccessible, shape }
+        {
+          label,
+          capacity,
+          purpose: purpose || null,
+          isRestricted,
+          isAccessible,
+          singleSideOnly,
+          purposeCriterionType: criterionType || null,
+          purposeCriterionValue: criterionType ? criterionValue : null,
+          shape,
+        }
       );
       setTables([...tables, table].sort((a, b) => a.label.localeCompare(b.label)));
       setLabel("");
@@ -97,6 +156,9 @@ export function TablesTab({
       setPurpose("");
       setIsRestricted(false);
       setIsAccessible(false);
+      setSingleSideOnly(false);
+      setCriterionType("");
+      setCriterionValue("");
       setShape("ROUND");
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't add that table.");
@@ -160,6 +222,19 @@ export function TablesTab({
     } catch {
       setTables(prev);
       setError("Couldn't update that table's accessible flag.");
+    }
+  }
+
+  // FR-3.4: a plain boolean toggle, same pattern as isLocked -- unlike isAccessible it never has
+  // a hard-rule reassignment side effect, so there's nothing else to surface here.
+  async function onToggleSingleSideOnly(id: string, next: boolean) {
+    const prev = tables;
+    setTables(tables.map((t) => (t.id === id ? { ...t, singleSideOnly: next } : t)));
+    try {
+      await api.patch(`/api/v1/weddings/${weddingId}/tables/${id}`, { singleSideOnly: next });
+    } catch {
+      setTables(prev);
+      setError("Couldn't update that table's Single-Side-Only setting.");
     }
   }
 
@@ -252,6 +327,57 @@ export function TablesTab({
             value={purpose}
             onChange={(e) => setPurpose(e.target.value)}
           />
+          <p className="mt-1 text-xs text-neutral-500">
+            Just a label on its own — pair it with a criterion below for it to actually affect
+            generation.
+          </p>
+        </div>
+        <div>
+          <label htmlFor="table-criterion-type" className="mb-1 block text-sm font-medium">
+            Purpose criterion (optional)
+          </label>
+          <select
+            id="table-criterion-type"
+            className="mb-2 w-full rounded-md border border-neutral-300 px-3 py-2 text-sm"
+            value={criterionType}
+            onChange={(e) => {
+              const next = e.target.value as TablePurposeCriterionType | "";
+              setCriterionType(next);
+              setCriterionValue(
+                next === "SIDE" ? "BRIDE" : next === "TIER" ? TIER_VALUES[0] : next === "AGE_CATEGORY" ? "CHILD" : ""
+              );
+            }}
+          >
+            {CRITERION_TYPES.map((c) => (
+              <option key={c.value} value={c.value}>
+                {c.label}
+              </option>
+            ))}
+          </select>
+          {criterionType && (
+            <select
+              id="table-criterion-value"
+              aria-label="Purpose criterion value"
+              className="w-full rounded-md border border-neutral-300 px-3 py-2 text-sm"
+              value={criterionValue}
+              onChange={(e) => setCriterionValue(e.target.value)}
+            >
+              {(criterionType === "SIDE"
+                ? SIDE_VALUES
+                : criterionType === "TIER"
+                  ? TIER_VALUES.map((v) => ({ value: v, label: v.replace("_", " ") }))
+                  : AGE_CATEGORY_VALUES.map((v) => ({ value: v, label: v.charAt(0) + v.slice(1).toLowerCase() }))
+              ).map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          )}
+          <p className="mt-1 text-xs text-neutral-500">
+            A soft preference (FR-3.7) — favors matching guests but never blocks anyone else, and
+            overflow is seated elsewhere rather than failing generation.
+          </p>
         </div>
         <label className="flex items-center gap-2 text-sm sm:col-span-2">
           <input
@@ -268,6 +394,15 @@ export function TablesTab({
             onChange={(e) => setIsAccessible(e.target.checked)}
           />
           Accessible (wheelchair-accessible seating)
+        </label>
+        <label className="flex items-center gap-2 text-sm sm:col-span-2">
+          <input
+            type="checkbox"
+            checked={singleSideOnly}
+            onChange={(e) => setSingleSideOnly(e.target.checked)}
+          />
+          Single-Side Only (favor seating just one side here, regardless of the wedding&apos;s
+          overall Side-Mixing setting)
         </label>
         <button
           type="submit"
@@ -454,6 +589,19 @@ export function TablesTab({
                         locked
                       </span>
                     )}
+                    {t.singleSideOnly && (
+                      <span className="ml-2 rounded bg-purple-50 px-1.5 py-0.5 text-xs text-purple-700">
+                        single-side only
+                      </span>
+                    )}
+                    {t.purposeCriterionType && (
+                      <span
+                        className="ml-2 rounded bg-emerald-50 px-1.5 py-0.5 text-xs text-emerald-700"
+                        title="A soft preference for generation (FR-3.7) -- never blocks anyone else from being seated here."
+                      >
+                        favors {criterionValueLabel(t.purposeCriterionType, t.purposeCriterionValue, SIDE_VALUES)}
+                      </span>
+                    )}
                   </p>
                   <p className="text-sm text-neutral-500">
                     {assigned}/{t.capacity} seated ({t.capacity - assigned} remaining)
@@ -470,6 +618,14 @@ export function TablesTab({
                           onChange={(e) => onToggleAccessible(t.id, e.target.checked)}
                         />
                         Accessible
+                      </label>
+                      <label className="flex items-center gap-1.5 text-sm">
+                        <input
+                          type="checkbox"
+                          checked={t.singleSideOnly}
+                          onChange={(e) => onToggleSingleSideOnly(t.id, e.target.checked)}
+                        />
+                        Single-side
                       </label>
                       <button
                         onClick={() => onToggleLock(t.id, !t.isLocked)}
