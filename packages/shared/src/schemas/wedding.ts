@@ -10,6 +10,11 @@ export const createWeddingSchema = z.object({
   eventDate: z.string().date().optional().nullable(),
   venueName: z.string().max(200).optional().nullable(),
   sideMixing: sideMixingEnum.default("BALANCED_MIX"),
+  // FR-1.3a: this wedding's own name for each side (e.g. "Bride"/"Groom") -- a display label
+  // only. Renaming never touches the underlying GuestSide value (BRIDE/GROOM/BOTH) stored on any
+  // guest, so no guest, rule, or assignment is recreated or lost when these change.
+  sideLabel1: z.string().min(1, "Side label is required").max(40).default("Bride"),
+  sideLabel2: z.string().min(1, "Side label is required").max(40).default("Groom"),
 });
 export type CreateWeddingInput = z.infer<typeof createWeddingSchema>;
 
@@ -28,6 +33,9 @@ export interface WeddingDTO {
   emailNotificationsEnabled: boolean;
   // FR-3.4
   sideMixing: SideMixing;
+  // FR-1.3a
+  sideLabel1: string;
+  sideLabel2: string;
   createdAt: string;
   updatedAt: string;
 }

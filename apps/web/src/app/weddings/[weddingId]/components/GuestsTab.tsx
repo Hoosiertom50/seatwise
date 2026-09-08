@@ -2,7 +2,15 @@
 
 import { useRef, useState } from "react";
 import { api, ApiError } from "@/lib/api-client";
-import type { GuestDTO, GuestImportField, GuestImportPreview, GuestTier, RsvpStatus } from "@seatwise/shared";
+import type {
+  GuestDTO,
+  GuestImportField,
+  GuestImportPreview,
+  GuestSide,
+  GuestTier,
+  RsvpStatus,
+  WeddingDTO,
+} from "@seatwise/shared";
 import { parseCsv } from "@seatwise/shared";
 
 const TIERS: GuestTier[] = ["VIP", "FAMILY", "FRIEND", "PLUS_ONE", "OTHER"];
@@ -10,31 +18,53 @@ const RSVP_STATUSES: RsvpStatus[] = ["PENDING", "CONFIRMED", "DECLINED"];
 
 // FR-2.4: which guest fields a column can map to, and how each is labeled in the mapping form.
 // firstName/lastName are the only two that must be mapped before a preview can be requested.
-const IMPORT_FIELDS: { field: GuestImportField; label: string; required?: boolean }[] = [
-  { field: "guestId", label: "Guest ID (to update an existing guest)" },
-  { field: "firstName", label: "First name", required: true },
-  { field: "lastName", label: "Last name", required: true },
-  { field: "partyName", label: "Party / household" },
-  { field: "headcount", label: "Headcount" },
-  { field: "tier", label: "Tier" },
-  { field: "rsvpStatus", label: "RSVP status" },
-  { field: "requiresAccessibleTable", label: "Requires accessible table (yes/no)" },
-  { field: "dayOfAttendance", label: "Attendance (Attending/Not Attending)" },
-  { field: "side", label: "Side (Bride/Groom/Both)" },
-  { field: "notes", label: "Notes" },
-];
+// FR-1.3a: the "side" field's label uses this wedding's own side names rather than a hardcoded
+// "Bride"/"Groom" -- everything else is fixed.
+function buildImportFields(
+  sideLabel1: string,
+  sideLabel2: string
+): { field: GuestImportField; label: string; required?: boolean }[] {
+  return [
+    { field: "guestId", label: "Guest ID (to update an existing guest)" },
+    { field: "firstName", label: "First name", required: true },
+    { field: "lastName", label: "Last name", required: true },
+    { field: "partyName", label: "Party / household" },
+    { field: "headcount", label: "Headcount" },
+    { field: "tier", label: "Tier" },
+    { field: "rsvpStatus", label: "RSVP status" },
+    { field: "requiresAccessibleTable", label: "Requires accessible table (yes/no)" },
+    { field: "dayOfAttendance", label: "Attendance (Attending/Not Attending)" },
+    { field: "side", label: `Side (${sideLabel1}/${sideLabel2}/Both)` },
+    { field: "notes", label: "Notes" },
+  ];
+}
 
 export function GuestsTab({
   weddingId,
+  wedding,
   guests,
   setGuests,
   canEdit,
 }: {
   weddingId: string;
+  wedding: WeddingDTO | null;
   guests: GuestDTO[];
   setGuests: (guests: GuestDTO[]) => void;
   canEdit: boolean;
 }) {
+  const sideLabel1 = wedding?.sideLabel1 ?? "Bride";
+  const sideLabel2 = wedding?.sideLabel2 ?? "Groom";
+  // FR-1.3a: BRIDE/GROOM/BOTH are the stored values everywhere -- these are only the labels
+  // shown for them, so renaming a side never touches which value a guest is actually stored
+  // against.
+  const SIDE_OPTIONS: { value: GuestSide; label: string }[] = [
+    { value: "BRIDE", label: sideLabel1 },
+    { value: "GROOM", label: sideLabel2 },
+    { value: "BOTH", label: "Both" },
+  ];
+  const sideLabelFor = (value: GuestSide) => SIDE_OPTIONS.find((o) => o.value === value)?.label ?? value;
+  const IMPORT_FIELDS = buildImportFields(sideLabel1, sideLabel2);
+
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const [partyName, setPartyName] = useState("");
@@ -42,6 +72,7 @@ export function GuestsTab({
   const [tier, setTier] = useState<GuestTier>("OTHER");
   const [rsvpStatus, setRsvpStatus] = useState<RsvpStatus>("PENDING");
   const [requiresAccessibleTable, setRequiresAccessibleTable] = useState(false);
+  const [side, setSide] = useState<GuestSide>("BOTH");
   const [adding, setAdding] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -175,6 +206,7 @@ export function GuestsTab({
         tier,
         rsvpStatus,
         requiresAccessibleTable,
+        side,
       });
       setGuests([...guests, guest].sort((a, b) => a.lastName.localeCompare(b.lastName)));
       setFirstName("");
@@ -184,6 +216,7 @@ export function GuestsTab({
       setTier("OTHER");
       setRsvpStatus("PENDING");
       setRequiresAccessibleTable(false);
+      setSide("BOTH");
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't add that guest.");
     } finally {
@@ -210,6 +243,19 @@ export function GuestsTab({
     } catch {
       setGuests(prev);
       setError("Couldn't update RSVP status.");
+    }
+  }
+
+  // FR-1.3a/FR-3.4: only the BRIDE/GROOM/BOTH value is ever written here -- this wedding's side
+  // labels only affect how that value is displayed (see SIDE_OPTIONS above).
+  async function onUpdateSide(guestId: string, newSide: GuestSide) {
+    const prev = guests;
+    setGuests(guests.map((g) => (g.id === guestId ? { ...g, side: newSide } : g)));
+    try {
+      await api.patch(`/api/v1/weddings/${weddingId}/guests/${guestId}`, { side: newSide });
+    } catch {
+      setGuests(prev);
+      setError("Couldn't update that guest's side.");
     }
   }
 
@@ -319,6 +365,23 @@ export function GuestsTab({
             {RSVP_STATUSES.map((s) => (
               <option key={s} value={s}>
                 {s}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label htmlFor="guest-side" className="mb-1 block text-sm font-medium">
+            Side
+          </label>
+          <select
+            id="guest-side"
+            className="w-full rounded-md border border-neutral-300 px-3 py-2 text-sm"
+            value={side}
+            onChange={(e) => setSide(e.target.value as GuestSide)}
+          >
+            {SIDE_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
               </option>
             ))}
           </select>
@@ -533,11 +596,24 @@ export function GuestsTab({
                 <p className="text-sm text-neutral-500">
                   {g.partyName ? `${g.partyName} · ` : ""}
                   {g.tier.replace("_", " ")}
+                  {g.side !== "BOTH" ? ` · ${sideLabelFor(g.side)}` : ""}
                 </p>
               </div>
               <div className="flex items-center gap-2">
                 {canEdit ? (
                   <>
+                    <select
+                      aria-label={`Side for ${g.firstName} ${g.lastName}`}
+                      className="rounded-md border border-neutral-300 px-2 py-1 text-sm"
+                      value={g.side}
+                      onChange={(e) => onUpdateSide(g.id, e.target.value as GuestSide)}
+                    >
+                      {SIDE_OPTIONS.map((o) => (
+                        <option key={o.value} value={o.value}>
+                          {o.label}
+                        </option>
+                      ))}
+                    </select>
                     <select
                       aria-label={`RSVP status for ${g.firstName} ${g.lastName}`}
                       className="rounded-md border border-neutral-300 px-2 py-1 text-sm"

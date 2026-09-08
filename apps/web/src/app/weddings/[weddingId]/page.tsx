@@ -126,7 +126,13 @@ export default function WeddingDetailPage() {
       </div>
 
       {tab === "guests" && (
-        <GuestsTab weddingId={weddingId} guests={guests} setGuests={setGuests} canEdit={canEdit} />
+        <GuestsTab
+          weddingId={weddingId}
+          wedding={wedding}
+          guests={guests}
+          setGuests={setGuests}
+          canEdit={canEdit}
+        />
       )}
       {tab === "rules" && <RulesTab weddingId={weddingId} guests={guests} canEdit={canEdit} />}
       {tab === "tables" && <TablesTab weddingId={weddingId} guests={guests} canEdit={canEdit} />}

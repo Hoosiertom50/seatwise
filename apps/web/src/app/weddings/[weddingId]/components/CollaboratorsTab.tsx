@@ -31,6 +31,11 @@ export function CollaboratorsTab({
   const [adding, setAdding] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [savingSettings, setSavingSettings] = useState(false);
+  // FR-1.3a: this wedding's own names for its two sides -- edited here, then PATCHed as a pure
+  // label rename. Local input state so typing doesn't PATCH on every keystroke; saved on blur.
+  const [sideLabel1, setSideLabel1] = useState(wedding?.sideLabel1 ?? "Bride");
+  const [sideLabel2, setSideLabel2] = useState(wedding?.sideLabel2 ?? "Groom");
+  const [savingLabels, setSavingLabels] = useState(false);
 
   useEffect(() => {
     api
@@ -39,6 +44,38 @@ export function CollaboratorsTab({
       .catch(() => setError("Couldn't load collaborators."))
       .finally(() => setLoading(false));
   }, [weddingId]);
+
+  useEffect(() => {
+    if (wedding) {
+      setSideLabel1(wedding.sideLabel1);
+      setSideLabel2(wedding.sideLabel2);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wedding?.id]);
+
+  async function onSaveSideLabels() {
+    if (!wedding) return;
+    const label1 = sideLabel1.trim() || "Bride";
+    const label2 = sideLabel2.trim() || "Groom";
+    if (label1 === wedding.sideLabel1 && label2 === wedding.sideLabel2) return;
+    setSavingLabels(true);
+    setError(null);
+    try {
+      const { wedding: updated } = await api.patch<{ wedding: WeddingDTO }>(
+        `/api/v1/weddings/${weddingId}`,
+        { sideLabel1: label1, sideLabel2: label2 }
+      );
+      setWedding(updated);
+      setSideLabel1(updated.sideLabel1);
+      setSideLabel2(updated.sideLabel2);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Couldn't save the side labels.");
+      setSideLabel1(wedding.sideLabel1);
+      setSideLabel2(wedding.sideLabel2);
+    } finally {
+      setSavingLabels(false);
+    }
+  }
 
   async function onAdd(e: React.FormEvent) {
     e.preventDefault();
@@ -164,6 +201,47 @@ export function CollaboratorsTab({
               />
               Also send email notifications for this wedding (in-app notifications always happen)
             </label>
+          )}
+
+          {wedding && (
+            <div className="mb-8 rounded-lg border border-neutral-200 p-4">
+              <h3 className="mb-1 text-sm font-medium">Side labels</h3>
+              <p className="mb-3 text-sm text-neutral-500">
+                Name this wedding&apos;s two sides — used anywhere a guest&apos;s side is shown or
+                set. Renaming never touches any guest, rule, or seat assignment; it&apos;s just a
+                label.
+              </p>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div>
+                  <label htmlFor="side-label-1" className="mb-1 block text-sm font-medium">
+                    Side 1
+                  </label>
+                  <input
+                    id="side-label-1"
+                    className="w-full rounded-md border border-neutral-300 px-3 py-2 text-sm"
+                    value={sideLabel1}
+                    onChange={(e) => setSideLabel1(e.target.value)}
+                    onBlur={onSaveSideLabels}
+                    maxLength={40}
+                    disabled={savingLabels}
+                  />
+                </div>
+                <div>
+                  <label htmlFor="side-label-2" className="mb-1 block text-sm font-medium">
+                    Side 2
+                  </label>
+                  <input
+                    id="side-label-2"
+                    className="w-full rounded-md border border-neutral-300 px-3 py-2 text-sm"
+                    value={sideLabel2}
+                    onChange={(e) => setSideLabel2(e.target.value)}
+                    onBlur={onSaveSideLabels}
+                    maxLength={40}
+                    disabled={savingLabels}
+                  />
+                </div>
+              </div>
+            </div>
           )}
         </>
       )}

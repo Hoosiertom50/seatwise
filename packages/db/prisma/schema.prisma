@@ -65,6 +65,12 @@ model Wedding {
   emailNotificationsEnabled Boolean @default(true)
   // FR-3.4
   sideMixing SideMixingSetting @default(BALANCED_MIX)
+  // FR-1.3a: each wedding names its own two sides (e.g. "Bride"/"Groom", or any other pair) --
+  // purely a display label. The underlying GuestSide value a guest is stored against (BRIDE /
+  // GROOM / BOTH) never changes when these are renamed, so renaming never touches a guest, rule,
+  // or seat assignment -- it only changes what's shown wherever a BRIDE/GROOM value is displayed.
+  sideLabel1 String        @default("Bride")
+  sideLabel2 String        @default("Groom")
   createdAt DateTime      @default(now())
   updatedAt DateTime      @updatedAt
 
