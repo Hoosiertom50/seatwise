@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import {
   generateSeatingPlan,
   RULE_WEIGHT_CONFIG_VERSION,
+  generatePlanVersionSchema,
   type EngineSideMixing,
   type EngineGuestTier,
   type EngineAgeCategory,
@@ -17,7 +18,7 @@ import {
   getWeddingById,
 } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
-import { errorResponse } from "@/lib/api-response";
+import { errorResponse, zodErrorResponse } from "@/lib/api-response";
 import { requireAccess } from "@/lib/access";
 
 type Params = { params: Promise<{ weddingId: string }> };
@@ -29,6 +30,14 @@ export async function POST(req: NextRequest, { params }: Params) {
   const { weddingId } = await params;
   const access = await requireAccess(weddingId, user.id, "EDIT");
   if ("error" in access) return access.error;
+
+  // FR-5.6: an empty/absent body defaults every field to unset, which the schema treats as
+  // makeCurrent's own default (true) below -- existing callers that generate with no body at all
+  // keep their old "always current" behavior unchanged.
+  const body = await req.json().catch(() => ({}));
+  const parsedBody = generatePlanVersionSchema.safeParse(body);
+  if (!parsedBody.success) return zodErrorResponse(parsedBody.error);
+  const makeCurrent = parsedBody.data.makeCurrent ?? true;
 
   const [wedding, guests, relationships, tables, currentAssignments] = await Promise.all([
     getWeddingById(weddingId),
@@ -113,6 +122,7 @@ export async function POST(req: NextRequest, { params }: Params) {
     unassignedGuestIds: result.unassignedGuestIds,
     sideMixingSetting: sideMixing,
     ruleConfigVersion: RULE_WEIGHT_CONFIG_VERSION,
+    makeCurrent,
   });
 
   const planVersion = await getPlanVersionDetail(planVersionId, weddingId);
@@ -121,5 +131,7 @@ export async function POST(req: NextRequest, { params }: Params) {
   }
   planVersion.warnings = result.warnings;
 
-  return NextResponse.json({ planVersion }, { status: 201 });
+  // FR-5.3: reported once, right alongside the version it was computed for -- same lifecycle as
+  // `warnings` above (surfaced in this response only, not persisted for a later reload).
+  return NextResponse.json({ planVersion, scoreReport: result.scoreReport }, { status: 201 });
 }

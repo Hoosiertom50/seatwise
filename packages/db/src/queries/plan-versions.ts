@@ -1,7 +1,19 @@
 import { randomUUID } from "crypto";
 import { pool } from "../pool";
 import { notifyWeddingCollaborators } from "./notifications";
-import { RULE_WEIGHT_CONFIG } from "@seatwise/shared";
+import { RULE_WEIGHT_CONFIG, RULE_WEIGHT_CONFIG_VERSION } from "@seatwise/shared";
+
+// TS-3 (FR-0.2 AC2): a soft-rule warning must name "the applied weighting-configuration version"
+// -- this plan version's own recorded one if it has one (set at generation time), or the current
+// live version if it doesn't (e.g. a version restored/created before ruleConfigVersion existed,
+// or one that's never been regenerated since).
+async function getEffectiveRuleConfigVersion(planVersionId: string): Promise<number> {
+  const { rows } = await pool.query(
+    `SELECT "ruleConfigVersion" FROM "plan_versions" WHERE id = $1`,
+    [planVersionId]
+  );
+  return (rows[0]?.ruleConfigVersion as number | null) ?? RULE_WEIGHT_CONFIG_VERSION;
+}
 
 export interface PlanVersionRow {
   id: string;
@@ -126,8 +138,13 @@ export async function createPlanVersionWithAssignments(
     // used" -- optional so older call sites (and tests) that don't pass these still work.
     sideMixingSetting?: string;
     ruleConfigVersion?: number;
+    // FR-5.6: the planner's upfront choice of whether this run becomes the new Current version
+    // (replacing whichever version was Current before) or a non-replacing Comparison Draft that
+    // sits alongside it. Defaults to true so every existing call site keeps its old behavior.
+    makeCurrent?: boolean;
   }
 ): Promise<string> {
+  const makeCurrent = input.makeCurrent ?? true;
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -138,10 +155,20 @@ export async function createPlanVersionWithAssignments(
     );
     const versionNumber: number = versionRows[0].next;
 
+    // FR-5.6: unset whatever was Current first (same transaction, before the insert below) so the
+    // partial unique index on ("weddingId") WHERE "isCurrent" never sees two true rows at once.
+    if (makeCurrent) {
+      await client.query(
+        `UPDATE "plan_versions" SET "isCurrent" = false WHERE "weddingId" = $1 AND "isCurrent"`,
+        [weddingId]
+      );
+    }
+
     const planVersionId = randomUUID();
     await client.query(
-      `INSERT INTO "plan_versions" (id, "weddingId", "versionNumber", status, "isComplete", "sideMixingSetting", "ruleConfigVersion")
-       VALUES ($1, $2, $3, 'DRAFT', $4, $5, $6)`,
+      `INSERT INTO "plan_versions"
+         (id, "weddingId", "versionNumber", status, "isComplete", "sideMixingSetting", "ruleConfigVersion", "isCurrent")
+       VALUES ($1, $2, $3, 'DRAFT', $4, $5, $6, $7)`,
       [
         planVersionId,
         weddingId,
@@ -149,6 +176,7 @@ export async function createPlanVersionWithAssignments(
         input.isComplete,
         input.sideMixingSetting ?? null,
         input.ruleConfigVersion ?? null,
+        makeCurrent,
       ]
     );
 
@@ -173,13 +201,14 @@ export async function createPlanVersionWithAssignments(
       );
     }
 
+    const draftSuffix = makeCurrent ? "" : " (saved as a comparison draft, not made Current)";
     const description =
-      input.assignments.length > 0
+      (input.assignments.length > 0
         ? `Generated version ${versionNumber}: seated ${input.assignments.length} guest(s)` +
           (input.unassignedGuestIds.length > 0
             ? `, ${input.unassignedGuestIds.length} left unassigned.`
             : ".")
-        : `Generated version ${versionNumber}: no guests could be seated.`;
+        : `Generated version ${versionNumber}: no guests could be seated.`) + draftSuffix;
     await client.query(
       `INSERT INTO "change_history_entries" (id, "planVersionId", action, description)
        VALUES ($1, $2, 'GENERATE', $3)`,
@@ -196,8 +225,10 @@ export async function createPlanVersionWithAssignments(
   }
 }
 
-// FR-7.4: a locked guest's *current* table (from the latest version, whether or not it's the
-// one about to be regenerated) is what a fresh generation tries to preserve.
+// FR-7.4: a locked guest's *current* table (from the Current Plan Version, whether or not it's
+// the one about to be regenerated) is what a fresh generation tries to preserve. Reads the
+// isCurrent flag (FR-5.6) rather than the highest versionNumber, so a Comparison Draft never
+// gets treated as the source of truth for locks just because it happens to be newer.
 export async function getLatestAssignmentsForWedding(
   weddingId: string
 ): Promise<Map<string, string>> {
@@ -205,8 +236,7 @@ export async function getLatestAssignmentsForWedding(
     `SELECT sa."guestId", sa."seatingTableId" AS "tableId"
      FROM "seat_assignments" sa
      JOIN "plan_versions" pv ON pv.id = sa."planVersionId"
-     WHERE pv."weddingId" = $1
-       AND pv."versionNumber" = (SELECT MAX("versionNumber") FROM "plan_versions" WHERE "weddingId" = $1)`,
+     WHERE pv."weddingId" = $1 AND pv."isCurrent"`,
     [weddingId]
   );
   return new Map(rows.map((r) => [r.guestId, r.tableId]));
@@ -219,7 +249,7 @@ export async function getLatestAssignmentsForWedding(
 // plan from incomplete to complete -- nothing else recomputes that on delete today.
 export async function recomputeCurrentPlanCompleteness(weddingId: string): Promise<void> {
   const { rows: planRows } = await pool.query(
-    `SELECT id FROM "plan_versions" WHERE "weddingId" = $1 ORDER BY "versionNumber" DESC LIMIT 1`,
+    `SELECT id FROM "plan_versions" WHERE "weddingId" = $1 AND "isCurrent" LIMIT 1`,
     [weddingId]
   );
   const planVersionId: string | undefined = planRows[0]?.id;
@@ -245,8 +275,7 @@ export async function recomputeCurrentPlanCompleteness(weddingId: string): Promi
 export async function listPlanVersionsForWedding(weddingId: string): Promise<PlanVersionRow[]> {
   const { rows } = await pool.query(
     `SELECT pv.id, pv."weddingId", pv."versionNumber", pv.label, pv.status, pv."isComplete",
-            pv."approvedAt", pv."createdAt", pv.revision,
-            (pv."versionNumber" = (SELECT MAX("versionNumber") FROM "plan_versions" WHERE "weddingId" = pv."weddingId")) AS "isCurrent",
+            pv."approvedAt", pv."createdAt", pv.revision, pv."isCurrent",
             COALESCE(sa.count, 0)::int AS "assignedGuestCount",
             GREATEST(
               (SELECT COUNT(*)::int FROM "guests" WHERE "weddingId" = pv."weddingId" AND "dayOfAttendance" = 'ATTENDING') -
@@ -271,19 +300,18 @@ export async function listPlanVersionsForWedding(weddingId: string): Promise<Pla
 // otherwise have no reason to touch plan_versions at all.
 export async function getCurrentPlanVersionStatus(weddingId: string): Promise<string | null> {
   const { rows } = await pool.query(
-    `SELECT status FROM "plan_versions" WHERE "weddingId" = $1 ORDER BY "versionNumber" DESC LIMIT 1`,
+    `SELECT status FROM "plan_versions" WHERE "weddingId" = $1 AND "isCurrent" LIMIT 1`,
     [weddingId]
   );
   return rows[0]?.status ?? null;
 }
 
-// FR-6.4: status can only ever change on the Current Plan Version (the highest versionNumber
-// for the wedding) — approving or reviewing an old, superseded version makes no sense and isn't
-// allowed.
+// FR-6.4: status can only ever change on the Current Plan Version — approving or reviewing an
+// old, superseded version (or an as-yet-unpromoted Comparison Draft, FR-5.6) makes no sense and
+// isn't allowed.
 async function isCurrentVersion(id: string, weddingId: string): Promise<boolean> {
   const { rows } = await pool.query(
-    `SELECT ("versionNumber" = (SELECT MAX("versionNumber") FROM "plan_versions" WHERE "weddingId" = $2)) AS "isCurrent"
-     FROM "plan_versions" WHERE id = $1 AND "weddingId" = $2`,
+    `SELECT "isCurrent" FROM "plan_versions" WHERE id = $1 AND "weddingId" = $2`,
     [id, weddingId]
   );
   return rows[0]?.isCurrent ?? false;
@@ -385,7 +413,7 @@ export async function getPlanVersionDetail(
   const { rows: versionRows } = await pool.query(
     `SELECT pv.id, pv."weddingId", pv."versionNumber", pv.label, pv.status, pv."isComplete",
             pv."approvedAt", pv."createdAt", pv."sideMixingSetting", pv."ruleConfigVersion", pv.revision,
-            (pv."versionNumber" = (SELECT MAX("versionNumber") FROM "plan_versions" WHERE "weddingId" = $2)) AS "isCurrent",
+            pv."isCurrent",
             restored_from."versionNumber" AS "restoredFromVersionNumber"
      FROM "plan_versions" pv
      LEFT JOIN "plan_versions" restored_from ON restored_from.id = pv."restoredFromId"
@@ -638,6 +666,9 @@ export async function moveGuestAssignment(
   }
 
   // --- Soft rules — allowed, but returned as a non-blocking warning. ---
+  // FR-0.2 AC2: every such warning names the affected preference and references the applied
+  // weighting-configuration version.
+  const ruleConfigVersionForWarnings = await getEffectiveRuleConfigVersion(planVersionId);
   const warnings: string[] = [];
   for (const member of unit) {
     const avoids = avoidByGuest.get(member.id);
@@ -646,7 +677,8 @@ export async function moveGuestAssignment(
       if (avoids.has(occupant.guestId)) {
         warnings.push(
           `${member.name} and ${occupant.name} will be seated together at "${targetTable.label}" ` +
-            `despite an "avoid" preference between them.`
+            `despite an "avoid" preference between them (weighting-configuration version ` +
+            `${ruleConfigVersionForWarnings}).`
         );
       }
     }
@@ -865,7 +897,7 @@ export async function setGuestAttendance(
   if (!guest) throw new AttendanceError("Guest not found.");
 
   const { rows: currentRows } = await pool.query(
-    `SELECT id FROM "plan_versions" WHERE "weddingId" = $1 ORDER BY "versionNumber" DESC LIMIT 1`,
+    `SELECT id FROM "plan_versions" WHERE "weddingId" = $1 AND "isCurrent" LIMIT 1`,
     [weddingId]
   );
   const currentPlanVersionId: string | undefined = currentRows[0]?.id;
@@ -1161,6 +1193,9 @@ export async function swapGuestAssignments(
   }
 
   // --- Soft rules — allowed, non-blocking warning, both directions. ---
+  // FR-0.2 AC2: every such warning names the affected preference and references the applied
+  // weighting-configuration version.
+  const ruleConfigVersionForWarnings = await getEffectiveRuleConfigVersion(planVersionId);
   const warnings: string[] = [];
   for (const member of unitB) {
     const avoids = avoidByGuest.get(member.id);
@@ -1169,7 +1204,8 @@ export async function swapGuestAssignments(
       if (avoids.has(occupant.guestId)) {
         warnings.push(
           `${member.name} and ${occupant.name} will be seated together at "${tableA.label}" ` +
-            `despite an "avoid" preference between them.`
+            `despite an "avoid" preference between them (weighting-configuration version ` +
+            `${ruleConfigVersionForWarnings}).`
         );
       }
     }
@@ -1181,7 +1217,8 @@ export async function swapGuestAssignments(
       if (avoids.has(occupant.guestId)) {
         warnings.push(
           `${member.name} and ${occupant.name} will be seated together at "${tableB.label}" ` +
-            `despite an "avoid" preference between them.`
+            `despite an "avoid" preference between them (weighting-configuration version ` +
+            `${ruleConfigVersionForWarnings}).`
         );
       }
     }
@@ -1413,8 +1450,10 @@ export async function previewPlanVersionRestore(
 }
 
 // FR-9.4: actually perform the restore — creates a new, numbered version (the source and every
-// version/history entry in between are never touched) which becomes Current simply because it's
-// the newest version that exists.
+// version/history entry in between are never touched) which becomes Current -- explicitly now
+// (FR-5.6 means "newest version" and "Current" are no longer the same thing), the same way a
+// plain "make current" generation does: unset whatever was Current first, in the same
+// transaction, before the new row is inserted.
 export async function restorePlanVersion(
   sourceVersionId: string,
   weddingId: string,
@@ -1433,10 +1472,15 @@ export async function restorePlanVersion(
     );
     const versionNumber: number = versionRows[0].next;
 
+    await client.query(
+      `UPDATE "plan_versions" SET "isCurrent" = false WHERE "weddingId" = $1 AND "isCurrent"`,
+      [weddingId]
+    );
+
     newVersionId = randomUUID();
     await client.query(
-      `INSERT INTO "plan_versions" (id, "weddingId", "versionNumber", status, "isComplete", "restoredFromId")
-       VALUES ($1, $2, $3, 'DRAFT', $4, $5)`,
+      `INSERT INTO "plan_versions" (id, "weddingId", "versionNumber", status, "isComplete", "restoredFromId", "isCurrent")
+       VALUES ($1, $2, $3, 'DRAFT', $4, $5, true)`,
       [newVersionId, weddingId, versionNumber, result.isComplete, sourceVersionId]
     );
 
@@ -1693,7 +1737,7 @@ export async function revalidateGuestAssignment(
   guestId: string
 ): Promise<{ guestName: string; flagged: boolean } | null> {
   const { rows: planRows } = await pool.query(
-    `SELECT id FROM "plan_versions" WHERE "weddingId" = $1 ORDER BY "versionNumber" DESC LIMIT 1`,
+    `SELECT id FROM "plan_versions" WHERE "weddingId" = $1 AND "isCurrent" LIMIT 1`,
     [weddingId]
   );
   const planVersionId: string | undefined = planRows[0]?.id;

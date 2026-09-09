@@ -232,7 +232,7 @@ export async function commitGuestImport(
   // FR-2.9: the Current Plan Version, if any -- fetched once up front since import never
   // generates a new version itself, so it's stable for the whole commit below.
   const { rows: planRows } = await pool.query(
-    `SELECT id FROM "plan_versions" WHERE "weddingId" = $1 ORDER BY "versionNumber" DESC LIMIT 1`,
+    `SELECT id FROM "plan_versions" WHERE "weddingId" = $1 AND "isCurrent" LIMIT 1`,
     [weddingId]
   );
   const planVersionId: string | undefined = planRows[0]?.id;

@@ -47,7 +47,10 @@ export function DayOfTab({
       api.get<{ planVersions: PlanVersionDTO[] }>(`/api/v1/weddings/${weddingId}/plan-versions`),
     ]);
     setTables(tableList);
-    const current = planVersions[0]; // listed newest-first — the first entry is always Current.
+    // FR-5.6 (TS-8): a Comparison Draft can now have a higher versionNumber than Current without
+    // replacing it, so "listed newest-first" no longer implies "first entry is Current" — find it
+    // by isCurrent explicitly. Day-of mode must always act on the real Current version.
+    const current = planVersions.find((v) => v.isCurrent) ?? planVersions[0];
     if (current) {
       const d = await api.get<{ planVersion: PlanVersionDetailDTO }>(
         `/api/v1/weddings/${weddingId}/plan-versions/${current.id}`
