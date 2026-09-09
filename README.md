@@ -833,6 +833,19 @@ planner edit — that's what makes the badge mean what it says) and can copy/res
 guest's link on demand (FR-12.4); the raw token itself is deliberately never returned by the
 normal guest read endpoints, only by that one dedicated, EDIT-gated endpoint.
 
+**TS-18 (Day-Of Timeline / Run-of-Show) is done.** A per-wedding, chronological schedule of
+day-of events (ceremony, processional, toasts, cake cutting, ...) in its own `timeline_entries`
+table — no foreign keys pointing in from guests/tables/rules/plan versions, so it's genuinely
+independent of the seating plan in both directions (FR-13.1/FR-13.2). Each entry stores a plain
+zero-padded 24-hour "HH:MM" time label rather than a real TIME/TIMESTAMP — a run-of-show is a flat
+list of clock-face labels, not datetimes — and entries are always listed by `(time, sortOrder)`;
+"reorder" is deliberately scoped to only reshuffle entries sharing the *exact same* time, which is
+what keeps the list genuinely "always chronological" instead of a free-floating manual order that
+could contradict the displayed times. Comments gained a third target type, `TIMELINE_ENTRY`,
+alongside `GUEST`/`TABLE` (FR-13.3), reusing the same nullable-target-plus-captured-label pattern
+so a comment on a since-removed entry still stands. Access follows the identical View/Comment/Edit
+rules as every other tab.
+
 ## Mobile later
 
 Nothing here should need to change to add an iOS/Android app: point a React Native/Expo app (or
