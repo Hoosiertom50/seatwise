@@ -798,6 +798,27 @@ at all — it's been fully wired to Resend since the TS-13 pass described above 
 step is an account-level one: sign up for a free Resend account, verify a sending domain/address,
 and set `RESEND_API_KEY`/`RESEND_FROM_EMAIL` in `apps/web/.env` (see the setup section above).
 
+## The planner-pivot roadmap (new, post-TS-15)
+
+Beyond the original requirements doc closed out above, a September 2026 stakeholder interview
+confirmed a bigger-picture pivot: from a couple-facing tool used once per wedding, to a
+professional platform a wedding planner uses daily across dozens of active client weddings at
+once. Six new Jira stories (TS-16 through TS-21) capture this, in priority order, under the same
+TS-2 Workstream — see the shared roadmap doc for full context and the open questions still being
+decided.
+
+**TS-16 (Planner Portfolio & Multi-Client Account Model) is in progress.** FR-11.1
+(sortable/filterable/searchable dashboard), FR-11.2 (per-row plan status and unassigned/Needs
+Reassignment counts), and FR-11.3 (a "needs attention soonest" default ordering, not a plain
+column sort) are built — `GET /api/v1/weddings` now returns a `WeddingSummaryDTO` per wedding,
+computed via a `LEFT JOIN LATERAL` against each wedding's Current Plan Version, and the dashboard
+filters/sorts/searches that list client-side (deliberately, not a query-param API — see the code
+comment in `listWeddingsWithSummaryForUser` for why that's the right tradeoff at the stated
+15-50+-wedding portfolio scale). FR-11.4 — reviewing the create-wedding flow's language for
+planner-as-owner — has a first pass (explicit copy on the create form), but the deeper question of
+whether the existing Couple role gets relabeled or rebuilt for the planner-first model is still
+open, so TS-16 isn't closed yet.
+
 ## Mobile later
 
 Nothing here should need to change to add an iOS/Android app: point a React Native/Expo app (or

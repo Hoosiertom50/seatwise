@@ -44,3 +44,14 @@ export interface WeddingDTO {
   createdAt: string;
   updatedAt: string;
 }
+
+// FR-11.2 (TS-16): the planner-portfolio dashboard's row shape -- everything WeddingDTO has, plus
+// the Current Plan Version's status and its unassigned/Needs Reassignment counts, so a planner can
+// tell whether a wedding needs attention without opening it. Only the dashboard list endpoint
+// (`GET /api/v1/weddings`) returns this; every other wedding read still returns plain WeddingDTO.
+export interface WeddingSummaryDTO extends WeddingDTO {
+  // null: no plan version has been generated for this wedding yet ("No plan yet").
+  planStatus: "DRAFT" | "IN_REVIEW" | "APPROVED" | null;
+  unassignedCount: number;
+  needsReassignmentCount: number;
+}

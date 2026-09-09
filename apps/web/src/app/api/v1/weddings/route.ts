@@ -1,14 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createWeddingSchema } from "@seatwise/shared";
-import { createWedding, listWeddingsAccessibleToUser } from "@seatwise/db";
+import { createWedding, listWeddingsWithSummaryForUser } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
 import { errorResponse, zodErrorResponse } from "@/lib/api-response";
 
+// FR-11.1/FR-11.2: the dashboard's list now carries each wedding's plan status and
+// unassigned/Needs Reassignment counts (WeddingSummaryDTO), not just the plain WeddingDTO fields.
 export async function GET(req: NextRequest) {
   const user = await getAuthUser(req);
   if (!user) return errorResponse("Not authenticated", 401);
 
-  const weddings = await listWeddingsAccessibleToUser(user.id);
+  const weddings = await listWeddingsWithSummaryForUser(user.id);
   return NextResponse.json({ weddings });
 }
 

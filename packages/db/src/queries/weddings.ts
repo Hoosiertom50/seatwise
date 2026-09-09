@@ -21,6 +21,17 @@ export interface WeddingRow {
   updatedAt: Date;
 }
 
+// FR-11.2: the planner-portfolio dashboard's row-level summary (Current Plan Version's status,
+// plus its unassigned/Needs Reassignment counts) so a planner can see "does this wedding need
+// attention" without opening it. Only listWeddingsWithSummaryForUser below returns these three --
+// every other read in this file returns the plain WeddingRow, unchanged.
+export interface WeddingSummaryRow extends WeddingRow {
+  // null: no plan version has been generated for this wedding yet.
+  planStatus: string | null;
+  unassignedCount: number;
+  needsReassignmentCount: number;
+}
+
 const SELECT_WITH_GUEST_COUNT = `
   SELECT w.id, w."ownerId", w.name, w."eventDate"::text AS "eventDate", w."venueName", w.note,
          w.status, w."emailNotificationsEnabled", w."sideMixing", w."sideLabel1", w."sideLabel2",
@@ -30,6 +41,44 @@ const SELECT_WITH_GUEST_COUNT = `
   LEFT JOIN (
     SELECT "weddingId", COUNT(*) AS count FROM "guests" GROUP BY "weddingId"
   ) g ON g."weddingId" = w.id
+`;
+
+// FR-11.1/FR-11.2: same base as SELECT_WITH_GUEST_COUNT, plus each wedding's Current Plan Version
+// (highest versionNumber, via LATERAL -- there's at most one "current" per wedding so this can't
+// fan out rows the way a plain join could) and, scoped to that one version, the same
+// unassigned/needsReassignment counting formula used everywhere else a plan version's completeness
+// is checked (see plan-versions.ts). When a wedding has no plan version yet, cpv.id is NULL --
+// "planStatus" comes back null (rendered as "No plan yet"), "needsReassignmentCount" correctly
+// comes back 0 (nothing to reassign without a plan), and "unassignedCount" correctly falls back to
+// every Attending guest (nothing's assigned to anything, so all of them are unassigned) since the
+// NOT EXISTS below never matches a NULL planVersionId.
+const SELECT_WITH_SUMMARY = `
+  SELECT w.id, w."ownerId", w.name, w."eventDate"::text AS "eventDate", w."venueName", w.note,
+         w.status, w."emailNotificationsEnabled", w."sideMixing", w."sideLabel1", w."sideLabel2",
+         w."createdAt", w."updatedAt",
+         COALESCE(g.count, 0)::int AS "guestCount",
+         cpv.status AS "planStatus",
+         COALESCE(unassigned.count, 0)::int AS "unassignedCount",
+         COALESCE(reassign.count, 0)::int AS "needsReassignmentCount"
+  FROM "weddings" w
+  LEFT JOIN (
+    SELECT "weddingId", COUNT(*) AS count FROM "guests" GROUP BY "weddingId"
+  ) g ON g."weddingId" = w.id
+  LEFT JOIN LATERAL (
+    SELECT id, status FROM "plan_versions" pv
+    WHERE pv."weddingId" = w.id ORDER BY pv."versionNumber" DESC LIMIT 1
+  ) cpv ON true
+  LEFT JOIN LATERAL (
+    SELECT COUNT(*)::int AS count FROM "guests" ag
+    WHERE ag."weddingId" = w.id AND ag."dayOfAttendance" = 'ATTENDING'
+      AND NOT EXISTS (
+        SELECT 1 FROM "seat_assignments" sa WHERE sa."planVersionId" = cpv.id AND sa."guestId" = ag.id
+      )
+  ) unassigned ON true
+  LEFT JOIN LATERAL (
+    SELECT COUNT(*)::int AS count FROM "seat_assignments" sa2
+    WHERE sa2."planVersionId" = cpv.id AND sa2."needsReassignment" = true
+  ) reassign ON true
 `;
 
 export async function createWedding(
@@ -93,6 +142,24 @@ export async function getWeddingById(id: string): Promise<WeddingRow | null> {
 export async function listWeddingsAccessibleToUser(userId: string): Promise<WeddingRow[]> {
   const { rows } = await pool.query(
     `${SELECT_WITH_GUEST_COUNT}
+     WHERE w."ownerId" = $1
+        OR w.id IN (SELECT "weddingId" FROM "wedding_collaborators" WHERE "userId" = $1)
+     ORDER BY w."createdAt" DESC`,
+    [userId]
+  );
+  return rows;
+}
+
+// FR-11.1/FR-11.2: the planner-portfolio dashboard's version of the above -- same access rule
+// (owned or collaborator-on), enriched with each wedding's plan status and unassigned/Needs
+// Reassignment counts. Sorting, filtering, and searching this list all happen client-side (see
+// dashboard/page.tsx) rather than as query params here: at the stated portfolio scale (dozens,
+// 15-50+ weddings per planner) filtering an already-fetched array is instant and far simpler than
+// a parameterized WHERE/ORDER BY builder -- this can grow a real query-param API later if a
+// planner's portfolio ever gets large enough for that to matter.
+export async function listWeddingsWithSummaryForUser(userId: string): Promise<WeddingSummaryRow[]> {
+  const { rows } = await pool.query(
+    `${SELECT_WITH_SUMMARY}
      WHERE w."ownerId" = $1
         OR w.id IN (SELECT "weddingId" FROM "wedding_collaborators" WHERE "userId" = $1)
      ORDER BY w."createdAt" DESC`,
