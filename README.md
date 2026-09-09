@@ -29,8 +29,10 @@ rather than a second project.
 
 ```
 apps/web/            Next.js app — pages + /api/v1 route handlers
-packages/shared/      Zod schemas & shared TS types (validation rules, DTOs) — importable by
-                       the web app today and a React Native/Expo app later, unchanged
+apps/mobile/          Expo/React Native app (TS-21) — on-site floor-plan view/adjust only, see its
+                       own section below
+packages/shared/      Zod schemas & shared TS types (validation rules, DTOs) — imported unchanged
+                       by both apps/web and apps/mobile
 packages/db/           Data model (Prisma schema) + the query layer the API routes use
 ```
 
@@ -898,9 +900,94 @@ tab (guests, tables, timeline) — this is ordinary planner data entry, not an a
 setting — and every vendor edit carries FR-7.7's optimistic-concurrency protection, same as tables
 and guests. Verified in `test_budget.py`.
 
-## Mobile later
+## Mobile app (`apps/mobile`, TS-21)
 
-Nothing here should need to change to add an iOS/Android app: point a React Native/Expo app (or
-a Capacitor-wrapped build of this same web app, if that's the faster route when the time comes)
-at the same `/api/v1` endpoints, reuse `@seatwise/shared` for validation and types, and store the
-token from the auth response instead of relying on the cookie.
+An Expo/React Native TypeScript app, scoped exactly to TS-21's FR-16.1/FR-16.2: a planner viewing
+and adjusting the current wedding's seating plan on-site, touch-first, tolerant of unreliable venue
+wifi. FR-16.3 explicitly defers everything else (guest list, budget, RSVP, timeline, the portfolio
+dashboard) to a later story, so this is deliberately three screens — log in, pick a wedding, the
+floor plan — not a mobile port of the whole web app.
+
+**Two open questions the ticket itself flagged as needing a design call, resolved and documented
+here (also posted as a dev note on TS-21):**
+
+- **Framework: React Native/Expo, not a Capacitor-wrapped web build.** FR-16.2's offline
+  requirement — cache the current plan locally, queue moves made offline, sync them against the
+  existing FR-7.7 revision/conflict contract once connectivity returns — is a real local-storage-
+  plus-background-sync problem, not a "hide the browser chrome" problem, so a webview wrapper
+  around the existing Next.js UI would fight the requirement rather than serve it. `@seatwise/shared`
+  has zero Node-only dependencies (only `zod`), so it imports into Expo unchanged for validation and
+  DTO types — nothing about the shared package needed to change to add this app, exactly as this
+  README used to say it wouldn't.
+- **Touch interaction: tap-to-select-guest, then tap-to-place-at-table, not a literal free-drag
+  port.** The ticket's own context note flags that "touch-first drag-and-drop needs its own design,
+  not just bigger hit targets" — a literal drag gesture degrades badly on a real phone at a crowded
+  table layout (small drop targets, a thumb covering the destination mid-drag). Tapping a guest chip
+  to select them, then tapping a table to move them there, is the same underlying move the web
+  Plan tab already does one at a time (`POST .../plan-versions/:id/assignments`, unchanged) — only
+  the gesture is simpler for touch, not the action or its validation.
+
+**What's built:**
+
+- **Auth**: `src/api/auth.ts` — the exact same `/api/v1/auth/login` endpoint the web app's login
+  form calls, but this client keeps the `token` field from the JSON response and sends it back as
+  `Authorization: Bearer <token>` on every request (`src/api/client.ts`), instead of relying on the
+  httpOnly cookie the web app uses — precisely the mobile contract `apps/web/src/lib/auth.ts`'s own
+  comment on `getAuthUser()` already described. The session (user + token) persists in
+  `AsyncStorage` so a planner isn't asked to log in again every time they open the app at the venue.
+- **Wedding picker**: a minimal list (`GET /api/v1/weddings`) — just enough to choose which
+  wedding's floor plan to load, not a dashboard. FR-16.3 stays out of scope here on purpose.
+- **Floor plan screen**: fetches tables, guests, and the current plan version (same
+  `GET .../plan-versions` → take the first result, which is always the highest `versionNumber` and
+  therefore current — see the TS-9/TS-10 sections above), merges them into a table-by-table view
+  reusing each table's saved `positionX`/`positionY` from FR-7.1 so the picture matches the web
+  floor plan, and renders guest chips per table plus an Unassigned tray. Tap a guest, then tap a
+  table (or the Unassigned tray) to move them — same `POST .../assignments` endpoint, same
+  hard/soft-rule validation and `expectedRevision`/409-conflict contract FR-7.7 already defined; a
+  soft-rule warning surfaces as an alert, a hard-rule rejection reverts the attempted move with an
+  explanation, exactly mirroring the web Plan tab's own conflict handling.
+- **Offline (FR-16.2)**: the current plan version is cached in `AsyncStorage` on every successful
+  load or sync, so re-opening the app at a venue with no signal still shows the last-known plan
+  rather than a blank screen. A move made while offline (detected via `@react-native-community/
+  netinfo`, or a failed `fetch` even when NetInfo hasn't noticed yet) applies immediately to the
+  local view (marked with a small "pending sync" indicator) and is queued in `src/offline/queue.ts`
+  rather than lost. On reconnect, the queue replays against the real endpoint in order, reusing
+  FR-7.7's existing revision contract unchanged — no new conflict mechanism was invented for mobile:
+  - A **conflict** (someone else's save landed first) stops the replay there, shows the planner the
+    message and the fresh server state, and never silently reapplies the rest of the queue on top of
+    it — the still-unsynced moves are surfaced by name so the planner can review and manually redo
+    whichever still make sense, per AC2's "never silently overwriting a newer change."
+  - A **rejection** (a genuine hard-rule violation, e.g. the table filled up in the meantime) has no
+    fresh state to show (the server never changed), but invalidates the `expectedRevision` every
+    *later* queued move assumed — so the app re-fetches the real current revision and renumbers the
+    remainder (`rebaseQueue`) before continuing, rather than letting each one fail its own confusing
+    conflict in turn.
+  - A **network** failure mid-replay just stops and waits for the next reconnect or manual "Sync
+    now" tap.
+- **Tests**: `src/planMerge.ts` (merging tables/guests/plan-version into the floor-plan view, and
+  applying a move locally before the server confirms it) and `src/offline/queue.ts` (the replay
+  state machine above, including the conflict/rejection/offline/rebase paths) are plain TypeScript
+  with no React Native or device dependency, and have a real executed Jest suite
+  (`apps/mobile/__tests__/`, `pnpm --filter @seatwise/mobile test` — 15 tests, all passing) — the
+  same bar the rest of this repo's ticket work has held to. The screens themselves (`App.tsx`,
+  `src/screens/*.tsx`) type-check cleanly (`npx tsc --noEmit`) but aren't exercised by an automated
+  test here: there's no iOS/Android simulator or device available in this sandbox to drive them, so
+  that pass is left for Tom's own machine (see below).
+
+**Running it**: `pnpm install` at the repo root picks up `apps/mobile` automatically (the existing
+`apps/*` workspace glob needs no changes), then `cd apps/mobile && pnpm start` opens Expo's
+dev-server UI — scan the QR code with Expo Go on a phone, or press `i`/`a` for a simulator/emulator.
+One real gotcha worth knowing up front: the web app's dev server binds to `localhost:3000`, but
+"localhost" means a different machine depending on where this app is running — the iOS Simulator
+reaches the Mac's own localhost directly, the Android emulator needs `10.0.2.2` for the same thing,
+and a real phone in Expo Go is a separate device on the same wifi and needs the Mac's actual LAN IP
+(e.g. `http://192.168.1.23:3000`). Set `EXPO_PUBLIC_API_BASE_URL` to whichever of those applies
+before starting (`src/config.ts` falls back to the Simulator's `localhost:3000` if it's unset).
+`metro.config.js` has the pnpm-monorepo-specific settings (watched folders, symlink resolution)
+`@seatwise/shared`'s raw-TypeScript-source import needs — see its own comments for why.
+
+**Deliberately out of scope, per FR-16.3**: guest list management, budget tracking, RSVP
+collection, the day-of timeline, and the portfolio dashboard aren't in this app at all — a planner
+needing any of those still reaches for the web app. There's also no push notification wiring for a
+sync completing in the background; the app has to be open (or brought to the foreground) for a
+queued move to replay.
