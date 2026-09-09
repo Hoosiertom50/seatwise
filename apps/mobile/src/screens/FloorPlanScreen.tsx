@@ -87,13 +87,20 @@ export function FloorPlanScreen({
         const [tablesRes, guestsRes, versionsRes] = await Promise.all([
           api.get<{ tables: SeatingTableDTO[] }>(`/api/v1/weddings/${weddingId}/tables`),
           api.get<{ guests: GuestDTO[] }>(`/api/v1/weddings/${weddingId}/guests`),
-          api.get<{ planVersions: { id: string }[] }>(`/api/v1/weddings/${weddingId}/plan-versions`),
+          api.get<{ planVersions: { id: string; isCurrent: boolean }[] }>(
+            `/api/v1/weddings/${weddingId}/plan-versions`
+          ),
         ]);
         if (cancelled) return;
         setTables(tablesRes.tables);
         setGuests(guestsRes.guests);
 
-        const currentId = versionsRes.planVersions[0]?.id;
+        // FR-5.6 (TS-8): a Comparison Draft can be generated with a higher versionNumber than the
+        // actual Current version and never replace it, so "highest version number" and "current"
+        // are no longer the same thing -- the on-site floor plan must follow isCurrent explicitly,
+        // same as every web-side call site does (see plan-versions.ts on the server).
+        const currentId =
+          versionsRes.planVersions.find((v) => v.isCurrent)?.id ?? versionsRes.planVersions[0]?.id;
         if (currentId) {
           const detail = await api.get<{ planVersion: PlanVersionDetailDTO }>(
             `/api/v1/weddings/${weddingId}/plan-versions/${currentId}`

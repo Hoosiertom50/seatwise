@@ -115,7 +115,11 @@ export function TablesTab({
           api.get<{ planVersions: PlanVersionDTO[] }>(`/api/v1/weddings/${weddingId}/plan-versions`),
         ]);
         setTables(tablesRes.tables);
-        const currentId = versionsRes.planVersions[0]?.id;
+        // FR-5.6 (TS-8): a Comparison Draft can have a higher versionNumber than Current without
+        // replacing it, so the first (newest) row here isn't reliably Current anymore -- the
+        // capacity overview must reflect Current's assignments specifically, by isCurrent.
+        const currentId =
+          versionsRes.planVersions.find((v) => v.isCurrent)?.id ?? versionsRes.planVersions[0]?.id;
         if (currentId) {
           const detail = await api.get<{ planVersion: PlanVersionDetailDTO }>(
             `/api/v1/weddings/${weddingId}/plan-versions/${currentId}`

@@ -71,7 +71,7 @@ const SELECT_WITH_SUMMARY = `
   ) g ON g."weddingId" = w.id
   LEFT JOIN LATERAL (
     SELECT id, status FROM "plan_versions" pv
-    WHERE pv."weddingId" = w.id ORDER BY pv."versionNumber" DESC LIMIT 1
+    WHERE pv."weddingId" = w.id AND pv."isCurrent" LIMIT 1
   ) cpv ON true
   LEFT JOIN LATERAL (
     SELECT COUNT(*)::int AS count FROM "guests" ag

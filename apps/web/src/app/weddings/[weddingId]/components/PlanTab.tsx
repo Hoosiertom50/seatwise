@@ -2,11 +2,13 @@
 
 import { useEffect, useState } from "react";
 import { api, ApiError } from "@/lib/api-client";
+import { RULE_WEIGHT_CONFIG } from "@seatwise/shared";
 import type {
   GuestDTO,
   PlanVersionComparisonDTO,
   PlanVersionDTO,
   PlanVersionDetailDTO,
+  PlanVersionScoreReportDTO,
   PlanVersionStatusValue,
   RestorePreviewDTO,
   SeatingTableDTO,
@@ -27,7 +29,9 @@ const COMPARISON_STATUS_CLASS: Record<PlanVersionComparisonDTO["guests"][number]
 };
 
 function versionOptionLabel(v: PlanVersionDTO): string {
-  return `v${v.versionNumber}${v.label ? ` — ${v.label}` : ""} (${new Date(v.createdAt).toLocaleDateString()})`;
+  // FR-5.6: a Comparison Draft can be *newer* than the Current version (list order alone no
+  // longer implies which one is current), so the picker always says explicitly which is which.
+  return `v${v.versionNumber}${v.label ? ` — ${v.label}` : ""}${v.isCurrent ? " (current)" : ""} (${new Date(v.createdAt).toLocaleDateString()})`;
 }
 
 // FR-7.1: the floor-plan boxes reuse each table's saved (positionX, positionY) from the Tables
@@ -78,6 +82,14 @@ export function PlanTab({
   const [tables, setTables] = useState<SeatingTableDTO[]>([]);
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
+  // FR-5.6: the planner's upfront choice for the *next* generation run -- true (the default)
+  // makes it the new Current version, replacing whichever was Current before; false saves it
+  // alongside as a non-replacing Comparison Draft instead.
+  const [saveAsDraft, setSaveAsDraft] = useState(false);
+  // FR-5.3: the just-generated plan's soft-preference report -- shown only right after this
+  // generation run, same lifecycle as moveWarnings below (not persisted for a later reload).
+  const [scoreReport, setScoreReport] = useState<PlanVersionScoreReportDTO | null>(null);
+  const [showScoreDetail, setShowScoreDetail] = useState(false);
   const [statusUpdating, setStatusUpdating] = useState(false);
   const [movingGuestId, setMovingGuestId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -125,7 +137,12 @@ export function PlanTab({
       `/api/v1/weddings/${weddingId}/plan-versions`
     );
     setVersions(res.planVersions);
-    const idToLoad = selectId ?? res.planVersions[0]?.id;
+    // FR-5.6 (TS-8): when nothing specific was requested (the tab's initial load), default to the
+    // actual Current version, not just the highest versionNumber -- a Comparison Draft can now
+    // outnumber Current without replacing it. An explicit selectId (picking from the dropdown,
+    // or the version just generated) always wins regardless of its isCurrent state.
+    const idToLoad =
+      selectId ?? res.planVersions.find((v) => v.isCurrent)?.id ?? res.planVersions[0]?.id;
     if (idToLoad) {
       const d = await api.get<{ planVersion: PlanVersionDetailDTO }>(
         `/api/v1/weddings/${weddingId}/plan-versions/${idToLoad}`
@@ -196,12 +213,16 @@ export function PlanTab({
     setRestorePreview(null);
     setUndoStack([]);
     setRedoStack([]);
+    setScoreReport(null);
+    setShowScoreDetail(false);
     setGenerating(true);
     try {
-      const res = await api.post<{ planVersion: PlanVersionDetailDTO }>(
-        `/api/v1/weddings/${weddingId}/plan-versions/generate`
+      const res = await api.post<{ planVersion: PlanVersionDetailDTO; scoreReport?: PlanVersionScoreReportDTO }>(
+        `/api/v1/weddings/${weddingId}/plan-versions/generate`,
+        { makeCurrent: !saveAsDraft }
       );
       await loadVersions(res.planVersion.id);
+      setScoreReport(res.scoreReport ?? null);
     } catch (err) {
       if (err instanceof ApiError && err.status === 409 && err.fieldErrors?.conflicts) {
         setConflicts(err.fieldErrors.conflicts as unknown as string[]);
@@ -216,6 +237,8 @@ export function PlanTab({
   async function onSelectVersion(id: string) {
     setMoveWarnings([]);
     setRestorePreview(null);
+    setScoreReport(null);
+    setShowScoreDetail(false);
     // Undo/redo history is scoped to whichever version was current when each move was made --
     // switching what's being viewed ends that continuity rather than risk replaying a stale move
     // against the wrong version later.
@@ -472,13 +495,26 @@ export function PlanTab({
           </p>
         </div>
         {canEdit && (
-          <button
-            onClick={onGenerate}
-            disabled={generating}
-            className="min-h-11 shrink-0 rounded-md bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-700 disabled:opacity-50"
-          >
-            {generating ? "Generating..." : "Generate new plan"}
-          </button>
+          <div className="flex shrink-0 flex-col items-end gap-2">
+            <button
+              onClick={onGenerate}
+              disabled={generating}
+              className="min-h-11 rounded-md bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-700 disabled:opacity-50"
+            >
+              {generating ? "Generating..." : "Generate new plan"}
+            </button>
+            {/* FR-5.6: chosen upfront, before the run -- an unsuccessful run (a hard-rule
+                conflict) only ever produces a conflict report either way, nothing is saved. */}
+            <label className="flex items-center gap-2 text-xs text-neutral-600">
+              <input
+                type="checkbox"
+                checked={saveAsDraft}
+                onChange={(e) => setSaveAsDraft(e.target.checked)}
+                disabled={generating}
+              />
+              Save as comparison draft (don&apos;t replace the current version)
+            </label>
+          </div>
         )}
       </div>
       {!canEdit && (
@@ -500,6 +536,60 @@ export function PlanTab({
         </div>
       )}
       {error && <p className="mb-4 text-sm text-red-600">{error}</p>}
+
+      {/* FR-5.3: shown once, right after the generation run that produced it -- not persisted, so
+          reloading or switching versions clears it, same as the moveWarnings/conflicts above. */}
+      {scoreReport && (
+        <div className="mb-6 rounded-lg border border-neutral-200 p-4">
+          <div className="mb-2 flex items-center justify-between gap-3">
+            <p className="text-sm font-medium text-neutral-800">
+              Soft-preference results — weighting-configuration version {scoreReport.ruleConfigVersion},
+              total score {scoreReport.totalScore}
+            </p>
+            <button
+              onClick={() => setShowScoreDetail((s) => !s)}
+              className="shrink-0 text-xs font-medium text-blue-700 hover:underline"
+            >
+              {showScoreDetail ? "Hide calculation" : "How is this calculated?"}
+            </button>
+          </div>
+          {scoreReport.preferences.length > 0 && (
+            <ul className="mb-2 list-inside list-disc text-sm">
+              {scoreReport.preferences.map((p, i) => (
+                <li key={i} className={p.satisfied ? "text-neutral-700" : "text-amber-700"}>
+                  {p.guestAName} and {p.guestBName} (
+                  {p.type === "PREFER_NEAR" ? "prefer near each other" : "avoid each other"}):{" "}
+                  {p.satisfied ? "satisfied" : "not satisfied"}
+                </li>
+              ))}
+            </ul>
+          )}
+          {scoreReport.purposeTables.length > 0 && (
+            <ul className="mb-2 list-inside list-disc text-sm text-neutral-700">
+              {scoreReport.purposeTables.map((t) => (
+                <li key={t.tableId}>
+                  &quot;{t.tableLabel}&quot; Purpose table ({t.criterionType.toLowerCase().replace("_", " ")}
+                  : {t.criterionValue}): {t.matchingGuestsSeatedHere} of {t.matchingGuestsTotal} matching
+                  guest(s) seated here
+                </li>
+              ))}
+            </ul>
+          )}
+          <p className="text-sm text-neutral-700">
+            Side-Mixing ({scoreReport.sideMixing.setting}): {scoreReport.sideMixing.mixedTableCount} mixed
+            table(s), {scoreReport.sideMixing.singleSideTableCount} single-side table(s)
+            {scoreReport.sideMixing.singleSideOnlyViolations > 0
+              ? `, ${scoreReport.sideMixing.singleSideOnlyViolations} Single-Side-Only table(s) seated both sides anyway`
+              : ""}
+            .
+          </p>
+          {showScoreDetail && (
+            <pre className="mt-3 overflow-x-auto rounded bg-neutral-50 p-3 text-xs text-neutral-600">
+              {JSON.stringify(RULE_WEIGHT_CONFIG, null, 2)}
+            </pre>
+          )}
+        </div>
+      )}
 
       {versions.length > 1 && (
         <div className="mb-6">

@@ -66,9 +66,60 @@ export interface PlanVersionDetailDTO extends PlanVersionDTO {
   modifiedSinceApproval: ModifiedSinceApprovalDTO;
 }
 
+// FR-5.6: the planner's upfront choice of whether a successful generation becomes the new
+// Current version (replacing whichever was Current before) or a non-replacing Comparison Draft.
+// Defaults to true so existing callers that don't send a body keep the old "always current"
+// behavior.
+export const generatePlanVersionSchema = z.object({
+  makeCurrent: z.boolean().optional(),
+});
+export type GeneratePlanVersionInput = z.infer<typeof generatePlanVersionSchema>;
+
+// FR-5.3: one PREFER_NEAR or AVOID relationship's outcome in the generated plan.
+export interface SoftPreferenceEntryDTO {
+  type: "PREFER_NEAR" | "AVOID";
+  guestAId: string;
+  guestAName: string;
+  guestBId: string;
+  guestBName: string;
+  satisfied: boolean;
+}
+
+// FR-3.7/FR-5.3: a Purpose table's wedding-wide match rate.
+export interface PurposeTableScoreEntryDTO {
+  tableId: string;
+  tableLabel: string;
+  criterionType: "SIDE" | "TIER" | "AGE_CATEGORY";
+  criterionValue: string;
+  matchingGuestsSeatedHere: number;
+  matchingGuestsTotal: number;
+}
+
+// FR-3.4/FR-5.3: Side-Mixing is scored per table, so it's reported as an aggregate.
+export interface SideMixingScoreReportDTO {
+  setting: SideMixing;
+  mixedTableCount: number;
+  singleSideTableCount: number;
+  singleSideOnlyViolations: number;
+}
+
+// FR-5.3: "generation ... reports which preferences were satisfied/unsatisfied and the
+// weighting-configuration version used; any displayed score links to its calculation method" --
+// the calculation method itself is RULE_WEIGHT_CONFIG (packages/shared/src/seating-engine.ts),
+// exported alongside this report's own ruleConfigVersion so the UI can show the exact weights
+// that produced it without a second round-trip.
+export interface PlanVersionScoreReportDTO {
+  ruleConfigVersion: number;
+  totalScore: number;
+  preferences: SoftPreferenceEntryDTO[];
+  purposeTables: PurposeTableScoreEntryDTO[];
+  sideMixing: SideMixingScoreReportDTO;
+}
+
 export interface GeneratePlanResponse {
   planVersion: PlanVersionDetailDTO;
   errors: string[];
+  scoreReport?: PlanVersionScoreReportDTO;
 }
 
 export const moveGuestAssignmentSchema = z.object({
