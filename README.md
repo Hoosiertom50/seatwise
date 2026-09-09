@@ -900,6 +900,11 @@ tab (guests, tables, timeline) — this is ordinary planner data entry, not an a
 setting — and every vendor edit carries FR-7.7's optimistic-concurrency protection, same as tables
 and guests. Verified in `test_budget.py`.
 
+**TS-21 (iOS/Android: On-Site Day-Of Floor Plan) is done** — see its own "Mobile app" section
+right below, including the two architecture calls (framework choice, touch-interaction design) it
+needed the same way TS-16 and TS-19 above did. That closes out all six planner-pivot stories
+(TS-16 through TS-21) in the priority order the September 2026 stakeholder interview set.
+
 ## Mobile app (`apps/mobile`, TS-21)
 
 An Expo/React Native TypeScript app, scoped exactly to TS-21's FR-16.1/FR-16.2: a planner viewing
