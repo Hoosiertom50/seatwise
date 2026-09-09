@@ -85,7 +85,8 @@ export interface InvitePreviewDTO {
   invitedEmail?: string;
 }
 
-export const commentTargetTypeEnum = z.enum(["GUEST", "TABLE"]);
+// TS-18 (FR-13.3): a third target alongside GUEST/TABLE -- a comment on a single timeline entry.
+export const commentTargetTypeEnum = z.enum(["GUEST", "TABLE", "TIMELINE_ENTRY"]);
 export type CommentTargetType = z.infer<typeof commentTargetTypeEnum>;
 
 export const createCommentSchema = z
@@ -93,13 +94,22 @@ export const createCommentSchema = z
     targetType: commentTargetTypeEnum,
     guestId: z.string().optional().nullable(),
     tableId: z.string().optional().nullable(),
+    timelineEntryId: z.string().optional().nullable(),
     body: z.string().min(1, "Comment can't be empty").max(4000),
     parentCommentId: z.string().optional().nullable(),
   })
-  .refine((v) => (v.targetType === "GUEST" ? !!v.guestId : !!v.tableId), {
-    message: "guestId or tableId must match targetType",
-    path: ["targetType"],
-  });
+  .refine(
+    (v) =>
+      v.targetType === "GUEST"
+        ? !!v.guestId
+        : v.targetType === "TABLE"
+          ? !!v.tableId
+          : !!v.timelineEntryId,
+    {
+      message: "guestId, tableId, or timelineEntryId must match targetType",
+      path: ["targetType"],
+    }
+  );
 export type CreateCommentInput = z.infer<typeof createCommentSchema>;
 
 export interface CommentDTO {
@@ -108,6 +118,7 @@ export interface CommentDTO {
   targetType: CommentTargetType;
   guestId: string | null;
   tableId: string | null;
+  timelineEntryId: string | null;
   targetLabel: string;
   targetRemoved: boolean;
   body: string;

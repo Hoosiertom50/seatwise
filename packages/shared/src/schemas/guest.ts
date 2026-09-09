@@ -34,10 +34,25 @@ export const createGuestSchema = z.object({
   notes: z.string().max(2000).optional().nullable(),
   side: guestSideEnum.default("BOTH"),
   ageCategory: ageCategoryEnum.default("ADULT"),
+  // TS-17 (FR-12.4): optional -- lets a planner send/resend this guest their own RSVP link. An
+  // empty string (a form field left blank) is treated the same as omitting it entirely, not as an
+  // invalid email.
+  email: z
+    .union([z.string().trim().max(200).email("Not a valid email address"), z.literal(""), z.null()])
+    .optional()
+    .transform((v) => (v === "" ? null : v)),
+  // TS-17 (FR-12.1): free-text "who's coming with you", only meaningful when headcount > 1.
+  plusOneNames: z.string().max(500).optional().nullable(),
 });
 export type CreateGuestInput = z.infer<typeof createGuestSchema>;
 
-export const updateGuestSchema = createGuestSchema.partial();
+// FR-7.7, extended to guests: every edit accepts the revision the client last saw, so the server
+// can detect a save that landed on top of a newer one instead of silently overwriting it.
+const expectedRevisionField = z.number().int().nonnegative().optional();
+
+export const updateGuestSchema = createGuestSchema.partial().extend({
+  expectedRevision: expectedRevisionField,
+});
 export type UpdateGuestInput = z.infer<typeof updateGuestSchema>;
 
 export interface GuestDTO {
@@ -59,6 +74,17 @@ export interface GuestDTO {
   ageCategory: AgeCategory;
   // FR-3.7a: the Restricted table this guest is a required member of, if any (null otherwise).
   requiredTableId: string | null;
+  // TS-17 (FR-12.4): lets a planner actually deliver (or resend) this guest's own RSVP link.
+  // Deliberately NOT the raw rsvpToken itself -- see the dedicated rsvp-link endpoint for that.
+  email: string | null;
+  // TS-17 (FR-12.1): free-text "who's coming with you", only meaningful when headcount > 1.
+  plusOneNames: string | null;
+  // TS-17 (FR-12.4): set only by the guest's own public RSVP submission -- null means "hasn't
+  // responded via their link yet" (independent of rsvpStatus, which a planner can also set directly).
+  rsvpRespondedAt: string | null;
   createdAt: string;
   updatedAt: string;
+  // FR-7.7: an optimistic-concurrency counter -- send this back as expectedRevision on an edit to
+  // this guest so the server can detect and refuse a save based on stale data.
+  revision: number;
 }

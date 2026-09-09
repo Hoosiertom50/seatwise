@@ -63,14 +63,24 @@ export function RulesTab({
     }
   }
 
+  // Seating rules have no "edit" verb (only add/remove) and a duplicate/conflicting rule is
+  // already rejected up front by the server -- so the one real concurrent-edit risk here is a
+  // stale remove: someone else already deleted this same rule a moment ago. That surfaces as a
+  // 404, which is handled as success (the rule's gone either way) with a clear explanation,
+  // rather than as a generic failure that puts the row back in the list only to fail again on
+  // retry.
   async function onRemove(id: string) {
     const prev = relationships;
     setRelationships(relationships.filter((r) => r.id !== id));
     try {
       await api.delete(`/api/v1/weddings/${weddingId}/relationships/${id}`);
-    } catch {
-      setRelationships(prev);
-      setError("Couldn't remove that rule.");
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 404) {
+        setError("That rule was already removed — possibly by another collaborator.");
+      } else {
+        setRelationships(prev);
+        setError(err instanceof ApiError ? err.message : "Couldn't remove that rule.");
+      }
     }
   }
 

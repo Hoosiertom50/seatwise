@@ -15,9 +15,10 @@ export class CommentError extends Error {
 export interface CommentRow {
   id: string;
   weddingId: string;
-  targetType: "GUEST" | "TABLE";
+  targetType: "GUEST" | "TABLE" | "TIMELINE_ENTRY";
   guestId: string | null;
   tableId: string | null;
+  timelineEntryId: string | null;
   targetLabel: string;
   // FR-10.3: the original target no longer exists (removed after this comment was made), but the
   // comment itself — and the label captured at creation — still stands.
@@ -33,24 +34,27 @@ export interface CommentRow {
 }
 
 export interface CreateCommentInput {
-  targetType: "GUEST" | "TABLE";
+  targetType: "GUEST" | "TABLE" | "TIMELINE_ENTRY";
   guestId?: string | null;
   tableId?: string | null;
+  timelineEntryId?: string | null;
   body: string;
   parentCommentId?: string | null;
 }
 
+const SELECT_COMMENT = `
+  SELECT c.id, c."weddingId", c."targetType", c."guestId", c."tableId", c."timelineEntryId", c."targetLabel",
+         (c."guestId" IS NULL AND c."tableId" IS NULL AND c."timelineEntryId" IS NULL) AS "targetRemoved",
+         c.body, c."authorUserId", author.name AS "authorName", c."parentCommentId",
+         c."resolvedAt", c."resolvedByUserId", resolver.name AS "resolvedByName", c."createdAt"
+  FROM "comments" c
+  JOIN "users" author ON author.id = c."authorUserId"
+  LEFT JOIN "users" resolver ON resolver.id = c."resolvedByUserId"
+`;
+
 export async function listCommentsForWedding(weddingId: string): Promise<CommentRow[]> {
   const { rows } = await pool.query(
-    `SELECT c.id, c."weddingId", c."targetType", c."guestId", c."tableId", c."targetLabel",
-            (c."guestId" IS NULL AND c."tableId" IS NULL) AS "targetRemoved",
-            c.body, c."authorUserId", author.name AS "authorName", c."parentCommentId",
-            c."resolvedAt", c."resolvedByUserId", resolver.name AS "resolvedByName", c."createdAt"
-     FROM "comments" c
-     JOIN "users" author ON author.id = c."authorUserId"
-     LEFT JOIN "users" resolver ON resolver.id = c."resolvedByUserId"
-     WHERE c."weddingId" = $1
-     ORDER BY c."createdAt" ASC`,
+    `${SELECT_COMMENT} WHERE c."weddingId" = $1 ORDER BY c."createdAt" ASC`,
     [weddingId]
   );
   return rows;
@@ -64,6 +68,7 @@ export async function createComment(
   let targetLabel: string;
   let guestId: string | null = null;
   let tableId: string | null = null;
+  let timelineEntryId: string | null = null;
 
   if (input.targetType === "GUEST") {
     if (!input.guestId) throw new CommentError("guestId is required for a guest comment.", "INVALID_TARGET");
@@ -75,7 +80,7 @@ export async function createComment(
     if (!guest) throw new CommentError("Guest not found.", "NOT_FOUND");
     guestId = input.guestId;
     targetLabel = `Guest: ${guest.firstName} ${guest.lastName}`;
-  } else {
+  } else if (input.targetType === "TABLE") {
     if (!input.tableId) throw new CommentError("tableId is required for a table comment.", "INVALID_TARGET");
     const { rows } = await pool.query(
       `SELECT label FROM "seating_tables" WHERE id = $1 AND "weddingId" = $2`,
@@ -85,6 +90,17 @@ export async function createComment(
     if (!table) throw new CommentError("Table not found.", "NOT_FOUND");
     tableId = input.tableId;
     targetLabel = `Table: ${table.label}`;
+  } else {
+    if (!input.timelineEntryId)
+      throw new CommentError("timelineEntryId is required for a timeline comment.", "INVALID_TARGET");
+    const { rows } = await pool.query(
+      `SELECT time, description FROM "timeline_entries" WHERE id = $1 AND "weddingId" = $2`,
+      [input.timelineEntryId, weddingId]
+    );
+    const entry = rows[0];
+    if (!entry) throw new CommentError("Timeline entry not found.", "NOT_FOUND");
+    timelineEntryId = input.timelineEntryId;
+    targetLabel = `Timeline: ${entry.time} ${entry.description}`;
   }
 
   let parentAuthorId: string | null = null;
@@ -100,9 +116,20 @@ export async function createComment(
 
   const id = randomUUID();
   await pool.query(
-    `INSERT INTO "comments" (id, "weddingId", "targetType", "guestId", "tableId", "targetLabel", body, "authorUserId", "parentCommentId")
-     VALUES ($1, $2, $3::"CommentTargetType", $4, $5, $6, $7, $8, $9)`,
-    [id, weddingId, input.targetType, guestId, tableId, targetLabel, input.body, authorUserId, input.parentCommentId ?? null]
+    `INSERT INTO "comments" (id, "weddingId", "targetType", "guestId", "tableId", "timelineEntryId", "targetLabel", body, "authorUserId", "parentCommentId")
+     VALUES ($1, $2, $3::"CommentTargetType", $4, $5, $6, $7, $8, $9, $10)`,
+    [
+      id,
+      weddingId,
+      input.targetType,
+      guestId,
+      tableId,
+      timelineEntryId,
+      targetLabel,
+      input.body,
+      authorUserId,
+      input.parentCommentId ?? null,
+    ]
   );
 
   if (input.parentCommentId) {
@@ -117,27 +144,19 @@ export async function createComment(
     );
   }
 
-  const { rows } = await pool.query(
-    `SELECT c.id, c."weddingId", c."targetType", c."guestId", c."tableId", c."targetLabel",
-            (c."guestId" IS NULL AND c."tableId" IS NULL) AS "targetRemoved",
-            c.body, c."authorUserId", author.name AS "authorName", c."parentCommentId",
-            c."resolvedAt", c."resolvedByUserId", resolver.name AS "resolvedByName", c."createdAt"
-     FROM "comments" c
-     JOIN "users" author ON author.id = c."authorUserId"
-     LEFT JOIN "users" resolver ON resolver.id = c."resolvedByUserId"
-     WHERE c.id = $1`,
-    [id]
-  );
+  const { rows } = await pool.query(`${SELECT_COMMENT} WHERE c.id = $1`, [id]);
   return rows[0];
 }
 
-// FR-10.3: only the original commenter or someone with Edit access may resolve a thread.
+// FR-10.3: only the original commenter or someone with Edit access may resolve a thread. Returns
+// the updated comment (rather than void) so the caller can sync its local state -- including
+// resolvedByName, which the client has no other way to know -- instead of guessing at the result.
 export async function resolveComment(
   weddingId: string,
   commentId: string,
   requesterId: string,
   requesterCanEdit: boolean
-): Promise<void> {
+): Promise<CommentRow> {
   const { rows } = await pool.query(
     `SELECT "authorUserId" FROM "comments" WHERE id = $1 AND "weddingId" = $2`,
     [commentId, weddingId]
@@ -151,4 +170,7 @@ export async function resolveComment(
     `UPDATE "comments" SET "resolvedAt" = now(), "resolvedByUserId" = $1 WHERE id = $2`,
     [requesterId, commentId]
   );
+
+  const { rows: updatedRows } = await pool.query(`${SELECT_COMMENT} WHERE c.id = $1`, [commentId]);
+  return updatedRows[0];
 }

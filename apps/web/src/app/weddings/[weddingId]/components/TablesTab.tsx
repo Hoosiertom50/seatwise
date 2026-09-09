@@ -7,6 +7,7 @@ import type {
   PlanVersionDTO,
   PlanVersionDetailDTO,
   SeatingTableDTO,
+  SeatingTemplateDTO,
   TableShape,
   TablePurposeCriterionType,
   WeddingDTO,
@@ -96,6 +97,12 @@ export function TablesTab({
   const [qcPrefix, setQcPrefix] = useState("Table");
   const [qcCreating, setQcCreating] = useState(false);
 
+  // TS-19 (FR-14.1/FR-14.2): save this wedding's current table layout + Side-Mixing setting as a
+  // reusable template -- see save-as-template's own route comment for why EDIT access is enough.
+  const [templateName, setTemplateName] = useState("");
+  const [savingTemplate, setSavingTemplate] = useState(false);
+  const [savedTemplate, setSavedTemplate] = useState<SeatingTemplateDTO | null>(null);
+
   // FR-4.5: capacity overview needs the current plan version's assignments, purely to display --
   // never used for anything that affects seating logic.
   const [assignedHeadcountByTable, setAssignedHeadcountByTable] = useState<Record<string, number>>({});
@@ -184,6 +191,28 @@ export function TablesTab({
     }
   }
 
+  // TS-19: captures the tables above plus this wedding's sideMixing setting in one action. A
+  // template is a one-time snapshot, not a live link -- editing this wedding's tables afterward
+  // never changes a template already saved from it.
+  async function onSaveAsTemplate(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+    setSavedTemplate(null);
+    setSavingTemplate(true);
+    try {
+      const { template } = await api.post<{ template: SeatingTemplateDTO }>(
+        `/api/v1/weddings/${weddingId}/save-as-template`,
+        { name: templateName }
+      );
+      setSavedTemplate(template);
+      setTemplateName("");
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Couldn't save that template.");
+    } finally {
+      setSavingTemplate(false);
+    }
+  }
+
   async function onRemove(id: string) {
     const prev = tables;
     setTables(tables.filter((t) => t.id !== id));
@@ -195,14 +224,35 @@ export function TablesTab({
     }
   }
 
+  // FR-7.7, extended to seating tables: a 409 conflict carries the fresh, currently-committed
+  // table alongside the message -- pulling it out lets every edit handler refresh that one row in
+  // one step instead of a second round-trip, and shows the user the latest instead of a bare error.
+  function conflictTable(err: unknown): SeatingTableDTO | null {
+    if (err instanceof ApiError && err.status === 409 && err.data?.table) {
+      return err.data.table as SeatingTableDTO;
+    }
+    return null;
+  }
+
   async function onToggleLock(id: string, isLocked: boolean) {
     const prev = tables;
-    setTables(tables.map((t) => (t.id === id ? { ...t, isLocked } : t)));
+    const expectedRevision = prev.find((t) => t.id === id)?.revision;
+    setTables(prev.map((t) => (t.id === id ? { ...t, isLocked } : t)));
     try {
-      await api.patch(`/api/v1/weddings/${weddingId}/tables/${id}`, { isLocked });
-    } catch {
-      setTables(prev);
-      setError("Couldn't update that table's lock.");
+      const { table } = await api.patch<{ table: SeatingTableDTO }>(
+        `/api/v1/weddings/${weddingId}/tables/${id}`,
+        { isLocked, expectedRevision }
+      );
+      setTables(prev.map((t) => (t.id === id ? table : t)));
+    } catch (err) {
+      const fresh = conflictTable(err);
+      if (fresh) {
+        setTables(prev.map((t) => (t.id === id ? fresh : t)));
+        setError(`"${fresh.label}" was just edited elsewhere — showing the latest. Try again if you still want to make this change.`);
+      } else {
+        setTables(prev);
+        setError(err instanceof ApiError ? err.message : "Couldn't update that table's lock.");
+      }
     }
   }
 
@@ -211,17 +261,24 @@ export function TablesTab({
   // this just surfaces whatever warning message came back.
   async function onToggleAccessible(id: string, next: boolean) {
     const prev = tables;
-    setTables(tables.map((t) => (t.id === id ? { ...t, isAccessible: next } : t)));
+    const expectedRevision = prev.find((t) => t.id === id)?.revision;
+    setTables(prev.map((t) => (t.id === id ? { ...t, isAccessible: next } : t)));
     try {
       const res = await api.patch<{ table: SeatingTableDTO; warnings: string[] }>(
         `/api/v1/weddings/${weddingId}/tables/${id}`,
-        { isAccessible: next }
+        { isAccessible: next, expectedRevision }
       );
       setTables((cur) => cur.map((t) => (t.id === id ? res.table : t)));
       setTableWarnings(res.warnings ?? []);
-    } catch {
-      setTables(prev);
-      setError("Couldn't update that table's accessible flag.");
+    } catch (err) {
+      const fresh = conflictTable(err);
+      if (fresh) {
+        setTables(prev.map((t) => (t.id === id ? fresh : t)));
+        setError(`"${fresh.label}" was just edited elsewhere — showing the latest. Try again if you still want to make this change.`);
+      } else {
+        setTables(prev);
+        setError(err instanceof ApiError ? err.message : "Couldn't update that table's accessible flag.");
+      }
     }
   }
 
@@ -229,21 +286,47 @@ export function TablesTab({
   // a hard-rule reassignment side effect, so there's nothing else to surface here.
   async function onToggleSingleSideOnly(id: string, next: boolean) {
     const prev = tables;
-    setTables(tables.map((t) => (t.id === id ? { ...t, singleSideOnly: next } : t)));
+    const expectedRevision = prev.find((t) => t.id === id)?.revision;
+    setTables(prev.map((t) => (t.id === id ? { ...t, singleSideOnly: next } : t)));
     try {
-      await api.patch(`/api/v1/weddings/${weddingId}/tables/${id}`, { singleSideOnly: next });
-    } catch {
-      setTables(prev);
-      setError("Couldn't update that table's Single-Side-Only setting.");
+      const { table } = await api.patch<{ table: SeatingTableDTO }>(
+        `/api/v1/weddings/${weddingId}/tables/${id}`,
+        { singleSideOnly: next, expectedRevision }
+      );
+      setTables(prev.map((t) => (t.id === id ? table : t)));
+    } catch (err) {
+      const fresh = conflictTable(err);
+      if (fresh) {
+        setTables(prev.map((t) => (t.id === id ? fresh : t)));
+        setError(`"${fresh.label}" was just edited elsewhere — showing the latest. Try again if you still want to make this change.`);
+      } else {
+        setTables(prev);
+        setError(err instanceof ApiError ? err.message : "Couldn't update that table's Single-Side-Only setting.");
+      }
     }
   }
 
   async function onMove(id: string, x: number, y: number) {
+    const expectedRevision = tables.find((t) => t.id === id)?.revision;
     setTables((cur) => cur.map((t) => (t.id === id ? { ...t, positionX: x, positionY: y } : t)));
     try {
-      await api.patch(`/api/v1/weddings/${weddingId}/tables/${id}`, { positionX: x, positionY: y });
-    } catch {
-      setError("Couldn't save that table's position.");
+      const { table } = await api.patch<{ table: SeatingTableDTO }>(
+        `/api/v1/weddings/${weddingId}/tables/${id}`,
+        { positionX: x, positionY: y, expectedRevision }
+      );
+      // FR-7.7: sync the server's incremented revision back so the *next* drag's expectedRevision
+      // is still accurate -- without this, every move after the first would be rejected as stale.
+      setTables((cur) => cur.map((t) => (t.id === id ? table : t)));
+    } catch (err) {
+      // A position conflict is low-stakes (nobody's seating was affected) and dragging is a
+      // frequent, low-friction gesture -- silently re-sync to the fresh table instead of
+      // interrupting the user with an error for something this minor.
+      const fresh = conflictTable(err);
+      if (fresh) {
+        setTables((cur) => cur.map((t) => (t.id === id ? fresh : t)));
+      } else {
+        setError(err instanceof ApiError ? err.message : "Couldn't save that table's position.");
+      }
     }
   }
 
@@ -484,6 +567,47 @@ export function TablesTab({
               : `Create ${qcCount} ${qcShape.toLowerCase()} table(s) of ${qcCapacity}`}
           </button>
         </form>
+      </details>
+
+      <details className="mb-6 rounded-lg border border-neutral-200 p-4">
+        <summary className="cursor-pointer text-sm font-medium">
+          Save as a reusable template
+        </summary>
+        <p className="mt-2 mb-3 text-sm text-neutral-500">
+          Saves this wedding&apos;s current table layout (labels, capacities, shapes, Purpose-table
+          criteria) and its Side-Mixing setting as a template you can start a different wedding
+          from later. Never includes any guest — a Restricted table&apos;s required-guest list
+          doesn&apos;t carry over, since it has no meaning for a different wedding&apos;s guests.
+        </p>
+        <form onSubmit={onSaveAsTemplate} className="flex flex-col gap-2 sm:flex-row sm:items-end">
+          <div className="flex-1">
+            <label htmlFor="template-name" className="mb-1 block text-xs font-medium">
+              Template name
+            </label>
+            <input
+              id="template-name"
+              className="w-full rounded-md border border-neutral-300 px-2 py-1.5 text-sm"
+              placeholder="e.g. Standard reception layout"
+              value={templateName}
+              onChange={(e) => setTemplateName(e.target.value)}
+              required
+            />
+          </div>
+          <button
+            type="submit"
+            disabled={savingTemplate}
+            className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 disabled:opacity-50"
+          >
+            {savingTemplate ? "Saving..." : "Save as template"}
+          </button>
+        </form>
+        {savedTemplate && (
+          <p className="mt-2 text-sm text-green-700">
+            Saved &ldquo;{savedTemplate.name}&rdquo; ({savedTemplate.tableCount} table
+            {savedTemplate.tableCount === 1 ? "" : "s"}) — pick it when creating a new wedding from
+            your dashboard.
+          </p>
+        )}
       </details>
         </>
       )}

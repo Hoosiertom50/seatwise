@@ -33,8 +33,12 @@ function versionOptionLabel(v: PlanVersionDTO): string {
 // FR-7.1: the floor-plan boxes reuse each table's saved (positionX, positionY) from the Tables
 // tab's own floor plan (FR-4.3) so both views agree on where a table sits in the room -- only its
 // footprint differs here, since this view also needs room to list the guests seated at it.
-const PLAN_BOX_WIDTH = 168;
-const PLAN_BOX_MIN_HEIGHT = 92;
+const PLAN_BOX_WIDTH = 224;
+// A fixed (not minimum) height -- a table box's guest list scrolls internally within this
+// footprint rather than growing the box itself, so a full table never grows tall enough to
+// overlap the row of boxes below it. Sized for the label line plus the guest list's own
+// max-h-36 (144px) scroll region, with a little padding room.
+const PLAN_BOX_HEIGHT = 200;
 
 // FR-7.5: one manual-move action, as recorded for undo/redo. `toTableId` is the table the guest's
 // own unit ended up at; `priorTableId` is where *this specific guest* was seated before (null if
@@ -1083,7 +1087,7 @@ function PlanFloorPlan({
   }
 
   const width = Math.max(760, ...tables.map((t) => (t.positionX ?? 40) + PLAN_BOX_WIDTH + 40));
-  const height = Math.max(480, ...tables.map((t) => (t.positionY ?? 40) + PLAN_BOX_MIN_HEIGHT + 40));
+  const height = Math.max(480, ...tables.map((t) => (t.positionY ?? 40) + PLAN_BOX_HEIGHT + 40));
 
   return (
     <div>
@@ -1159,16 +1163,16 @@ function PlanFloorPlan({
                 left: t.positionX ?? 40,
                 top: t.positionY ?? 40,
                 width: PLAN_BOX_WIDTH,
-                minHeight: PLAN_BOX_MIN_HEIGHT,
+                height: PLAN_BOX_HEIGHT,
               }}
-              className={`absolute flex flex-col rounded-md border-2 bg-white p-2 text-xs shadow-sm ${
+              className={`absolute flex flex-col overflow-hidden rounded-md border-2 bg-white p-2 text-xs shadow-sm ${
                 dragOverTableId === t.id ? "border-blue-500 bg-blue-50" : "border-neutral-300"
               }`}
             >
               <p className="mb-1 truncate font-medium" title={t.label}>
                 {t.label}
               </p>
-              <div className="flex max-h-24 flex-col gap-1 overflow-y-auto">
+              <div className="flex max-h-36 flex-col gap-1 overflow-y-auto">
                 {tableGuests.length === 0 && <span className="text-neutral-400">Empty</span>}
                 {tableGuests.map((g) => (
                   <span
@@ -1176,7 +1180,8 @@ function PlanFloorPlan({
                     data-guest-id={g.guestId}
                     draggable={canEditThisVersion}
                     onDragStart={(e) => onGuestDragStart(e, g.guestId)}
-                    className={`truncate rounded px-1.5 py-0.5 bg-neutral-100 ${
+                    title={g.guestName}
+                    className={`truncate rounded px-1.5 py-0.5 bg-neutral-100 text-neutral-900 ${
                       canEditThisVersion ? "cursor-grab active:cursor-grabbing" : ""
                     } ${movingGuestId === g.guestId ? "opacity-50" : ""}`}
                   >

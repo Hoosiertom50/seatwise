@@ -24,6 +24,9 @@ export interface SeatingTableRow {
   requiredGuestIds: string[];
   createdAt: Date;
   updatedAt: Date;
+  // FR-7.7: an optimistic-concurrency counter for this table -- an edit that names an
+  // expectedRevision the server no longer matches is rejected as stale.
+  revision: number;
 }
 
 // Every read joins in the current required-guest list (FR-3.7a) as an aggregated array, so
@@ -31,7 +34,7 @@ export interface SeatingTableRow {
 const SELECT_WITH_REQUIRED = `
   SELECT t.id, t."weddingId", t.label, t.capacity, t."isRestricted", t."isAccessible", t."isLocked",
          t.purpose, t."purposeCriterionType", t."purposeCriterionValue", t."singleSideOnly", t.shape,
-         t."positionX", t."positionY",
+         t."positionX", t."positionY", t.revision,
          t."createdAt", t."updatedAt",
          COALESCE(rtg."guestIds", ARRAY[]::text[]) AS "requiredGuestIds"
   FROM "seating_tables" t
@@ -39,6 +42,17 @@ const SELECT_WITH_REQUIRED = `
     SELECT "tableId", array_agg("guestId") AS "guestIds" FROM "restricted_table_guests" GROUP BY "tableId"
   ) rtg ON rtg."tableId" = t.id
 `;
+
+// FR-7.7: thrown instead of applying an edit whose expectedRevision no longer matches the table's
+// current one -- the fresh, up-to-date table is attached so the caller can refresh the UI with it
+// directly rather than making a second round-trip.
+export class TableConflictError extends Error {
+  table: SeatingTableRow;
+  constructor(message: string, table: SeatingTableRow) {
+    super(message);
+    this.table = table;
+  }
+}
 
 export interface CreateSeatingTableData {
   label: string;
@@ -59,11 +73,14 @@ export class RestrictedTableError extends Error {}
 
 // FR-4.3: a simple grid fallback position for a table that's never been explicitly placed --
 // four columns, spaced widely enough for the floor-plan's table boxes not to overlap. Purely a
-// starting point the planner can drag from; never read by seating logic.
+// starting point the planner can drag from; never read by seating logic. Column/row spacing here
+// must stay wider than the frontend's PLAN_BOX_WIDTH (224px) and fixed table-box height (200px)
+// respectively, plus a real gap -- these two constants aren't shared code across the frontend/
+// backend boundary, so keep them in sync by hand if either box size changes.
 function gridPosition(index: number): { x: number; y: number } {
   const col = index % 4;
   const row = Math.floor(index / 4);
-  return { x: 40 + col * 180, y: 40 + row * 180 };
+  return { x: 40 + col * 264, y: 40 + row * 240 };
 }
 
 export async function createSeatingTable(
@@ -82,7 +99,7 @@ export async function createSeatingTable(
         "purposeCriterionType", "purposeCriterionValue", "singleSideOnly", shape, "positionX", "positionY", "updatedAt")
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::"TablePurposeCriterionType", $10, $11, $12::"TableShape", $13, $14, now())
      RETURNING id, "weddingId", label, capacity, "isRestricted", "isAccessible", "isLocked", purpose,
-               "purposeCriterionType", "purposeCriterionValue", "singleSideOnly", shape, "positionX", "positionY", "createdAt", "updatedAt"`,
+               "purposeCriterionType", "purposeCriterionValue", "singleSideOnly", shape, "positionX", "positionY", revision, "createdAt", "updatedAt"`,
     [
       id,
       weddingId,
@@ -128,7 +145,7 @@ export async function quickCreateSeatingTables(
          VALUES ($1, $2, $3, $4, $5::"TableShape", $6, $7, now())
          RETURNING id, "weddingId", label, capacity, "isRestricted", "isAccessible", "isLocked",
                    purpose, "purposeCriterionType", "purposeCriterionValue", "singleSideOnly", shape,
-                   "positionX", "positionY", "createdAt", "updatedAt"`,
+                   "positionX", "positionY", revision, "createdAt", "updatedAt"`,
         [id, weddingId, `${input.labelPrefix} ${startIndex + i + 1}`, input.capacity, input.shape, x, y]
       );
       created.push({ ...rows[0], requiredGuestIds: [] });
@@ -159,10 +176,19 @@ export async function getSeatingTableForWedding(id: string, weddingId: string): 
   return rows[0] ?? null;
 }
 
+// FR-7.7, extended to seating tables: an optional expectedRevision locks the table's row (FOR
+// UPDATE, inside this function's own transaction) and compares it against the current revision
+// before writing anything. A mismatch means someone else's edit landed first -- rather than
+// proceeding on stale data, this throws TableConflictError with the fresh, currently-committed
+// table attached (a plain read from a second connection isn't blocked by the row lock, so it
+// safely sees the latest committed state) and writes nothing. A caller that passes no
+// expectedRevision at all (an internal/legacy call site) skips the check entirely, matching the
+// plan-version pattern.
 export async function updateSeatingTableForWedding(
   id: string,
   weddingId: string,
-  input: Partial<CreateSeatingTableData>
+  input: Partial<CreateSeatingTableData>,
+  expectedRevision?: number
 ): Promise<boolean> {
   const fields: string[] = [];
   const values: unknown[] = [];
@@ -217,14 +243,41 @@ export async function updateSeatingTableForWedding(
     fields.push(`"positionY" = $${i++}`);
     values.push(input.positionY);
   }
-  if (fields.length === 0) return true;
-  fields.push(`"updatedAt" = now()`);
-  values.push(id, weddingId);
-  const { rowCount } = await pool.query(
-    `UPDATE "seating_tables" SET ${fields.join(", ")} WHERE id = $${i++} AND "weddingId" = $${i}`,
-    values
-  );
-  return (rowCount ?? 0) > 0;
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const { rows } = await client.query(
+      `SELECT revision FROM "seating_tables" WHERE id = $1 AND "weddingId" = $2 FOR UPDATE`,
+      [id, weddingId]
+    );
+    const current = rows[0];
+    if (!current) {
+      await client.query("ROLLBACK");
+      return false;
+    }
+    if (expectedRevision !== undefined && current.revision !== expectedRevision) {
+      const fresh = await getSeatingTableForWedding(id, weddingId);
+      throw new TableConflictError(
+        "This table changed since you loaded it — someone else's edit landed first. It's been refreshed with the latest — please try again.",
+        fresh!
+      );
+    }
+    if (fields.length > 0) {
+      fields.push(`"updatedAt" = now()`, `revision = revision + 1`);
+      values.push(id, weddingId);
+      await client.query(
+        `UPDATE "seating_tables" SET ${fields.join(", ")} WHERE id = $${i++} AND "weddingId" = $${i}`,
+        values
+      );
+    }
+    await client.query("COMMIT");
+    return true;
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 
 export async function deleteSeatingTableForWedding(id: string, weddingId: string): Promise<boolean> {

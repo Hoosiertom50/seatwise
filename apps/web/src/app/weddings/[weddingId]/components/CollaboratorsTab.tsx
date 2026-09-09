@@ -73,6 +73,10 @@ export function CollaboratorsTab({
   // as the side labels above.
   const [note, setNote] = useState(wedding?.note ?? "");
   const [savingNote, setSavingNote] = useState(false);
+  // TS-17 (FR-12.2): the planner-configured RSVP cutoff -- same local-input-then-save-on-blur
+  // pattern as the note/side labels above. Empty string means no cutoff at all.
+  const [rsvpCutoffDate, setRsvpCutoffDate] = useState(wedding?.rsvpCutoffDate ?? "");
+  const [savingRsvpCutoff, setSavingRsvpCutoff] = useState(false);
 
   useEffect(() => {
     api
@@ -107,6 +111,7 @@ export function CollaboratorsTab({
       setSideLabel1(wedding.sideLabel1);
       setSideLabel2(wedding.sideLabel2);
       setNote(wedding.note ?? "");
+      setRsvpCutoffDate(wedding.rsvpCutoffDate ?? "");
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [wedding?.id]);
@@ -221,6 +226,29 @@ export function CollaboratorsTab({
     } catch {
       setCollaborators(prev);
       setError("Couldn't remove that collaborator.");
+    }
+  }
+
+  // FR-12.2: the RSVP cutoff -- same save-on-blur pattern as the note above. An empty input
+  // clears it back to null (no cutoff at all), matching the FR's "or none" language.
+  async function onSaveRsvpCutoff() {
+    if (!wedding) return;
+    const trimmed = rsvpCutoffDate.trim();
+    if (trimmed === (wedding.rsvpCutoffDate ?? "")) return;
+    setSavingRsvpCutoff(true);
+    setError(null);
+    try {
+      const { wedding: updated } = await api.patch<{ wedding: WeddingDTO }>(
+        `/api/v1/weddings/${weddingId}`,
+        { rsvpCutoffDate: trimmed || null }
+      );
+      setWedding(updated);
+      setRsvpCutoffDate(updated.rsvpCutoffDate ?? "");
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Couldn't save the RSVP cutoff.");
+      setRsvpCutoffDate(wedding.rsvpCutoffDate ?? "");
+    } finally {
+      setSavingRsvpCutoff(false);
     }
   }
 
@@ -418,6 +446,26 @@ export function CollaboratorsTab({
                 onBlur={onSaveNote}
                 disabled={savingNote}
                 placeholder="Nothing noted yet"
+              />
+            </div>
+          )}
+
+          {wedding && (
+            <div className="mb-8 rounded-lg border border-neutral-200 p-4">
+              <h3 className="mb-1 text-sm font-medium">RSVP cutoff</h3>
+              <p className="mb-3 text-sm text-neutral-500">
+                After this date, a guest&apos;s own RSVP link becomes read-only — they can still
+                see what they submitted, but can no longer change it. Leave blank for no cutoff.
+              </p>
+              <input
+                id="rsvp-cutoff-date"
+                aria-label="RSVP cutoff date"
+                type="date"
+                className="w-full max-w-xs rounded-md border border-neutral-300 px-3 py-2 text-sm disabled:opacity-50"
+                value={rsvpCutoffDate}
+                onChange={(e) => setRsvpCutoffDate(e.target.value)}
+                onBlur={onSaveRsvpCutoff}
+                disabled={savingRsvpCutoff}
               />
             </div>
           )}

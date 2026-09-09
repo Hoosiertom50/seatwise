@@ -5,6 +5,7 @@ import {
   getSeatingTableForWedding,
   syncAccessibleTableReassignment,
   deleteSeatingTableForWedding,
+  TableConflictError,
 } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
 import { errorResponse, zodErrorResponse } from "@/lib/api-response";
@@ -24,8 +25,18 @@ export async function PATCH(req: NextRequest, { params }: Params) {
   const parsed = updateTableSchema.safeParse(body);
   if (!parsed.success) return zodErrorResponse(parsed.error);
 
-  const updated = await updateSeatingTableForWedding(tableId, weddingId, parsed.data);
-  if (!updated) return errorResponse("Table not found", 404);
+  const { expectedRevision, ...data } = parsed.data;
+  try {
+    const updated = await updateSeatingTableForWedding(tableId, weddingId, data, expectedRevision);
+    if (!updated) return errorResponse("Table not found", 404);
+  } catch (err) {
+    // FR-7.7, extended to seating tables: someone else's edit landed on this table first -- refuse
+    // the stale write and hand back the fresh table so the frontend can refresh in one step.
+    if (err instanceof TableConflictError) {
+      return NextResponse.json({ error: err.message, table: err.table }, { status: 409 });
+    }
+    throw err;
+  }
 
   // FR-4.6: an isAccessible change (either direction) re-checks anyone currently assigned here
   // who requires an accessible table -- flagging or clearing Needs Reassignment and keeping the

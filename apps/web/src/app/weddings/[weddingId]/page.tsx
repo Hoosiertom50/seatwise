@@ -13,9 +13,21 @@ import { DayOfTab } from "./components/DayOfTab";
 import { CollaboratorsTab } from "./components/CollaboratorsTab";
 import { ActivityTab } from "./components/ActivityTab";
 import { CommentsTab } from "./components/CommentsTab";
+import { TimelineTab } from "./components/TimelineTab";
+import { BudgetTab } from "./components/BudgetTab";
 import { NotificationsBell } from "@/components/NotificationsBell";
 
-type Tab = "guests" | "rules" | "tables" | "plan" | "dayof" | "comments" | "activity" | "collaborators";
+type Tab =
+  | "guests"
+  | "rules"
+  | "tables"
+  | "plan"
+  | "dayof"
+  | "timeline"
+  | "budget"
+  | "comments"
+  | "activity"
+  | "collaborators";
 
 const TABS: { value: Tab; label: string }[] = [
   { value: "guests", label: "Guests" },
@@ -23,6 +35,12 @@ const TABS: { value: Tab; label: string }[] = [
   { value: "tables", label: "Tables" },
   { value: "plan", label: "Seating plan" },
   { value: "dayof", label: "Day-of mode" },
+  // TS-18: intentionally its own tab, next to Day-of mode -- a run-of-show is a different kind of
+  // "plan" than the seating plan, and never derived from or dependent on guests/tables/rules.
+  { value: "timeline", label: "Timeline" },
+  // TS-20: also its own tab, independent of guests/tables/rules/plan the same way Timeline is --
+  // a vendor list and budget figure have nothing to do with seating.
+  { value: "budget", label: "Budget" },
   { value: "comments", label: "Comments" },
   { value: "activity", label: "Activity" },
   { value: "collaborators", label: "Collaborators" },
@@ -221,6 +239,8 @@ export default function WeddingDetailPage() {
       {tab === "dayof" && (
         <DayOfTab weddingId={weddingId} guests={guests} setGuests={setGuests} canEdit={canEdit} />
       )}
+      {tab === "timeline" && <TimelineTab weddingId={weddingId} canEdit={canEdit} />}
+      {tab === "budget" && <BudgetTab weddingId={weddingId} canEdit={canEdit} />}
       {tab === "comments" && (
         <CommentsTab
           weddingId={weddingId}

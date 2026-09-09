@@ -75,6 +75,10 @@ const tableBaseSchema = z.object({
 export const createTableSchema = tableBaseSchema.superRefine(validatePurposeCriterion);
 export type CreateTableInput = z.infer<typeof tableBaseSchema>;
 
+// FR-7.7, extended to seating tables: every edit accepts the revision the client last saw, so the
+// server can detect a save that landed on top of a newer one instead of silently overwriting it.
+const expectedRevisionField = z.number().int().nonnegative().optional();
+
 export const updateTableSchema = tableBaseSchema
   .partial()
   .extend({
@@ -84,6 +88,7 @@ export const updateTableSchema = tableBaseSchema
     // never read by generation, the engine, or any rule check.
     positionX: z.number().finite().nullable().optional(),
     positionY: z.number().finite().nullable().optional(),
+    expectedRevision: expectedRevisionField,
   })
   .superRefine(validatePurposeCriterion);
 export type UpdateTableInput = z.infer<typeof updateTableSchema>;
@@ -129,4 +134,7 @@ export interface SeatingTableDTO {
   requiredGuestIds: string[];
   createdAt: string;
   updatedAt: string;
+  // FR-7.7: an optimistic-concurrency counter -- send this back as expectedRevision on an edit to
+  // this table so the server can detect and refuse a save based on stale data.
+  revision: number;
 }

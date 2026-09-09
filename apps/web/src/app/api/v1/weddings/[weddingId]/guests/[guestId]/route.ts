@@ -9,6 +9,7 @@ import {
   setGuestAttendance,
   revalidateGuestAssignment,
   recomputeCurrentPlanCompleteness,
+  GuestConflictError,
 } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
 import { errorResponse, zodErrorResponse } from "@/lib/api-response";
@@ -51,10 +52,19 @@ export async function PATCH(req: NextRequest, { params }: Params) {
   const parsed = updateGuestSchema.safeParse(body);
   if (!parsed.success) return zodErrorResponse(parsed.error);
 
-  const { dayOfAttendance, ...rest } = parsed.data;
+  const { dayOfAttendance, expectedRevision, ...rest } = parsed.data;
 
-  const updated = await updateGuestForWedding(guestId, weddingId, rest);
-  if (!updated) return errorResponse("Guest not found", 404);
+  try {
+    const updated = await updateGuestForWedding(guestId, weddingId, rest, expectedRevision);
+    if (!updated) return errorResponse("Guest not found", 404);
+  } catch (err) {
+    // FR-7.7, extended to guests: someone else's edit landed on this guest first -- refuse the
+    // stale write and hand back the fresh guest so the frontend can refresh in one step.
+    if (err instanceof GuestConflictError) {
+      return NextResponse.json({ error: err.message, guest: err.guest }, { status: 409 });
+    }
+    throw err;
+  }
 
   if (dayOfAttendance !== undefined) {
     await setGuestAttendance(weddingId, guestId, dayOfAttendance, user.id);

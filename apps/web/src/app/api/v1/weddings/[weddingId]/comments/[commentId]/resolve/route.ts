@@ -21,8 +21,8 @@ export async function POST(req: NextRequest, { params }: Params) {
   const canEdit = access.accessLevel === "OWNER" || access.accessLevel === "EDIT";
 
   try {
-    await resolveComment(weddingId, commentId, user.id, canEdit);
-    return NextResponse.json({ ok: true });
+    const comment = await resolveComment(weddingId, commentId, user.id, canEdit);
+    return NextResponse.json({ ok: true, comment });
   } catch (err) {
     if (err instanceof CommentError) {
       return errorResponse(err.message, err.code === "NOT_FOUND" ? 404 : 403);

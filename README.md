@@ -29,8 +29,10 @@ rather than a second project.
 
 ```
 apps/web/            Next.js app — pages + /api/v1 route handlers
-packages/shared/      Zod schemas & shared TS types (validation rules, DTOs) — importable by
-                       the web app today and a React Native/Expo app later, unchanged
+apps/mobile/          Expo/React Native app (TS-21) — on-site floor-plan view/adjust only, see its
+                       own section below
+packages/shared/      Zod schemas & shared TS types (validation rules, DTOs) — imported unchanged
+                       by both apps/web and apps/mobile
 packages/db/           Data model (Prisma schema) + the query layer the API routes use
 ```
 
@@ -77,6 +79,28 @@ and open http://localhost:3000 — sign up, create a wedding, add some guests, a
 Seating rules and Tables tabs on a wedding's page. To try collaboration, invite a second account
 from the Collaborators tab (the invite link is printed to the terminal running `pnpm dev` if
 `RESEND_API_KEY` is unset) and accept it while signed in as that second account.
+
+### Turning on real email delivery
+
+No code is needed for this — the app is already fully wired to send real email through
+[Resend](https://resend.com); it's off only because no `RESEND_API_KEY` is set yet. To turn it on:
+
+1. Sign up for a free Resend account at resend.com (their free tier is plenty for trying this out
+   — 100 emails/day, 3,000/month at the time of writing).
+2. Verify a sending domain or address in Resend's dashboard (Domains → Add Domain, or use the
+   sandbox `onboarding@resend.dev` address Resend gives every new account for testing before a
+   domain is verified).
+3. Create an API key (API Keys → Create API Key).
+4. In `apps/web/.env`, set:
+   ```
+   RESEND_API_KEY="re_..."
+   RESEND_FROM_EMAIL="Seatwise <onboarding@resend.dev>"
+   ```
+   (swap in your verified domain/address once you have one).
+5. Restart `pnpm dev` so it picks up the new env vars.
+
+That's it — invite emails, plan-shared notifications, and everything else under FR-10.2 will now
+send for real instead of falling back to the console-log stand-in.
 
 ### A note on how the database layer was built and verified here
 
@@ -349,21 +373,24 @@ up for it.
     before; the assignment endpoint now accepts `tableId: null` for exactly this (never exposed
     as its own "Unassign" button, only used by undo/redo today), which itself takes the same
     must-sit-together unit the forward move would.
-  - **FR-7.7** (scoped to the Current Plan Version — see below): every write that touches the
-    Current Plan Version's assignments, status, or label (move, unassign, swap, status change,
-    relabel) now carries a `revision` counter. A client sends back the revision it last loaded;
-    if someone else's save has moved it on, the write is rejected outright — with a 409 and the
-    fresh, currently-committed plan version attached — instead of silently overwriting what they
-    just did. The rejected user sees "This plan changed since you loaded it — someone else's
-    change landed first," the view refreshes to the real state automatically (no page reload),
-    and their own attempted change is simply not applied, so they can look at what's there now
-    and retry deliberately. Separately, the Seating plan tab polls for a newer revision every 4
+  - **FR-7.7** (originally scoped to the Current Plan Version, since extended — see below): every
+    write that touches the Current Plan Version's assignments, status, or label (move, unassign,
+    swap, status change, relabel) carries a `revision` counter. A client sends back the revision it
+    last loaded; if someone else's save has moved it on, the write is rejected outright — with a
+    409 and the fresh, currently-committed plan version attached — instead of silently overwriting
+    what they just did. The rejected user sees "This plan changed since you loaded it — someone
+    else's change landed first," the view refreshes to the real state automatically (no page
+    reload), and their own attempted change is simply not applied, so they can look at what's there
+    now and retry deliberately. Separately, the Seating plan tab polls for a newer revision every 4
     seconds while a Current Plan Version is open (paused while a move/undo/redo/status/label save
     of your own is in flight, so it can't race your own write) and merges in whatever a
     collaborator has since saved — meeting the "visible within five seconds without a manual
     refresh" requirement without needing websocket/SSE infrastructure. `expectedRevision` is
     optional on every one of these endpoints, so this is purely additive: a caller that omits it
-    gets the exact old behavior.
+    gets the exact old behavior. Guests and seating tables now carry the same `revision` counter
+    and `expectedRevision` contract on their own edit endpoints (see the TS-10 paragraph below) —
+    editing a guest's tier, side, or lock, or a table's lock/accessible/single-side/position, is
+    protected exactly the same way.
   - Guests forced together by "must sit together" always move as one unit — moving one member
     brings the rest along automatically.
   - A move that would break a hard rule (capacity, must-not-sit-together with whoever's already
@@ -643,25 +670,29 @@ own separate, prominent area in both Plan views rather than a badge inside a nom
 table, and Not Attending guests are excluded outright. Nothing is deliberately left out on this
 ticket anymore.
 
-**TS-10 is now built for the scope FR-7.1–FR-7.7 actually describe: the Current Plan Version.**
-What's there: manual moves with full hard/soft-rule validation, locks, change history, FR-7.1's
-guest-drag-onto-table floor plan, FR-7.5's session-scoped undo/redo, and — since this pass —
-FR-7.7's revision-based conflict detection and 4-second polling sync, all described above. Two
-users editing the same Current Plan Version at the same time now get exactly the behavior FR-7.7
-asks for: the second save is rejected rather than silently overwriting the first, an on-screen
-explanation appears, the view refreshes to the real state, and the newer collaborator's own
-change becomes visible elsewhere within a few seconds without a manual refresh — verified with a
-real two-browser Playwright test (`test_live_sync.py`) alongside the API-level conflict checks
-(`test_concurrent_conflict.py`). What's still deliberately out of scope, and why: FR-7.7's own
-list of what a conflict can be about — "guest, rule, table, floor-plan, comment, status, version,
-or assignment data" — reads broader than just the Current Plan Version's own writes; this pass
-covers status, version (label), and assignment (move/unassign/swap) for that one entity, since
-that's what TS-10's own requirement grouping and the "Manual Override" section are actually about.
-Editing a guest, a rule, a table, or a comment concurrently still has no optimistic-concurrency
-check of its own — the second save there simply wins, same as before this pass — since each of
-those is really its own entity with its own edit surface (TS-3/TS-5/TS-6/TS-7/TS-13), and giving
-each one the same revision-counter treatment is realistically its own slice of work rather than a
-few hours' extension of this one.
+**TS-10 is now built for the full scope FR-7.1–FR-7.7 describe, including FR-7.7's own list of
+what a conflict can be about** — "guest, rule, table, floor-plan, comment, status, version, or
+assignment data." What's there: manual moves with full hard/soft-rule validation, locks, change
+history, FR-7.1's guest-drag-onto-table floor plan, FR-7.5's session-scoped undo/redo, FR-7.7's
+revision-based conflict detection and 4-second polling sync for the Current Plan Version itself
+(status, version/label, and assignment data — move/unassign/swap), all described above, and — since
+this pass — the same revision-based protection extended to guests and seating tables. Two users
+editing the same Current Plan Version, guest, or table at the same time now get exactly the
+behavior FR-7.7 asks for: the second save is rejected rather than silently overwriting the first,
+an on-screen explanation appears, the view refreshes to the real state, and (for the Current Plan
+Version) the newer collaborator's own change becomes visible elsewhere within a few seconds without
+a manual refresh — verified with a real two-browser Playwright test (`test_live_sync.py`) alongside
+the API-level conflict checks (`test_concurrent_conflict.py` for the plan version, and the new
+`test_entity_concurrency.py` for guests, tables, rules, and comments together). Seating rules and
+comments deliberately do *not* get their own `revision` column: a rule has no edit verb at all
+(only add/remove), and a duplicate or conflicting rule is already rejected up front by validation
+in `relationships.ts`; a comment is append-only plus a one-way, idempotent resolve. Neither has an
+in-place write a revision counter would be protecting against — so instead, deleting a seating rule
+that another collaborator already removed now returns a clean, explained 404 rather than a generic
+error that silently puts the (already-gone) row back in the list only to fail again on retry, and
+resolving a comment now returns the full updated row (including who resolved it) so every
+collaborator's view can sync exactly instead of guessing. This is the intentionally different, but
+equally deliberate, shape of protection each entity's actual edit surface calls for — not a gap.
 
 **TS-11 (Day-of Mode) is built**, described above. What's deliberately left out, and why: the
 `needsReassignment` flag on `seat_assignments` exists in the schema but isn't touched by an
@@ -734,10 +765,11 @@ Version labeling and side-by-side comparison are now built (described above) —
 last gap TS-12 had left open, and permission-aware UI hiding and real email delivery (both
 described above) close the last gaps TS-13 had left open. All three gaps TS-15 originally surfaced
 or that TS-7 depended on (bulk guest import, Side-Mixing, and the visual floor plan) are also
-closed. TS-10 is now built for the Current Plan Version scope FR-7.1–FR-7.7 describe (FR-7.1's
-floor-plan drag, FR-7.5's undo/redo, and FR-7.7's concurrent-edit sync and conflict detection are
-all in, described above; entity-level conflict detection for guests/rules/tables/comments remains
-a documented, deliberate gap — see the TS-10 paragraph above). TS-4 (Account & Wedding Management)
+closed. TS-10 is now built for the full scope FR-7.1–FR-7.7 describe (FR-7.1's floor-plan drag,
+FR-7.5's undo/redo, and FR-7.7's concurrent-edit sync and conflict detection are all in, described
+above; entity-level conflict detection now also covers guests and seating tables directly, with
+rules and comments getting the differently-shaped protection their own add/remove/resolve-only edit
+surface actually calls for — see the TS-10 paragraph above). TS-4 (Account & Wedding Management)
 was found, on a dev-notes audit, to have been missing its own paragraph here entirely despite
 being the earliest-built story — three real, previously undocumented gaps surfaced from that audit
 (per-wedding renameable side labels, live enforcement on an already-open browser tab, and a full
@@ -758,9 +790,209 @@ and TS-6 is now fully built. With that, every story in the
 original requirements doc has a paragraph here reflecting the scope actually built, with every
 deliberate gap named and explained rather than left silent.
 
-## Mobile later
+Most recently, TS-10's one remaining documented gap — FR-7.7's optimistic-concurrency conflict
+detection for entities other than the Current Plan Version itself — is closed too: guests and
+seating tables now carry the same `revision`/`expectedRevision` contract, and seating rules and
+comments get the differently-shaped "already gone" protection their add/remove/resolve-only edit
+surface actually calls for, rather than a revision counter with nothing to count (see the TS-10
+paragraph above, and `test_entity_concurrency.py`). Real email delivery itself needs no more code
+at all — it's been fully wired to Resend since the TS-13 pass described above — the only remaining
+step is an account-level one: sign up for a free Resend account, verify a sending domain/address,
+and set `RESEND_API_KEY`/`RESEND_FROM_EMAIL` in `apps/web/.env` (see the setup section above).
 
-Nothing here should need to change to add an iOS/Android app: point a React Native/Expo app (or
-a Capacitor-wrapped build of this same web app, if that's the faster route when the time comes)
-at the same `/api/v1` endpoints, reuse `@seatwise/shared` for validation and types, and store the
-token from the auth response instead of relying on the cookie.
+## The planner-pivot roadmap (new, post-TS-15)
+
+Beyond the original requirements doc closed out above, a September 2026 stakeholder interview
+confirmed a bigger-picture pivot: from a couple-facing tool used once per wedding, to a
+professional platform a wedding planner uses daily across dozens of active client weddings at
+once. Six new Jira stories (TS-16 through TS-21) capture this, in priority order, under the same
+TS-2 Workstream — see the shared roadmap doc for full context and the open questions still being
+decided.
+
+**TS-16 (Planner Portfolio & Multi-Client Account Model) is done.** FR-11.1
+(sortable/filterable/searchable dashboard), FR-11.2 (per-row plan status and unassigned/Needs
+Reassignment counts), and FR-11.3 (a "needs attention soonest" default ordering, not a plain
+column sort) are built — `GET /api/v1/weddings` now returns a `WeddingSummaryDTO` per wedding,
+computed via a `LEFT JOIN LATERAL` against each wedding's Current Plan Version, and the dashboard
+filters/sorts/searches that list client-side (deliberately, not a query-param API — see the code
+comment in `listWeddingsWithSummaryForUser` for why that's the right tradeoff at the stated
+15-50+-wedding portfolio scale). FR-11.4 (reviewing the create-wedding flow's language for
+planner-as-owner) was resolved as a **reposition, not a rebuild**: the existing Couple role/invite
+flow (TS-4/TS-13) is unchanged underneath, and the create-wedding form now says directly that the
+planner owns and manages the wedding and invites the couple as a collaborator afterward — no other
+copy in the app implied otherwise.
+
+**TS-17 (Client-Facing RSVP Collection) is done.** A guest can submit their own RSVP through a
+unique, unauthenticated token link — modeled directly on the existing invite-token flow (same
+32-byte random hex token, lookup by token alone) — reached at `/rsvp/[token]`, requiring no
+account (FR-12.1). The submission writes straight into that guest's own record (FR-12.3), bumping
+the same FR-7.7 revision counter without itself using `expectedRevision` (an anonymous public form
+has nothing to send back as "last seen revision"). A wedding can optionally set an
+`rsvpCutoffDate` (Collaborators tab, owner-only); past it, the link still shows the guest's
+current answers but refuses further submissions (FR-12.2). On the Guests tab, a planner sees each
+guest's "responded"/"no self-RSVP yet" status (set only by the guest's own submission, never a
+planner edit — that's what makes the badge mean what it says) and can copy/resend or regenerate a
+guest's link on demand (FR-12.4); the raw token itself is deliberately never returned by the
+normal guest read endpoints, only by that one dedicated, EDIT-gated endpoint.
+
+**TS-18 (Day-Of Timeline / Run-of-Show) is done.** A per-wedding, chronological schedule of
+day-of events (ceremony, processional, toasts, cake cutting, ...) in its own `timeline_entries`
+table — no foreign keys pointing in from guests/tables/rules/plan versions, so it's genuinely
+independent of the seating plan in both directions (FR-13.1/FR-13.2). Each entry stores a plain
+zero-padded 24-hour "HH:MM" time label rather than a real TIME/TIMESTAMP — a run-of-show is a flat
+list of clock-face labels, not datetimes — and entries are always listed by `(time, sortOrder)`;
+"reorder" is deliberately scoped to only reshuffle entries sharing the *exact same* time, which is
+what keeps the list genuinely "always chronological" instead of a free-floating manual order that
+could contradict the displayed times. Comments gained a third target type, `TIMELINE_ENTRY`,
+alongside `GUEST`/`TABLE` (FR-13.3), reusing the same nullable-target-plus-captured-label pattern
+so a comment on a since-removed entry still stands. Access follows the identical View/Comment/Edit
+rules as every other tab.
+
+**TS-19 (Reusable Templates) is done.** A planner can save a wedding's table layout plus its
+Side-Mixing setting as a reusable `SeatingTemplate` (`POST .../weddings/:id/save-as-template`,
+EDIT-gated), then start a brand-new wedding from it (`POST /api/v1/weddings` with an optional
+`templateId` + `applyTemplateTables`/`applyTemplateRules` flags). Two architectural calls were
+needed to turn FR-14.1/FR-14.2's fairly abstract language into something concrete against this
+codebase's actual data model, made the same way FR-11.4 was above — resolved and documented here
+rather than blocking on it:
+  - **FR-14.2's "structural rules"**: every seating rule this app actually has (`GuestRelationship`
+    — Must/Must Not Sit Together, Prefer Near, Avoid) is tied to two specific guest IDs, so it's
+    exactly the "guest-specific pairing" FR-14.2 says has no meaning outside its original wedding —
+    none of it is ever captured by a template, full stop. FR-14.2's own example of a rule that
+    *does* generalize ("the officiant's table is always Restricted") turns out to already be a
+    table-level property (`isRestricted`/`purpose`/`purposeCriterion*`) rather than a separate rule
+    object, so it's captured as part of each table below; the only other non-guest-specific rule
+    signal that exists at all is the wedding's own `sideMixing` setting, captured on the template
+    itself.
+  - **FR-14.3 (all-or-nothing vs. pick-and-choose)**: saving is one action that always captures
+    both pieces together from one source wedding (matches how AC1/AC2 both read). Applying is
+    composable, but only at the two-piece granularity FR-14.4's own wording gives — "table layout
+    **and/or** rule-shape" — not per-table or per-field: a planner starting a new wedding checks
+    either or both of "use its tables" / "use its rule-shape."
+  A template belongs to the planner who saved it (`ownerId`), not to any one wedding — it's a
+  portfolio-level asset, listed and deleted independent of any wedding access check, reusable
+  across all of a planner's weddings and outliving the wedding it was captured from
+  (`sourceWeddingId` goes `null` if that wedding is later deleted, the template itself is
+  unaffected). Applying a template is a one-time clone, never a live link: every field it seeds
+  (including a Restricted table's `isRestricted` flag, but deliberately never its required-guest
+  list — see FR-14.2 above) is immediately and fully editable afterward with zero ongoing
+  connection back to the template or its source wedding (AC4). Verified in `test_templates.py`:
+  saving never leaks guest data, both pieces apply independently, a template requires picking at
+  least one piece, ownership is isolated per planner, a template survives its source wedding being
+  deleted, and applying it is a true snapshot (editing the clone or the original afterward never
+  affects the other).
+
+**TS-20 (Budget & Vendor Tracking) is done.** A planner records vendors per wedding — name,
+category (Catering/Venue/Florist/Photography/... plus an `OTHER` category with its own free-text
+label, the same enum-plus-label split as the Purpose table criterion), contact info, and a cost —
+and can set an overall budget figure, seeing a running total and remaining amount as vendor costs
+are recorded (FR-15.1/FR-15.2). Money is always integer cents end-to-end (the schema, the API, the
+running-total math) and only ever converted to/from dollars at the UI boundary — never a float —
+so a running total can be summed and compared against the budget without drift. FR-15.3 (planner-
+entered numbers only, vs. reconciling against real payments/invoicing) was resolved by the ticket
+itself, not left to me: the narrower, planner-entered-only scope is what's built, with no payment/
+deposit ledger of any kind — a vendor's `contractNotes` free-text field is where that kind of
+detail (e.g. "50% deposit due 30 days out") lives instead, matching how the assistant building this
+already never handles real financial transactions. "Remaining" is `null` (not a bare negative
+number) until a budget is actually set, and goes negative rather than clamping at zero once
+recorded costs exceed it. Access follows the same View/Comment/Edit rules as every other working
+tab (guests, tables, timeline) — this is ordinary planner data entry, not an administrative wedding
+setting — and every vendor edit carries FR-7.7's optimistic-concurrency protection, same as tables
+and guests. Verified in `test_budget.py`.
+
+**TS-21 (iOS/Android: On-Site Day-Of Floor Plan) is done** — see its own "Mobile app" section
+right below, including the two architecture calls (framework choice, touch-interaction design) it
+needed the same way TS-16 and TS-19 above did. That closes out all six planner-pivot stories
+(TS-16 through TS-21) in the priority order the September 2026 stakeholder interview set.
+
+## Mobile app (`apps/mobile`, TS-21)
+
+An Expo/React Native TypeScript app, scoped exactly to TS-21's FR-16.1/FR-16.2: a planner viewing
+and adjusting the current wedding's seating plan on-site, touch-first, tolerant of unreliable venue
+wifi. FR-16.3 explicitly defers everything else (guest list, budget, RSVP, timeline, the portfolio
+dashboard) to a later story, so this is deliberately three screens — log in, pick a wedding, the
+floor plan — not a mobile port of the whole web app.
+
+**Two open questions the ticket itself flagged as needing a design call, resolved and documented
+here (also posted as a dev note on TS-21):**
+
+- **Framework: React Native/Expo, not a Capacitor-wrapped web build.** FR-16.2's offline
+  requirement — cache the current plan locally, queue moves made offline, sync them against the
+  existing FR-7.7 revision/conflict contract once connectivity returns — is a real local-storage-
+  plus-background-sync problem, not a "hide the browser chrome" problem, so a webview wrapper
+  around the existing Next.js UI would fight the requirement rather than serve it. `@seatwise/shared`
+  has zero Node-only dependencies (only `zod`), so it imports into Expo unchanged for validation and
+  DTO types — nothing about the shared package needed to change to add this app, exactly as this
+  README used to say it wouldn't.
+- **Touch interaction: tap-to-select-guest, then tap-to-place-at-table, not a literal free-drag
+  port.** The ticket's own context note flags that "touch-first drag-and-drop needs its own design,
+  not just bigger hit targets" — a literal drag gesture degrades badly on a real phone at a crowded
+  table layout (small drop targets, a thumb covering the destination mid-drag). Tapping a guest chip
+  to select them, then tapping a table to move them there, is the same underlying move the web
+  Plan tab already does one at a time (`POST .../plan-versions/:id/assignments`, unchanged) — only
+  the gesture is simpler for touch, not the action or its validation.
+
+**What's built:**
+
+- **Auth**: `src/api/auth.ts` — the exact same `/api/v1/auth/login` endpoint the web app's login
+  form calls, but this client keeps the `token` field from the JSON response and sends it back as
+  `Authorization: Bearer <token>` on every request (`src/api/client.ts`), instead of relying on the
+  httpOnly cookie the web app uses — precisely the mobile contract `apps/web/src/lib/auth.ts`'s own
+  comment on `getAuthUser()` already described. The session (user + token) persists in
+  `AsyncStorage` so a planner isn't asked to log in again every time they open the app at the venue.
+- **Wedding picker**: a minimal list (`GET /api/v1/weddings`) — just enough to choose which
+  wedding's floor plan to load, not a dashboard. FR-16.3 stays out of scope here on purpose.
+- **Floor plan screen**: fetches tables, guests, and the current plan version (same
+  `GET .../plan-versions` → take the first result, which is always the highest `versionNumber` and
+  therefore current — see the TS-9/TS-10 sections above), merges them into a table-by-table view
+  reusing each table's saved `positionX`/`positionY` from FR-7.1 so the picture matches the web
+  floor plan, and renders guest chips per table plus an Unassigned tray. Tap a guest, then tap a
+  table (or the Unassigned tray) to move them — same `POST .../assignments` endpoint, same
+  hard/soft-rule validation and `expectedRevision`/409-conflict contract FR-7.7 already defined; a
+  soft-rule warning surfaces as an alert, a hard-rule rejection reverts the attempted move with an
+  explanation, exactly mirroring the web Plan tab's own conflict handling.
+- **Offline (FR-16.2)**: the current plan version is cached in `AsyncStorage` on every successful
+  load or sync, so re-opening the app at a venue with no signal still shows the last-known plan
+  rather than a blank screen. A move made while offline (detected via `@react-native-community/
+  netinfo`, or a failed `fetch` even when NetInfo hasn't noticed yet) applies immediately to the
+  local view (marked with a small "pending sync" indicator) and is queued in `src/offline/queue.ts`
+  rather than lost. On reconnect, the queue replays against the real endpoint in order, reusing
+  FR-7.7's existing revision contract unchanged — no new conflict mechanism was invented for mobile:
+  - A **conflict** (someone else's save landed first) stops the replay there, shows the planner the
+    message and the fresh server state, and never silently reapplies the rest of the queue on top of
+    it — the still-unsynced moves are surfaced by name so the planner can review and manually redo
+    whichever still make sense, per AC2's "never silently overwriting a newer change."
+  - A **rejection** (a genuine hard-rule violation, e.g. the table filled up in the meantime) has no
+    fresh state to show (the server never changed), but invalidates the `expectedRevision` every
+    *later* queued move assumed — so the app re-fetches the real current revision and renumbers the
+    remainder (`rebaseQueue`) before continuing, rather than letting each one fail its own confusing
+    conflict in turn.
+  - A **network** failure mid-replay just stops and waits for the next reconnect or manual "Sync
+    now" tap.
+- **Tests**: `src/planMerge.ts` (merging tables/guests/plan-version into the floor-plan view, and
+  applying a move locally before the server confirms it) and `src/offline/queue.ts` (the replay
+  state machine above, including the conflict/rejection/offline/rebase paths) are plain TypeScript
+  with no React Native or device dependency, and have a real executed Jest suite
+  (`apps/mobile/__tests__/`, `pnpm --filter @seatwise/mobile test` — 15 tests, all passing) — the
+  same bar the rest of this repo's ticket work has held to. The screens themselves (`App.tsx`,
+  `src/screens/*.tsx`) type-check cleanly (`npx tsc --noEmit`) but aren't exercised by an automated
+  test here: there's no iOS/Android simulator or device available in this sandbox to drive them, so
+  that pass is left for Tom's own machine (see below).
+
+**Running it**: `pnpm install` at the repo root picks up `apps/mobile` automatically (the existing
+`apps/*` workspace glob needs no changes), then `cd apps/mobile && pnpm start` opens Expo's
+dev-server UI — scan the QR code with Expo Go on a phone, or press `i`/`a` for a simulator/emulator.
+One real gotcha worth knowing up front: the web app's dev server binds to `localhost:3000`, but
+"localhost" means a different machine depending on where this app is running — the iOS Simulator
+reaches the Mac's own localhost directly, the Android emulator needs `10.0.2.2` for the same thing,
+and a real phone in Expo Go is a separate device on the same wifi and needs the Mac's actual LAN IP
+(e.g. `http://192.168.1.23:3000`). Set `EXPO_PUBLIC_API_BASE_URL` to whichever of those applies
+before starting (`src/config.ts` falls back to the Simulator's `localhost:3000` if it's unset).
+`metro.config.js` has the pnpm-monorepo-specific settings (watched folders, symlink resolution)
+`@seatwise/shared`'s raw-TypeScript-source import needs — see its own comments for why.
+
+**Deliberately out of scope, per FR-16.3**: guest list management, budget tracking, RSVP
+collection, the day-of timeline, and the portfolio dashboard aren't in this app at all — a planner
+needing any of those still reaches for the web app. There's also no push notification wiring for a
+sync completing in the background; the app has to be open (or brought to the foreground) for a
+queued move to replay.
