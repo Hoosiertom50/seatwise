@@ -1,0 +1,23 @@
+{
+  "name": "seatwise",
+  "private": true,
+  "packageManager": "pnpm@10.28.0",
+  "scripts": {
+    "dev": "pnpm --filter @seatwise/web dev",
+    "build": "pnpm --filter @seatwise/web build",
+    "db:generate": "pnpm --filter @seatwise/db generate",
+    "db:migrate": "pnpm --filter @seatwise/db migrate"
+  },
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@prisma/client",
+      "@prisma/engines",
+      "prisma",
+      "unrs-resolver"
+    ]
+  }
+}

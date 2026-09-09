@@ -1,0 +1,22 @@
+{
+  "expo": {
+    "name": "Seatwise",
+    "slug": "seatwise-mobile",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.egineering.seatwise"
+    },
+    "android": {
+      "package": "com.egineering.seatwise"
+    },
+    "web": {
+      "bundler": "metro"
+    },
+    "plugins": [
+      "expo-status-bar"
+    ]
+  }
+}
