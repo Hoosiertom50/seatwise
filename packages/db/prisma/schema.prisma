@@ -91,6 +91,7 @@ model Wedding {
   invites       WeddingInvite[]
   comments      Comment[]
   notifications Notification[]
+  timelineEntries TimelineEntry[]
 
   @@index([ownerId])
   @@map("weddings")
@@ -167,6 +168,8 @@ model WeddingInvite {
 enum CommentTargetType {
   GUEST
   TABLE
+  // TS-18 (FR-13.3): a comment can also target a single timeline entry, same pattern as GUEST/TABLE.
+  TIMELINE_ENTRY
 }
 
 model Comment {
@@ -178,10 +181,14 @@ model Comment {
   guest            Guest?            @relation(fields: [guestId], references: [id], onDelete: SetNull)
   tableId          String?
   table            SeatingTable?     @relation(fields: [tableId], references: [id], onDelete: SetNull)
-  // FR-10.3: captured once at creation so the comment stays understandable even after its guest
-  // or table is renamed or removed — "stays attached to that historical target rather than being
-  // silently reassigned". If guestId/tableId is null but targetType still says GUEST/TABLE, the
-  // original target was removed; targetLabel is what's shown in its place.
+  // TS-18 (FR-13.3): same nullable-target-plus-captured-label shape as guestId/tableId above.
+  timelineEntryId  String?
+  timelineEntry    TimelineEntry?    @relation(fields: [timelineEntryId], references: [id], onDelete: SetNull)
+  // FR-10.3: captured once at creation so the comment stays understandable even after its guest,
+  // table, or timeline entry is renamed or removed — "stays attached to that historical target
+  // rather than being silently reassigned". If guestId/tableId/timelineEntryId is null but
+  // targetType still names that kind of target, the original target was removed; targetLabel is
+  // what's shown in its place.
   targetLabel      String
   body             String
   authorUserId     String
@@ -196,7 +203,33 @@ model Comment {
   @@index([weddingId])
   @@index([guestId])
   @@index([tableId])
+  @@index([timelineEntryId])
   @@map("comments")
+}
+
+// TS-18 (FR-13.1/FR-13.2): a per-wedding, chronological run-of-show -- its own record, never
+// derived from or dependent on guests/tables/rules/seating plans, and nothing else depends on it
+// either (deleting a wedding cascades this away; nothing else cascades from it). "time" is a
+// plain zero-padded 24-hour "HH:MM" string (validated at the Zod layer, see schemas/timeline.ts)
+// rather than a real TIME/TIMESTAMP -- a run-of-show is a flat list of clock-face labels, not
+// datetimes, and a zero-padded string sorts correctly with ordinary text ordering. "sortOrder" is
+// a tie-breaker for entries sharing the same displayed time, and is also the field a planner's
+// explicit reorder action moves -- see reorderTimelineEntry in queries/timeline.ts for why entries
+// are always listed by (time, sortOrder).
+model TimelineEntry {
+  id          String   @id @default(cuid())
+  weddingId   String
+  wedding     Wedding  @relation(fields: [weddingId], references: [id], onDelete: Cascade)
+  time        String
+  description String
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  comments Comment[]
+
+  @@index([weddingId])
+  @@map("timeline_entries")
 }
 
 enum NotificationType {
