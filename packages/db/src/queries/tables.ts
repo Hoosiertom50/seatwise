@@ -386,7 +386,7 @@ export async function syncAccessibleTableReassignment(
   if (!table) return { affectedGuestNames: [] };
 
   const { rows: planRows } = await pool.query(
-    `SELECT id FROM "plan_versions" WHERE "weddingId" = $1 ORDER BY "versionNumber" DESC LIMIT 1`,
+    `SELECT id FROM "plan_versions" WHERE "weddingId" = $1 AND "isCurrent" LIMIT 1`,
     [weddingId]
   );
   const currentPlanVersionId: string | undefined = planRows[0]?.id;
