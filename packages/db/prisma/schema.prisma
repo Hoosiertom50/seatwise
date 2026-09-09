@@ -609,6 +609,12 @@ model PlanVersion {
   // null on a version restored/created before this field existed.
   sideMixingSetting SideMixingSetting?
   ruleConfigVersion Int?
+  // FR-5.6: an independent flag, not derived from versionNumber ordering -- lets a "Save as
+  // Comparison Draft" generation (or restore) produce a new, higher-numbered version that never
+  // replaces the Current one. Enforced to at most one true row per wedding by a partial unique
+  // index (see the migration) rather than a Prisma-level constraint, since Prisma doesn't support
+  // partial unique indexes in the schema itself.
+  isCurrent      Boolean           @default(false)
   createdAt      DateTime          @default(now())
   // FR-7.7: bumped by every write that touches this version's assignments, status, or label --
   // an optimistic-concurrency guard so a stale client can't silently overwrite a newer save.

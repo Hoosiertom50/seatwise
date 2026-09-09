@@ -229,6 +229,18 @@ up for it.
   with the FR-0.1 hard-rule invariant enforced server-side: a pair of guests can't simultaneously
   be required to sit together and forbidden from it — that's blocked outright with a clear error,
   not just left to the UI to prevent.
+  - **Cross-cutting hard-rule invariant** (TS-3, FR-0.2 AC2): the flip side of FR-0.1 above — an
+    action that would leave a *soft* rule (Prefer Near/Avoid, or a table's Single-Side-Only flag)
+    unsatisfied always still saves, with a visible, non-blocking warning, never a blocking error.
+    That much already existed at every site that produces one of these warnings (a manual move, a
+    day-of swap, generation itself). The real, previously-flagged gap was narrower than "does the
+    warning exist" — FR-0.2 AC2 also requires the warning to name "the applied
+    weighting-configuration version," and none of the three warning strings did; they named the
+    guests and the rule, but not the version. Every soft-rule warning site now appends "(weighting-
+    configuration version N)" using the same `RULE_WEIGHT_CONFIG_VERSION`/`ruleConfigVersion`
+    already stored on each plan version (see the Side-Mixing/`ruleConfigVersion` bullet under
+    Relationships & Seating Rules gap-closing, TS-6/FR-3.4, below) — verified end-to-end for the
+    manual-move, swap, and generation warning paths in `test_warning_rule_config_version.py`.
 - **Table & Venue Layout** (TS-7, FR-4.1–FR-4.7): create/update/delete tables for a wedding with a
   name, seat capacity, optional purpose (e.g. "Kids table"), a restricted flag, and an
   accessible-seating flag, plus:
@@ -309,8 +321,9 @@ up for it.
   - A guest who needs an accessible table is only ever placed at one flagged as accessible.
   - Table capacity is a hard limit — a table is never overbooked.
   - "Prefer near" / "avoid" are treated as soft, best-effort preferences: honored when there's
-    room to do so, and surfaced as a non-blocking warning (naming the guests involved) when they
-    can't be.
+    room to do so, and surfaced as a non-blocking warning (naming the guests involved, and the
+    weighting-configuration version in effect — see the TS-3/FR-0.2 bullet above) when they can't
+    be.
   - If there isn't a valid seat for everyone (not enough capacity, or every remaining table
     already seats someone a guest must not sit with), the plan is generated anyway, those guests
     are listed as unassigned with a clear reason, and the plan is marked incomplete — nothing is
@@ -321,8 +334,43 @@ up for it.
     pass below) *are* seated automatically: every listed guest is pinned to that table at
     generation time, the same way a locked guest is pinned to theirs, with the same
     graceful-fallback-with-warning behavior if the pin can no longer be honored.
-- **Plan review status** (TS-9 — now fully built, see below): the Current Plan Version (the latest
-  one generated) moves through Draft → In Review → Approved. Approving requires a complete plan
+  - **Soft-preference score report** (FR-5.3): the response from a generation also carries a
+    `scoreReport` — the weighting-configuration version used, a total score, every individual
+    Prefer Near/Avoid relationship's satisfied/unsatisfied outcome (by name, not just a count),
+    each Purpose table's wedding-wide match rate, and a Side-Mixing aggregate (mixed vs.
+    single-side table counts, and any Single-Side-Only violations). The Plan tab shows this
+    alongside the generated plan, with a "How is this calculated?" toggle that displays the exact
+    `RULE_WEIGHT_CONFIG` weights the version number refers to — the point of FR-5.3's "any
+    displayed score links to its calculation method," not just a number with nothing behind it.
+    Deliberately transient like `warnings` already was: it's computed by the pure engine function
+    and returned only in that immediate response, never persisted — regenerating recomputes it
+    fresh rather than reading back something stale. Verified in
+    `test_score_report_and_comparison_draft.py`.
+  - **Make Current vs. Save as Comparison Draft** (FR-5.6): generating now asks upfront (a
+    checkbox on the Plan tab, `makeCurrent` in the API) whether this run becomes the new Current
+    version — replacing whichever was Current before — or a non-replacing Comparison Draft that
+    exists purely to be looked at and compared, never touching what the wedding actually uses.
+    This required turning `isCurrent` from something that used to be *computed* (whichever version
+    had the highest number was, by definition, "current") into its own independently-settable
+    column, enforced to at-most-one-true-per-wedding by a database-level partial unique index —
+    so a draft can legitimately have a higher version number than Current without ever becoming
+    it. A hard-rule contradiction still produces only a conflict report and saves nothing, for
+    either choice (FR-5.6 AC6's last clause) — that part needed no new code, since a rejected
+    generation already never reached the point of creating a version at all. Verified in
+    `test_score_report_and_comparison_draft.py`.
+    - **A real regression this surfaced, and fixed as part of the same change:** every place that
+      used to read "the first (highest-numbered) plan version" as shorthand for "Current" —
+      Day-of Mode, the Tables tab's capacity overview, the Plan tab's own initial load, and the
+      mobile app's on-site floor plan screen — stopped being safe the moment a Comparison Draft
+      could outnumber Current without replacing it. All four now select by `isCurrent` explicitly
+      instead (falling back to the first row only when the list is otherwise empty), so a
+      Comparison Draft never gets mistaken for the plan actually in effect — confirmed in
+      `test_current_vs_draft_selection.py`, which checks the exact shape (`isCurrent` present per
+      row, and NOT always on the first row) those call sites now depend on.
+- **Plan review status** (TS-9 — now fully built, see below): the Current Plan Version (the one
+  explicitly marked `isCurrent` — see FR-5.6 under Automated seat assignment engine above; before
+  that, always just whichever version had the highest number) moves through Draft → In Review →
+  Approved. Approving requires a complete plan
   (FR-0.1) and only ever applies to the current version — an older, superseded version's status
   can no longer be changed. Approving is a checkpoint, not a lock: nothing about assignments,
   rules, guests, or tables becomes read-only. If the plan is edited after approval, it stays
@@ -943,8 +991,11 @@ here (also posted as a dev note on TS-21):**
 - **Wedding picker**: a minimal list (`GET /api/v1/weddings`) — just enough to choose which
   wedding's floor plan to load, not a dashboard. FR-16.3 stays out of scope here on purpose.
 - **Floor plan screen**: fetches tables, guests, and the current plan version (same
-  `GET .../plan-versions` → take the first result, which is always the highest `versionNumber` and
-  therefore current — see the TS-9/TS-10 sections above), merges them into a table-by-table view
+  `GET .../plan-versions` → find the row with `isCurrent: true`, falling back to the first result
+  only if the list is otherwise empty — updated when FR-5.6/TS-8 made a Comparison Draft able to
+  outnumber Current without replacing it, since "the first result" stopped reliably meaning
+  current at that point; see the FR-5.6 bullet under Automated seat assignment engine above),
+  merges them into a table-by-table view
   reusing each table's saved `positionX`/`positionY` from FR-7.1 so the picture matches the web
   floor plan, and renders guest chips per table plus an Unassigned tray. Tap a guest, then tap a
   table (or the Unassigned tray) to move them — same `POST .../assignments` endpoint, same

@@ -106,6 +106,60 @@ export interface SeatingPlanResult {
   warnings: string[];
   errors: string[];
   isComplete: boolean;
+  // FR-5.3: which soft preferences were satisfied/unsatisfied by the final plan, the weighting-
+  // configuration version that produced it, and an approximate total score using those same
+  // weights -- omitted on a hard-rule-contradiction failure (errors.length > 0), since no plan
+  // was actually produced to score.
+  scoreReport?: SoftPreferenceScoreReport;
+}
+
+// FR-5.3: one PREFER_NEAR or AVOID relationship's outcome in the final plan.
+export interface SoftPreferenceEntry {
+  type: "PREFER_NEAR" | "AVOID";
+  guestAId: string;
+  guestAName: string;
+  guestBId: string;
+  guestBName: string;
+  // PREFER_NEAR: satisfied means seated at the same table. AVOID: satisfied means seated at
+  // different tables (or one/both unseated, which trivially avoids sitting together).
+  satisfied: boolean;
+}
+
+// FR-3.7/FR-5.3: a Purpose table's structured criterion is a wedding-wide preference, not a
+// single pairwise one -- reported as how many matching guests (across the whole wedding) actually
+// ended up seated at this table versus how many matching guests exist at all.
+export interface PurposeTableScoreEntry {
+  tableId: string;
+  tableLabel: string;
+  criterionType: EnginePurposeCriterionType;
+  criterionValue: string;
+  matchingGuestsSeatedHere: number;
+  matchingGuestsTotal: number;
+}
+
+// FR-3.4/FR-5.3: Side-Mixing (and its Single-Side-Only table override) is scored per table, not
+// per guest pair, so it's reported as an aggregate rather than a list of individual preferences.
+export interface SideMixingScoreReport {
+  setting: EngineSideMixing;
+  // Tables seating guests from both sides.
+  mixedTableCount: number;
+  // Multi-occupant tables seating only one side.
+  singleSideTableCount: number;
+  // Single-Side-Only tables that nonetheless ended up seating both sides.
+  singleSideOnlyViolations: number;
+}
+
+export interface SoftPreferenceScoreReport {
+  ruleConfigVersion: number;
+  // An approximate summary using the same documented weights (RULE_WEIGHT_CONFIG) the live
+  // placement scoring uses -- FR-5.3 explicitly doesn't require the plan itself to be
+  // mathematically optimal, and this total is likewise a best-effort summary, not a claim that a
+  // higher score was unreachable. See RULE_WEIGHT_CONFIG below for exactly how each term is
+  // weighted -- that's this score's calculation method.
+  totalScore: number;
+  preferences: SoftPreferenceEntry[];
+  purposeTables: PurposeTableScoreEntry[];
+  sideMixing: SideMixingScoreReport;
 }
 
 interface Unit {
@@ -143,6 +197,128 @@ export const RULE_WEIGHT_CONFIG = {
   purposeCriterionBonus: 6,
   purposeCriterionMismatchPenalty: 2,
 } as const;
+
+// FR-5.3: a pure post-analysis pass over the final assignments -- deliberately decoupled from
+// attemptPlace's own (local, per-decision) scoring above, so adding this reporting can never
+// change what generation actually does, only what it reports afterward.
+function computeScoreReport(
+  guests: EngineGuest[],
+  relationships: EngineRelationship[],
+  tables: EngineTable[],
+  sideMixing: EngineSideMixing,
+  assignments: SeatingPlanAssignment[]
+): SoftPreferenceScoreReport {
+  const guestById = new Map(guests.map((g) => [g.id, g]));
+  const guestName = (id: string) => guestById.get(id)?.name ?? id;
+  const tableIdByGuestId = new Map(assignments.map((a) => [a.guestId, a.tableId]));
+  const w = RULE_WEIGHT_CONFIG;
+
+  let totalScore = 0;
+
+  // PREFER_NEAR / AVOID: one entry per relationship, deduplicated in case the same pair somehow
+  // appears twice (relationships are meant to be unique per pair+type, but this stays correct
+  // either way rather than double-counting).
+  const preferences: SoftPreferenceEntry[] = [];
+  const seenPairs = new Set<string>();
+  for (const r of relationships) {
+    if (r.type !== "PREFER_NEAR" && r.type !== "AVOID") continue;
+    const pairKey = `${r.type}::${[r.guestAId, r.guestBId].sort().join("::")}`;
+    if (seenPairs.has(pairKey)) continue;
+    seenPairs.add(pairKey);
+
+    const tableA = tableIdByGuestId.get(r.guestAId);
+    const tableB = tableIdByGuestId.get(r.guestBId);
+    const seatedTogether = tableA !== undefined && tableA === tableB;
+    const satisfied = r.type === "PREFER_NEAR" ? seatedTogether : !seatedTogether;
+    if (r.type === "PREFER_NEAR" && satisfied) totalScore += w.preferNearBonus;
+    if (r.type === "AVOID" && !satisfied) totalScore -= w.avoidPenalty;
+
+    preferences.push({
+      type: r.type,
+      guestAId: r.guestAId,
+      guestAName: guestName(r.guestAId),
+      guestBId: r.guestBId,
+      guestBName: guestName(r.guestBId),
+      satisfied,
+    });
+  }
+
+  // Purpose-table criterion (FR-3.7): wedding-wide match rate per Purpose table.
+  const purposeTables: PurposeTableScoreEntry[] = [];
+  for (const t of tables) {
+    if (!t.purposeCriterion) continue;
+    const { type, value } = t.purposeCriterion;
+    let matchingGuestsTotal = 0;
+    let matchingGuestsSeatedHere = 0;
+    for (const g of guests) {
+      const fieldValue = type === "SIDE" ? g.side : type === "TIER" ? g.tier : g.ageCategory;
+      if (fieldValue !== value) continue;
+      matchingGuestsTotal++;
+      if (tableIdByGuestId.get(g.id) === t.id) {
+        matchingGuestsSeatedHere++;
+        totalScore += w.purposeCriterionBonus;
+      }
+    }
+    purposeTables.push({
+      tableId: t.id,
+      tableLabel: t.label,
+      criterionType: type,
+      criterionValue: value,
+      matchingGuestsSeatedHere,
+      matchingGuestsTotal,
+    });
+  }
+
+  // Side-Mixing (FR-3.4): an aggregate view, not a per-pair list -- occupancy at each table that
+  // ended up with 2+ guests is classified as mixed (both sides present) or single-side, and every
+  // Single-Side-Only table that nonetheless ended up mixed is counted as a violation (mirroring
+  // the same non-blocking warning already surfaced during generation for that case).
+  const occupantsByTable = new Map<string, string[]>();
+  for (const a of assignments) {
+    if (!occupantsByTable.has(a.tableId)) occupantsByTable.set(a.tableId, []);
+    occupantsByTable.get(a.tableId)!.push(a.guestId);
+  }
+  const tablesById = new Map(tables.map((t) => [t.id, t]));
+  let mixedTableCount = 0;
+  let singleSideTableCount = 0;
+  let singleSideOnlyViolations = 0;
+  for (const [tableId, occupantIds] of occupantsByTable) {
+    let bride = 0;
+    let groom = 0;
+    for (const guestId of occupantIds) {
+      const side = guestById.get(guestId)?.side;
+      if (side === "BRIDE") bride++;
+      else if (side === "GROOM") groom++;
+    }
+    const isMixed = bride > 0 && groom > 0;
+    if (isMixed) {
+      mixedTableCount++;
+      // Mixing is the desired outcome under Balanced/Fully Mixed, and the thing Keep Separate
+      // specifically tries to avoid.
+      if (sideMixing === "KEEP_SEPARATE") {
+        totalScore -= w.sideMixing.keepSeparateOppositeSidePenalty;
+      } else if (sideMixing === "FULLY_MIXED") {
+        totalScore += w.sideMixing.fullyMixedOppositeSideBonus;
+      } else {
+        totalScore += w.sideMixing.balancedMixOppositeSideBonus;
+      }
+    } else if (bride > 0 || groom > 0) {
+      singleSideTableCount++;
+    }
+    if (isMixed && tablesById.get(tableId)?.singleSideOnly) {
+      singleSideOnlyViolations++;
+      totalScore -= w.sideMixing.singleSideOnlyMismatchPenalty;
+    }
+  }
+
+  return {
+    ruleConfigVersion: RULE_WEIGHT_CONFIG_VERSION,
+    totalScore,
+    preferences,
+    purposeTables,
+    sideMixing: { setting: sideMixing, mixedTableCount, singleSideTableCount, singleSideOnlyViolations },
+  };
+}
 
 class UnionFind {
   private parent = new Map<string, string>();
@@ -399,7 +575,7 @@ export function generateSeatingPlan(
         warnings.push(
           `${unit.guestIds.map(guestName).join(", ")} ${unit.guestIds.length === 1 ? "was" : "were"} ` +
             `seated at "${best.label}" (Single-Side-Only) despite being on the other side — no other ` +
-            `table had room.`
+            `table had room (weighting-configuration version ${RULE_WEIGHT_CONFIG_VERSION}).`
         );
       }
     }
@@ -409,8 +585,9 @@ export function generateSeatingPlan(
       for (const other of existingBefore) {
         if (avoidMap.get(guestId)?.has(other)) {
           warnings.push(
-            `${guestName(guestId)} and ${guestName(other)} were seated at the same table ` +
-              `despite an "avoid" preference between them — no other table had room.`
+            `${guestName(guestId)} and ${guestName(other)} were seated at the same table despite an ` +
+              `"avoid" preference between them — no other table had room (weighting-configuration ` +
+              `version ${RULE_WEIGHT_CONFIG_VERSION}).`
           );
         }
       }
@@ -496,5 +673,6 @@ export function generateSeatingPlan(
     warnings,
     errors,
     isComplete: unassignedGuestIds.length === 0,
+    scoreReport: computeScoreReport(guests, relationships, tables, sideMixing, assignments),
   };
 }
