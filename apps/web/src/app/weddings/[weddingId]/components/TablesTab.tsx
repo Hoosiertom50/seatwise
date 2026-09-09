@@ -7,6 +7,7 @@ import type {
   PlanVersionDTO,
   PlanVersionDetailDTO,
   SeatingTableDTO,
+  SeatingTemplateDTO,
   TableShape,
   TablePurposeCriterionType,
   WeddingDTO,
@@ -96,6 +97,12 @@ export function TablesTab({
   const [qcPrefix, setQcPrefix] = useState("Table");
   const [qcCreating, setQcCreating] = useState(false);
 
+  // TS-19 (FR-14.1/FR-14.2): save this wedding's current table layout + Side-Mixing setting as a
+  // reusable template -- see save-as-template's own route comment for why EDIT access is enough.
+  const [templateName, setTemplateName] = useState("");
+  const [savingTemplate, setSavingTemplate] = useState(false);
+  const [savedTemplate, setSavedTemplate] = useState<SeatingTemplateDTO | null>(null);
+
   // FR-4.5: capacity overview needs the current plan version's assignments, purely to display --
   // never used for anything that affects seating logic.
   const [assignedHeadcountByTable, setAssignedHeadcountByTable] = useState<Record<string, number>>({});
@@ -181,6 +188,28 @@ export function TablesTab({
       setError(err instanceof ApiError ? err.message : "Couldn't create those tables.");
     } finally {
       setQcCreating(false);
+    }
+  }
+
+  // TS-19: captures the tables above plus this wedding's sideMixing setting in one action. A
+  // template is a one-time snapshot, not a live link -- editing this wedding's tables afterward
+  // never changes a template already saved from it.
+  async function onSaveAsTemplate(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+    setSavedTemplate(null);
+    setSavingTemplate(true);
+    try {
+      const { template } = await api.post<{ template: SeatingTemplateDTO }>(
+        `/api/v1/weddings/${weddingId}/save-as-template`,
+        { name: templateName }
+      );
+      setSavedTemplate(template);
+      setTemplateName("");
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Couldn't save that template.");
+    } finally {
+      setSavingTemplate(false);
     }
   }
 
@@ -538,6 +567,47 @@ export function TablesTab({
               : `Create ${qcCount} ${qcShape.toLowerCase()} table(s) of ${qcCapacity}`}
           </button>
         </form>
+      </details>
+
+      <details className="mb-6 rounded-lg border border-neutral-200 p-4">
+        <summary className="cursor-pointer text-sm font-medium">
+          Save as a reusable template
+        </summary>
+        <p className="mt-2 mb-3 text-sm text-neutral-500">
+          Saves this wedding&apos;s current table layout (labels, capacities, shapes, Purpose-table
+          criteria) and its Side-Mixing setting as a template you can start a different wedding
+          from later. Never includes any guest — a Restricted table&apos;s required-guest list
+          doesn&apos;t carry over, since it has no meaning for a different wedding&apos;s guests.
+        </p>
+        <form onSubmit={onSaveAsTemplate} className="flex flex-col gap-2 sm:flex-row sm:items-end">
+          <div className="flex-1">
+            <label htmlFor="template-name" className="mb-1 block text-xs font-medium">
+              Template name
+            </label>
+            <input
+              id="template-name"
+              className="w-full rounded-md border border-neutral-300 px-2 py-1.5 text-sm"
+              placeholder="e.g. Standard reception layout"
+              value={templateName}
+              onChange={(e) => setTemplateName(e.target.value)}
+              required
+            />
+          </div>
+          <button
+            type="submit"
+            disabled={savingTemplate}
+            className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 disabled:opacity-50"
+          >
+            {savingTemplate ? "Saving..." : "Save as template"}
+          </button>
+        </form>
+        {savedTemplate && (
+          <p className="mt-2 text-sm text-green-700">
+            Saved &ldquo;{savedTemplate.name}&rdquo; ({savedTemplate.tableCount} table
+            {savedTemplate.tableCount === 1 ? "" : "s"}) — pick it when creating a new wedding from
+            your dashboard.
+          </p>
+        )}
       </details>
         </>
       )}

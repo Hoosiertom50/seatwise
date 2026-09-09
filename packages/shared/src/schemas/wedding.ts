@@ -5,7 +5,7 @@ import { z } from "zod";
 export const sideMixingEnum = z.enum(["KEEP_SEPARATE", "BALANCED_MIX", "FULLY_MIXED"]);
 export type SideMixing = z.infer<typeof sideMixingEnum>;
 
-export const createWeddingSchema = z.object({
+const weddingBaseSchema = z.object({
   name: z.string().min(1, "Wedding name is required").max(200),
   eventDate: z.string().date().optional().nullable(),
   venueName: z.string().max(200).optional().nullable(),
@@ -23,9 +23,30 @@ export const createWeddingSchema = z.object({
   // language exactly.
   rsvpCutoffDate: z.string().date().optional().nullable(),
 });
+
+// TS-19 (FR-14.4): "start this new wedding from an existing template" is only ever offered at
+// creation time -- not a later update -- so these fields live only on createWeddingSchema, never
+// on updateWeddingSchema below. templateId alone picks nothing; the planner must also check at
+// least one of applyTemplateTables/applyTemplateRules (mirroring FR-14.4's own "table layout
+// and/or rule-shape" phrasing), or the request is rejected rather than silently applying nothing.
+export const createWeddingSchema = weddingBaseSchema
+  .extend({
+    templateId: z.string().min(1).optional(),
+    applyTemplateTables: z.boolean().default(false),
+    applyTemplateRules: z.boolean().default(false),
+  })
+  .superRefine((data, ctx) => {
+    if (data.templateId && !data.applyTemplateTables && !data.applyTemplateRules) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Pick at least one part of the template to use: its table layout, its rule-shape, or both.",
+        path: ["templateId"],
+      });
+    }
+  });
 export type CreateWeddingInput = z.infer<typeof createWeddingSchema>;
 
-export const updateWeddingSchema = createWeddingSchema.partial();
+export const updateWeddingSchema = weddingBaseSchema.partial();
 export type UpdateWeddingInput = z.infer<typeof updateWeddingSchema>;
 
 export interface WeddingDTO {

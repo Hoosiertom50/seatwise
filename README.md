@@ -846,6 +846,40 @@ alongside `GUEST`/`TABLE` (FR-13.3), reusing the same nullable-target-plus-captu
 so a comment on a since-removed entry still stands. Access follows the identical View/Comment/Edit
 rules as every other tab.
 
+**TS-19 (Reusable Templates) is done.** A planner can save a wedding's table layout plus its
+Side-Mixing setting as a reusable `SeatingTemplate` (`POST .../weddings/:id/save-as-template`,
+EDIT-gated), then start a brand-new wedding from it (`POST /api/v1/weddings` with an optional
+`templateId` + `applyTemplateTables`/`applyTemplateRules` flags). Two architectural calls were
+needed to turn FR-14.1/FR-14.2's fairly abstract language into something concrete against this
+codebase's actual data model, made the same way FR-11.4 was above — resolved and documented here
+rather than blocking on it:
+  - **FR-14.2's "structural rules"**: every seating rule this app actually has (`GuestRelationship`
+    — Must/Must Not Sit Together, Prefer Near, Avoid) is tied to two specific guest IDs, so it's
+    exactly the "guest-specific pairing" FR-14.2 says has no meaning outside its original wedding —
+    none of it is ever captured by a template, full stop. FR-14.2's own example of a rule that
+    *does* generalize ("the officiant's table is always Restricted") turns out to already be a
+    table-level property (`isRestricted`/`purpose`/`purposeCriterion*`) rather than a separate rule
+    object, so it's captured as part of each table below; the only other non-guest-specific rule
+    signal that exists at all is the wedding's own `sideMixing` setting, captured on the template
+    itself.
+  - **FR-14.3 (all-or-nothing vs. pick-and-choose)**: saving is one action that always captures
+    both pieces together from one source wedding (matches how AC1/AC2 both read). Applying is
+    composable, but only at the two-piece granularity FR-14.4's own wording gives — "table layout
+    **and/or** rule-shape" — not per-table or per-field: a planner starting a new wedding checks
+    either or both of "use its tables" / "use its rule-shape."
+  A template belongs to the planner who saved it (`ownerId`), not to any one wedding — it's a
+  portfolio-level asset, listed and deleted independent of any wedding access check, reusable
+  across all of a planner's weddings and outliving the wedding it was captured from
+  (`sourceWeddingId` goes `null` if that wedding is later deleted, the template itself is
+  unaffected). Applying a template is a one-time clone, never a live link: every field it seeds
+  (including a Restricted table's `isRestricted` flag, but deliberately never its required-guest
+  list — see FR-14.2 above) is immediately and fully editable afterward with zero ongoing
+  connection back to the template or its source wedding (AC4). Verified in `test_templates.py`:
+  saving never leaks guest data, both pieces apply independently, a template requires picking at
+  least one piece, ownership is isolated per planner, a template survives its source wedding being
+  deleted, and applying it is a true snapshot (editing the clone or the original afterward never
+  affects the other).
+
 ## Mobile later
 
 Nothing here should need to change to add an iOS/Android app: point a React Native/Expo app (or

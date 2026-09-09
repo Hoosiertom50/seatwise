@@ -12,3 +12,4 @@ export * from "./queries/comments";
 export * from "./queries/activity";
 export * from "./queries/notifications";
 export * from "./queries/timeline";
+export * from "./queries/templates";

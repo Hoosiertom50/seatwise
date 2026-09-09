@@ -1,5 +1,6 @@
 import { randomUUID } from "crypto";
 import { pool } from "../pool";
+import { TemplateNotFoundError } from "./templates";
 
 export interface WeddingRow {
   id: string;
@@ -85,6 +86,14 @@ const SELECT_WITH_SUMMARY = `
   ) reassign ON true
 `;
 
+// TS-19 (FR-14.4): optionally seeds the new wedding from an existing template the caller owns.
+// applyTemplateRules overrides sideMixing with the template's own setting (taking precedence over
+// whatever input.sideMixing carries, matching "start from the template" rather than "start from
+// the template but only for the fields I didn't already set"); applyTemplateTables clones every
+// one of the template's tables in as brand-new, independent seating_tables rows -- there's no
+// ongoing link back to the template afterward, so everything cloned in is immediately and freely
+// editable (AC4), same as a table created by hand. Both the wedding insert and every cloned table
+// happen in one transaction, so a template mid-application can never leave a half-seeded wedding.
 export async function createWedding(
   ownerId: string,
   input: {
@@ -96,29 +105,109 @@ export async function createWedding(
     sideLabel1?: string;
     sideLabel2?: string;
     rsvpCutoffDate?: string | null;
+    templateId?: string;
+    applyTemplateTables?: boolean;
+    applyTemplateRules?: boolean;
   }
 ): Promise<WeddingRow> {
-  const id = randomUUID();
-  const { rows } = await pool.query(
-    `INSERT INTO "weddings" (id, "ownerId", name, "eventDate", "venueName", note, "sideMixing", "sideLabel1", "sideLabel2", "rsvpCutoffDate", "updatedAt")
-     VALUES ($1, $2, $3, $4, $5, $6, COALESCE($7::"SideMixingSetting", 'BALANCED_MIX'), COALESCE($8, 'Bride'), COALESCE($9, 'Groom'), $10, now())
-     RETURNING id, "ownerId", name, "eventDate"::text AS "eventDate", "venueName", note, status,
-               "emailNotificationsEnabled", "sideMixing", "sideLabel1", "sideLabel2",
-               "rsvpCutoffDate"::text AS "rsvpCutoffDate", "createdAt", "updatedAt"`,
-    [
-      id,
-      ownerId,
-      input.name,
-      input.eventDate ?? null,
-      input.venueName ?? null,
-      input.note ?? null,
-      input.sideMixing ?? null,
-      input.sideLabel1 ?? null,
-      input.sideLabel2 ?? null,
-      input.rsvpCutoffDate ?? null,
-    ]
-  );
-  return { ...rows[0], guestCount: 0 };
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+
+    let sideMixing = input.sideMixing ?? null;
+    let templateTables: Array<{
+      label: string;
+      capacity: number;
+      isRestricted: boolean;
+      isAccessible: boolean;
+      isLocked: boolean;
+      purpose: string | null;
+      purposeCriterionType: string | null;
+      purposeCriterionValue: string | null;
+      singleSideOnly: boolean;
+      shape: string;
+      positionX: number | null;
+      positionY: number | null;
+    }> = [];
+
+    if (input.templateId) {
+      const { rows: templateRows } = await client.query(
+        `SELECT "sideMixing" FROM "seating_templates" WHERE id = $1 AND "ownerId" = $2`,
+        [input.templateId, ownerId]
+      );
+      const template = templateRows[0];
+      if (!template) throw new TemplateNotFoundError("Template not found.");
+
+      if (input.applyTemplateRules) {
+        sideMixing = template.sideMixing;
+      }
+      if (input.applyTemplateTables) {
+        const { rows } = await client.query(
+          `SELECT label, capacity, "isRestricted", "isAccessible", "isLocked", purpose,
+                  "purposeCriterionType", "purposeCriterionValue", "singleSideOnly", shape,
+                  "positionX", "positionY"
+           FROM "seating_template_tables" WHERE "templateId" = $1 ORDER BY "sortOrder"`,
+          [input.templateId]
+        );
+        templateTables = rows;
+      }
+    }
+
+    const id = randomUUID();
+    const { rows } = await client.query(
+      `INSERT INTO "weddings" (id, "ownerId", name, "eventDate", "venueName", note, "sideMixing", "sideLabel1", "sideLabel2", "rsvpCutoffDate", "updatedAt")
+       VALUES ($1, $2, $3, $4, $5, $6, COALESCE($7::"SideMixingSetting", 'BALANCED_MIX'), COALESCE($8, 'Bride'), COALESCE($9, 'Groom'), $10, now())
+       RETURNING id, "ownerId", name, "eventDate"::text AS "eventDate", "venueName", note, status,
+                 "emailNotificationsEnabled", "sideMixing", "sideLabel1", "sideLabel2",
+                 "rsvpCutoffDate"::text AS "rsvpCutoffDate", "createdAt", "updatedAt"`,
+      [
+        id,
+        ownerId,
+        input.name,
+        input.eventDate ?? null,
+        input.venueName ?? null,
+        input.note ?? null,
+        sideMixing,
+        input.sideLabel1 ?? null,
+        input.sideLabel2 ?? null,
+        input.rsvpCutoffDate ?? null,
+      ]
+    );
+    const wedding = rows[0];
+
+    for (const t of templateTables) {
+      await client.query(
+        `INSERT INTO "seating_tables"
+           (id, "weddingId", label, capacity, "isRestricted", "isAccessible", "isLocked", purpose,
+            "purposeCriterionType", "purposeCriterionValue", "singleSideOnly", shape, "positionX", "positionY", "updatedAt")
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::"TablePurposeCriterionType", $10, $11, $12::"TableShape", $13, $14, now())`,
+        [
+          randomUUID(),
+          id,
+          t.label,
+          t.capacity,
+          t.isRestricted,
+          t.isAccessible,
+          t.isLocked,
+          t.purpose,
+          t.purposeCriterionType,
+          t.purposeCriterionValue,
+          t.singleSideOnly,
+          t.shape,
+          t.positionX,
+          t.positionY,
+        ]
+      );
+    }
+
+    await client.query("COMMIT");
+    return { ...wedding, guestCount: 0 };
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 
 export async function listWeddingsByOwner(ownerId: string): Promise<WeddingRow[]> {

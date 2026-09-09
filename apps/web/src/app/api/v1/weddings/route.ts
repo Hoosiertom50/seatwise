@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createWeddingSchema } from "@seatwise/shared";
-import { createWedding, listWeddingsWithSummaryForUser } from "@seatwise/db";
+import { createWedding, listWeddingsWithSummaryForUser, TemplateNotFoundError } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
 import { errorResponse, zodErrorResponse } from "@/lib/api-response";
 
@@ -22,6 +22,14 @@ export async function POST(req: NextRequest) {
   const parsed = createWeddingSchema.safeParse(body);
   if (!parsed.success) return zodErrorResponse(parsed.error);
 
-  const wedding = await createWedding(user.id, parsed.data);
-  return NextResponse.json({ wedding }, { status: 201 });
+  // TS-19 (FR-14.4): templateId is validated against this same user's own templates inside
+  // createWedding -- a template belongs to whoever saved it, so this is the one place ownership
+  // is checked, rather than a separate lookup here.
+  try {
+    const wedding = await createWedding(user.id, parsed.data);
+    return NextResponse.json({ wedding }, { status: 201 });
+  } catch (err) {
+    if (err instanceof TemplateNotFoundError) return errorResponse(err.message, 404);
+    throw err;
+  }
 }

@@ -31,6 +31,9 @@ model User {
   collaboratingOn WeddingCollaborator[]
   comments        Comment[]
   notifications   Notification[]
+  // TS-19 (FR-14.x): templates belong to the planner who saved them, reusable across any wedding
+  // they can reach -- not scoped to the one wedding they were captured from.
+  seatingTemplates SeatingTemplate[]
 
   @@map("users")
 }
@@ -92,6 +95,11 @@ model Wedding {
   comments      Comment[]
   notifications Notification[]
   timelineEntries TimelineEntry[]
+  // TS-19 (FR-14.x): templates ever captured *from* this wedding -- kept only for provenance
+  // display ("saved from Alex & Jordan's Wedding"); a template survives this wedding's deletion
+  // (sourceWeddingId goes null on the template, see SeatingTemplate below) since a template is a
+  // standalone, reusable asset, never a live link back to where it came from.
+  seatingTemplates SeatingTemplate[]
 
   @@index([ownerId])
   @@map("weddings")
@@ -428,6 +436,69 @@ model SeatingTable {
 
   @@index([weddingId])
   @@map("seating_tables")
+}
+
+// --- Reusable templates (TS-19, FR-14.x) ----------------------------------
+
+// FR-14.1/FR-14.2: a reusable snapshot of a wedding's table layout plus its "rule-shape" -- the
+// two pieces FR-14.4 lets a planner apply independently ("table layout and/or rule-shape") when
+// starting a new wedding. Deliberately excludes anything guest-specific: no guest_relationships
+// row (MUST_SIT_TOGETHER etc.) is ever captured here at all, since every one of those is tied to
+// two specific guest IDs that "have no meaning outside the wedding they were created for"
+// (FR-14.2's own language) -- there's no guest-agnostic version of "these two people sit
+// together" to reuse. What FR-14.2 calls a "structural rule" that *does* generalize (its own
+// example: "the officiant's table is always Restricted") turns out, in this data model, to
+// already be a table-level property (isRestricted/purpose/purposeCriterion*) rather than a
+// separate rule object -- so it's captured as part of each SeatingTemplateTable below, and the
+// only other non-guest-specific rule signal that exists (the wedding's sideMixing setting) is
+// captured right on this row. A template belongs to the planner who saved it (ownerId), not to
+// any one wedding, so it can seed any of that planner's weddings, not just the one it came from.
+model SeatingTemplate {
+  id              String   @id @default(cuid())
+  ownerId         String
+  owner           User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  name            String
+  sourceWeddingId String?
+  sourceWedding   Wedding? @relation(fields: [sourceWeddingId], references: [id], onDelete: SetNull)
+  // FR-14.2: the "rule-shape" piece -- a wedding-wide soft-rule setting, never guest-specific.
+  sideMixing      SideMixingSetting @default(BALANCED_MIX)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  tables SeatingTemplateTable[]
+
+  @@index([ownerId])
+  @@map("seating_templates")
+}
+
+// FR-14.1: one saved table's structural shape -- every field a SeatingTable has except its id,
+// weddingId, revision/timestamps, and (deliberately) requiredGuestIds: a Restricted table's
+// required-guest list is a list of specific guest IDs, exactly the kind of guest-specific data
+// FR-14.2 says has no meaning outside its original wedding, so a template preserves *that a
+// table is Restricted* without ever preserving *who* is required there.
+model SeatingTemplateTable {
+  id                    String   @id @default(cuid())
+  templateId            String
+  template              SeatingTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  label                 String
+  capacity              Int
+  isRestricted          Boolean  @default(false)
+  isAccessible          Boolean  @default(false)
+  isLocked              Boolean  @default(false)
+  purpose               String?
+  purposeCriterionType  TablePurposeCriterionType?
+  purposeCriterionValue String?
+  singleSideOnly        Boolean  @default(false)
+  shape                 TableShape @default(ROUND)
+  positionX             Float?
+  positionY             Float?
+  // Preserves the source wedding's table order (originally by label) so applying a template lists
+  // its tables in the same order they were saved in, rather than however Postgres happens to
+  // return them.
+  sortOrder             Int      @default(0)
+
+  @@index([templateId])
+  @@map("seating_template_tables")
 }
 
 // FR-3.7a: a Restricted table's explicit required guest list — a hard rule, not a preference.

@@ -4,8 +4,15 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { api, ApiError } from "@/lib/api-client";
-import type { WeddingSummaryDTO } from "@seatwise/shared";
+import type { WeddingSummaryDTO, SeatingTemplateDTO } from "@seatwise/shared";
 import { NotificationsBell } from "@/components/NotificationsBell";
+
+// TS-19 (FR-14.2): human-readable labels for a template's captured rule-shape.
+const SIDE_MIXING_LABELS: Record<string, string> = {
+  KEEP_SEPARATE: "Keep sides separate",
+  BALANCED_MIX: "Balanced mix",
+  FULLY_MIXED: "Fully mixed",
+};
 
 type PlanStatusFilter = "ALL" | "DRAFT" | "IN_REVIEW" | "APPROVED" | "NONE";
 type SortKey = "urgency" | "name" | "eventDate" | "guestCount" | "issues";
@@ -70,6 +77,15 @@ export default function DashboardPage() {
   const [showNote, setShowNote] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // TS-19 (FR-14.4): "start from an existing template" is offered right in this create form --
+  // templates are a portfolio-level asset (not scoped to any one wedding), so they're fetched
+  // once here alongside the wedding list itself.
+  const [templates, setTemplates] = useState<SeatingTemplateDTO[]>([]);
+  const [selectedTemplateId, setSelectedTemplateId] = useState("");
+  const [applyTemplateTables, setApplyTemplateTables] = useState(true);
+  const [applyTemplateRules, setApplyTemplateRules] = useState(true);
+  const [templatesError, setTemplatesError] = useState<string | null>(null);
+
   // FR-11.1: search/filter/sort all operate on the already-fetched list client-side -- at the
   // portfolio scale this is built for (dozens, 15-50+ weddings per planner) that's instant, and
   // far simpler than a parameterized query-param API (see listWeddingsWithSummaryForUser's own
@@ -84,8 +100,12 @@ export default function DashboardPage() {
         const me = await api.get<{ user: { id: string; name: string } }>("/api/v1/auth/me");
         setUserName(me.user.name);
         setUserId(me.user.id);
-        const list = await api.get<{ weddings: WeddingSummaryDTO[] }>("/api/v1/weddings");
+        const [list, templatesRes] = await Promise.all([
+          api.get<{ weddings: WeddingSummaryDTO[] }>("/api/v1/weddings"),
+          api.get<{ templates: SeatingTemplateDTO[] }>("/api/v1/templates"),
+        ]);
         setWeddings(list.weddings);
+        setTemplates(templatesRes.templates);
       } catch (err) {
         if (err instanceof ApiError && err.status === 401) {
           router.push("/login");
@@ -145,6 +165,12 @@ export default function DashboardPage() {
         eventDate: newDate || null,
         venueName: newVenue || null,
         note: newNote || null,
+        // TS-19 (FR-14.4): only sent meaningfully when a template is actually selected -- an
+        // unselected picker (selectedTemplateId === "") sends no templateId, and the two
+        // checkboxes are simply ignored server-side in that case.
+        templateId: selectedTemplateId || undefined,
+        applyTemplateTables: selectedTemplateId ? applyTemplateTables : false,
+        applyTemplateRules: selectedTemplateId ? applyTemplateRules : false,
       });
       // A brand-new wedding has no plan version and no guests yet -- fill in the summary fields
       // the create endpoint itself doesn't compute, rather than waiting on a second round-trip.
@@ -157,10 +183,23 @@ export default function DashboardPage() {
       setNewVenue("");
       setNewNote("");
       setShowNote(false);
+      setSelectedTemplateId("");
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't create the wedding.");
     } finally {
       setCreating(false);
+    }
+  }
+
+  async function onDeleteTemplate(id: string) {
+    const prev = templates;
+    setTemplates(templates.filter((t) => t.id !== id));
+    if (selectedTemplateId === id) setSelectedTemplateId("");
+    try {
+      await api.delete(`/api/v1/templates/${id}`);
+    } catch (err) {
+      setTemplates(prev);
+      setTemplatesError(err instanceof ApiError ? err.message : "Couldn't delete that template.");
     }
   }
 
@@ -241,12 +280,67 @@ export default function DashboardPage() {
           </div>
           <button
             type="submit"
-            disabled={creating}
+            disabled={creating || (!!selectedTemplateId && !applyTemplateTables && !applyTemplateRules)}
             className="rounded-md bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-700 disabled:opacity-50"
           >
             {creating ? "Adding..." : "Add wedding"}
           </button>
         </div>
+        {/* TS-19 (FR-14.4): entirely optional -- leaving this at "Start from scratch" behaves
+            exactly as before this feature existed. */}
+        {templates.length > 0 && (
+          <div className="rounded-md border border-neutral-200 p-3">
+            <label htmlFor="new-wedding-template" className="mb-1 block text-sm font-medium">
+              Start from a template (optional)
+            </label>
+            <select
+              id="new-wedding-template"
+              className="w-full rounded-md border border-neutral-300 px-3 py-2 text-sm sm:max-w-sm"
+              value={selectedTemplateId}
+              onChange={(e) => setSelectedTemplateId(e.target.value)}
+            >
+              <option value="">Start from scratch</option>
+              {templates.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.name} ({t.tableCount} table{t.tableCount === 1 ? "" : "s"}
+                  {t.sourceWeddingName ? ` · from ${t.sourceWeddingName}` : ""})
+                </option>
+              ))}
+            </select>
+            {selectedTemplateId && (
+              <div className="mt-2 flex flex-col gap-1.5">
+                <label className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={applyTemplateTables}
+                    onChange={(e) => setApplyTemplateTables(e.target.checked)}
+                  />
+                  Use its table layout
+                </label>
+                <label className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={applyTemplateRules}
+                    onChange={(e) => setApplyTemplateRules(e.target.checked)}
+                  />
+                  Use its rule-shape (
+                  {SIDE_MIXING_LABELS[
+                    templates.find((t) => t.id === selectedTemplateId)?.sideMixing ?? "BALANCED_MIX"
+                  ]}
+                  )
+                </label>
+                {!applyTemplateTables && !applyTemplateRules && (
+                  <p className="text-xs text-red-600">
+                    Pick at least one, or choose &ldquo;Start from scratch&rdquo; instead.
+                  </p>
+                )}
+                <p className="text-xs text-neutral-500">
+                  Everything pre-filled from the template stays fully editable afterward.
+                </p>
+              </div>
+            )}
+          </div>
+        )}
         {/* FR-1.3: "an optional note" -- tucked behind a toggle so the quick-add row above stays
             uncluttered for the common case of not needing one. */}
         {showNote ? (
@@ -275,6 +369,38 @@ export default function DashboardPage() {
       </form>
 
       {error && <p className="mb-4 text-sm text-red-600">{error}</p>}
+
+      {templates.length > 0 && (
+        <details className="mb-8 rounded-lg border border-neutral-200 p-4">
+          <summary className="cursor-pointer text-sm font-medium">
+            Your templates ({templates.length})
+          </summary>
+          {templatesError && <p className="mt-2 text-sm text-red-600">{templatesError}</p>}
+          <ul className="mt-3 flex flex-col gap-2">
+            {templates.map((t) => (
+              <li
+                key={t.id}
+                className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-neutral-200 px-3 py-2"
+              >
+                <div>
+                  <p className="font-medium">{t.name}</p>
+                  <p className="text-xs text-neutral-500">
+                    {t.tableCount} table{t.tableCount === 1 ? "" : "s"} ·{" "}
+                    {SIDE_MIXING_LABELS[t.sideMixing]}
+                    {t.sourceWeddingName ? ` · saved from ${t.sourceWeddingName}` : ""}
+                  </p>
+                </div>
+                <button
+                  onClick={() => onDeleteTemplate(t.id)}
+                  className="rounded-md border border-neutral-300 px-2 py-1 text-sm text-red-600 hover:bg-red-50"
+                >
+                  Delete
+                </button>
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
 
       {weddings.length > 0 && (
         <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
