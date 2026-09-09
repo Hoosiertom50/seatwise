@@ -1,0 +1,667 @@
+// Seatwise data model
+// Modeled from the Seatwise Requirements & Acceptance Criteria docs (FR-0.x through FR-10.x).
+// This first pass wires up the tables needed for auth + wedding/guest management (the current
+// vertical slice) and lays down the full relational shape (tables, seating rules, plan
+// versioning, change history) that later stories (TS-6 through TS-15 in Jira) will build on,
+// so those features are additive rather than requiring a schema rework.
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["queryCompiler", "driverAdapters"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// --- Accounts -----------------------------------------------------------
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  name         String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  weddings Wedding[]
+  // TS-13 (Collaboration & Notifications): access another owner's wedding grants, comments this
+  // user has authored, and in-app notifications addressed to this user.
+  collaboratingOn WeddingCollaborator[]
+  comments        Comment[]
+  notifications   Notification[]
+  // TS-19 (FR-14.x): templates belong to the planner who saved them, reusable across any wedding
+  // they can reach -- not scoped to the one wedding they were captured from.
+  seatingTemplates SeatingTemplate[]
+
+  @@map("users")
+}
+
+// --- Core wedding / guest domain (FR-1, FR-2) ---------------------------
+
+enum WeddingStatus {
+  PLANNING
+  APPROVED
+  ARCHIVED
+}
+
+// FR-3.4: one wedding-level setting weighting how much generation mixes the two sides at a
+// table. Always a soft preference (FR-3.4 is explicit it's never a hard rule) — see
+// seating-engine.ts's side-mixing scoring.
+enum SideMixingSetting {
+  KEEP_SEPARATE
+  BALANCED_MIX
+  FULLY_MIXED
+}
+
+model Wedding {
+  id        String        @id @default(cuid())
+  ownerId   String
+  owner     User          @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  name      String
+  eventDate DateTime?     @db.Date
+  venueName String?
+  // FR-1.3: "a wedding has couple's names, date, venue, and an optional note" -- the couple's
+  // names are entered as part of `name` above (e.g. "Alex & Jordan's Wedding"), and date/venue
+  // already existed; this was the one field of the four never built. Free text, always optional
+  // (AC: "the note is left blank, then all fields save with no error").
+  note      String?
+  status    WeddingStatus @default(PLANNING)
+  // FR-10.2: email delivery is opt-out per wedding — this flips it off entirely for this
+  // wedding's notifications; the in-app notification itself always still fires.
+  emailNotificationsEnabled Boolean @default(true)
+  // FR-3.4
+  sideMixing SideMixingSetting @default(BALANCED_MIX)
+  // FR-1.3a: each wedding names its own two sides (e.g. "Bride"/"Groom", or any other pair) --
+  // purely a display label. The underlying GuestSide value a guest is stored against (BRIDE /
+  // GROOM / BOTH) never changes when these are renamed, so renaming never touches a guest, rule,
+  // or seat assignment -- it only changes what's shown wherever a BRIDE/GROOM value is displayed.
+  sideLabel1 String        @default("Bride")
+  sideLabel2 String        @default("Groom")
+  // TS-17 (FR-12.2): the cutoff after which a guest's own RSVP link becomes read-only -- null
+  // (the default) means no cutoff at all, matching the FR's "or none" language exactly.
+  rsvpCutoffDate DateTime? @db.Date
+  // TS-20 (FR-15.2): the planner's overall budget figure, in integer cents (never a float -- see
+  // the Vendor model comment for why money is stored this way throughout this feature) so a
+  // running total can be compared against it without floating-point drift. Null means no budget
+  // has been set yet -- FR-15.2 makes setting one optional, not a requirement of using vendor
+  // tracking at all.
+  budgetCents Int?
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+
+  guests        Guest[]
+  relationships GuestRelationship[]
+  tables        SeatingTable[]
+  planVersions  PlanVersion[]
+  ruleConfigs   RuleWeightConfig[]
+  collaborators WeddingCollaborator[]
+  invites       WeddingInvite[]
+  comments      Comment[]
+  notifications Notification[]
+  timelineEntries TimelineEntry[]
+  vendors       Vendor[]
+  // TS-19 (FR-14.x): templates ever captured *from* this wedding -- kept only for provenance
+  // display ("saved from Alex & Jordan's Wedding"); a template survives this wedding's deletion
+  // (sourceWeddingId goes null on the template, see SeatingTemplate below) since a template is a
+  // standalone, reusable asset, never a live link back to where it came from.
+  seatingTemplates SeatingTemplate[]
+
+  @@index([ownerId])
+  @@map("weddings")
+}
+
+// --- Collaboration & notifications (FR-10.x) ------------------------------
+
+// "View/Comment/Edit" from the requirements doc, in increasing order of what's allowed. The
+// owner is implicitly above Edit (can manage collaborators, rename/delete the wedding) and isn't
+// itself a row in this table.
+enum CollaboratorPermission {
+  VIEW
+  COMMENT
+  EDIT
+}
+
+// FR-1.4: a role assigned at invite time, separate from -- and orthogonal to -- the permission
+// level above. A Couple member's approval authority (FR-6.4: only the Planner/Owner or a Couple
+// user with Comment/Edit permission may Approve a plan) is the only place this is currently read;
+// otherwise a Couple and a Collaborator with the same permission level can do exactly the same
+// things.
+enum CollaboratorRole {
+  COUPLE
+  COLLABORATOR
+}
+
+model WeddingCollaborator {
+  id              String                 @id @default(cuid())
+  weddingId       String
+  wedding         Wedding                @relation(fields: [weddingId], references: [id], onDelete: Cascade)
+  userId          String
+  user            User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role            CollaboratorRole       @default(COLLABORATOR)
+  permissionLevel CollaboratorPermission @default(VIEW)
+  invitedByUserId String?
+  createdAt       DateTime               @default(now())
+
+  @@unique([weddingId, userId])
+  @@index([userId])
+  @@map("wedding_collaborators")
+}
+
+// FR-1.4a: a real invite lifecycle -- an invite carries no guest data, is looked up only by its
+// opaque token, and must be accepted by someone signed in with the exact invited address. Status
+// is PENDING until accepted or revoked; "expired" is derived from expiresAt rather than its own
+// stored transition, since it isn't an action anyone takes, just time passing (see isInviteExpired
+// in packages/db/src/queries/invites.ts). A wedding may have at most one active (PENDING) invite
+// per email at a time -- re-inviting the same address revokes the previous invite first.
+enum WeddingInviteStatus {
+  PENDING
+  ACCEPTED
+  REVOKED
+}
+
+model WeddingInvite {
+  id              String                 @id @default(cuid())
+  weddingId       String
+  wedding         Wedding                @relation(fields: [weddingId], references: [id], onDelete: Cascade)
+  email           String
+  role            CollaboratorRole
+  permissionLevel CollaboratorPermission
+  token           String                 @unique
+  status          WeddingInviteStatus    @default(PENDING)
+  invitedByUserId String
+  expiresAt       DateTime
+  acceptedAt      DateTime?
+  createdAt       DateTime               @default(now())
+
+  @@index([weddingId])
+  @@index([email])
+  @@map("wedding_invites")
+}
+
+enum CommentTargetType {
+  GUEST
+  TABLE
+  // TS-18 (FR-13.3): a comment can also target a single timeline entry, same pattern as GUEST/TABLE.
+  TIMELINE_ENTRY
+}
+
+model Comment {
+  id               String            @id @default(cuid())
+  weddingId        String
+  wedding          Wedding           @relation(fields: [weddingId], references: [id], onDelete: Cascade)
+  targetType       CommentTargetType
+  guestId          String?
+  guest            Guest?            @relation(fields: [guestId], references: [id], onDelete: SetNull)
+  tableId          String?
+  table            SeatingTable?     @relation(fields: [tableId], references: [id], onDelete: SetNull)
+  // TS-18 (FR-13.3): same nullable-target-plus-captured-label shape as guestId/tableId above.
+  timelineEntryId  String?
+  timelineEntry    TimelineEntry?    @relation(fields: [timelineEntryId], references: [id], onDelete: SetNull)
+  // FR-10.3: captured once at creation so the comment stays understandable even after its guest,
+  // table, or timeline entry is renamed or removed — "stays attached to that historical target
+  // rather than being silently reassigned". If guestId/tableId/timelineEntryId is null but
+  // targetType still names that kind of target, the original target was removed; targetLabel is
+  // what's shown in its place.
+  targetLabel      String
+  body             String
+  authorUserId     String
+  author           User              @relation(fields: [authorUserId], references: [id], onDelete: Cascade)
+  parentCommentId  String?
+  parentComment    Comment?          @relation("CommentReplies", fields: [parentCommentId], references: [id])
+  replies          Comment[]         @relation("CommentReplies")
+  resolvedAt       DateTime?
+  resolvedByUserId String?
+  createdAt        DateTime          @default(now())
+
+  @@index([weddingId])
+  @@index([guestId])
+  @@index([tableId])
+  @@index([timelineEntryId])
+  @@map("comments")
+}
+
+// TS-18 (FR-13.1/FR-13.2): a per-wedding, chronological run-of-show -- its own record, never
+// derived from or dependent on guests/tables/rules/seating plans, and nothing else depends on it
+// either (deleting a wedding cascades this away; nothing else cascades from it). "time" is a
+// plain zero-padded 24-hour "HH:MM" string (validated at the Zod layer, see schemas/timeline.ts)
+// rather than a real TIME/TIMESTAMP -- a run-of-show is a flat list of clock-face labels, not
+// datetimes, and a zero-padded string sorts correctly with ordinary text ordering. "sortOrder" is
+// a tie-breaker for entries sharing the same displayed time, and is also the field a planner's
+// explicit reorder action moves -- see reorderTimelineEntry in queries/timeline.ts for why entries
+// are always listed by (time, sortOrder).
+model TimelineEntry {
+  id          String   @id @default(cuid())
+  weddingId   String
+  wedding     Wedding  @relation(fields: [weddingId], references: [id], onDelete: Cascade)
+  time        String
+  description String
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  comments Comment[]
+
+  @@index([weddingId])
+  @@map("timeline_entries")
+}
+
+// --- Budget & vendor tracking (TS-20, FR-15.x) -----------------------------
+
+// FR-15.1's own list of examples, plus the handful of other common wedding vendor types --
+// OTHER (with categoryOther holding the free-text label) covers anything not named here, same
+// pattern as the Purpose table criterion's own enum-plus-free-text-value split.
+enum VendorCategory {
+  CATERING
+  VENUE
+  FLORIST
+  PHOTOGRAPHY
+  VIDEOGRAPHY
+  MUSIC_ENTERTAINMENT
+  ATTIRE
+  CAKE_BAKERY
+  RENTALS
+  TRANSPORTATION
+  STATIONERY
+  OTHER
+}
+
+// FR-15.1/FR-15.2: a per-wedding vendor record. Money is always integer cents (never a float),
+// specifically so a running total (see getBudgetSummaryForWedding in queries/vendors.ts) can be
+// summed and compared against the wedding's own budgetCents without floating-point drift -- the
+// same reasoning behind budgetCents on Wedding above. costCents is nullable: FR-15.1 lists "cost
+// details" as part of a vendor record, not a requirement to have a finalized number before it can
+// be saved at all (a planner may want to record a vendor they're still getting quotes from).
+// Deliberately does NOT model payments, deposits, or invoices as their own rows -- FR-15.3 flags
+// reconciling against real payments/invoicing as a materially larger, explicitly-out-of-scope
+// piece of work this story doesn't assume; contractNotes is free text for exactly that kind of
+// detail (e.g. "50% deposit due 30 days out") without tracking it as its own ledger entry.
+model Vendor {
+  id             String          @id @default(cuid())
+  weddingId      String
+  wedding        Wedding         @relation(fields: [weddingId], references: [id], onDelete: Cascade)
+  name           String
+  category       VendorCategory
+  categoryOther  String?
+  contactName    String?
+  contactEmail   String?
+  contactPhone   String?
+  costCents      Int?
+  contractNotes  String?
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  // FR-7.7, extended to vendors (per Tom's own stated wish for concurrent-edit protection on
+  // every editable entity, not just the current plan version): an optimistic-concurrency counter,
+  // bumped on every edit.
+  revision       Int             @default(0)
+
+  @@index([weddingId])
+  @@map("vendors")
+}
+
+enum NotificationType {
+  PLAN_SHARED
+  COMMENT_REPLY
+  TABLE_CHANGED
+  GUEST_ADDED
+  GUEST_REMOVED
+  ATTENDANCE_CHANGED
+  STATUS_CHANGED
+}
+
+model Notification {
+  id              String           @id @default(cuid())
+  weddingId       String
+  wedding         Wedding          @relation(fields: [weddingId], references: [id], onDelete: Cascade)
+  recipientUserId String
+  recipient       User             @relation(fields: [recipientUserId], references: [id], onDelete: Cascade)
+  type            NotificationType
+  message         String
+  isRead          Boolean          @default(false)
+  createdAt       DateTime         @default(now())
+
+  @@index([recipientUserId])
+  @@index([weddingId])
+  @@map("notifications")
+}
+
+enum GuestTier {
+  VIP
+  FAMILY
+  FRIEND
+  PLUS_ONE
+  OTHER
+}
+
+// FR-3.4: which side of the wedding a guest belongs to, for Side-Mixing weighting. BOTH (the
+// default) is the "invited by/close to both" case and never counts toward either side.
+enum GuestSide {
+  BRIDE
+  GROOM
+  BOTH
+}
+
+// FR-4.1: a table's shape, for the floor-plan drawing only -- never read by seating logic.
+enum TableShape {
+  ROUND
+  RECTANGULAR
+  SQUARE
+  OVAL
+  OTHER
+}
+
+// FR-3.7: one of the three structured criteria a Purpose table can favor, as a soft preference.
+enum TablePurposeCriterionType {
+  SIDE
+  TIER
+  AGE_CATEGORY
+}
+
+// FR-3.7: lets a Purpose table's Age Category criterion (e.g. "Kids' Table") mean something --
+// nothing else in the schema categorized a guest by age before this.
+enum AgeCategory {
+  ADULT
+  CHILD
+  INFANT
+}
+
+enum RsvpStatus {
+  PENDING
+  CONFIRMED
+  DECLINED
+}
+
+// FR-8.1 (Day-Of Mode): distinct from rsvpStatus — a guest can RSVP Confirmed weeks ahead and
+// still no-show, or walk in unannounced. Attendance is the day-of, same-day-editable signal.
+enum DayOfAttendance {
+  ATTENDING
+  NOT_ATTENDING
+}
+
+model Guest {
+  id                      String     @id @default(cuid())
+  weddingId               String
+  wedding                 Wedding    @relation(fields: [weddingId], references: [id], onDelete: Cascade)
+  firstName               String
+  lastName                String
+  partyName               String?
+  headcount               Int        @default(1)
+  tier                    GuestTier  @default(OTHER)
+  rsvpStatus              RsvpStatus @default(PENDING)
+  requiresAccessibleTable Boolean    @default(false)
+  // FR-3.4
+  side                    GuestSide  @default(BOTH)
+  // FR-3.7: lets a Purpose table's Age Category criterion mean something (e.g. a "Kids' Table"
+  // favoring CHILD guests). A soft-preference input only -- never a hard rule.
+  ageCategory             AgeCategory @default(ADULT)
+  // FR-7.4: when locked, automated (re)generation keeps this guest at their current table
+  // instead of reshuffling them; manual moves and hard-rule checks are never affected by a lock.
+  isLocked                Boolean    @default(false)
+  dayOfAttendance         DayOfAttendance @default(ATTENDING)
+  notes                   String?
+  // FR-7.7, extended to guests: optimistic-concurrency counter, bumped on every edit.
+  revision                Int        @default(0)
+  // TS-17 (FR-12.4): lets a planner actually deliver (or resend) this guest's own RSVP link --
+  // optional, since not every guest needs their own link (a shared household RSVP can go through
+  // one contact).
+  email                   String?
+  // TS-17 (FR-12.1): free-text "who's coming with you" info, only meaningful when headcount > 1.
+  plusOneNames            String?
+  // TS-17 (FR-12.1/FR-12.4): generated lazily (see ensureGuestRsvpToken) -- most guests, especially
+  // bulk-imported ones, may never need a link at all, so nothing pre-populates this at creation.
+  rsvpToken               String?    @unique
+  // TS-17 (FR-12.4): set only by the guest's own public submission (submitGuestRsvp), never by a
+  // planner editing the guest directly -- this is what "responded via their link" means.
+  rsvpRespondedAt         DateTime?
+  createdAt               DateTime   @default(now())
+  updatedAt               DateTime   @updatedAt
+
+  relationshipsFrom GuestRelationship[] @relation("relationshipGuestA")
+  relationshipsTo   GuestRelationship[] @relation("relationshipGuestB")
+  seatAssignments   SeatAssignment[]
+  comments          Comment[]
+  // FR-3.7a: at most one restricted table can require this guest, wedding-wide (enforced by the
+  // @@unique([guestId]) below, not just app logic).
+  requiredAtTable   RestrictedTableGuest?
+
+  @@index([weddingId])
+  @@map("guests")
+}
+
+// --- Relationships & seating rules (FR-3) --------------------------------
+
+enum RelationshipType {
+  MUST_SIT_TOGETHER
+  MUST_NOT_SIT_TOGETHER
+  PREFER_NEAR
+  AVOID
+}
+
+model GuestRelationship {
+  id        String           @id @default(cuid())
+  weddingId String
+  wedding   Wedding          @relation(fields: [weddingId], references: [id], onDelete: Cascade)
+  guestAId  String
+  guestA    Guest            @relation("relationshipGuestA", fields: [guestAId], references: [id], onDelete: Cascade)
+  guestBId  String
+  guestB    Guest            @relation("relationshipGuestB", fields: [guestBId], references: [id], onDelete: Cascade)
+  type      RelationshipType
+  createdAt DateTime         @default(now())
+
+  @@unique([weddingId, guestAId, guestBId, type])
+  @@index([weddingId])
+  @@map("guest_relationships")
+}
+
+// --- Table & venue layout (FR-4) ------------------------------------------
+
+model SeatingTable {
+  id           String   @id @default(cuid())
+  weddingId    String
+  wedding      Wedding  @relation(fields: [weddingId], references: [id], onDelete: Cascade)
+  label        String
+  capacity     Int
+  isRestricted Boolean  @default(false)
+  isAccessible Boolean  @default(false)
+  // FR-4.1: affects only the floor-plan drawing (FR-4.3), never seating logic.
+  shape        TableShape @default(ROUND)
+  // FR-7.4: when locked, automated (re)generation won't assign new guests here — reserved for
+  // whoever's already seated here (or a locked guest pinned here). Manual moves can still target
+  // a locked table, and hard-rule checks are never affected by a lock.
+  isLocked     Boolean  @default(false)
+  purpose      String?
+  // FR-3.7: a Purpose table's structured criterion, on top of its free-text `purpose` label
+  // (which has no algorithmic effect on its own). At most one of Side/Tier/Age Category at a
+  // time; `purposeCriterionValue` holds that criterion's specific value (e.g. "CHILD" when the
+  // type is AGE_CATEGORY) as plain text rather than three separate nullable enum columns, since
+  // only one is ever meaningful at once -- validated against the right enum at the app layer.
+  // Always a soft preference for generation (see the seating engine), never a hard rule.
+  purposeCriterionType  TablePurposeCriterionType?
+  purposeCriterionValue String?
+  // FR-3.4: a table-level override — favor seating only one side here, regardless of the
+  // wedding's overall Side-Mixing setting. Still only ever a soft preference (see engine).
+  singleSideOnly Boolean @default(false)
+  positionX    Float?
+  positionY    Float?
+  // FR-7.7, extended to tables: optimistic-concurrency counter, bumped on every edit.
+  revision     Int      @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  seatAssignments SeatAssignment[]
+  comments        Comment[]
+  // FR-3.7a: this table's explicit required-guest list, when isRestricted is true.
+  requiredGuests  RestrictedTableGuest[]
+
+  @@index([weddingId])
+  @@map("seating_tables")
+}
+
+// --- Reusable templates (TS-19, FR-14.x) ----------------------------------
+
+// FR-14.1/FR-14.2: a reusable snapshot of a wedding's table layout plus its "rule-shape" -- the
+// two pieces FR-14.4 lets a planner apply independently ("table layout and/or rule-shape") when
+// starting a new wedding. Deliberately excludes anything guest-specific: no guest_relationships
+// row (MUST_SIT_TOGETHER etc.) is ever captured here at all, since every one of those is tied to
+// two specific guest IDs that "have no meaning outside the wedding they were created for"
+// (FR-14.2's own language) -- there's no guest-agnostic version of "these two people sit
+// together" to reuse. What FR-14.2 calls a "structural rule" that *does* generalize (its own
+// example: "the officiant's table is always Restricted") turns out, in this data model, to
+// already be a table-level property (isRestricted/purpose/purposeCriterion*) rather than a
+// separate rule object -- so it's captured as part of each SeatingTemplateTable below, and the
+// only other non-guest-specific rule signal that exists (the wedding's sideMixing setting) is
+// captured right on this row. A template belongs to the planner who saved it (ownerId), not to
+// any one wedding, so it can seed any of that planner's weddings, not just the one it came from.
+model SeatingTemplate {
+  id              String   @id @default(cuid())
+  ownerId         String
+  owner           User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  name            String
+  sourceWeddingId String?
+  sourceWedding   Wedding? @relation(fields: [sourceWeddingId], references: [id], onDelete: SetNull)
+  // FR-14.2: the "rule-shape" piece -- a wedding-wide soft-rule setting, never guest-specific.
+  sideMixing      SideMixingSetting @default(BALANCED_MIX)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  tables SeatingTemplateTable[]
+
+  @@index([ownerId])
+  @@map("seating_templates")
+}
+
+// FR-14.1: one saved table's structural shape -- every field a SeatingTable has except its id,
+// weddingId, revision/timestamps, and (deliberately) requiredGuestIds: a Restricted table's
+// required-guest list is a list of specific guest IDs, exactly the kind of guest-specific data
+// FR-14.2 says has no meaning outside its original wedding, so a template preserves *that a
+// table is Restricted* without ever preserving *who* is required there.
+model SeatingTemplateTable {
+  id                    String   @id @default(cuid())
+  templateId            String
+  template              SeatingTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  label                 String
+  capacity              Int
+  isRestricted          Boolean  @default(false)
+  isAccessible          Boolean  @default(false)
+  isLocked              Boolean  @default(false)
+  purpose               String?
+  purposeCriterionType  TablePurposeCriterionType?
+  purposeCriterionValue String?
+  singleSideOnly        Boolean  @default(false)
+  shape                 TableShape @default(ROUND)
+  positionX             Float?
+  positionY             Float?
+  // Preserves the source wedding's table order (originally by label) so applying a template lists
+  // its tables in the same order they were saved in, rather than however Postgres happens to
+  // return them.
+  sortOrder             Int      @default(0)
+
+  @@index([templateId])
+  @@map("seating_template_tables")
+}
+
+// FR-3.7a: a Restricted table's explicit required guest list — a hard rule, not a preference.
+// Every listed Attending guest must be seated at exactly this table; a guest may be required at
+// only one Restricted table wedding-wide (the @@unique([guestId]) below enforces that at the
+// database level, not just in application code); manual moves can't violate either side of the
+// list (see moveGuestAssignment in plan-versions.ts).
+model RestrictedTableGuest {
+  id        String       @id @default(cuid())
+  tableId   String
+  table     SeatingTable @relation(fields: [tableId], references: [id], onDelete: Cascade)
+  guestId   String
+  guest     Guest        @relation(fields: [guestId], references: [id], onDelete: Cascade)
+  createdAt DateTime     @default(now())
+
+  @@unique([tableId, guestId])
+  @@unique([guestId])
+  @@map("restricted_table_guests")
+}
+
+// --- Plan versions & change history (FR-9.4) ------------------------------
+
+// Review/approval workflow status (FR-6.4). Applies only to the Current Plan Version — the one
+// with the highest versionNumber for a wedding; older versions keep whatever status they had
+// when superseded, since FR-6.4 only lets the Current version's status change going forward.
+enum PlanVersionStatus {
+  DRAFT
+  IN_REVIEW
+  APPROVED
+}
+
+model PlanVersion {
+  id             String            @id @default(cuid())
+  weddingId      String
+  wedding        Wedding           @relation(fields: [weddingId], references: [id], onDelete: Cascade)
+  versionNumber  Int
+  label          String?
+  status         PlanVersionStatus @default(DRAFT)
+  isComplete     Boolean           @default(false)
+  // Set when status moves to APPROVED, cleared (not deleted) when it moves away again. FR-6.6's
+  // "Modified Since Approval" indicator is derived from this: active whenever status is
+  // APPROVED and a change_history_entries row exists with createdAt after approvedAt.
+  approvedAt     DateTime?
+  restoredFromId String?
+  restoredFrom   PlanVersion?      @relation("restoredFrom", fields: [restoredFromId], references: [id])
+  restoredInto   PlanVersion[]     @relation("restoredFrom")
+  // FR-3.4 AC: "each Plan Version records the setting and weighting-configuration version used" —
+  // null on a version restored/created before this field existed.
+  sideMixingSetting SideMixingSetting?
+  ruleConfigVersion Int?
+  createdAt      DateTime          @default(now())
+  // FR-7.7: bumped by every write that touches this version's assignments, status, or label --
+  // an optimistic-concurrency guard so a stale client can't silently overwrite a newer save.
+  revision       Int               @default(0)
+
+  seatAssignments SeatAssignment[]
+  changeHistory   ChangeHistoryEntry[]
+
+  @@unique([weddingId, versionNumber])
+  @@index([weddingId])
+  @@map("plan_versions")
+}
+
+model SeatAssignment {
+  id                 String       @id @default(cuid())
+  planVersionId       String
+  planVersion         PlanVersion  @relation(fields: [planVersionId], references: [id], onDelete: Cascade)
+  guestId             String
+  guest               Guest        @relation(fields: [guestId], references: [id], onDelete: Cascade)
+  seatingTableId      String
+  seatingTable        SeatingTable @relation(fields: [seatingTableId], references: [id], onDelete: Cascade)
+  needsReassignment   Boolean      @default(false)
+  createdAt           DateTime     @default(now())
+  updatedAt           DateTime     @updatedAt
+
+  @@unique([planVersionId, guestId])
+  @@index([planVersionId])
+  @@map("seat_assignments")
+}
+
+model ChangeHistoryEntry {
+  id            String      @id @default(cuid())
+  planVersionId String
+  planVersion   PlanVersion @relation(fields: [planVersionId], references: [id], onDelete: Cascade)
+  action        String
+  description   String
+  actorUserId   String?
+  createdAt     DateTime    @default(now())
+
+  @@index([planVersionId])
+  @@map("change_history_entries")
+}
+
+// --- Soft-rule weighting config (FR-0.2) ----------------------------------
+
+model RuleWeightConfig {
+  id        String   @id @default(cuid())
+  weddingId String
+  wedding   Wedding  @relation(fields: [weddingId], references: [id], onDelete: Cascade)
+  version   Int
+  config    Json
+  createdAt DateTime @default(now())
+
+  @@unique([weddingId, version])
+  @@map("rule_weight_configs")
+}
