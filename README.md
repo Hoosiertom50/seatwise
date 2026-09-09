@@ -880,6 +880,24 @@ rather than blocking on it:
   deleted, and applying it is a true snapshot (editing the clone or the original afterward never
   affects the other).
 
+**TS-20 (Budget & Vendor Tracking) is done.** A planner records vendors per wedding — name,
+category (Catering/Venue/Florist/Photography/... plus an `OTHER` category with its own free-text
+label, the same enum-plus-label split as the Purpose table criterion), contact info, and a cost —
+and can set an overall budget figure, seeing a running total and remaining amount as vendor costs
+are recorded (FR-15.1/FR-15.2). Money is always integer cents end-to-end (the schema, the API, the
+running-total math) and only ever converted to/from dollars at the UI boundary — never a float —
+so a running total can be summed and compared against the budget without drift. FR-15.3 (planner-
+entered numbers only, vs. reconciling against real payments/invoicing) was resolved by the ticket
+itself, not left to me: the narrower, planner-entered-only scope is what's built, with no payment/
+deposit ledger of any kind — a vendor's `contractNotes` free-text field is where that kind of
+detail (e.g. "50% deposit due 30 days out") lives instead, matching how the assistant building this
+already never handles real financial transactions. "Remaining" is `null` (not a bare negative
+number) until a budget is actually set, and goes negative rather than clamping at zero once
+recorded costs exceed it. Access follows the same View/Comment/Edit rules as every other working
+tab (guests, tables, timeline) — this is ordinary planner data entry, not an administrative wedding
+setting — and every vendor edit carries FR-7.7's optimistic-concurrency protection, same as tables
+and guests. Verified in `test_budget.py`.
+
 ## Mobile later
 
 Nothing here should need to change to add an iOS/Android app: point a React Native/Expo app (or

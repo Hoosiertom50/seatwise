@@ -9,6 +9,7 @@ export * from "./schemas/guest-import";
 export * from "./schemas/rsvp";
 export * from "./schemas/timeline";
 export * from "./schemas/template";
+export * from "./schemas/vendor";
 export * from "./seating-engine";
 export * from "./csv";
 

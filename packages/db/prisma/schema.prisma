@@ -82,6 +82,12 @@ model Wedding {
   // TS-17 (FR-12.2): the cutoff after which a guest's own RSVP link becomes read-only -- null
   // (the default) means no cutoff at all, matching the FR's "or none" language exactly.
   rsvpCutoffDate DateTime? @db.Date
+  // TS-20 (FR-15.2): the planner's overall budget figure, in integer cents (never a float -- see
+  // the Vendor model comment for why money is stored this way throughout this feature) so a
+  // running total can be compared against it without floating-point drift. Null means no budget
+  // has been set yet -- FR-15.2 makes setting one optional, not a requirement of using vendor
+  // tracking at all.
+  budgetCents Int?
   createdAt DateTime      @default(now())
   updatedAt DateTime      @updatedAt
 
@@ -95,6 +101,7 @@ model Wedding {
   comments      Comment[]
   notifications Notification[]
   timelineEntries TimelineEntry[]
+  vendors       Vendor[]
   // TS-19 (FR-14.x): templates ever captured *from* this wedding -- kept only for provenance
   // display ("saved from Alex & Jordan's Wedding"); a template survives this wedding's deletion
   // (sourceWeddingId goes null on the template, see SeatingTemplate below) since a template is a
@@ -238,6 +245,59 @@ model TimelineEntry {
 
   @@index([weddingId])
   @@map("timeline_entries")
+}
+
+// --- Budget & vendor tracking (TS-20, FR-15.x) -----------------------------
+
+// FR-15.1's own list of examples, plus the handful of other common wedding vendor types --
+// OTHER (with categoryOther holding the free-text label) covers anything not named here, same
+// pattern as the Purpose table criterion's own enum-plus-free-text-value split.
+enum VendorCategory {
+  CATERING
+  VENUE
+  FLORIST
+  PHOTOGRAPHY
+  VIDEOGRAPHY
+  MUSIC_ENTERTAINMENT
+  ATTIRE
+  CAKE_BAKERY
+  RENTALS
+  TRANSPORTATION
+  STATIONERY
+  OTHER
+}
+
+// FR-15.1/FR-15.2: a per-wedding vendor record. Money is always integer cents (never a float),
+// specifically so a running total (see getBudgetSummaryForWedding in queries/vendors.ts) can be
+// summed and compared against the wedding's own budgetCents without floating-point drift -- the
+// same reasoning behind budgetCents on Wedding above. costCents is nullable: FR-15.1 lists "cost
+// details" as part of a vendor record, not a requirement to have a finalized number before it can
+// be saved at all (a planner may want to record a vendor they're still getting quotes from).
+// Deliberately does NOT model payments, deposits, or invoices as their own rows -- FR-15.3 flags
+// reconciling against real payments/invoicing as a materially larger, explicitly-out-of-scope
+// piece of work this story doesn't assume; contractNotes is free text for exactly that kind of
+// detail (e.g. "50% deposit due 30 days out") without tracking it as its own ledger entry.
+model Vendor {
+  id             String          @id @default(cuid())
+  weddingId      String
+  wedding        Wedding         @relation(fields: [weddingId], references: [id], onDelete: Cascade)
+  name           String
+  category       VendorCategory
+  categoryOther  String?
+  contactName    String?
+  contactEmail   String?
+  contactPhone   String?
+  costCents      Int?
+  contractNotes  String?
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  // FR-7.7, extended to vendors (per Tom's own stated wish for concurrent-edit protection on
+  // every editable entity, not just the current plan version): an optimistic-concurrency counter,
+  // bumped on every edit.
+  revision       Int             @default(0)
+
+  @@index([weddingId])
+  @@map("vendors")
 }
 
 enum NotificationType {
