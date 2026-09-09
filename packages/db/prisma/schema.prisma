@@ -296,6 +296,8 @@ model Guest {
   isLocked                Boolean    @default(false)
   dayOfAttendance         DayOfAttendance @default(ATTENDING)
   notes                   String?
+  // FR-7.7, extended to guests: optimistic-concurrency counter, bumped on every edit.
+  revision                Int        @default(0)
   createdAt               DateTime   @default(now())
   updatedAt               DateTime   @updatedAt
 
@@ -366,6 +368,8 @@ model SeatingTable {
   singleSideOnly Boolean @default(false)
   positionX    Float?
   positionY    Float?
+  // FR-7.7, extended to tables: optimistic-concurrency counter, bumped on every edit.
+  revision     Int      @default(0)
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
