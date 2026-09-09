@@ -12,7 +12,7 @@ import type {
   RsvpStatus,
   WeddingDTO,
 } from "@seatwise/shared";
-import { parseCsv } from "@seatwise/shared";
+import { parseCsv, toCsv } from "@seatwise/shared";
 
 const TIERS: GuestTier[] = ["VIP", "FAMILY", "FRIEND", "PLUS_ONE", "OTHER"];
 const RSVP_STATUSES: RsvpStatus[] = ["PENDING", "CONFIRMED", "DECLINED"];
@@ -44,6 +44,35 @@ function buildImportFields(
   ];
 }
 
+// FR-2.4: a small always-visible sample so a first-time importer can see what a clean file looks
+// like without trial-and-erroring the mapping step. Column order/exact header names never matter
+// (see the mapping UI below) -- this is just one example shape, not a required template.
+function buildImportExample(
+  sideLabel1: string,
+  sideLabel2: string
+): { headers: string[]; rows: string[][] } {
+  return {
+    headers: [
+      "First Name",
+      "Last Name",
+      "Party / Household",
+      "Headcount",
+      "Tier",
+      "RSVP Status",
+      "Accessible Table?",
+      "Attendance",
+      "Side",
+      "Age Category",
+      "Notes",
+    ],
+    rows: [
+      ["Amy", "Adams", "The Adams Family", "2", "VIP", "Confirmed", "No", "Attending", sideLabel1, "Adult", ""],
+      ["Ben", "Baker", "", "1", "Friend", "Pending", "No", "Attending", "Both", "Adult", "Vegetarian"],
+      ["Cora", "Chen", "", "1", "Family", "Confirmed", "Yes", "Attending", sideLabel2, "Adult", ""],
+    ],
+  };
+}
+
 export function GuestsTab({
   weddingId,
   wedding,
@@ -69,6 +98,7 @@ export function GuestsTab({
   ];
   const sideLabelFor = (value: GuestSide) => SIDE_OPTIONS.find((o) => o.value === value)?.label ?? value;
   const IMPORT_FIELDS = buildImportFields(sideLabel1, sideLabel2);
+  const IMPORT_EXAMPLE = buildImportExample(sideLabel1, sideLabel2);
 
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
@@ -99,6 +129,20 @@ export function GuestsTab({
     updatedCount: number;
     warnings: string[];
   } | null>(null);
+  const [showImportExample, setShowImportExample] = useState(false);
+
+  function onDownloadImportExample() {
+    const csv = toCsv(IMPORT_EXAMPLE.headers, IMPORT_EXAMPLE.rows);
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "seatwise-guest-import-example.csv";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
 
   function resetImport() {
     setCsvText(null);
@@ -494,6 +538,62 @@ export function GuestsTab({
           Party/household or Notes cell to blank it out explicitly. Nothing is saved until you
           confirm the preview below, and either everything imports or nothing does.
         </p>
+
+        <div className="mb-3">
+          <button
+            type="button"
+            onClick={() => setShowImportExample((v) => !v)}
+            className="text-sm text-neutral-600 underline hover:text-neutral-900"
+          >
+            {showImportExample ? "Hide example" : "See an example"}
+          </button>
+          {showImportExample && (
+            <div className="mt-2 rounded-md border border-neutral-200 bg-neutral-50 p-3">
+              <p className="mb-2 text-xs text-neutral-500">
+                Column order and header names don&apos;t have to match this exactly — you&apos;ll
+                map each of your file&apos;s columns to a guest field below once it&apos;s chosen.
+                This is just one example of a clean file:
+              </p>
+              <div className="overflow-x-auto">
+                <table className="min-w-full text-xs">
+                  <thead>
+                    <tr className="text-left text-neutral-500">
+                      {IMPORT_EXAMPLE.headers.map((h) => (
+                        <th key={h} className="whitespace-nowrap pb-1 pr-3 font-medium">
+                          {h}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {IMPORT_EXAMPLE.rows.map((row, i) => (
+                      <tr key={i} className="border-t border-neutral-200">
+                        {row.map((cell, j) => (
+                          <td key={j} className="whitespace-nowrap py-1 pr-3">
+                            {cell || <span className="text-neutral-400">—</span>}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <p className="mt-2 text-xs text-neutral-500">
+                Accepted values (not case-sensitive) — Tier: VIP, Family, Friend, Plus One, Other.
+                RSVP status: Pending, Confirmed, Declined. Accessible table?: Yes/No. Attendance:
+                Attending, Not Attending. Side: {sideLabel1}, {sideLabel2}, or Both. Age category:
+                Adult, Child, Infant.
+              </p>
+              <button
+                type="button"
+                onClick={onDownloadImportExample}
+                className="mt-2 rounded-md border border-neutral-300 px-2 py-1 text-xs font-medium hover:bg-white"
+              >
+                Download example CSV
+              </button>
+            </div>
+          )}
+        </div>
 
         <input
           ref={fileInputRef}
