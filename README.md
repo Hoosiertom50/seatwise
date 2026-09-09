@@ -807,17 +807,31 @@ once. Six new Jira stories (TS-16 through TS-21) capture this, in priority order
 TS-2 Workstream — see the shared roadmap doc for full context and the open questions still being
 decided.
 
-**TS-16 (Planner Portfolio & Multi-Client Account Model) is in progress.** FR-11.1
+**TS-16 (Planner Portfolio & Multi-Client Account Model) is done.** FR-11.1
 (sortable/filterable/searchable dashboard), FR-11.2 (per-row plan status and unassigned/Needs
 Reassignment counts), and FR-11.3 (a "needs attention soonest" default ordering, not a plain
 column sort) are built — `GET /api/v1/weddings` now returns a `WeddingSummaryDTO` per wedding,
 computed via a `LEFT JOIN LATERAL` against each wedding's Current Plan Version, and the dashboard
 filters/sorts/searches that list client-side (deliberately, not a query-param API — see the code
 comment in `listWeddingsWithSummaryForUser` for why that's the right tradeoff at the stated
-15-50+-wedding portfolio scale). FR-11.4 — reviewing the create-wedding flow's language for
-planner-as-owner — has a first pass (explicit copy on the create form), but the deeper question of
-whether the existing Couple role gets relabeled or rebuilt for the planner-first model is still
-open, so TS-16 isn't closed yet.
+15-50+-wedding portfolio scale). FR-11.4 (reviewing the create-wedding flow's language for
+planner-as-owner) was resolved as a **reposition, not a rebuild**: the existing Couple role/invite
+flow (TS-4/TS-13) is unchanged underneath, and the create-wedding form now says directly that the
+planner owns and manages the wedding and invites the couple as a collaborator afterward — no other
+copy in the app implied otherwise.
+
+**TS-17 (Client-Facing RSVP Collection) is done.** A guest can submit their own RSVP through a
+unique, unauthenticated token link — modeled directly on the existing invite-token flow (same
+32-byte random hex token, lookup by token alone) — reached at `/rsvp/[token]`, requiring no
+account (FR-12.1). The submission writes straight into that guest's own record (FR-12.3), bumping
+the same FR-7.7 revision counter without itself using `expectedRevision` (an anonymous public form
+has nothing to send back as "last seen revision"). A wedding can optionally set an
+`rsvpCutoffDate` (Collaborators tab, owner-only); past it, the link still shows the guest's
+current answers but refuses further submissions (FR-12.2). On the Guests tab, a planner sees each
+guest's "responded"/"no self-RSVP yet" status (set only by the guest's own submission, never a
+planner edit — that's what makes the badge mean what it says) and can copy/resend or regenerate a
+guest's link on demand (FR-12.4); the raw token itself is deliberately never returned by the
+normal guest read endpoints, only by that one dedicated, EDIT-gated endpoint.
 
 ## Mobile later
 
