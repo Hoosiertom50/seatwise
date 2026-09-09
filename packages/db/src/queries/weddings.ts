@@ -17,6 +17,8 @@ export interface WeddingRow {
   // FR-1.3a
   sideLabel1: string;
   sideLabel2: string;
+  // TS-17 (FR-12.2): null means no RSVP cutoff at all.
+  rsvpCutoffDate: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -35,6 +37,7 @@ export interface WeddingSummaryRow extends WeddingRow {
 const SELECT_WITH_GUEST_COUNT = `
   SELECT w.id, w."ownerId", w.name, w."eventDate"::text AS "eventDate", w."venueName", w.note,
          w.status, w."emailNotificationsEnabled", w."sideMixing", w."sideLabel1", w."sideLabel2",
+         w."rsvpCutoffDate"::text AS "rsvpCutoffDate",
          w."createdAt", w."updatedAt",
          COALESCE(g.count, 0)::int AS "guestCount"
   FROM "weddings" w
@@ -55,6 +58,7 @@ const SELECT_WITH_GUEST_COUNT = `
 const SELECT_WITH_SUMMARY = `
   SELECT w.id, w."ownerId", w.name, w."eventDate"::text AS "eventDate", w."venueName", w.note,
          w.status, w."emailNotificationsEnabled", w."sideMixing", w."sideLabel1", w."sideLabel2",
+         w."rsvpCutoffDate"::text AS "rsvpCutoffDate",
          w."createdAt", w."updatedAt",
          COALESCE(g.count, 0)::int AS "guestCount",
          cpv.status AS "planStatus",
@@ -91,14 +95,16 @@ export async function createWedding(
     sideMixing?: string;
     sideLabel1?: string;
     sideLabel2?: string;
+    rsvpCutoffDate?: string | null;
   }
 ): Promise<WeddingRow> {
   const id = randomUUID();
   const { rows } = await pool.query(
-    `INSERT INTO "weddings" (id, "ownerId", name, "eventDate", "venueName", note, "sideMixing", "sideLabel1", "sideLabel2", "updatedAt")
-     VALUES ($1, $2, $3, $4, $5, $6, COALESCE($7::"SideMixingSetting", 'BALANCED_MIX'), COALESCE($8, 'Bride'), COALESCE($9, 'Groom'), now())
+    `INSERT INTO "weddings" (id, "ownerId", name, "eventDate", "venueName", note, "sideMixing", "sideLabel1", "sideLabel2", "rsvpCutoffDate", "updatedAt")
+     VALUES ($1, $2, $3, $4, $5, $6, COALESCE($7::"SideMixingSetting", 'BALANCED_MIX'), COALESCE($8, 'Bride'), COALESCE($9, 'Groom'), $10, now())
      RETURNING id, "ownerId", name, "eventDate"::text AS "eventDate", "venueName", note, status,
-               "emailNotificationsEnabled", "sideMixing", "sideLabel1", "sideLabel2", "createdAt", "updatedAt"`,
+               "emailNotificationsEnabled", "sideMixing", "sideLabel1", "sideLabel2",
+               "rsvpCutoffDate"::text AS "rsvpCutoffDate", "createdAt", "updatedAt"`,
     [
       id,
       ownerId,
@@ -109,6 +115,7 @@ export async function createWedding(
       input.sideMixing ?? null,
       input.sideLabel1 ?? null,
       input.sideLabel2 ?? null,
+      input.rsvpCutoffDate ?? null,
     ]
   );
   return { ...rows[0], guestCount: 0 };
@@ -187,6 +194,7 @@ export async function updateWeddingForOwner(
     sideMixing: string;
     sideLabel1: string;
     sideLabel2: string;
+    rsvpCutoffDate: string | null;
   }>
 ): Promise<boolean> {
   const fields: string[] = [];
@@ -220,6 +228,11 @@ export async function updateWeddingForOwner(
   if (input.sideLabel2 !== undefined) {
     fields.push(`"sideLabel2" = $${i++}`);
     values.push(input.sideLabel2);
+  }
+  // FR-12.2: null clears the cutoff (no cutoff at all), matching the FR's "or none" language.
+  if (input.rsvpCutoffDate !== undefined) {
+    fields.push(`"rsvpCutoffDate" = $${i++}`);
+    values.push(input.rsvpCutoffDate);
   }
   fields.push(`"updatedAt" = now()`);
   values.push(id, ownerId);

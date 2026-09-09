@@ -18,6 +18,10 @@ export const createWeddingSchema = z.object({
   // guest, so no guest, rule, or assignment is recreated or lost when these change.
   sideLabel1: z.string().min(1, "Side label is required").max(40).default("Bride"),
   sideLabel2: z.string().min(1, "Side label is required").max(40).default("Groom"),
+  // TS-17 (FR-12.2): the cutoff after which a guest's own RSVP link becomes read-only. Optional --
+  // omitting it (or explicitly clearing it) means no cutoff at all, matching the FR's "or none"
+  // language exactly.
+  rsvpCutoffDate: z.string().date().optional().nullable(),
 });
 export type CreateWeddingInput = z.infer<typeof createWeddingSchema>;
 
@@ -41,6 +45,8 @@ export interface WeddingDTO {
   // FR-1.3a
   sideLabel1: string;
   sideLabel2: string;
+  // TS-17 (FR-12.2): null means no RSVP cutoff at all.
+  rsvpCutoffDate: string | null;
   createdAt: string;
   updatedAt: string;
 }

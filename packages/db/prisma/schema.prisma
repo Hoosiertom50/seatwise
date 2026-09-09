@@ -76,6 +76,9 @@ model Wedding {
   // or seat assignment -- it only changes what's shown wherever a BRIDE/GROOM value is displayed.
   sideLabel1 String        @default("Bride")
   sideLabel2 String        @default("Groom")
+  // TS-17 (FR-12.2): the cutoff after which a guest's own RSVP link becomes read-only -- null
+  // (the default) means no cutoff at all, matching the FR's "or none" language exactly.
+  rsvpCutoffDate DateTime? @db.Date
   createdAt DateTime      @default(now())
   updatedAt DateTime      @updatedAt
 
@@ -298,6 +301,18 @@ model Guest {
   notes                   String?
   // FR-7.7, extended to guests: optimistic-concurrency counter, bumped on every edit.
   revision                Int        @default(0)
+  // TS-17 (FR-12.4): lets a planner actually deliver (or resend) this guest's own RSVP link --
+  // optional, since not every guest needs their own link (a shared household RSVP can go through
+  // one contact).
+  email                   String?
+  // TS-17 (FR-12.1): free-text "who's coming with you" info, only meaningful when headcount > 1.
+  plusOneNames            String?
+  // TS-17 (FR-12.1/FR-12.4): generated lazily (see ensureGuestRsvpToken) -- most guests, especially
+  // bulk-imported ones, may never need a link at all, so nothing pre-populates this at creation.
+  rsvpToken               String?    @unique
+  // TS-17 (FR-12.4): set only by the guest's own public submission (submitGuestRsvp), never by a
+  // planner editing the guest directly -- this is what "responded via their link" means.
+  rsvpRespondedAt         DateTime?
   createdAt               DateTime   @default(now())
   updatedAt               DateTime   @updatedAt
 

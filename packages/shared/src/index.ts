@@ -6,6 +6,7 @@ export * from "./schemas/table";
 export * from "./schemas/plan-version";
 export * from "./schemas/collaboration";
 export * from "./schemas/guest-import";
+export * from "./schemas/rsvp";
 export * from "./seating-engine";
 export * from "./csv";
 
