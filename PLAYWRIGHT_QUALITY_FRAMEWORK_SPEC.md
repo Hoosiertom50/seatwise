@@ -102,16 +102,16 @@ The completed framework shall provide:
 
 The implementing agent must maintain this section throughout the build.
 
-**Current stage:** Not started  
-**Current task:** Repository discovery  
-**Last verified task:** None  
-**Last passing audit:** None  
+**Current stage:** 00 (complete, audit PASS)  
+**Current task:** Awaiting human go-ahead to start Stage 01  
+**Last verified task:** Stage 00 discovery and Project Profile, verified by an independent review pass  
+**Last passing audit:** `quality/audits/stage-00-audit.md` — PASS  
 **Active blockers:** None recorded  
-**Next action:** Complete the Project Profile and Stage 00 discovery
+**Next action:** Begin Stage 01 — Playwright foundation and environment safety
 
 ### Progress dashboard
 
-- [ ] Stage 00 — Repository discovery and implementation plan
+- [x] Stage 00 — Repository discovery and implementation plan
 - [ ] Stage 01 — Playwright foundation and environment safety
 - [ ] Stage 02 — Test governance, metadata, tags, and value model
 - [ ] Stage 03 — Page objects, fixtures, test data, and evidence architecture
@@ -129,6 +129,10 @@ The implementing agent must maintain this section throughout the build.
 | ID | Date | Decision | Reason | Human approval required? |
 |---|---|---|---|---|
 | DEC-001 | TBD | Use TypeScript unless the repository requires another supported Playwright language | Best support for Playwright Test and typed framework utilities | No |
+| DEC-002 | 2026-09-10 | No repo-committed Node version file exists; framework tooling will target the version actually in use (Node 22.x) rather than inventing an `.nvmrc` unasked | Avoid imposing a new project-wide convention during a testing-framework build; the repo owner didn't request one | No — flagged for awareness only |
+| DEC-003 | 2026-09-10 | Chromium-only browser project for now; Firefox/WebKit stay defined but unused in `playwright.config.ts` | App has no deployed users yet and no known cross-browser defect history to justify the extra CI time | No — reversible later by enabling the existing project entries |
+| DEC-004 | 2026-09-10 | Editor deep-links in reports default to off (plain relative file links only) until the human states a preferred editor | Spec Section 5 lists this as a profile item with no discovered value; safest default is "do nothing extra" rather than guess an editor scheme | No — cosmetic, easy to add later |
+| DEC-005 | 2026-09-10 | Production is treated as **undefined** everywhere the framework needs a production hostname (Stage 01's fail-closed guard, Stage 05's production preflight) | The app has never been deployed; there is no real host to allow-list, so every environment must be treated as non-production and mutating tests must never be approved for it by default | Yes — human must explicitly configure and approve a real production hostname before any mutating-test production policy can change |
 
 ### Blocker log
 
@@ -142,7 +146,7 @@ Append one row before ending each implementation session.
 
 | Date/time | Stage | Work completed | Verification evidence | Files changed | Next action |
 |---|---|---|---|---|---|
-| TBD | 00 | Implementation not started | None | None | Complete discovery |
+| 2026-09-10 | 00 | Repository discovery completed; Project Profile filled in with no unexplained TBDs; five decisions recorded (DEC-002..005); no framework dependency installed | Discovery claims cross-checked live against the repo (package manager/version, Node version, absence of Playwright/CI/`.claude` assets, ESLint/TypeScript config paths, existing `apps/mobile/__tests__`, absence of any deployment config) by an independent adversarial review pass before the audit was marked PASS | `PLAYWRIGHT_QUALITY_FRAMEWORK_SPEC.md` (Sections 4 and 5), `quality/audits/stage-00-audit.md` (new) | Begin Stage 01 — Playwright foundation and environment safety |
 
 ---
 
@@ -152,26 +156,26 @@ Complete this section before installing or changing the framework.
 
 | Item | Discovered value | Evidence/path |
 |---|---|---|
-| Repository root | TBD | |
-| Application type/framework | TBD | |
-| Package manager and version | TBD | |
-| Node version policy | TBD | |
-| Existing Playwright version | TBD | |
-| Existing test directories | TBD | |
-| Existing test command(s) | TBD | |
-| Existing CI provider | TBD | |
-| Existing lint/typecheck tools | TBD | |
-| Existing `.claude` assets | TBD | |
-| Primary test environment | TBD | |
-| Production hostname(s) | TBD | |
-| Authentication approach | TBD | |
-| Test-data creation approach | TBD | |
-| Supported operating systems | TBD | |
-| Required browser matrix | TBD | |
-| Preferred editor/link type | TBD | |
-| Requirements source of truth | TBD | |
-| Artifact retention requirement | TBD | |
-| Sensitive-data restrictions | TBD | |
+| Repository root | `/home/claude/seatwise` (pnpm monorepo: `apps/*`, `packages/*`) | `pnpm-workspace.yaml` |
+| Application type/framework | Next.js 16 (App Router) + TypeScript web app (`apps/web`); companion Expo/React Native mobile app (`apps/mobile`, out of scope for this framework) | `apps/web/package.json`, `apps/mobile/package.json` |
+| Package manager and version | pnpm 10.28.0, pinned via `packageManager` field | `package.json` |
+| Node version policy | No `.nvmrc`/`.node-version` committed; sandbox runs Node v22.22.2. Recorded as DEC-002 below rather than left ambiguous. | repo root (no version file found) |
+| Existing Playwright version | None installed anywhere in the monorepo | no `playwright.config.*`, no `playwright` dependency in any `package.json` |
+| Existing test directories | `apps/mobile/__tests__` (Vitest/Jest-style unit tests for mobile-only plan-merge/queue logic) — unrelated to browser E2E, left untouched | `apps/mobile/__tests__/*.test.ts` |
+| Existing test command(s) | None at the web app level (`apps/web/package.json` scripts: `dev`, `build`, `start`, `lint` only) | `apps/web/package.json` |
+| Existing CI provider | None configured (no `.github/workflows`, no other CI config found) | repo root |
+| Existing lint/typecheck tools | ESLint via `apps/web/eslint.config.mjs` (flat config); TypeScript via `apps/web/tsconfig.json`, `packages/shared/tsconfig.json`, `apps/mobile/tsconfig.json` | listed paths |
+| Existing `.claude` assets | None at repo root. `apps/web/CLAUDE.md` + `apps/web/AGENTS.md` exist but are Next.js's own auto-generated dev-server agent notes (regenerated by `next dev`), not Claude Code project skills/hooks — must not be confused with this framework's `.claude/` | `apps/web/CLAUDE.md`, `apps/web/AGENTS.md` |
+| Primary test environment | Local dev only — `pnpm dev` on `localhost:3000` against a local Postgres instance. No staging environment exists yet. | `apps/web/.env` (`APP_URL="http://localhost:3000"`) |
+| Production hostname(s) | **None — the app has never been deployed.** No Vercel/Netlify/Docker deployment config found anywhere in the repo. Until a real production host exists, "production" is undefined and the mutating-test guard (Section 7.5/9.3) must fail closed on any unrecognized/undeployed host rather than assume safety. | repo-wide search: no `vercel.json`, `netlify.toml`, `Dockerfile`; README states deployment host is "whatever this gets deployed to," not yet chosen |
+| Authentication approach | Custom JWT-based session auth (`jose` for signing, `bcryptjs` for password hashing) — no third-party auth provider | `apps/web/src/lib/auth.ts`, `apps/web/package.json` dependencies |
+| Test-data creation approach | Via the app's own public API: `POST /api/v1/auth/signup` to create a fresh user, then authenticated calls to create weddings/guests/tables/etc. This is exactly the pattern used by every ad hoc verification script this session (unique per-run email via timestamp). No seed/fixture DB scripts exist. | `apps/web/src/app/api/v1/auth/signup/route.ts`; prior session verification scripts |
+| Supported operating systems | Dev machines only: this cloud sandbox is Linux; the human developer's machine is macOS (arm64) | environment info |
+| Required browser matrix | Chromium only for now (matches spec default); Firefox/WebKit deferred as configurable-but-unused projects since the app has no known cross-browser requirements or bug history yet | DEC-003 below |
+| Preferred editor/link type | Not yet specified by the human reviewer — left as a documented default (plain relative file link, no editor deep link) until stated otherwise | DEC-004 below |
+| Requirements source of truth | No formal requirements doc exists. `README.md`'s "What's implemented" section is the closest thing to a living feature list. `quality/requirements.yaml` will start from that list and be expanded/corrected by the human over time — explicitly not invented wholesale by the agent. | `README.md` |
+| Artifact retention requirement | Not yet specified by the human reviewer — default to spec's baseline (failure screenshots/traces always kept; success screenshots only at named checkpoints) until told otherwise | spec Section 5 defaults |
+| Sensitive-data restrictions | Auth/session secrets (`JWT_SECRET`, `ENCRYPTION_KEY`, `DATABASE_URL`, `RESEND_API_KEY`) live in untracked, gitignored `.env`/`apps/web/.env` files and must never appear in reports, logs, or committed fixtures | `apps/web/.env` (gitignored via `apps/web/.gitignore`), `.gitignore` |
 
 ### Defaults requiring confirmation or documented substitution
 
