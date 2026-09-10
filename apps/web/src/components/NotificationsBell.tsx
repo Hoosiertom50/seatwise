@@ -74,7 +74,7 @@ export function NotificationsBell() {
       <button
         onClick={() => setOpen((o) => !o)}
         aria-label={`Notifications${unreadCount > 0 ? ` (${unreadCount} unread)` : ""}`}
-        className="relative flex h-11 w-11 items-center justify-center rounded-md border border-neutral-300 dark:border-neutral-600 text-lg hover:bg-neutral-50 dark:hover:bg-neutral-800 dark:hover:bg-neutral-800"
+        className="relative flex h-11 w-11 items-center justify-center rounded-md border border-neutral-300 dark:border-neutral-600 text-lg hover:bg-neutral-50 dark:hover:bg-neutral-800"
       >
         🔔
         {unreadCount > 0 && (
@@ -102,7 +102,7 @@ export function NotificationsBell() {
                 <button
                   key={n.id}
                   onClick={() => onMarkOneRead(n.id)}
-                  className={`flex w-full flex-col items-start gap-0.5 border-b border-neutral-50 px-4 py-3 text-left last:border-0 hover:bg-neutral-50 dark:hover:bg-neutral-800 dark:hover:bg-neutral-800 ${
+                  className={`flex w-full flex-col items-start gap-0.5 border-b border-neutral-50 px-4 py-3 text-left last:border-0 hover:bg-neutral-50 dark:hover:bg-neutral-800 ${
                     n.isRead ? "" : "bg-blue-50/50"
                   }`}
                 >

@@ -35,6 +35,23 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   return data as T;
 }
 
+// A 422's top-level message is always the generic "Validation failed" -- the actually useful text
+// (e.g. "Can only contain letters, spaces, hyphens, apostrophes, and periods") lives in
+// fieldErrors, keyed by field name. This picks the first message for any of the given fields,
+// falling back to the error's own message (or a caller-supplied default for a non-ApiError) when
+// there's nothing more specific -- so a caller can show the user why a save was rejected instead
+// of just "Validation failed".
+export function apiErrorMessage(err: unknown, fields: string[], fallback: string): string {
+  if (err instanceof ApiError) {
+    for (const field of fields) {
+      const msg = err.fieldErrors?.[field]?.[0];
+      if (msg) return msg;
+    }
+    return err.message;
+  }
+  return fallback;
+}
+
 export const api = {
   get: <T>(path: string) => request<T>(path, { method: "GET" }),
   post: <T>(path: string, body?: unknown) =>
