@@ -753,6 +753,35 @@ up for it.
   labels, venue name) were deliberately left alone — the planner's concern was specifically about
   name fields, and a character allowlist doesn't make sense for open-ended text.
 
+- **Wider main content area, plus a small responsive audit**: the wedding-detail page and the
+  dashboard were both capped at a fixed centered width (`max-w-3xl`/768px and `max-w-5xl`/1024px
+  respectively) on every screen size, which was needlessly cramped for space-hungry views like the
+  Tables/Seating-plan floor plans — both floor-plan canvases already scale to fill their container
+  (`width: "100%", maxWidth: <content-derived size>`), so they were only ever using a fraction of
+  a wide monitor's actual space. Both are now capped at `max-w-[1600px]` instead — a large, bounded
+  width rather than a literal no-cap, so a genuinely huge (5120px) ultrawide monitor still gets
+  reasonable margins instead of content stretching edge to edge. Small-screen behavior is
+  unaffected — a max-width only ever engages once the viewport is wider than it, so this is a
+  pure widening, not a narrowing anywhere. Auth/guest-facing single-purpose pages (login, signup,
+  the invite-accept and RSVP pages) were deliberately left at their existing narrow centered-card
+  width, since a login form or RSVP card stretched to fill an ultrawide monitor is worse, not
+  better.
+
+  While auditing this at narrow widths, found and fixed two real (pre-existing, unrelated to the
+  width change) small-screen overflow bugs: the Guests tab's per-guest Side/RSVP/Lock/Delete
+  control row, and the Seating plan tab's "Generate new plan" + "Save as comparison draft" header
+  row, both used a plain `flex` row with no wrapping, so at phone width their contents pushed past
+  the edge of the screen instead of dropping to a second line. Fixed those, and proactively added
+  the same `flex-wrap` to three structurally identical control clusters elsewhere (the Tables tab's
+  per-table Accessible/Single-side/Lock controls, the Collaborators tab's per-collaborator
+  Role/Access controls — whose own row wrapper was also missing `flex-wrap` — and the Budget tab's
+  per-vendor Edit/Delete controls) that weren't yet demonstrably broken with today's data but share
+  the exact same failure shape and would break the same way with a longer name, a longer vendor
+  contact line, or one more button. Verified with a headless sweep checking for horizontal overflow
+  across six viewport widths (390px phone through 3440px super-ultrawide) on every tab; also
+  confirmed the main content area actually measures wider on large viewports now, not just capped
+  the same as before.
+
 ## What's next
 
 **TS-4 is now fully built** — signup/login, per-owner wedding creation, full cross-wedding data

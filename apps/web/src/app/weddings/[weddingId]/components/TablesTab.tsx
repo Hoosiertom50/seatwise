@@ -736,7 +736,7 @@ export function TablesTab({
                     {t.purpose ? ` · ${t.purpose}` : ""}
                   </p>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   {canEdit ? (
                     <>
                       <label className="flex items-center gap-1.5 text-sm">
