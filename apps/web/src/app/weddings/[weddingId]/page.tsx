@@ -214,7 +214,7 @@ export default function WeddingDetailPage() {
             className={`whitespace-nowrap px-4 py-2 text-sm font-medium ${
               tab === t.value
                 ? "border-b-2 border-neutral-900 dark:border-neutral-100 text-neutral-900 dark:text-neutral-100"
-                : "text-neutral-500 dark:text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-300 dark:hover:text-neutral-300"
+                : "text-neutral-500 dark:text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-300"
             }`}
           >
             {t.label}

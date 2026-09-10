@@ -96,7 +96,7 @@ export default function InviteAcceptPage() {
                 <button
                   onClick={onAccept}
                   disabled={accepting}
-                  className="w-full rounded-md bg-neutral-900 dark:bg-neutral-100 px-4 py-2 text-sm font-medium text-white dark:text-neutral-900 hover:bg-neutral-700 dark:hover:bg-neutral-300 dark:hover:bg-neutral-300 disabled:opacity-50"
+                  className="w-full rounded-md bg-neutral-900 dark:bg-neutral-100 px-4 py-2 text-sm font-medium text-white dark:text-neutral-900 hover:bg-neutral-700 dark:hover:bg-neutral-300 disabled:opacity-50"
                 >
                   {accepting ? "Accepting..." : "Accept invite"}
                 </button>
@@ -109,7 +109,7 @@ export default function InviteAcceptPage() {
                 </p>
                 <Link
                   href="/login"
-                  className="w-full rounded-md bg-neutral-900 dark:bg-neutral-100 px-4 py-2 text-sm font-medium text-white dark:text-neutral-900 hover:bg-neutral-700 dark:hover:bg-neutral-300 dark:hover:bg-neutral-300"
+                  className="w-full rounded-md bg-neutral-900 dark:bg-neutral-100 px-4 py-2 text-sm font-medium text-white dark:text-neutral-900 hover:bg-neutral-700 dark:hover:bg-neutral-300"
                 >
                   Log in
                 </Link>
