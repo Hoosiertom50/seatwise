@@ -12,6 +12,7 @@ export * from "./schemas/template";
 export * from "./schemas/vendor";
 export * from "./seating-engine";
 export * from "./csv";
+export * from "./validation";
 
 export interface ApiErrorResponse {
   error: string;
