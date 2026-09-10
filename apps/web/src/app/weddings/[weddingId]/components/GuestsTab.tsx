@@ -383,6 +383,45 @@ export function GuestsTab({
     }
   }
 
+  // Inline name edit -- same optimistic-update-then-reconcile pattern as the other per-guest edit
+  // handlers above (added after a planner flagged there was no way to fix a misspelled guest name
+  // short of re-importing or deleting/re-adding; the API/DB already supported it, only the UI
+  // didn't expose it). firstName/lastName are both required server-side (min length 1), so an
+  // emptied-out field is never sent -- it just reverts to the last saved value on blur instead.
+  async function onUpdateName(guestId: string, field: "firstName" | "lastName", newValue: string) {
+    const trimmed = newValue.trim();
+    const prev = guests;
+    const current = prev.find((g) => g.id === guestId);
+    if (!current || trimmed === current[field]) return;
+    if (trimmed === "") {
+      setError(field === "firstName" ? "First name can't be blank." : "Last name can't be blank.");
+      setGuests([...prev]); // force the input back to its defaultValue
+      return;
+    }
+    const expectedRevision = current.revision;
+    setGuests(prev.map((g) => (g.id === guestId ? { ...g, [field]: trimmed } : g)));
+    try {
+      const { guest } = await api.patch<{ guest: GuestDTO }>(
+        `/api/v1/weddings/${weddingId}/guests/${guestId}`,
+        { [field]: trimmed, expectedRevision }
+      );
+      setGuests(prev.map((g) => (g.id === guestId ? guest : g)));
+    } catch (err) {
+      const fresh = conflictGuest(err);
+      if (fresh) {
+        setGuests(prev.map((g) => (g.id === guestId ? fresh : g)));
+        setError(
+          `${fresh.firstName} ${fresh.lastName} was just edited elsewhere — showing the latest. Try again if you still want to make this change.`
+        );
+      } else {
+        setGuests(prev);
+        setError(
+          err instanceof ApiError ? err.message : `Couldn't update that guest's ${field === "firstName" ? "first" : "last"} name.`
+        );
+      }
+    }
+  }
+
   // TS-17 (FR-12.4): "get/copy" (regenerate: false) reuses an existing token or lazily creates
   // one; "regenerate" always issues a fresh one. Either way, if the guest has an email on file the
   // server also (re)sends it -- the result line reflects whichever actually happened.
@@ -825,8 +864,27 @@ export function GuestsTab({
               className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-neutral-200 px-4 py-3"
             >
               <div>
-                <p className="font-medium">
-                  {g.firstName} {g.lastName}
+                <div className="flex flex-wrap items-center font-medium">
+                  {canEdit ? (
+                    <span className="flex items-center gap-1">
+                      <input
+                        aria-label={`First name for ${g.firstName} ${g.lastName}`}
+                        className="w-24 rounded-md border border-transparent px-1 py-0.5 font-medium hover:border-neutral-200 focus:border-neutral-300 focus:outline-none"
+                        defaultValue={g.firstName}
+                        onBlur={(e) => onUpdateName(g.id, "firstName", e.target.value)}
+                      />
+                      <input
+                        aria-label={`Last name for ${g.firstName} ${g.lastName}`}
+                        className="w-28 rounded-md border border-transparent px-1 py-0.5 font-medium hover:border-neutral-200 focus:border-neutral-300 focus:outline-none"
+                        defaultValue={g.lastName}
+                        onBlur={(e) => onUpdateName(g.id, "lastName", e.target.value)}
+                      />
+                    </span>
+                  ) : (
+                    <span>
+                      {g.firstName} {g.lastName}
+                    </span>
+                  )}
                   {g.headcount > 1 ? ` (+${g.headcount - 1})` : ""}
                   {g.requiresAccessibleTable && (
                     <span className="ml-2 rounded bg-blue-50 px-1.5 py-0.5 text-xs text-blue-700">
@@ -863,7 +921,7 @@ export function GuestsTab({
                   >
                     {g.rsvpRespondedAt ? "responded" : "no self-RSVP yet"}
                   </span>
-                </p>
+                </div>
                 <p className="text-sm text-neutral-500">
                   {g.partyName ? `${g.partyName} · ` : ""}
                   {g.tier.replace("_", " ")}
