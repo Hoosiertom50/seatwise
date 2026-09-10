@@ -17,7 +17,8 @@
     "pw:serve-report": "playwright show-report artifacts/playwright/runs/html-report --host 0.0.0.0",
     "pw:validate-metadata": "tsx playwright-framework/cli/validate-metadata.ts",
     "pw:generate-value-model-md": "tsx playwright-framework/cli/generate-value-model-md.ts",
-    "pw:validate": "tsc --noEmit && pnpm pw:validate-metadata && playwright test --project=chromium --project=framework-unit --list"
+    "pw:lint-tests": "tsx playwright-framework/cli/lint-tests.ts",
+    "pw:validate": "tsc --noEmit && pnpm pw:validate-metadata && pnpm pw:lint-tests && playwright test --project=chromium --project=framework-unit --list"
   },
   "workspaces": [
     "apps/*",

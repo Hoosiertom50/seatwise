@@ -102,4 +102,26 @@ test.describe("validateAllTestMetadata", () => {
     );
     expect(summary.valid).toBe(false);
   });
+
+  test("a reference to a retired requirement is a hard failure (stale metadata) even though the requirement still exists", () => {
+    const requirementsWithRetired: RequirementsFile = {
+      ...requirements,
+      requirements: [
+        ...requirements.requirements,
+        { id: "REQ-OLD", title: "t", description: "d", sourceRefs: [], status: "retired", provenance: "p" },
+      ],
+    };
+    const summary = validateAllTestMetadata(
+      [validTest({ requirementIds: ["REQ-OLD"] })],
+      taxonomy,
+      requirementsWithRetired,
+    );
+    expect(summary.valid).toBe(false);
+    expect(summary.issues.some((i) => i.message.includes("retired requirement") && i.message.includes("stale metadata"))).toBe(
+      true,
+    );
+    // A retired requirement is a different failure from an unknown one -- it must not also be
+    // reported as "unknown requirement" (the requirement genuinely exists, just retired).
+    expect(summary.issues.some((i) => i.message.includes("unknown requirement"))).toBe(false);
+  });
 });

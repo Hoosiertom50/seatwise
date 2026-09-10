@@ -1139,24 +1139,36 @@ queued move to replay.
 A reusable Playwright Test framework is being built out per
 `PLAYWRIGHT_QUALITY_FRAMEWORK_SPEC.md` (also the resumable implementation ledger — see its own
 Progress Dashboard for what's done). Tracked in Jira as TS-22 with one story per stage (TS-23
-through TS-34); a full manual-tester guide (`PLAYWRIGHT_TESTING.md`) arrives in Stage 04/10. In the
-meantime, the basics that exist as of Stage 02:
+through TS-34). **`PLAYWRIGHT_TESTING.md` is the full manual-tester/authoring guide** (Stage 04) —
+start there if you're writing or reviewing a test. The basics, as of Stage 04:
 
 - **Install:** `pnpm install` (top-level, same as the rest of the repo) gets `@playwright/test`
   itself; then `pnpm pw:install` downloads the Chromium browser binary Playwright needs (Firefox
   and WebKit stay uninstalled/unused for now — see the spec's Decision Log, DEC-003).
 - **Run:** `pnpm pw:test` runs the Chromium E2E project plus the framework's own unit tests.
   `pnpm pw:test:headed` / `pnpm pw:test:debug` / `pnpm pw:test:ui` are the usual Playwright
-  debugging modes. `pnpm pw:validate` type-checks the framework and lists what would run, without
-  actually running anything.
+  debugging modes. `pnpm pw:validate` type-checks the framework, validates all governance/metadata
+  (including, as of Stage 04, the real test suite's own authoring standards — see
+  `pnpm pw:lint-tests` below), and lists what would run, without actually running anything.
 - **Reports:** `pnpm pw:report` opens the most recent HTML report (generated under
   `artifacts/playwright/runs/` — gitignored, regenerated per run; the framework's own richer report
   templates arrive in Stage 06).
-- **Layout:** `e2e/` holds application tests (currently just a framework-health smoke test —
-  Stage 03/04 add the page objects, fixtures, and real reference tests); `playwright-framework/`
-  holds the framework's own source and self-tests (environment config, the production/mutation
-  safety guard); `quality/` holds versioned config and audit reports; `artifacts/playwright/` holds
-  generated, gitignored run output.
+- **Layout:** `e2e/tests/` holds application tests (`guest-management.spec.ts` and
+  `guest-viewing.spec.ts` are the mutating/read-only reference tests; `unit/` holds pure-logic unit
+  tests for the `e2e/` support code) plus page objects (`e2e/pages/`), component objects
+  (`e2e/components/`), fixtures (`e2e/fixtures/`), and test-data/support helpers
+  (`e2e/data/`, `e2e/support/`); `playwright-framework/` holds the framework's own source and
+  self-tests (environment config, the production/mutation safety guard, metadata/tag validation,
+  scoring, and — as of Stage 04 — static test-authoring lint rules under
+  `playwright-framework/validation/`); `quality/` holds versioned config and audit reports;
+  `artifacts/playwright/` holds generated, gitignored run output.
+- **Test-authoring standards and enforcement (Stage 04):** `pnpm pw:lint-tests` statically checks
+  every real `e2e/tests/**/*.spec.ts` file (no browser launch needed) against the rules
+  `PLAYWRIGHT_TESTING.md` documents — no raw selectors/screenshots/fixed-waits in a test file, no
+  committed `test.only`, no unreasoned skip/fixme/fail, no swallowed errors, every test asserts
+  something, every test's ID is prefixed with its file's name — plus the metadata governance
+  checks below run against the real suite for the first time (previously only exercised against
+  synthetic data in a unit test). Folded into `pnpm pw:validate`.
 - **Production safety:** there's no real production deployment of this app yet, so
   `PRODUCTION_HOSTNAMES` defaults to empty and every target is treated as non-production. The guard
   itself (`e2e/support/productionGuard.ts`) is fully implemented and unit-tested so that whenever a
@@ -1167,6 +1179,6 @@ meantime, the basics that exist as of Stage 02:
   `quality/test-value-model.md`) are the canonical, versioned data behind the framework's tagging
   and scoring rules — see the spec's Section 8/9 for what each encodes. `pnpm pw:validate-metadata`
   checks all of it (and every other quality/*.yaml file) for consistency; `defineQualityTest` (in
-  `playwright-framework/metadata/`) is the typed helper a real test will use, starting in Stage 03,
-  to attach governed metadata (objective, expected outcome, requirement IDs, tags) and have it
-  validated at collection time.
+  `playwright-framework/metadata/`, re-exported with fixtures from `e2e/fixtures/index.ts`) is the
+  typed helper every real application test uses to attach governed metadata (objective, expected
+  outcome, requirement IDs, tags) and have it validated at collection time.

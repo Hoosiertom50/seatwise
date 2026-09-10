@@ -5,6 +5,13 @@
  * expected outcomes. This is what "invalid or contradictory metadata fails before execution" means
  * in practice: run this against the full set of authored test metadata and a non-empty result means
  * the run must not proceed.
+ *
+ * Stage 04 addition: a requirementIds entry pointing at a requirement whose own `status` is
+ * "retired" is flagged as stale metadata (spec Stage 04 task: "Add checks for unknown tags,
+ * duplicate IDs, missing mappings, and stale metadata") -- the requirement ID still resolves (so
+ * the pre-existing "unknown requirement" check wouldn't catch it), but the test is citing a
+ * requirement the business has since withdrawn, which is exactly the kind of drift that check is
+ * meant to close.
  */
 
 import type { RequirementsFile, TagTaxonomyFile, TestMetadata } from "./schemas.js";
@@ -32,6 +39,9 @@ export function validateAllTestMetadata(
 ): MetadataValidationSummary {
   const issues: MetadataValidationIssue[] = [];
   const requirementIds = new Set(requirements.requirements.map((r) => r.id));
+  const retiredRequirementIds = new Set(
+    requirements.requirements.filter((r) => r.status === "retired").map((r) => r.id),
+  );
   const seenIds = new Map<string, number>();
 
   for (const test of tests) {
@@ -60,6 +70,12 @@ export function validateAllTestMetadata(
           issues.push({
             testId: test.id,
             message: `requirementIds references unknown requirement "${reqId}"`,
+            needsHumanReview: false,
+          });
+        } else if (retiredRequirementIds.has(reqId)) {
+          issues.push({
+            testId: test.id,
+            message: `requirementIds references retired requirement "${reqId}" -- stale metadata: re-map this test to a current requirement or retire the test too`,
             needsHumanReview: false,
           });
         }
