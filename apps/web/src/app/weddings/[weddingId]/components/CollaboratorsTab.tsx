@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { api, ApiError } from "@/lib/api-client";
+import { api, ApiError, apiErrorMessage } from "@/lib/api-client";
 import type {
   CollaboratorDTO,
   CollaboratorPermission,
@@ -143,7 +143,7 @@ export function CollaboratorsTab({
       setWedding(updated);
       setWeddingName(updated.name);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Couldn't save the wedding name.");
+      setError(apiErrorMessage(err, ["name"], "Couldn't save the wedding name."));
       setWeddingName(wedding.name);
     } finally {
       setSavingName(false);
@@ -369,7 +369,7 @@ export function CollaboratorsTab({
             <button
               type="submit"
               disabled={adding}
-              className="rounded-md bg-neutral-900 dark:bg-neutral-100 px-4 py-2 text-sm font-medium text-white dark:text-neutral-900 hover:bg-neutral-700 dark:hover:bg-neutral-300 dark:hover:bg-neutral-300 disabled:opacity-50 sm:col-span-3"
+              className="rounded-md bg-neutral-900 dark:bg-neutral-100 px-4 py-2 text-sm font-medium text-white dark:text-neutral-900 hover:bg-neutral-700 dark:hover:bg-neutral-300 disabled:opacity-50 sm:col-span-3"
             >
               {adding ? "Sending invite..." : "Send invite"}
             </button>
@@ -398,7 +398,7 @@ export function CollaboratorsTab({
                       </div>
                       <button
                         onClick={() => onRevokeInvite(i.id)}
-                        className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1.5 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950 dark:hover:bg-red-950"
+                        className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1.5 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950"
                       >
                         Revoke
                       </button>
@@ -571,7 +571,7 @@ export function CollaboratorsTab({
                   </select>
                   <button
                     onClick={() => onRemove(c.id)}
-                    className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1.5 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950 dark:hover:bg-red-950"
+                    className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1.5 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950"
                   >
                     Remove
                   </button>

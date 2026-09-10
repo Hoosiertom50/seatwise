@@ -730,6 +730,29 @@ up for it.
   computed colors don't always serialize as plain `rgb()`) across the tab bar, page headings, the
   Collaborators and Plan tabs, the primary button, and the separate RSVP page.
 
+- **Name-field character validation**: a planner flagged that guest and wedding names would
+  silently accept digits, symbols, and emoji ("John3", "Alex & Jordan 🎉"). Guest first/last name
+  and wedding name are now checked against an allowlist wide enough to admit how real names
+  actually look — accented letters (José, François), apostrophes (O'Brien), hyphens
+  (Smith-Jones), periods (initials, "Jr."/"St.") — rather than a naive "letters only" rule that
+  would reject perfectly real names; the wedding-name allowlist is wider still, since it's a title
+  ("Alex & Jordan's Wedding, Est. 2026!") rather than a person's name, so it also permits digits,
+  ampersands, commas, and exclamation points. Both patterns live in one place
+  (`packages/shared/src/validation.ts`) shared by every entry point that touches these fields.
+  Three related gaps got fixed alongside it: (1) neither field was ever trimmed, so a name of pure
+  whitespace saved as "valid" — both now trim before every other check; (2) the CSV bulk-import
+  path validated guest names more weakly than the single-guest add/edit form (no length cap at
+  all, and no character check), so a name the regular form would reject could still get in through
+  an import — it now applies the identical 100-character cap and allowlist, per-row, alongside the
+  import's existing error reporting; (3) the add-guest and create-wedding forms were missing the
+  client-side `maxLength` their sibling edit forms already had. Also fixed a pre-existing UX gap
+  this surfaced: a 422 validation failure always showed the generic "Validation failed" instead of
+  the specific reason (e.g. which character rule tripped) — a new `apiErrorMessage()` helper
+  (`apps/web/src/lib/api-client.ts`) surfaces the actual field-level message when one exists, now
+  used by guest add/edit and wedding create/rename. Free-text fields (notes, plus-one names, side
+  labels, venue name) were deliberately left alone — the planner's concern was specifically about
+  name fields, and a character allowlist doesn't make sense for open-ended text.
+
 ## What's next
 
 **TS-4 is now fully built** — signup/login, per-owner wedding creation, full cross-wedding data
