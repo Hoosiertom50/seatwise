@@ -214,7 +214,7 @@ export function CommentsTab({
             <button
               type="submit"
               disabled={posting}
-              className="self-start rounded-md bg-neutral-900 dark:bg-neutral-100 px-4 py-2 text-sm font-medium text-white dark:text-neutral-900 hover:bg-neutral-700 dark:hover:bg-neutral-300 dark:hover:bg-neutral-300 disabled:opacity-50"
+              className="self-start rounded-md bg-neutral-900 dark:bg-neutral-100 px-4 py-2 text-sm font-medium text-white dark:text-neutral-900 hover:bg-neutral-700 dark:hover:bg-neutral-300 disabled:opacity-50"
             >
               {posting ? "Posting..." : "Post comment"}
             </button>
@@ -258,7 +258,7 @@ export function CommentsTab({
                     canResolve && (
                       <button
                         onClick={() => onResolve(root.id)}
-                        className="shrink-0 rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-xs hover:bg-neutral-50 dark:hover:bg-neutral-800 dark:hover:bg-neutral-800"
+                        className="shrink-0 rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-xs hover:bg-neutral-50 dark:hover:bg-neutral-800"
                       >
                         Resolve
                       </button>
@@ -294,7 +294,7 @@ export function CommentsTab({
                           onClick={() =>
                             onReply(root.id, root.targetType, root.guestId, root.tableId, root.timelineEntryId)
                           }
-                          className="rounded-md bg-neutral-900 dark:bg-neutral-100 px-3 py-2 text-sm font-medium text-white dark:text-neutral-900 hover:bg-neutral-700 dark:hover:bg-neutral-300 dark:hover:bg-neutral-300"
+                          className="rounded-md bg-neutral-900 dark:bg-neutral-100 px-3 py-2 text-sm font-medium text-white dark:text-neutral-900 hover:bg-neutral-700 dark:hover:bg-neutral-300"
                         >
                           Reply
                         </button>

@@ -499,7 +499,7 @@ export function PlanTab({
             <button
               onClick={onGenerate}
               disabled={generating}
-              className="min-h-11 rounded-md bg-neutral-900 dark:bg-neutral-100 px-4 py-2 text-sm font-medium text-white dark:text-neutral-900 hover:bg-neutral-700 dark:hover:bg-neutral-300 dark:hover:bg-neutral-300 disabled:opacity-50"
+              className="min-h-11 rounded-md bg-neutral-900 dark:bg-neutral-100 px-4 py-2 text-sm font-medium text-white dark:text-neutral-900 hover:bg-neutral-700 dark:hover:bg-neutral-300 disabled:opacity-50"
             >
               {generating ? "Generating..." : "Generate new plan"}
             </button>
@@ -625,7 +625,7 @@ export function PlanTab({
                 setCompareToId(versions[0]?.id ?? "");
               }
             }}
-            className="text-sm font-medium text-neutral-700 dark:text-neutral-300 hover:text-neutral-900 dark:hover:text-neutral-100 dark:hover:text-neutral-100"
+            className="text-sm font-medium text-neutral-700 dark:text-neutral-300 hover:text-neutral-900 dark:hover:text-neutral-100"
           >
             {showCompare ? "Hide version comparison" : "Compare two versions..."}
           </button>
@@ -669,7 +669,7 @@ export function PlanTab({
                 <button
                   onClick={onCompare}
                   disabled={comparing || !compareFromId || !compareToId}
-                  className="min-h-11 rounded-md bg-neutral-900 dark:bg-neutral-100 px-3 py-1.5 text-sm font-medium text-white dark:text-neutral-900 hover:bg-neutral-700 dark:hover:bg-neutral-300 dark:hover:bg-neutral-300 disabled:opacity-50"
+                  className="min-h-11 rounded-md bg-neutral-900 dark:bg-neutral-100 px-3 py-1.5 text-sm font-medium text-white dark:text-neutral-900 hover:bg-neutral-700 dark:hover:bg-neutral-300 disabled:opacity-50"
                 >
                   {comparing ? "Comparing..." : "Compare"}
                 </button>
@@ -756,14 +756,14 @@ export function PlanTab({
                 <button
                   onClick={onSaveLabel}
                   disabled={savingLabel}
-                  className="min-h-11 rounded-md bg-neutral-900 dark:bg-neutral-100 px-2 py-1 text-xs font-medium text-white dark:text-neutral-900 hover:bg-neutral-700 dark:hover:bg-neutral-300 dark:hover:bg-neutral-300 disabled:opacity-50"
+                  className="min-h-11 rounded-md bg-neutral-900 dark:bg-neutral-100 px-2 py-1 text-xs font-medium text-white dark:text-neutral-900 hover:bg-neutral-700 dark:hover:bg-neutral-300 disabled:opacity-50"
                 >
                   {savingLabel ? "Saving..." : "Save"}
                 </button>
                 <button
                   onClick={() => setEditingLabel(false)}
                   disabled={savingLabel}
-                  className="min-h-11 rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-xs font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800 dark:hover:bg-neutral-800 disabled:opacity-50"
+                  className="min-h-11 rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-xs font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50"
                 >
                   Cancel
                 </button>
@@ -774,7 +774,7 @@ export function PlanTab({
                   setLabelInput(detail.label ?? "");
                   setEditingLabel(true);
                 }}
-                className="text-sm text-neutral-500 dark:text-neutral-400 underline hover:text-neutral-700 dark:hover:text-neutral-300 dark:hover:text-neutral-300"
+                className="text-sm text-neutral-500 dark:text-neutral-400 underline hover:text-neutral-700 dark:hover:text-neutral-300"
               >
                 {detail.label ? `“${detail.label}” (rename)` : "Add a nickname..."}
               </button>
@@ -788,7 +788,7 @@ export function PlanTab({
                 href={`/api/v1/weddings/${weddingId}/plan-versions/${detail.id}/export/chart`}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="rounded-md border border-neutral-300 dark:border-neutral-600 min-h-11 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800 dark:hover:bg-neutral-800"
+                className="rounded-md border border-neutral-300 dark:border-neutral-600 min-h-11 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800"
               >
                 Seating chart (PDF)
               </a>
@@ -796,7 +796,7 @@ export function PlanTab({
                 href={`/api/v1/weddings/${weddingId}/plan-versions/${detail.id}/export/lookup`}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="rounded-md border border-neutral-300 dark:border-neutral-600 min-h-11 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800 dark:hover:bg-neutral-800"
+                className="rounded-md border border-neutral-300 dark:border-neutral-600 min-h-11 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800"
               >
                 Guest lookup list (PDF)
               </a>
@@ -804,7 +804,7 @@ export function PlanTab({
                 href={`/api/v1/weddings/${weddingId}/plan-versions/${detail.id}/export/cards`}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="rounded-md border border-neutral-300 dark:border-neutral-600 min-h-11 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800 dark:hover:bg-neutral-800"
+                className="rounded-md border border-neutral-300 dark:border-neutral-600 min-h-11 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800"
               >
                 Place cards (PDF)
               </a>
@@ -823,7 +823,7 @@ export function PlanTab({
                 <button
                   onClick={onPreviewRestore}
                   disabled={previewingRestore}
-                  className="rounded-md border border-neutral-300 dark:border-neutral-600 min-h-11 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800 dark:hover:bg-neutral-800 disabled:opacity-50"
+                  className="rounded-md border border-neutral-300 dark:border-neutral-600 min-h-11 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50"
                 >
                   {previewingRestore ? "Checking..." : `Restore version ${detail.versionNumber}...`}
                 </button>
@@ -856,14 +856,14 @@ export function PlanTab({
                     <button
                       onClick={onConfirmRestore}
                       disabled={restoring}
-                      className="rounded-md bg-neutral-900 dark:bg-neutral-100 min-h-11 px-3 py-1.5 text-sm font-medium text-white dark:text-neutral-900 hover:bg-neutral-700 dark:hover:bg-neutral-300 dark:hover:bg-neutral-300 disabled:opacity-50"
+                      className="rounded-md bg-neutral-900 dark:bg-neutral-100 min-h-11 px-3 py-1.5 text-sm font-medium text-white dark:text-neutral-900 hover:bg-neutral-700 dark:hover:bg-neutral-300 disabled:opacity-50"
                     >
                       {restoring ? "Restoring..." : "Confirm restore"}
                     </button>
                     <button
                       onClick={() => setRestorePreview(null)}
                       disabled={restoring}
-                      className="rounded-md border border-neutral-300 dark:border-neutral-600 min-h-11 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800 dark:hover:bg-neutral-800 disabled:opacity-50"
+                      className="rounded-md border border-neutral-300 dark:border-neutral-600 min-h-11 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50"
                     >
                       Cancel
                     </button>
@@ -879,7 +879,7 @@ export function PlanTab({
                 <button
                   onClick={() => onSetStatus("IN_REVIEW")}
                   disabled={statusUpdating}
-                  className="rounded-md border border-neutral-300 dark:border-neutral-600 min-h-11 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800 dark:hover:bg-neutral-800 disabled:opacity-50"
+                  className="rounded-md border border-neutral-300 dark:border-neutral-600 min-h-11 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50"
                 >
                   Move to review
                 </button>
@@ -889,7 +889,7 @@ export function PlanTab({
                   <button
                     onClick={() => onSetStatus("DRAFT")}
                     disabled={statusUpdating}
-                    className="rounded-md border border-neutral-300 dark:border-neutral-600 min-h-11 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800 dark:hover:bg-neutral-800 disabled:opacity-50"
+                    className="rounded-md border border-neutral-300 dark:border-neutral-600 min-h-11 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50"
                   >
                     Move back to draft
                   </button>
@@ -897,7 +897,7 @@ export function PlanTab({
                     onClick={() => onSetStatus("APPROVED")}
                     disabled={statusUpdating || !detail.isComplete}
                     title={!detail.isComplete ? "Every guest must be seated before a plan can be approved." : undefined}
-                    className="rounded-md bg-green-700 dark:bg-green-600 min-h-11 px-3 py-1.5 text-sm font-medium text-white hover:bg-green-800 dark:hover:bg-green-500 dark:hover:bg-green-500 disabled:opacity-50"
+                    className="rounded-md bg-green-700 dark:bg-green-600 min-h-11 px-3 py-1.5 text-sm font-medium text-white hover:bg-green-800 dark:hover:bg-green-500 disabled:opacity-50"
                   >
                     Approve
                   </button>
@@ -912,7 +912,7 @@ export function PlanTab({
                 <button
                   onClick={() => onSetStatus("IN_REVIEW")}
                   disabled={statusUpdating}
-                  className="rounded-md border border-neutral-300 dark:border-neutral-600 min-h-11 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800 dark:hover:bg-neutral-800 disabled:opacity-50"
+                  className="rounded-md border border-neutral-300 dark:border-neutral-600 min-h-11 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50"
                 >
                   Reopen for review
                 </button>
@@ -973,7 +973,7 @@ export function PlanTab({
                 onClick={onUndo}
                 disabled={undoStack.length === 0 || undoRedoBusy || movingGuestId !== null}
                 title={undoStack.length > 0 ? `Undo: ${undoStack[undoStack.length - 1].description}` : undefined}
-                className="min-h-11 rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800 dark:hover:bg-neutral-800 disabled:opacity-50"
+                className="min-h-11 rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50"
               >
                 {undoRedoBusy ? "Working..." : "Undo"}
               </button>
@@ -982,7 +982,7 @@ export function PlanTab({
                 onClick={onRedo}
                 disabled={redoStack.length === 0 || undoRedoBusy || movingGuestId !== null}
                 title={redoStack.length > 0 ? `Redo: ${redoStack[redoStack.length - 1].description}` : undefined}
-                className="min-h-11 rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800 dark:hover:bg-neutral-800 disabled:opacity-50"
+                className="min-h-11 rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50"
               >
                 Redo
               </button>
@@ -1070,13 +1070,13 @@ export function PlanTab({
             <div className="flex gap-1 rounded-md border border-neutral-300 dark:border-neutral-600 p-0.5 text-sm">
               <button
                 onClick={() => setPlanView("list")}
-                className={`rounded px-2 py-1 ${planView === "list" ? "bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900" : "hover:bg-neutral-50 dark:hover:bg-neutral-800 dark:hover:bg-neutral-800"}`}
+                className={`rounded px-2 py-1 ${planView === "list" ? "bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900" : "hover:bg-neutral-50 dark:hover:bg-neutral-800"}`}
               >
                 List
               </button>
               <button
                 onClick={() => setPlanView("floorplan")}
-                className={`rounded px-2 py-1 ${planView === "floorplan" ? "bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900" : "hover:bg-neutral-50 dark:hover:bg-neutral-800 dark:hover:bg-neutral-800"}`}
+                className={`rounded px-2 py-1 ${planView === "floorplan" ? "bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900" : "hover:bg-neutral-50 dark:hover:bg-neutral-800"}`}
               >
                 Floor plan
               </button>

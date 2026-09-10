@@ -332,8 +332,8 @@ export function DayOfTab({
                     disabled={busyGuestId === g.id}
                     className={`min-h-11 rounded-md border px-3 py-2 text-sm font-medium disabled:opacity-50 ${
                       notAttending
-                        ? "border-neutral-300 dark:border-neutral-600 hover:bg-neutral-50 dark:hover:bg-neutral-800 dark:hover:bg-neutral-800"
-                        : "border-red-300 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950 dark:hover:bg-red-950"
+                        ? "border-neutral-300 dark:border-neutral-600 hover:bg-neutral-50 dark:hover:bg-neutral-800"
+                        : "border-red-300 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950"
                     }`}
                   >
                     {notAttending ? "Mark attending" : "Mark not attending"}
@@ -394,7 +394,7 @@ export function DayOfTab({
           <button
             type="submit"
             disabled={addingWalkIn}
-            className="min-h-11 rounded-md bg-neutral-900 dark:bg-neutral-100 px-4 py-2 text-sm font-medium text-white dark:text-neutral-900 hover:bg-neutral-700 dark:hover:bg-neutral-300 dark:hover:bg-neutral-300 disabled:opacity-50"
+            className="min-h-11 rounded-md bg-neutral-900 dark:bg-neutral-100 px-4 py-2 text-sm font-medium text-white dark:text-neutral-900 hover:bg-neutral-700 dark:hover:bg-neutral-300 disabled:opacity-50"
           >
             {addingWalkIn ? "Adding..." : "Add walk-in"}
           </button>
@@ -437,7 +437,7 @@ export function DayOfTab({
             <button
               onClick={onSwap}
               disabled={swapping || !swapAId || !swapBId}
-              className="min-h-11 shrink-0 rounded-md bg-neutral-900 dark:bg-neutral-100 px-4 py-2 text-sm font-medium text-white dark:text-neutral-900 hover:bg-neutral-700 dark:hover:bg-neutral-300 dark:hover:bg-neutral-300 disabled:opacity-50"
+              className="min-h-11 shrink-0 rounded-md bg-neutral-900 dark:bg-neutral-100 px-4 py-2 text-sm font-medium text-white dark:text-neutral-900 hover:bg-neutral-700 dark:hover:bg-neutral-300 disabled:opacity-50"
             >
               {swapping ? "Swapping..." : "Swap"}
             </button>

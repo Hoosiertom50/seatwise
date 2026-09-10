@@ -247,7 +247,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
             <button
               type="submit"
               disabled={savingBudget}
-              className="rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800 dark:hover:bg-neutral-800 disabled:opacity-50"
+              className="rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50"
             >
               {savingBudget ? "Saving..." : "Save budget"}
             </button>
@@ -392,7 +392,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
             <button
               type="submit"
               disabled={adding}
-              className="rounded-md bg-neutral-900 dark:bg-neutral-100 px-4 py-2 text-sm font-medium text-white dark:text-neutral-900 hover:bg-neutral-700 dark:hover:bg-neutral-300 dark:hover:bg-neutral-300 disabled:opacity-50 sm:col-span-2"
+              className="rounded-md bg-neutral-900 dark:bg-neutral-100 px-4 py-2 text-sm font-medium text-white dark:text-neutral-900 hover:bg-neutral-700 dark:hover:bg-neutral-300 disabled:opacity-50 sm:col-span-2"
             >
               {adding ? "Adding..." : "Add vendor"}
             </button>
@@ -483,13 +483,13 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
                     <button
                       onClick={() => onSaveEdit(v.id)}
                       disabled={saving}
-                      className="rounded-md bg-neutral-900 dark:bg-neutral-100 px-3 py-1.5 text-sm font-medium text-white dark:text-neutral-900 hover:bg-neutral-700 dark:hover:bg-neutral-300 dark:hover:bg-neutral-300 disabled:opacity-50"
+                      className="rounded-md bg-neutral-900 dark:bg-neutral-100 px-3 py-1.5 text-sm font-medium text-white dark:text-neutral-900 hover:bg-neutral-700 dark:hover:bg-neutral-300 disabled:opacity-50"
                     >
                       Save
                     </button>
                     <button
                       onClick={() => setEditingId(null)}
-                      className="rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800 dark:hover:bg-neutral-800"
+                      className="rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800"
                     >
                       Cancel
                     </button>
@@ -515,13 +515,13 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
                       <>
                         <button
                           onClick={() => startEdit(v)}
-                          className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800 dark:hover:bg-neutral-800"
+                          className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800"
                         >
                           Edit
                         </button>
                         <button
                           onClick={() => onRemove(v.id)}
-                          className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950 dark:hover:bg-red-950"
+                          className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950"
                         >
                           Remove
                         </button>
