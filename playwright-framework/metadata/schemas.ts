@@ -338,6 +338,119 @@ export const RunResultFileSchema = z.object({
 export type RunResultFile = z.infer<typeof RunResultFileSchema>;
 
 // ---------------------------------------------------------------------------
+// Run REPORT (Stage 06 — spec Section 10.2): the rich, per-test diagnostic document the custom
+// Playwright reporter (playwright-framework/reporting/normalizedReporter.ts) writes once a run
+// finishes, and playwright-framework/cli/generate-run-report.ts renders to HTML. Distinct from
+// RunResultFile above: that one records what a `pw:run` invocation was ASKED to do (Stage 05,
+// written before execution); this one records what actually HAPPENED (Stage 06, written after).
+// The two share a `runId` so they can be cross-referenced but are never merged into one file --
+// Stage 05's manifest is written by the CLI process itself, Stage 06's report by a Playwright
+// reporter running inside a separate `playwright test` child process, and forcing one writer to
+// wait on/patch the other's file would add exactly the kind of fragile cross-process coordination
+// this framework has otherwise avoided.
+// ---------------------------------------------------------------------------
+
+export const StepOutcomeSchema = z.object({
+  title: NonEmptyStringSchema,
+  /** Playwright's own step category: "test.step" for an authored Arrange/Act/Assert step,
+   * "expect" for an individual assertion, "hook"/"fixture" for setup/teardown machinery. */
+  category: NonEmptyStringSchema,
+  durationMs: z.number().nonnegative(),
+  status: z.enum(["passed", "failed", "skipped"]),
+  error: z.string().optional(),
+});
+export type StepOutcome = z.infer<typeof StepOutcomeSchema>;
+
+export const SuccessCheckpointSchema = z.object({
+  name: NonEmptyStringSchema,
+  /** Relative (never absolute) path to the attached screenshot, from the report file's own
+   * directory -- spec Section 10.1: "contains no absolute path unless configured for local editor
+   * linking" (which this framework does not enable -- DEC-004). */
+  screenshotPath: z.string().optional(),
+  validationDescription: NonEmptyStringSchema,
+});
+
+export const RunReportTestSchema = z.object({
+  testId: NonEmptyStringSchema,
+  title: NonEmptyStringSchema,
+  /** Repository-relative source path and 1-based line -- never an absolute path (Section 10.1). */
+  filePath: NonEmptyStringSchema,
+  line: z.number().int().positive(),
+  tags: z.array(NonEmptyStringSchema),
+  requirementIds: z.array(NonEmptyStringSchema),
+  objective: z.string().optional(),
+  expectedOutcome: z.string().optional(),
+  status: RunResultStatusSchema,
+  durationMs: z.number().nonnegative(),
+  /** Total attempts Playwright made (1 + retries actually consumed for this test). */
+  attempts: z.number().int().positive(),
+  steps: z.array(StepOutcomeSchema),
+  /** Count of `expect(...)`/`expect.poll(...)` steps Playwright itself recorded as actually
+   * executed -- Section 10.1's "every claimed successful validation is backed by an executed
+   * assertion" means this is read from Playwright's own step data, never inferred from source. */
+  assertionCount: z.number().int().nonnegative(),
+  /** Only present for a failing/timed-out test -- the first meaningful failure's own message,
+   * redacted, with any absolute repository path rewritten relative (never fabricated when
+   * Playwright reported no error, e.g. a plain timeout with no thrown error). */
+  errorMessage: z.string().optional(),
+  sanitizedStackTrace: z.string().optional(),
+  successCheckpoints: z.array(SuccessCheckpointSchema),
+  /** Relative paths to Playwright's own failure attachments, when captured. */
+  failureScreenshotPath: z.string().optional(),
+  tracePath: z.string().optional(),
+  videoPath: z.string().optional(),
+  consoleMessages: z.string().optional(),
+  failedNetworkRequests: z.string().optional(),
+  /** Plain-language explanations (Section 10.2) -- generated deterministically from the structured
+   * data above (step/assertion counts, the first failing step's title), never a fabricated
+   * narrative disconnected from what Playwright actually recorded. */
+  whyPassed: z.string().optional(),
+  whyFailed: z.string().optional(),
+});
+export type RunReportTest = z.infer<typeof RunReportTestSchema>;
+
+export const RunReportCountsSchema = z.object({
+  initialPass: z.number().int().nonnegative(),
+  retryPass: z.number().int().nonnegative(),
+  consistentFailure: z.number().int().nonnegative(),
+  timeout: z.number().int().nonnegative(),
+  skipped: z.number().int().nonnegative(),
+  expectedFailure: z.number().int().nonnegative(),
+  quarantined: z.number().int().nonnegative(),
+  setupFailure: z.number().int().nonnegative(),
+});
+
+export const RunReportSchema = z.object({
+  schemaVersion: z.literal("1.0.0"),
+  runId: NonEmptyStringSchema,
+  generatedAt: z.string(),
+  startedAt: z.string(),
+  endedAt: z.string(),
+  durationMs: z.number().nonnegative(),
+  initiator: NonEmptyStringSchema,
+  environment: NonEmptyStringSchema,
+  baseUrl: z.string(),
+  gitCommit: NonEmptyStringSchema,
+  workingTreeClean: z.boolean(),
+  playwrightVersion: NonEmptyStringSchema,
+  nodeVersion: NonEmptyStringSchema,
+  operatingSystem: NonEmptyStringSchema,
+  browserProjects: z.array(NonEmptyStringSchema),
+  workers: z.number().int().positive(),
+  retries: z.number().int().nonnegative(),
+  tagExpression: z.string(),
+  selectionSummary: z.object({
+    matchedCount: z.number().int().nonnegative(),
+    excludedCount: z.number().int().nonnegative(),
+  }),
+  counts: RunReportCountsSchema,
+  tests: z.array(RunReportTestSchema),
+  /** Relative link to Playwright's own native HTML report, when generated alongside this one. */
+  nativeReportPath: z.string().optional(),
+});
+export type RunReport = z.infer<typeof RunReportSchema>;
+
+// ---------------------------------------------------------------------------
 // Maintenance results (future stage: triage output against a failed run — Section 10.4)
 // ---------------------------------------------------------------------------
 

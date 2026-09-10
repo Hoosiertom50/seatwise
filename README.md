@@ -1139,8 +1139,8 @@ queued move to replay.
 A reusable Playwright Test framework is being built out per
 `PLAYWRIGHT_QUALITY_FRAMEWORK_SPEC.md` (also the resumable implementation ledger — see its own
 Progress Dashboard for what's done). Tracked in Jira as TS-22 with one story per stage (TS-23
-through TS-34). **`PLAYWRIGHT_TESTING.md` is the full manual-tester/authoring guide** (Stage 05) —
-start there if you're writing or reviewing a test. The basics, as of Stage 05:
+through TS-34). **`PLAYWRIGHT_TESTING.md` is the full manual-tester/authoring guide** (Stage 06) —
+start there if you're writing or reviewing a test. The basics, as of Stage 06:
 
 - **Install:** `pnpm install` (top-level, same as the rest of the repo) gets `@playwright/test`
   itself; then `pnpm pw:install` downloads the Chromium browser binary Playwright needs (Firefox
@@ -1150,9 +1150,14 @@ start there if you're writing or reviewing a test. The basics, as of Stage 05:
   debugging modes. `pnpm pw:validate` type-checks the framework, validates all governance/metadata
   (including, as of Stage 04, the real test suite's own authoring standards — see
   `pnpm pw:lint-tests` below), and lists what would run, without actually running anything.
-- **Reports:** `pnpm pw:report` opens the most recent HTML report (generated under
-  `artifacts/playwright/runs/` — gitignored, regenerated per run; the framework's own richer report
-  templates arrive in Stage 06).
+- **Reports:** `pnpm pw:report` opens Playwright's own native HTML report (generated under
+  `artifacts/playwright/runs/` — gitignored, regenerated per run). As of Stage 06, every run also
+  produces the framework's own normalized, schema-validated report (JSON + a self-contained,
+  offline-viewable HTML companion) at `artifacts/playwright/runs/run-reports/<runId>.{json,html}`;
+  `pnpm pw:report:run` serves the most recent one (or `pnpm pw:report:run <runId>` for a specific
+  one) so its links to screenshots/traces/the native report all resolve. See
+  `PLAYWRIGHT_TESTING.md`'s "Test-run reports" section for the 8 status categories, what each test's
+  entry contains, and the disclosed `setup-failure` heuristic.
 - **Layout:** `e2e/tests/` holds application tests (`guest-management.spec.ts` and
   `guest-viewing.spec.ts` are the mutating/read-only reference tests; `unit/` holds pure-logic unit
   tests for the `e2e/` support code) plus page objects (`e2e/pages/`), component objects
@@ -1161,9 +1166,12 @@ start there if you're writing or reviewing a test. The basics, as of Stage 05:
   self-tests (environment config, the production/mutation safety guard, metadata/tag validation,
   scoring, static test-authoring lint rules under `playwright-framework/validation/` (Stage 04),
   and — as of Stage 05 — the tag-expression parser/compiler under `playwright-framework/runner/`
-  and the `pnpm pw:run` CLI under `playwright-framework/cli/`); `quality/` holds versioned config
-  (including Stage 05's `quality/saved-selections.yaml`) and audit reports; `artifacts/playwright/`
-  holds generated, gitignored run output, including Stage 05's run manifests.
+  and the `pnpm pw:run` CLI under `playwright-framework/cli/`; as of Stage 06, the custom reporter
+  and HTML renderer under `playwright-framework/reporting/`, the shared spec-discovery helper under
+  `playwright-framework/validation/discoverAllTests.ts`, and the `pnpm pw:report:run` CLI); `quality/`
+  holds versioned config (including Stage 05's `quality/saved-selections.yaml`) and audit reports;
+  `artifacts/playwright/` holds generated, gitignored run output, including Stage 05's run manifests
+  and Stage 06's run reports.
 - **Test-authoring standards and enforcement (Stage 04):** `pnpm pw:lint-tests` statically checks
   every real `e2e/tests/**/*.spec.ts` file (no browser launch needed) against the rules
   `PLAYWRIGHT_TESTING.md` documents — no raw selectors/screenshots/fixed-waits in a test file, no
@@ -1186,6 +1194,13 @@ start there if you're writing or reviewing a test. The basics, as of Stage 05:
   `pnpm pw:run` is what actually computes "does this selection include a mutating test" for real and
   wires it into the guard — see `PLAYWRIGHT_TESTING.md` for the coverage caveat (always run tagged
   tests through `pw:run`, not `playwright test` directly, once a production host is configured).
+- **Test-run reports (Stage 06):** a custom Playwright reporter
+  (`playwright-framework/reporting/normalizedReporter.ts`) classifies every test into one of 8
+  statuses (passed, passed-on-retry/flaky, failed, timed out, skipped, failed-as-expected,
+  quarantined, setup/infrastructure failure) derived entirely from Playwright's own recorded
+  outcome/step data — never guessed — and writes a normalized JSON + self-contained HTML report per
+  run, viewable with `pnpm pw:report:run`. See `PLAYWRIGHT_TESTING.md`'s "Test-run reports" section
+  for the full category definitions and what's in each test's entry.
 - **Test governance and value model (Stage 02):** `quality/requirements.yaml`,
   `quality/tag-taxonomy.yaml`, and `quality/test-value-model.yaml` (+ generated
   `quality/test-value-model.md`) are the canonical, versioned data behind the framework's tagging

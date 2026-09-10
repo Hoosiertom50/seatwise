@@ -30,6 +30,10 @@ export default defineConfig({
   reporter: [
     ["list"],
     ["html", { outputFolder: "artifacts/playwright/runs/html-report", open: "never" }],
+    // Stage 06: a normalized, schema-validated JSON + self-contained HTML companion report
+    // (playwright-framework/reporting/normalizedReporter.ts) alongside Playwright's own native
+    // ones above -- see PLAYWRIGHT_TESTING.md's "Test-run reports" section.
+    ["./playwright-framework/reporting/normalizedReporter.ts"],
   ],
   outputDir: "artifacts/playwright/runs/test-results",
 

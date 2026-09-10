@@ -276,6 +276,101 @@ the git commit, and timestamps. Per-test pass/fail outcomes (`outcomes: []` toda
 left for Stage 06's reporter to populate — Stage 05's manifest proves what was asked for and how it
 was configured, not what happened once it ran.
 
+## Test-run reports (Stage 06)
+
+Every `playwright test` invocation — however it was launched (`pw:run`, `pw:test`, or a raw
+`playwright test`) — additionally produces a normalized, schema-validated **run report**, written
+by a custom reporter (`playwright-framework/reporting/normalizedReporter.ts`, registered in
+`playwright.config.ts` alongside Playwright's own native `list`/`html` reporters — it supplements
+them, never replaces them) to:
+
+```
+artifacts/playwright/runs/run-reports/<runId>.json   # machine-readable, validated against RunReportSchema
+artifacts/playwright/runs/run-reports/<runId>.html   # a self-contained, offline-viewable companion
+```
+
+View the most recently generated report locally with:
+
+```bash
+pnpm pw:report:run              # serves the most recent run report
+pnpm pw:report:run <runId>      # serves a specific run by ID
+```
+
+This starts a small static file server over `artifacts/playwright/runs/` (default port 4300,
+override with `PW_REPORT_PORT`) so the report's relative links — the native Playwright HTML report,
+failure screenshots, traces, videos, success-checkpoint screenshots — all resolve exactly as they do
+under `pnpm pw:serve-report` for the native report alone. Opening the `.html` file directly (e.g.
+`file://...`) also works for the report's own text and status information, but its links to
+sibling artifacts (screenshots, traces) only resolve when served, since browsers restrict relative
+`file://` navigation.
+
+**Shared `runId` with Stage 05's manifest.** When launched via `pw:run`, the run manifest
+(pre-execution, "what was asked for") and this run report (post-execution, "what actually happened")
+share the same `runId` (passed via the `PW_RUN_ID` environment variable from `run-tests.ts` to the
+spawned Playwright child process) so the two can be cross-referenced. They are deliberately never
+merged into one file or one writer — the manifest is written by the CLI process itself before
+Playwright even starts, the report by a reporter running inside the spawned Playwright child once
+it finishes, and forcing one to wait on or patch the other's file would add exactly the kind of
+fragile cross-process coordination this framework has otherwise avoided.
+
+**Status categories.** Every test is classified into exactly one of eight statuses (Section 10.2),
+derived entirely from Playwright's own `TestCase.outcome()` and final `TestResult.status` — never
+guessed:
+
+| Status | Meaning |
+| --- | --- |
+| Passed (`initial-pass`) | Passed on its first attempt. |
+| Passed on retry (flaky) (`retry-pass`) | Failed at least once, but the final attempt passed (Playwright's own `outcome() === "flaky"`). |
+| Failed (`consistent-failure`) | Failed, with at least one of the test's own named `test.step`s recorded. |
+| Timed out (`timeout`) | Did not complete within the configured timeout. |
+| Skipped (`skipped`) | `test.skip()`/`test.fixme()`, or a conditional skip, without the `@quarantined` tag. |
+| Failed as expected (`expected-failure`) | Used `test.fail()` and failed as expected — the intended outcome. |
+| Quarantined (`quarantined`) | Skipped **and** tagged `@quarantined` (`quality/tag-taxonomy.yaml`'s documented, not-yet-enforced convention for a deliberately disabled-but-tracked test). |
+| Setup/infrastructure failure (`setup-failure`) | A failure (or an interrupted run) with **zero** of the test's own named steps recorded — most consistent with a fixture, hook, or environment problem rather than the test's own assertions. |
+
+`setup-failure` is explicitly disclosed as a best-effort heuristic, not a certainty: "zero named
+steps recorded" is a strong signal the failure happened before the test body's own Arrange/Act/
+Assert steps ever ran, but it is inference from shape, not Playwright telling us the failure was
+infrastructural. Playwright's own fifth `TestResult.status`, `interrupted` (a worker crash, or the
+whole run cancelled mid-test), has no dedicated category of its own in these eight — it is folded
+into `setup-failure` for the same reason: it never reached its own pass/fail determination at all.
+
+**What each test's entry contains**, all read directly off Playwright's own `TestCase`/`TestResult`/
+`TestStep` objects (never re-parsed from source or fabricated): the governed metadata
+(`objective`, `expectedOutcome`, `requirementIds` — read back from the `annotation` entries
+`defineQualityTest` already attaches, Stage 02/03), every named Arrange/Act/Assert step with its own
+pass/fail and duration, a count of `expect`-category steps Playwright recorded as actually executed
+(`assertionCount` — Section 10.1: "every claimed successful validation is backed by an executed
+assertion"), the true source file and line (see below), success-checkpoint screenshots and their
+validation text (`e2e/support/evidence.ts`'s convention), and, for a failure, the sanitized error
+message/stack trace plus links to Playwright's own screenshot/trace/video attachments. A plain-
+language "why this passed"/"why this failed" explanation is generated deterministically from this
+same structured data (step/assertion counts, the first failing step's title) — never a fabricated
+narrative disconnected from what Playwright actually recorded.
+
+**Source location correction.** A test defined through `defineQualityTest` has its `TestCase.location`
+resolved by Playwright to the wrapper's own internal call site
+(`playwright-framework/metadata/defineQualityTest.ts`), not the real spec file the test author wrote
+it in — this is systematic, not a fluke: Playwright resolves a test's location to wherever
+`test()`/`testFn()` is textually invoked during collection, and for a wrapped test that is always
+inside the wrapper module. The reporter corrects this by cross-referencing the same AST-based static
+discovery `pnpm pw:lint-tests` already performs (`playwright-framework/validation/discoverAllTests.ts`),
+keyed by each test's own declared `id`, and falls back to Playwright's own (already-correct)
+`test.location` only for tests that don't go through the wrapper at all (`framework-health.spec.ts`,
+`e2e/tests/unit/*.spec.ts`).
+
+**Redaction and paths.** Every string that could contain user data (error messages, stack traces,
+console/network diagnostics) passes through this framework's existing `redact()`
+(`e2e/support/redaction.ts`), and every absolute path is rewritten repo-relative before it is ever
+written to the report — never an absolute path (Section 10.1), consistent with this framework having
+no local-editor deep-linking configured (DEC-004).
+
+**Failure mode.** If HTML rendering itself fails for any reason, the already-written JSON is left
+untouched and the reporter exits non-zero (`process.exitCode = 1`) with the error printed loudly —
+Section 10.1: "report generation errors cause a nonzero result without erasing raw Playwright
+output." Playwright's own `list`/`html` reporters are unaffected either way, since they run
+independently.
+
 ## Verifying independence
 
 Reference tests are expected to pass individually, regardless of what ran before them, and under

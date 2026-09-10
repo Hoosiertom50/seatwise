@@ -40,7 +40,7 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { join, relative, resolve } from "node:path";
 import {
@@ -55,6 +55,7 @@ import {
 import { discoverTestMetadataFromSource } from "../validation/discoverTestMetadata.js";
 import { parseRunArgs, RUN_TESTS_HELP_TEXT, type ParsedRunArgs } from "../runner/parseRunArgs.js";
 import { buildPlaywrightTestArgs } from "../runner/buildPlaywrightInvocation.js";
+import { buildRunReportHint } from "../runner/runReportHint.js";
 import {
   loadTagTaxonomy,
   loadSavedSelections,
@@ -314,12 +315,20 @@ function main(): void {
     reporter: args.reporter,
   });
 
+  // Generated once and shared with the spawned child (below) so Stage 05's manifest and Stage 06's
+  // run report (playwright-framework/reporting/normalizedReporter.ts, which reads PW_RUN_ID) refer
+  // to the same run by the same ID, without either file needing to read the other's output.
+  const runId = randomUUID();
+
   const childEnv: NodeJS.ProcessEnv = {
     ...process.env,
     // Replaces Stage 01's temporary PW_SIMULATE_MUTATING_SELECTION (see DEC-007's tracked
     // follow-up and the Stage 05 Decision Log entry) with this run's own real, computed answer.
     PW_RUN_HAS_MUTATING_SELECTION: hasMutatingSelection ? "1" : "0",
     PLAYWRIGHT_ALLOW_PRODUCTION: isProduction && args.allowProduction ? "1" : "0",
+    PW_RUN_ID: runId,
+    PW_RUN_TAG_EXPRESSION: normalizedExpression,
+    PW_RUN_INITIATOR: process.env.PW_RUN_INITIATOR || "pw:run CLI",
   };
 
   // eslint-disable-next-line no-console
@@ -329,7 +338,6 @@ function main(): void {
       "...\n",
   );
 
-  const runId = randomUUID();
   const startedAt = new Date().toISOString();
   let exitCode = 0;
   try {
@@ -350,6 +358,19 @@ function main(): void {
     env,
     args,
   });
+
+  // AUDIT FINDING (fixed live): this used to print the "Run report: ...html (pnpm pw:report:run
+  // ... to open it)" hint unconditionally, regardless of whether the reporter actually produced
+  // one. Passing this CLI's own documented `--reporter <value>` flag (its own --help text
+  // recommends `--reporter list`) makes Playwright's CLI replace its ENTIRE configured reporter
+  // array with just that one reporter -- silently disabling both the native html reporter AND
+  // Stage 06's own normalizedReporter, so no run-report JSON/HTML is written at all. Reproduced
+  // live: `pnpm pw:run "@readonly" --allow-production --reporter list` printed a confident "Run
+  // report: .../<runId>.html" hint for a file that was never created. Checking for the file before
+  // claiming it exists turns a misleading dead link into an honest, actionable message.
+  const runReportHtmlPath = resolve(ROOT, "artifacts/playwright/runs/run-reports", `${runId}.html`);
+  // eslint-disable-next-line no-console
+  console.log(buildRunReportHint(runId, args.reporter, existsSync(runReportHtmlPath)));
 
   process.exit(exitCode);
 }

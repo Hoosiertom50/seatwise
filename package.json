@@ -23,7 +23,8 @@
     "pw:run:readonly": "tsx playwright-framework/cli/run-tests.ts --selection readonly",
     "pw:run:smoke": "tsx playwright-framework/cli/run-tests.ts --selection smoke",
     "pw:run:regression": "tsx playwright-framework/cli/run-tests.ts --selection regression",
-    "pw:run:critical": "tsx playwright-framework/cli/run-tests.ts --selection critical"
+    "pw:run:critical": "tsx playwright-framework/cli/run-tests.ts --selection critical",
+    "pw:report:run": "tsx playwright-framework/cli/serve-run-report.ts"
   },
   "workspaces": [
     "apps/*",
