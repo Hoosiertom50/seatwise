@@ -509,7 +509,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
                     </p>
                     {v.contractNotes && <p className="mt-1 text-sm text-neutral-500 dark:text-neutral-400">{v.contractNotes}</p>}
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     <span className="font-medium">{v.costCents === null ? "No cost set" : formatCents(v.costCents)}</span>
                     {canEdit && (
                       <>

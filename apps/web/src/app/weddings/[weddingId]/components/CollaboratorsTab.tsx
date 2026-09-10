@@ -537,14 +537,14 @@ export function CollaboratorsTab({
           {collaborators.map((c) => (
             <li
               key={c.id}
-              className="flex items-center justify-between gap-3 rounded-lg border border-neutral-200 dark:border-neutral-700 px-4 py-3"
+              className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-neutral-200 dark:border-neutral-700 px-4 py-3"
             >
               <div>
                 <p className="font-medium">{c.userName}</p>
                 <p className="text-sm text-neutral-500 dark:text-neutral-400">{c.userEmail}</p>
               </div>
               {isOwner ? (
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   <select
                     aria-label={`Role for ${c.userName}`}
                     className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1.5 text-sm"

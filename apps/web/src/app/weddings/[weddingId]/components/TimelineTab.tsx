@@ -222,7 +222,7 @@ export function TimelineTab({ weddingId, canEdit }: { weddingId: string; canEdit
                       <p className="text-sm text-neutral-500 dark:text-neutral-400">{entry.description}</p>
                     </div>
                     {canEdit && (
-                      <div className="flex items-center gap-2">
+                      <div className="flex flex-wrap items-center gap-2">
                         <button
                           onClick={() => onReorder(entry.id, "UP")}
                           disabled={!sameTimeAbove}
