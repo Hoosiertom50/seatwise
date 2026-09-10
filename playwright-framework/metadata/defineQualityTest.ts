@@ -13,9 +13,15 @@
  * taxonomy-aware AND/OR/NOT/parenthesized query language required by Section 9.2 is a CLI-level
  * concern for a later stage's runner, layered on top of these same native tags — it is not part
  * of this per-test authoring helper.
+ *
+ * `createDefineQualityTest` is generic over which `TestType` it wraps (Stage 03 addition): the
+ * plain Playwright `test` (this file's own default export, `defineQualityTest`) works for
+ * framework self-tests with no app-specific fixtures, while e2e/fixtures/index.ts wraps its own
+ * fixture-extended `test` (page objects, auth, test-data, evidence) the same way, so real
+ * application tests get both governed metadata validation AND typed fixtures from one call.
  */
 
-import { test as base } from "@playwright/test";
+import { test as base, type TestType } from "@playwright/test";
 import { TestMetadataSchema, type TestMetadata } from "./schemas.js";
 import { loadTagTaxonomy } from "./loaders.js";
 import { validateTags } from "./tagValidation.js";
@@ -64,10 +70,39 @@ export function validateQualityTestMetadata(metadata: TestMetadata): void {
   }
 }
 
-type QualityTestBody = Parameters<typeof base>[2];
+/**
+ * Builds a `defineQualityTest` function bound to a specific `TestType` — either plain Playwright
+ * `test`, or a fixture-extended one from `test.extend<...>()`. The returned function has the same
+ * governed-metadata validation and native tag/annotation wiring regardless of which `TestType` it
+ * wraps.
+ */
+export function createDefineQualityTest<TestArgs extends {}, WorkerArgs extends {}>(
+  testFn: TestType<TestArgs, WorkerArgs>,
+) {
+  return function defineQualityTest(
+    metadata: TestMetadata,
+    body: (args: TestArgs & WorkerArgs, testInfo: import("@playwright/test").TestInfo) => Promise<unknown> | unknown,
+  ): void {
+    validateQualityTestMetadata(metadata);
+    testFn(
+      metadata.title,
+      {
+        tag: metadata.tags,
+        annotation: [
+          { type: "quality-test-id", description: metadata.id },
+          { type: "objective", description: metadata.objective },
+          { type: "expected-outcome", description: metadata.expectedOutcome },
+          { type: "requirement-ids", description: metadata.requirementIds.join(",") },
+        ],
+      },
+      body,
+    );
+  };
+}
 
 /**
- * Defines a Playwright test carrying governed quality metadata. Usage:
+ * Defines a Playwright test carrying governed quality metadata, bound to plain Playwright `test`
+ * (no app-specific fixtures — use this for framework self-tests). Usage:
  *
  *   defineQualityTest({
  *     id: "guest-list.add-guest",
@@ -77,20 +112,9 @@ type QualityTestBody = Parameters<typeof base>[2];
  *     requirementIds: ["REQ-GUEST-LIST"],
  *     tags: ["@mutating", "@feature:guests", "@risk:normal"],
  *   }, async ({ page }) => { ... });
+ *
+ * Application tests that need the Stage 03 fixtures (page objects, auth, test data, evidence)
+ * should instead use `defineQualityTest` exported from `e2e/fixtures/index.ts`, which is the same
+ * function bound to that module's fixture-extended `test`.
  */
-export function defineQualityTest(metadata: TestMetadata, body: QualityTestBody): void {
-  validateQualityTestMetadata(metadata);
-  base(
-    metadata.title,
-    {
-      tag: metadata.tags,
-      annotation: [
-        { type: "quality-test-id", description: metadata.id },
-        { type: "objective", description: metadata.objective },
-        { type: "expected-outcome", description: metadata.expectedOutcome },
-        { type: "requirement-ids", description: metadata.requirementIds.join(",") },
-      ],
-    },
-    body,
-  );
-}
+export const defineQualityTest = createDefineQualityTest(base);
