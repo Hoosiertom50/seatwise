@@ -1133,3 +1133,32 @@ collection, the day-of timeline, and the portfolio dashboard aren't in this app 
 needing any of those still reaches for the web app. There's also no push notification wiring for a
 sync completing in the background; the app has to be open (or brought to the foreground) for a
 queued move to replay.
+
+## Playwright test automation framework (TS-22, in progress)
+
+A reusable Playwright Test framework is being built out per
+`PLAYWRIGHT_QUALITY_FRAMEWORK_SPEC.md` (also the resumable implementation ledger — see its own
+Progress Dashboard for what's done). Tracked in Jira as TS-22 with one story per stage (TS-23
+through TS-34); a full manual-tester guide (`PLAYWRIGHT_TESTING.md`) arrives in Stage 04/10. In the
+meantime, the basics that exist as of Stage 01:
+
+- **Install:** `pnpm install` (top-level, same as the rest of the repo) gets `@playwright/test`
+  itself; then `pnpm pw:install` downloads the Chromium browser binary Playwright needs (Firefox
+  and WebKit stay uninstalled/unused for now — see the spec's Decision Log, DEC-003).
+- **Run:** `pnpm pw:test` runs the Chromium E2E project plus the framework's own unit tests.
+  `pnpm pw:test:headed` / `pnpm pw:test:debug` / `pnpm pw:test:ui` are the usual Playwright
+  debugging modes. `pnpm pw:validate` type-checks the framework and lists what would run, without
+  actually running anything.
+- **Reports:** `pnpm pw:report` opens the most recent HTML report (generated under
+  `artifacts/playwright/runs/` — gitignored, regenerated per run; the framework's own richer report
+  templates arrive in Stage 06).
+- **Layout:** `e2e/` holds application tests (currently just a framework-health smoke test —
+  Stage 03/04 add the page objects, fixtures, and real reference tests); `playwright-framework/`
+  holds the framework's own source and self-tests (environment config, the production/mutation
+  safety guard); `quality/` holds versioned config and audit reports; `artifacts/playwright/` holds
+  generated, gitignored run output.
+- **Production safety:** there's no real production deployment of this app yet, so
+  `PRODUCTION_HOSTNAMES` defaults to empty and every target is treated as non-production. The guard
+  itself (`e2e/support/productionGuard.ts`) is fully implemented and unit-tested so that whenever a
+  real production host does exist, it can be added to that list and mutating tests will be blocked
+  against it automatically, by default, with no further code changes needed.

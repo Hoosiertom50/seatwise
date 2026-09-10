@@ -6,7 +6,16 @@
     "dev": "pnpm --filter @seatwise/web dev",
     "build": "pnpm --filter @seatwise/web build",
     "db:generate": "pnpm --filter @seatwise/db generate",
-    "db:migrate": "pnpm --filter @seatwise/db migrate"
+    "db:migrate": "pnpm --filter @seatwise/db migrate",
+    "pw:install": "playwright install chromium",
+    "pw:list": "playwright test --project=chromium --project=framework-unit --list",
+    "pw:test": "playwright test --project=chromium --project=framework-unit",
+    "pw:test:headed": "playwright test --project=chromium --headed",
+    "pw:test:debug": "playwright test --project=chromium --debug",
+    "pw:test:ui": "playwright test --ui",
+    "pw:report": "playwright show-report artifacts/playwright/runs/html-report",
+    "pw:serve-report": "playwright show-report artifacts/playwright/runs/html-report --host 0.0.0.0",
+    "pw:validate": "tsc --noEmit && playwright test --project=chromium --project=framework-unit --list"
   },
   "workspaces": [
     "apps/*",
@@ -19,5 +28,11 @@
       "prisma",
       "unrs-resolver"
     ]
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0",
+    "@types/node": "^22.20.2",
+    "typescript": "^5.9.3",
+    "zod": "^3.25.76"
   }
 }
