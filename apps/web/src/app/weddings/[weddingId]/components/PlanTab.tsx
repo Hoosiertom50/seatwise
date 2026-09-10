@@ -485,7 +485,7 @@ export function PlanTab({
 
   return (
     <div>
-      <div className="mb-6 flex items-center justify-between">
+      <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="text-lg font-medium">Seating plan</h2>
           <p className="text-sm text-neutral-500 dark:text-neutral-400">

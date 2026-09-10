@@ -955,7 +955,7 @@ export function GuestsTab({
                   <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">{rsvpLinkResult[g.id]}</p>
                 )}
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 {canEdit ? (
                   <>
                     <select

@@ -174,7 +174,7 @@ export default function WeddingDetailPage() {
   const isOwner = accessLevel === "OWNER";
 
   return (
-    <main className="mx-auto w-full max-w-3xl flex-1 px-6 py-10">
+    <main className="mx-auto w-full max-w-[1600px] flex-1 px-6 py-10">
       <div className="flex items-center justify-between">
         <Link href="/dashboard" className="text-sm text-neutral-500 dark:text-neutral-400 hover:underline">
           &larr; Back to dashboard
