@@ -1,0 +1,28 @@
+# Saved named tag-expression selections (Playwright Quality Engineering Framework, Stage 05).
+# Validated against playwright-framework/metadata/schemas.ts:SavedSelectionsFileSchema and, at load
+# time, against the live tag taxonomy (quality/tag-taxonomy.yaml) by the runner
+# (playwright-framework/runner/tagExpression.ts) -- an unknown tag or contradictory expression here
+# fails loudly before any test would run, the same "invalid metadata fails before execution"
+# posture every other quality/*.yaml file has.
+#
+# `pnpm pw:run <name>` runs a saved selection by name instead of a raw expression string; the
+# `pw:run:<name>` package scripts (package.json) are a thin, memorable wrapper around exactly that.
+
+schemaVersion: "1.0.0"
+
+selections:
+  - name: readonly
+    description: "Every test that only reads state -- always safe to run against any environment, including a real production host (with PLAYWRIGHT_ALLOW_PRODUCTION=1 in the environment AND --allow-production passed explicitly on that invocation)."
+    expression: "@readonly"
+
+  - name: smoke
+    description: "The fast, high-confidence subset run on every change, excluding anything quarantined."
+    expression: "@suite:smoke AND NOT @quarantined"
+
+  - name: regression
+    description: "Full regression coverage, run before release, excluding anything quarantined."
+    expression: "@suite:regression AND NOT @quarantined"
+
+  - name: critical
+    description: "Every test protecting a critical-risk behavior, regardless of which suite(s) it belongs to."
+    expression: "@risk:critical"

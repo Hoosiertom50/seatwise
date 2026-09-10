@@ -210,6 +210,72 @@ caught, and also feeds the checker the real reference tests and asserts **zero**
 regression in either direction (a missed bad pattern, or a false positive against real tests) fails
 `pnpm pw:test`.
 
+## Running tests by tag: `pnpm pw:run` (Stage 05)
+
+`pnpm pw:run` is the one command for running (or previewing) a subset of the suite by tag — the
+authoritative wrapper around `playwright test`; it never reimplements test selection or execution
+itself, only computes a safe, validated selection and hands off to the real Playwright CLI.
+
+```bash
+pnpm pw:run "@readonly AND @feature:guests"     # a raw boolean tag expression
+pnpm pw:run --selection smoke                    # a saved selection (quality/saved-selections.yaml)
+pnpm pw:run "<expr>" --list                      # preview only -- print matched tests, run nothing
+```
+
+Expression syntax: `@tag` literals, `AND`/`OR`/`NOT` (or `&&`/`||`/`!`), and parentheses — e.g.
+`"(@readonly OR @mutating) AND @feature:guests AND NOT @quarantined"`. `NOT` binds tighter than
+`AND`, which binds tighter than `OR`; parentheses override. Convenience wrappers exist for the four
+saved selections in `quality/saved-selections.yaml`: `pnpm pw:run:readonly`, `pw:run:smoke`,
+`pw:run:regression`, `pw:run:critical`.
+
+Before anything runs, `pw:run`:
+
+1. Parses the expression and validates every referenced tag against `quality/tag-taxonomy.yaml` --
+   an unknown tag (a typo, a retired tag) is rejected here, in plain language, before Playwright is
+   ever invoked.
+2. Detects a self-contradictory expression (e.g. `@readonly AND @mutating`, two tags from the same
+   `exactly-one` dimension) and rejects it with the specific pair that can never both apply.
+3. Statically discovers the real, tagged test suite (the same discovery `pnpm pw:lint-tests` uses)
+   and evaluates the expression against each test's own tags — the exact same `evaluateExpression`
+   this module's own unit tests cross-check, test by test, against the compiled `--grep` pattern
+   Playwright actually receives, so preview and actual execution can never select different tests.
+4. Refuses a zero-match selection outright (non-zero exit, explicit message) rather than treating
+   "0 tests, 0 failures" as a quiet success.
+5. Runs the production/mutation preflight (below) before ever spawning Playwright.
+
+Only supported, explicitly-validated options are ever forwarded to the underlying `playwright test`
+invocation: `--workers <n>`, `--repeat-each <n>`, `--reporter <list|line|dot|html|json>`. Anything
+else is rejected as an unrecognized option. The compiled `--grep` pattern (and every other value)
+reaches Playwright via `execFileSync` with an argv array — never a shell string — so nothing in an
+expression, however adversarial, is ever interpreted by a shell.
+
+### Production and mutation safety
+
+`pw:run` computes, for real, whether the current selection includes any `@mutating` test, and
+refuses outright — unconditionally, no flag overrides it — to run a mutating selection against a
+configured production host (`PRODUCTION_HOSTNAMES`). A fully read-only selection against production
+additionally requires **both** `PLAYWRIGHT_ALLOW_PRODUCTION=1` in the environment **and** this
+specific invocation to pass `--allow-production` explicitly — an ambient env var left set in a shell
+profile is deliberately not treated as consent for a run someone didn't mean to make production-
+targeted. `--list`/preview mode never blocks on this (nothing executes), but it always tells you
+what would happen if you dropped `--list` and ran it for real.
+
+This coverage is scoped to runs launched through `pw:run` (or its saved-selection wrappers): a bare
+`playwright test --grep ...` invoked directly bypasses this computation entirely, since Playwright's
+own `globalSetup` has no API to inspect a `--grep`-resolved test list on its own (see the spec's
+Stage 05 Decision Log). Always run tagged application tests through `pw:run`, never Playwright
+directly, when a production `APP_URL` is configured.
+
+### Run manifests
+
+Every real (non-preview) `pw:run` invocation writes a run manifest to
+`artifacts/playwright/runs/run-manifests/<runId>.json`, validated against
+`RunResultFileSchema` (`playwright-framework/metadata/schemas.ts`): the normalized expression, the
+compiled `--grep` pattern, every matched test ID, the exact execution configuration, the base URL,
+the git commit, and timestamps. Per-test pass/fail outcomes (`outcomes: []` today) are deliberately
+left for Stage 06's reporter to populate — Stage 05's manifest proves what was asked for and how it
+was configured, not what happened once it ran.
+
 ## Verifying independence
 
 Reference tests are expected to pass individually, regardless of what ran before them, and under

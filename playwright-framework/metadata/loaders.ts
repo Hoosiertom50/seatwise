@@ -15,10 +15,12 @@ import {
   TagTaxonomyFileSchema,
   TestValueModelFileSchema,
   ValueOverridesFileSchema,
+  SavedSelectionsFileSchema,
   type RequirementsFile,
   type TagTaxonomyFile,
   type TestValueModelFile,
   type ValueOverridesFile,
+  type SavedSelectionsFile,
 } from "./schemas.js";
 
 export class MetadataValidationError extends Error {
@@ -79,4 +81,8 @@ export function loadTestValueModel(path: string): TestValueModelFile {
 
 export function loadValueOverrides(path: string): ValueOverridesFile {
   return loadYamlFile(path, ValueOverridesFileSchema);
+}
+
+export function loadSavedSelections(path: string): SavedSelectionsFile {
+  return loadYamlFile(path, SavedSelectionsFileSchema);
 }

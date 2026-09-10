@@ -211,6 +211,26 @@ export const ValueOverridesFileSchema = z.object({
 export type ValueOverridesFile = z.infer<typeof ValueOverridesFileSchema>;
 
 // ---------------------------------------------------------------------------
+// Saved named tag-expression selections (quality/saved-selections.yaml, Stage 05)
+// ---------------------------------------------------------------------------
+
+/** A named, reusable tag expression -- e.g. `smoke` -> `"@suite:smoke AND NOT @quarantined"` --
+ * so `pw:run smoke` means the same thing every time instead of every invoker retyping the raw
+ * expression (and risking a typo silently narrowing or widening the selection). */
+export const SavedSelectionSchema = z.object({
+  name: NonEmptyStringSchema,
+  description: NonEmptyStringSchema,
+  expression: NonEmptyStringSchema,
+});
+export type SavedSelection = z.infer<typeof SavedSelectionSchema>;
+
+export const SavedSelectionsFileSchema = z.object({
+  schemaVersion: z.literal("1.0.0"),
+  selections: z.array(SavedSelectionSchema),
+});
+export type SavedSelectionsFile = z.infer<typeof SavedSelectionsFileSchema>;
+
+// ---------------------------------------------------------------------------
 // Per-test authored metadata (attached in test source via defineQualityTest — Stage 02 helper;
 // discovered/inventoried by the CLI runner built in a later stage)
 // ---------------------------------------------------------------------------
@@ -275,6 +295,21 @@ export const TestRunOutcomeSchema = z.object({
   attempts: z.number().int().positive(),
 });
 
+/** The exact, validated execution configuration a run was launched with (Stage 05 task: "Capture
+ * the normalized expression and exact execution configuration in the run manifest") -- only the
+ * small, explicitly-supported set of options playwright-framework/cli/run-tests.ts ever forwards
+ * to the underlying `playwright test` invocation, never an arbitrary passthrough. */
+export const ExecutionConfigSchema = z.object({
+  workers: z.number().int().positive().optional(),
+  repeatEach: z.number().int().positive().optional(),
+  reporter: z.string().optional(),
+  /** Whether this specific invocation explicitly passed `--allow-production` -- deliberately not
+   * "whether PLAYWRIGHT_ALLOW_PRODUCTION happened to be set in the ambient shell environment"; see
+   * the Stage 05 Decision Log entry on why the CLI treats those as different things. */
+  allowProductionFlagPassed: z.boolean(),
+});
+export type ExecutionConfig = z.infer<typeof ExecutionConfigSchema>;
+
 export const RunResultFileSchema = z.object({
   schemaVersion: z.literal("1.0.0"),
   runId: NonEmptyStringSchema,
@@ -285,6 +320,19 @@ export const RunResultFileSchema = z.object({
   baseUrl: z.string(),
   gitCommit: NonEmptyStringSchema,
   tagExpression: z.string(),
+  /** The compiled `--grep` regex source this run's selection was translated to (Stage 05) --
+   * kept alongside the human-authored expression so "what was typed" and "what Playwright was
+   * actually told to match" are both on record, not just the former. */
+  compiledGrepPattern: z.string(),
+  /** Every test ID the selection matched at launch time, from the same discovery+evaluation this
+   * run's own preview mode uses -- so a run manifest can always be cross-checked against "what
+   * would preview show right now" without re-deriving it from the grep pattern. */
+  matchedTestIds: z.array(NonEmptyStringSchema),
+  executionConfig: ExecutionConfigSchema,
+  /** Deliberately left empty by Stage 05: populating per-test pass/fail/attempt outcomes requires
+   * parsing Playwright's own run results, which is Stage 06's reporter work (spec Section 10.2).
+   * Stage 05's manifest instead exists to prove exactly what was asked for and configured, not to
+   * report what happened. */
   outcomes: z.array(TestRunOutcomeSchema),
 });
 export type RunResultFile = z.infer<typeof RunResultFileSchema>;

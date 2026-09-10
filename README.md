@@ -1139,8 +1139,8 @@ queued move to replay.
 A reusable Playwright Test framework is being built out per
 `PLAYWRIGHT_QUALITY_FRAMEWORK_SPEC.md` (also the resumable implementation ledger — see its own
 Progress Dashboard for what's done). Tracked in Jira as TS-22 with one story per stage (TS-23
-through TS-34). **`PLAYWRIGHT_TESTING.md` is the full manual-tester/authoring guide** (Stage 04) —
-start there if you're writing or reviewing a test. The basics, as of Stage 04:
+through TS-34). **`PLAYWRIGHT_TESTING.md` is the full manual-tester/authoring guide** (Stage 05) —
+start there if you're writing or reviewing a test. The basics, as of Stage 05:
 
 - **Install:** `pnpm install` (top-level, same as the rest of the repo) gets `@playwright/test`
   itself; then `pnpm pw:install` downloads the Chromium browser binary Playwright needs (Firefox
@@ -1159,9 +1159,11 @@ start there if you're writing or reviewing a test. The basics, as of Stage 04:
   (`e2e/components/`), fixtures (`e2e/fixtures/`), and test-data/support helpers
   (`e2e/data/`, `e2e/support/`); `playwright-framework/` holds the framework's own source and
   self-tests (environment config, the production/mutation safety guard, metadata/tag validation,
-  scoring, and — as of Stage 04 — static test-authoring lint rules under
-  `playwright-framework/validation/`); `quality/` holds versioned config and audit reports;
-  `artifacts/playwright/` holds generated, gitignored run output.
+  scoring, static test-authoring lint rules under `playwright-framework/validation/` (Stage 04),
+  and — as of Stage 05 — the tag-expression parser/compiler under `playwright-framework/runner/`
+  and the `pnpm pw:run` CLI under `playwright-framework/cli/`); `quality/` holds versioned config
+  (including Stage 05's `quality/saved-selections.yaml`) and audit reports; `artifacts/playwright/`
+  holds generated, gitignored run output, including Stage 05's run manifests.
 - **Test-authoring standards and enforcement (Stage 04):** `pnpm pw:lint-tests` statically checks
   every real `e2e/tests/**/*.spec.ts` file (no browser launch needed) against the rules
   `PLAYWRIGHT_TESTING.md` documents — no raw selectors/screenshots/fixed-waits in a test file, no
@@ -1169,11 +1171,21 @@ start there if you're writing or reviewing a test. The basics, as of Stage 04:
   something, every test's ID is prefixed with its file's name — plus the metadata governance
   checks below run against the real suite for the first time (previously only exercised against
   synthetic data in a unit test). Folded into `pnpm pw:validate`.
+- **Running by tag (Stage 05):** `pnpm pw:run "<tag expression>"` (or `pnpm pw:run --selection
+  <name>` for one of `readonly`/`smoke`/`regression`/`critical` in `quality/saved-selections.yaml`,
+  or the matching `pnpm pw:run:<name>` wrapper) is the one command for running a subset of the
+  suite by boolean tag expression (`@tag`, `AND`/`OR`/`NOT`, parentheses) — see
+  `PLAYWRIGHT_TESTING.md`'s "Running tests by tag" section for the full behavior: unknown-tag and
+  contradictory-expression rejection, zero-match detection, `--list`/preview mode, the production/
+  mutation preflight, and the run manifests it writes to `artifacts/playwright/runs/run-manifests/`.
 - **Production safety:** there's no real production deployment of this app yet, so
   `PRODUCTION_HOSTNAMES` defaults to empty and every target is treated as non-production. The guard
   itself (`e2e/support/productionGuard.ts`) is fully implemented and unit-tested so that whenever a
   real production host does exist, it can be added to that list and mutating tests will be blocked
-  against it automatically, by default, with no further code changes needed.
+  against it automatically, by default, with no further code changes needed. As of Stage 05,
+  `pnpm pw:run` is what actually computes "does this selection include a mutating test" for real and
+  wires it into the guard — see `PLAYWRIGHT_TESTING.md` for the coverage caveat (always run tagged
+  tests through `pw:run`, not `playwright test` directly, once a production host is configured).
 - **Test governance and value model (Stage 02):** `quality/requirements.yaml`,
   `quality/tag-taxonomy.yaml`, and `quality/test-value-model.yaml` (+ generated
   `quality/test-value-model.md`) are the canonical, versioned data behind the framework's tagging
