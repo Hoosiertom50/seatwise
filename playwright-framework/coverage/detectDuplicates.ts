@@ -52,8 +52,13 @@ export function objectiveSimilarity(a: string, b: string): number {
  * actually flagged, rather than merely noted -- chosen so two tests that legitimately validate the
  * same requirement via genuinely different, differently-worded scenarios are not flagged on tag
  * overlap alone. Documented, not tuned against a large corpus (only 2 real tests exist as of
- * Stage 07) -- a future stage with more tests may need to revisit this threshold. */
-const SIMILARITY_THRESHOLD = 0.5;
+ * Stage 07) -- a future stage with more tests may need to revisit this threshold.
+ *
+ * Exported and reused as-is by evaluateTest.ts's unique-coverage criterion (Stage 07 audit,
+ * Finding 1): PLAYWRIGHT_TESTING.md documents unique-coverage as using "the identical comparison"
+ * as duplicate detection, so there must be exactly one similarity threshold, not two independently
+ * maintained copies that can (and did) drift apart. */
+export const SIMILARITY_THRESHOLD = 0.5;
 
 export function detectDuplicates(tests: DuplicateDetectionTestInput[]): DuplicateCandidate[] {
   const candidates: DuplicateCandidate[] = [];

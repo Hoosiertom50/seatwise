@@ -13,11 +13,20 @@
  */
 import { createServer } from "node:http";
 import { readdirSync, statSync, createReadStream, existsSync } from "node:fs";
-import { extname, join, resolve, normalize, sep } from "node:path";
+import { extname, join, resolve, sep } from "node:path";
+import { candidatePathsForRequest } from "../reporting/servedPath.js";
 
-const ROOT = resolve(process.cwd(), "artifacts/playwright/runs");
+const REPO_ROOT = resolve(process.cwd());
+const ROOT = resolve(REPO_ROOT, "artifacts/playwright/runs");
 const SUITE_REVIEWS_DIR = join(ROOT, "suite-reviews");
 const PORT = Number(process.env.PW_REVIEW_PORT) || 4301;
+
+// Stage 07 audit, Finding 2 (High, fixed): a suite-review's own source-file links are authored
+// relative to the repo root (e.g. "e2e/tests/guest-viewing.spec.ts"), which lives well outside
+// `ROOT` above -- so they must also be servable, but ONLY from these two directories, never the
+// bare repo root (which holds .env and other files this local, unauthenticated server must never
+// expose). See playwright-framework/reporting/servedPath.ts for the full rationale.
+const ALLOWED_SOURCE_DIRS = ["e2e", "playwright-framework"];
 
 const CONTENT_TYPES: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
@@ -63,14 +72,13 @@ function main(): void {
 
   const server = createServer((req, res) => {
     const urlPath = decodeURIComponent((req.url || "/").split("?")[0]);
-    const safePath = normalize(urlPath).replace(/^(\.\.[/\\])+/, "");
-    const filePath = join(ROOT, safePath);
-    if (!filePath.startsWith(ROOT)) {
-      res.writeHead(403);
-      res.end("Forbidden");
-      return;
-    }
-    if (!existsSync(filePath) || statSync(filePath).isDirectory()) {
+    const candidates = candidatePathsForRequest(urlPath, {
+      primaryRoot: ROOT,
+      repoRoot: REPO_ROOT,
+      allowedSecondaryDirs: ALLOWED_SOURCE_DIRS,
+    });
+    const filePath = candidates.find((p) => existsSync(p) && !statSync(p).isDirectory());
+    if (!filePath) {
       res.writeHead(404);
       res.end("Not found");
       return;

@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { evaluateTestQuality, evaluateTestValue, type EvaluationContext, type EvaluationTestInput } from "../evaluation/evaluateTest.js";
+import { detectDuplicates, SIMILARITY_THRESHOLD } from "../coverage/detectDuplicates.js";
 import type { RequirementsFile, TestEvaluationsFile } from "../metadata/schemas.js";
 import type { LatestRunReportEntry } from "../coverage/runReportHistory.js";
 
@@ -373,5 +374,36 @@ test.describe("evaluateTestValue — unique-coverage", () => {
     expect(j.points).toBe(8); // round(15 / (1 + 1))
     expect(j.needsHumanReview).toBe(false);
     expect(j.rationale).toContain("guest-viewing.duplicate-of-list-view");
+  });
+
+  // Stage 07 audit, Finding 1 (High, fixed): unique-coverage's own overlap check used to hardcode
+  // a DIFFERENT similarity threshold (0.3) from detectDuplicates.ts's SIMILARITY_THRESHOLD (0.5) --
+  // even though PLAYWRIGHT_TESTING.md documents unique-coverage as "reusing the identical
+  // comparison" as duplicate detection. That let a pair of tests with objective similarity between
+  // 0.3 and 0.5 be treated as "overlapping" here (reducing unique-coverage's points, and saying so
+  // in its rationale) while detectDuplicates simultaneously reported the exact same pair as NOT a
+  // duplicate candidate -- a self-contradictory report. This locks the two mechanisms to the one
+  // shared threshold going forward.
+  test("a pair whose objective similarity sits strictly between the old, drifted 0.3 threshold and the real 0.5 threshold is NOT treated as overlapping (matches detectDuplicates exactly)", () => {
+    const objA =
+      "Confirms a signed-in planner can view an existing guest already present on their wedding's guest list with accurate details.";
+    const objB =
+      "Confirms a signed-in planner can filter the guest list to quickly find one particular guest already on their wedding.";
+
+    const testA = testInput({ testId: "guest-viewing.view-existing", objective: objA });
+    const testB = testInput({ testId: "guest-viewing.filter-existing", objective: objB });
+
+    // Sanity: prove this fixture pair's similarity genuinely lands in the gap this finding
+    // exploited (>= the old 0.3, < the real 0.5) -- otherwise this test would prove nothing.
+    const dupCandidatesForSanity = detectDuplicates([testA, testB]);
+    expect(dupCandidatesForSanity).toHaveLength(0); // below SIMILARITY_THRESHOLD (0.5)
+    expect(SIMILARITY_THRESHOLD).toBe(0.5);
+
+    const judgments = evaluateTestValue(makeContext({ test: testA, allTests: [testA, testB] }));
+    const j = findJudgment(judgments, "unique-coverage");
+    // Must agree with detectDuplicates: no overlap found, full marks, not the reduced/proportional path.
+    expect(j.points).toBe(15);
+    expect(j.needsHumanReview).toBe(false);
+    expect(j.rationale).not.toContain("filter-existing");
   });
 });

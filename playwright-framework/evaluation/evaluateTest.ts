@@ -22,7 +22,7 @@
  */
 
 import { checkTestSource, type LintIssue } from "../validation/lintRules.js";
-import { objectiveSimilarity } from "../coverage/detectDuplicates.js";
+import { objectiveSimilarity, SIMILARITY_THRESHOLD } from "../coverage/detectDuplicates.js";
 import type { CriterionJudgment } from "../scoring/types.js";
 import type { RequirementsFile, TestEvaluationsFile, TestEvaluationJudgment } from "../metadata/schemas.js";
 import type { LatestRunReportEntry } from "../coverage/runReportHistory.js";
@@ -344,7 +344,11 @@ export function evaluateTestValue(ctx: EvaluationContext): CriterionJudgment[] {
     if (otherDataImpact !== dataImpact) return false;
     const sharedFeature = other.tags.some((t) => featureTags.includes(t));
     if (!sharedFeature) return false;
-    return objectiveSimilarity(ctx.test.objective, other.objective) >= 0.3;
+    // Reuses detectDuplicates.ts's own SIMILARITY_THRESHOLD (not a separately-maintained copy --
+    // Stage 07 audit Finding 1 caught these drifting apart, 0.3 here vs 0.5 there, which let this
+    // criterion's rationale claim a pair of tests "overlap" on the same evidence the duplicate-
+    // detection section would explicitly decline to flag as a duplicate for the same pair).
+    return objectiveSimilarity(ctx.test.objective, other.objective) >= SIMILARITY_THRESHOLD;
   });
 
   if (overlapping.length === 0) {
