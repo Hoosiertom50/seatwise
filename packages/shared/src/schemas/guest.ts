@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { PERSON_NAME_PATTERN, PERSON_NAME_MESSAGE } from "../validation";
 
 export const guestTierEnum = z.enum(["VIP", "FAMILY", "FRIEND", "PLUS_ONE", "OTHER"]);
 export type GuestTier = z.infer<typeof guestTierEnum>;
@@ -22,8 +23,18 @@ export const ageCategoryEnum = z.enum(["ADULT", "CHILD", "INFANT"]);
 export type AgeCategory = z.infer<typeof ageCategoryEnum>;
 
 export const createGuestSchema = z.object({
-  firstName: z.string().min(1, "First name is required").max(100),
-  lastName: z.string().min(1, "Last name is required").max(100),
+  firstName: z
+    .string()
+    .trim()
+    .min(1, "First name is required")
+    .max(100)
+    .regex(PERSON_NAME_PATTERN, PERSON_NAME_MESSAGE),
+  lastName: z
+    .string()
+    .trim()
+    .min(1, "Last name is required")
+    .max(100)
+    .regex(PERSON_NAME_PATTERN, PERSON_NAME_MESSAGE),
   partyName: z.string().max(200).optional().nullable(),
   headcount: z.number().int().min(1).max(20).default(1),
   tier: guestTierEnum.default("OTHER"),

@@ -9,6 +9,8 @@ import {
   dayOfAttendanceEnum,
   guestSideEnum,
   ageCategoryEnum,
+  PERSON_NAME_PATTERN,
+  PERSON_NAME_MESSAGE,
   type GuestImportMapping,
   type GuestImportRow,
   type GuestImportRowPreview,
@@ -58,8 +60,23 @@ function parseRow(
   if (!firstName || !lastName) {
     errors.push("Missing required name (first and last name are both required).");
   } else {
-    data.firstName = firstName;
-    data.lastName = lastName;
+    // Same 100-char cap and character allowlist as the single-guest add/edit form (createGuestSchema)
+    // -- this bulk path used to skip both, so a CSV could smuggle in a name the regular form would
+    // have rejected outright.
+    if (firstName.length > 100) {
+      errors.push(`First name "${firstName}" is too long (100 characters max).`);
+    } else if (!PERSON_NAME_PATTERN.test(firstName)) {
+      errors.push(`First name "${firstName}" is invalid: ${PERSON_NAME_MESSAGE.toLowerCase()}.`);
+    } else {
+      data.firstName = firstName;
+    }
+    if (lastName.length > 100) {
+      errors.push(`Last name "${lastName}" is too long (100 characters max).`);
+    } else if (!PERSON_NAME_PATTERN.test(lastName)) {
+      errors.push(`Last name "${lastName}" is invalid: ${PERSON_NAME_MESSAGE.toLowerCase()}.`);
+    } else {
+      data.lastName = lastName;
+    }
   }
 
   const partyName = cellFor("partyName");

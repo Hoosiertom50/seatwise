@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { api, ApiError } from "@/lib/api-client";
+import { api, ApiError, apiErrorMessage } from "@/lib/api-client";
 import type {
   AgeCategory,
   GuestDTO,
@@ -279,7 +279,7 @@ export function GuestsTab({
       setAgeCategory("ADULT");
       setEmail("");
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Couldn't add that guest.");
+      setError(apiErrorMessage(err, ["firstName", "lastName"], "Couldn't add that guest."));
     } finally {
       setAdding(false);
     }
@@ -416,7 +416,11 @@ export function GuestsTab({
       } else {
         setGuests(prev);
         setError(
-          err instanceof ApiError ? err.message : `Couldn't update that guest's ${field === "firstName" ? "first" : "last"} name.`
+          apiErrorMessage(
+            err,
+            [field],
+            `Couldn't update that guest's ${field === "firstName" ? "first" : "last"} name.`
+          )
         );
       }
     }
@@ -501,6 +505,7 @@ export function GuestsTab({
             value={firstName}
             onChange={(e) => setFirstName(e.target.value)}
             required
+            maxLength={100}
           />
         </div>
         <div>
@@ -513,6 +518,7 @@ export function GuestsTab({
             value={lastName}
             onChange={(e) => setLastName(e.target.value)}
             required
+            maxLength={100}
           />
         </div>
         <div>
@@ -637,7 +643,7 @@ export function GuestsTab({
         <button
           type="submit"
           disabled={adding}
-          className="rounded-md bg-neutral-900 dark:bg-neutral-100 px-4 py-2 text-sm font-medium text-white dark:text-neutral-900 hover:bg-neutral-700 dark:hover:bg-neutral-300 dark:hover:bg-neutral-300 disabled:opacity-50 sm:col-span-2"
+          className="rounded-md bg-neutral-900 dark:bg-neutral-100 px-4 py-2 text-sm font-medium text-white dark:text-neutral-900 hover:bg-neutral-700 dark:hover:bg-neutral-300 disabled:opacity-50 sm:col-span-2"
         >
           {adding ? "Adding..." : "Add guest"}
         </button>
@@ -661,7 +667,7 @@ export function GuestsTab({
           <button
             type="button"
             onClick={() => setShowImportExample((v) => !v)}
-            className="text-sm text-neutral-600 dark:text-neutral-300 underline hover:text-neutral-900 dark:hover:text-neutral-100 dark:hover:text-neutral-100"
+            className="text-sm text-neutral-600 dark:text-neutral-300 underline hover:text-neutral-900 dark:hover:text-neutral-100"
           >
             {showImportExample ? "Hide example" : "See an example"}
           </button>
@@ -752,13 +758,13 @@ export function GuestsTab({
               <button
                 onClick={onRequestPreview}
                 disabled={previewing || !mapping.firstName || !mapping.lastName}
-                className="rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800 dark:hover:bg-neutral-800 disabled:opacity-50"
+                className="rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50"
               >
                 {previewing ? "Checking..." : "Preview import"}
               </button>
               <button
                 onClick={resetImport}
-                className="rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800 dark:hover:bg-neutral-800"
+                className="rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800"
               >
                 Cancel
               </button>
@@ -825,7 +831,7 @@ export function GuestsTab({
             <button
               onClick={onConfirmImport}
               disabled={committing || importPreview.summary.errorCount > 0 || importPreview.summary.totalRows === 0}
-              className="rounded-md bg-neutral-900 dark:bg-neutral-100 px-4 py-2 text-sm font-medium text-white dark:text-neutral-900 hover:bg-neutral-700 dark:hover:bg-neutral-300 dark:hover:bg-neutral-300 disabled:opacity-50"
+              className="rounded-md bg-neutral-900 dark:bg-neutral-100 px-4 py-2 text-sm font-medium text-white dark:text-neutral-900 hover:bg-neutral-700 dark:hover:bg-neutral-300 disabled:opacity-50"
             >
               {committing
                 ? "Importing..."
@@ -849,7 +855,7 @@ export function GuestsTab({
         </h2>
         <a
           href={`/api/v1/weddings/${weddingId}/guests/export`}
-          className="rounded-md border border-neutral-300 dark:border-neutral-600 min-h-11 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800 dark:hover:bg-neutral-800"
+          className="rounded-md border border-neutral-300 dark:border-neutral-600 min-h-11 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800"
         >
           Export guest list (CSV)
         </a>
@@ -869,15 +875,17 @@ export function GuestsTab({
                     <span className="flex items-center gap-1">
                       <input
                         aria-label={`First name for ${g.firstName} ${g.lastName}`}
-                        className="w-24 rounded-md border border-transparent px-1 py-0.5 font-medium hover:border-neutral-200 dark:hover:border-neutral-700 dark:hover:border-neutral-700 focus:border-neutral-300 dark:focus:border-neutral-600 dark:focus:border-neutral-600 focus:outline-none"
+                        className="w-24 rounded-md border border-transparent px-1 py-0.5 font-medium hover:border-neutral-200 dark:hover:border-neutral-700 focus:border-neutral-300 dark:focus:border-neutral-600 focus:outline-none"
                         defaultValue={g.firstName}
                         onBlur={(e) => onUpdateName(g.id, "firstName", e.target.value)}
+                        maxLength={100}
                       />
                       <input
                         aria-label={`Last name for ${g.firstName} ${g.lastName}`}
-                        className="w-28 rounded-md border border-transparent px-1 py-0.5 font-medium hover:border-neutral-200 dark:hover:border-neutral-700 dark:hover:border-neutral-700 focus:border-neutral-300 dark:focus:border-neutral-600 dark:focus:border-neutral-600 focus:outline-none"
+                        className="w-28 rounded-md border border-transparent px-1 py-0.5 font-medium hover:border-neutral-200 dark:hover:border-neutral-700 focus:border-neutral-300 dark:focus:border-neutral-600 focus:outline-none"
                         defaultValue={g.lastName}
                         onBlur={(e) => onUpdateName(g.id, "lastName", e.target.value)}
+                        maxLength={100}
                       />
                     </span>
                   ) : (
@@ -977,7 +985,7 @@ export function GuestsTab({
                     <button
                       onClick={() => onToggleLock(g.id, !g.isLocked)}
                       title="Locking keeps this guest at their current table when a new plan is generated."
-                      className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800 dark:hover:bg-neutral-800"
+                      className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800"
                     >
                       {g.isLocked ? "Unlock" : "Lock"}
                     </button>
@@ -988,7 +996,7 @@ export function GuestsTab({
                       onClick={() => onRsvpLink(g.id, g.email, false)}
                       disabled={rsvpLinkBusy === g.id}
                       title="Copies this guest's RSVP link, and emails it to them if they have an address on file."
-                      className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800 dark:hover:bg-neutral-800 disabled:opacity-50"
+                      className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50"
                     >
                       {rsvpLinkBusy === g.id ? "..." : "RSVP link"}
                     </button>
@@ -996,13 +1004,13 @@ export function GuestsTab({
                       onClick={() => onRsvpLink(g.id, g.email, true)}
                       disabled={rsvpLinkBusy === g.id}
                       title="Issues a brand new RSVP link, invalidating this guest's old one."
-                      className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800 dark:hover:bg-neutral-800 disabled:opacity-50"
+                      className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50"
                     >
                       New link
                     </button>
                     <button
                       onClick={() => onDeleteGuest(g.id)}
-                      className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950 dark:hover:bg-red-950"
+                      className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950"
                     >
                       Remove
                     </button>

@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { api, ApiError } from "@/lib/api-client";
+import { api, ApiError, apiErrorMessage } from "@/lib/api-client";
 import type { WeddingSummaryDTO, SeatingTemplateDTO } from "@seatwise/shared";
 import { NotificationsBell } from "@/components/NotificationsBell";
 
@@ -185,7 +185,7 @@ export default function DashboardPage() {
       setShowNote(false);
       setSelectedTemplateId("");
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Couldn't create the wedding.");
+      setError(apiErrorMessage(err, ["name"], "Couldn't create the wedding."));
     } finally {
       setCreating(false);
     }
@@ -223,7 +223,7 @@ export default function DashboardPage() {
           <NotificationsBell />
           <button
             onClick={onLogout}
-            className="rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800 dark:hover:bg-neutral-800"
+            className="rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800"
           >
             Log out
           </button>
@@ -253,6 +253,7 @@ export default function DashboardPage() {
               value={newName}
               onChange={(e) => setNewName(e.target.value)}
               required
+              maxLength={200}
             />
           </div>
           <div>
@@ -281,7 +282,7 @@ export default function DashboardPage() {
           <button
             type="submit"
             disabled={creating || (!!selectedTemplateId && !applyTemplateTables && !applyTemplateRules)}
-            className="rounded-md bg-neutral-900 dark:bg-neutral-100 px-4 py-2 text-sm font-medium text-white dark:text-neutral-900 hover:bg-neutral-700 dark:hover:bg-neutral-300 dark:hover:bg-neutral-300 disabled:opacity-50"
+            className="rounded-md bg-neutral-900 dark:bg-neutral-100 px-4 py-2 text-sm font-medium text-white dark:text-neutral-900 hover:bg-neutral-700 dark:hover:bg-neutral-300 disabled:opacity-50"
           >
             {creating ? "Adding..." : "Add wedding"}
           </button>
@@ -361,7 +362,7 @@ export default function DashboardPage() {
           <button
             type="button"
             onClick={() => setShowNote(true)}
-            className="self-start text-sm text-neutral-500 dark:text-neutral-400 underline hover:text-neutral-700 dark:hover:text-neutral-300 dark:hover:text-neutral-300"
+            className="self-start text-sm text-neutral-500 dark:text-neutral-400 underline hover:text-neutral-700 dark:hover:text-neutral-300"
           >
             + Add a note
           </button>
@@ -392,7 +393,7 @@ export default function DashboardPage() {
                 </div>
                 <button
                   onClick={() => onDeleteTemplate(t.id)}
-                  className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950 dark:hover:bg-red-950"
+                  className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950"
                 >
                   Delete
                 </button>
@@ -461,7 +462,7 @@ export default function DashboardPage() {
                 <li key={w.id}>
                   <Link
                     href={`/weddings/${w.id}`}
-                    className="flex flex-col gap-2 rounded-lg border border-neutral-200 dark:border-neutral-700 px-4 py-3 hover:border-neutral-400 dark:hover:border-neutral-500 dark:hover:border-neutral-500 sm:flex-row sm:items-center sm:justify-between"
+                    className="flex flex-col gap-2 rounded-lg border border-neutral-200 dark:border-neutral-700 px-4 py-3 hover:border-neutral-400 dark:hover:border-neutral-500 sm:flex-row sm:items-center sm:justify-between"
                   >
                     <div>
                       <p className="flex flex-wrap items-center gap-2 font-medium">

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { WEDDING_NAME_PATTERN, WEDDING_NAME_MESSAGE } from "../validation";
 
 // FR-3.4: how much generation weights table composition toward mixing the two sides. Always a
 // soft preference — see packages/shared/src/seating-engine.ts.
@@ -6,7 +7,12 @@ export const sideMixingEnum = z.enum(["KEEP_SEPARATE", "BALANCED_MIX", "FULLY_MI
 export type SideMixing = z.infer<typeof sideMixingEnum>;
 
 const weddingBaseSchema = z.object({
-  name: z.string().min(1, "Wedding name is required").max(200),
+  name: z
+    .string()
+    .trim()
+    .min(1, "Wedding name is required")
+    .max(200)
+    .regex(WEDDING_NAME_PATTERN, WEDDING_NAME_MESSAGE),
   eventDate: z.string().date().optional().nullable(),
   venueName: z.string().max(200).optional().nullable(),
   // FR-1.3: "an optional note" -- always optional, blank is fine (AC: creating with the note left
