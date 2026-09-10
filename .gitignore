@@ -8,3 +8,14 @@ dist/
 .DS_Store
 .pnpm-store/
 generated/
+
+# Playwright Quality Engineering Framework: generated run output, reports, and diagnostic
+# artifacts are never committed -- only the framework source/templates that produce them are.
+# The directory skeleton itself (via .gitkeep) stays tracked so it exists on a clean checkout.
+artifacts/playwright/**
+!artifacts/playwright/**/
+!artifacts/playwright/**/.gitkeep
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/

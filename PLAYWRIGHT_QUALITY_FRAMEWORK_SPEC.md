@@ -102,17 +102,17 @@ The completed framework shall provide:
 
 The implementing agent must maintain this section throughout the build.
 
-**Current stage:** 00 (complete, audit PASS)  
-**Current task:** Awaiting human go-ahead to start Stage 01  
-**Last verified task:** Stage 00 discovery and Project Profile, verified by an independent review pass  
-**Last passing audit:** `quality/audits/stage-00-audit.md` — PASS  
+**Current stage:** 01 (complete, audit PASS)  
+**Current task:** Awaiting human go-ahead to start Stage 02  
+**Last verified task:** Stage 01 Playwright foundation and production guard, verified by an independent review pass  
+**Last passing audit:** `quality/audits/stage-01-audit.md` — PASS  
 **Active blockers:** None recorded  
-**Next action:** Begin Stage 01 — Playwright foundation and environment safety
+**Next action:** Begin Stage 02 — Test governance, metadata, tags, and value model
 
 ### Progress dashboard
 
 - [x] Stage 00 — Repository discovery and implementation plan
-- [ ] Stage 01 — Playwright foundation and environment safety
+- [x] Stage 01 — Playwright foundation and environment safety
 - [ ] Stage 02 — Test governance, metadata, tags, and value model
 - [ ] Stage 03 — Page objects, fixtures, test data, and evidence architecture
 - [ ] Stage 04 — Test-authoring standards, enforcement, and reference tests
@@ -133,6 +133,8 @@ The implementing agent must maintain this section throughout the build.
 | DEC-003 | 2026-09-10 | Chromium-only browser project for now; Firefox/WebKit stay defined but unused in `playwright.config.ts` | App has no deployed users yet and no known cross-browser defect history to justify the extra CI time | No — reversible later by enabling the existing project entries |
 | DEC-004 | 2026-09-10 | Editor deep-links in reports default to off (plain relative file links only) until the human states a preferred editor | Spec Section 5 lists this as a profile item with no discovered value; safest default is "do nothing extra" rather than guess an editor scheme | No — cosmetic, easy to add later |
 | DEC-005 | 2026-09-10 | Production is treated as **undefined** everywhere the framework needs a production hostname (Stage 01's fail-closed guard, Stage 05's production preflight) | The app has never been deployed; there is no real host to allow-list, so every environment must be treated as non-production and mutating tests must never be approved for it by default | Yes — human must explicitly configure and approve a real production hostname before any mutating-test production policy can change |
+| DEC-006 | 2026-09-10 | `playwright.config.ts` reads an optional `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` env var and, only when set, passes it as `launchOptions.executablePath` for the chromium project | The cloud sandbox pre-installs a Chromium build whose revision doesn't always match what a given `@playwright/test` version expects, with no network access to fetch a replacement; this variable is unset (and a no-op) anywhere `pnpm pw:install` / `playwright install` has been run normally, e.g. a developer's machine or CI | No — additive, defaults to Playwright's normal behavior |
+| DEC-007 | 2026-09-10 | `e2e/support/globalSetup.ts` derives "does this selection include a mutating test" from a temporary env var (`PW_SIMULATE_MUTATING_SELECTION`) rather than a real computed selection | Stage 05 (the tag-expression runner) is what will actually know which tests are selected; until then this is the only way to prove the production/mutation guard blocks a run *before browser launch*, end-to-end through Playwright itself, rather than only via unit tests | No now — **Stage 05 must replace this simulation with the runner's real selection result; tracked as a required follow-up in Stage 05's own audit, not optional polish** |
 
 ### Blocker log
 
@@ -147,6 +149,7 @@ Append one row before ending each implementation session.
 | Date/time | Stage | Work completed | Verification evidence | Files changed | Next action |
 |---|---|---|---|---|---|
 | 2026-09-10 | 00 | Repository discovery completed; Project Profile filled in with no unexplained TBDs; five decisions recorded (DEC-002..005); no framework dependency installed | Discovery claims cross-checked live against the repo (package manager/version, Node version, absence of Playwright/CI/`.claude` assets, ESLint/TypeScript config paths, existing `apps/mobile/__tests__`, absence of any deployment config) by an independent adversarial review pass before the audit was marked PASS | `PLAYWRIGHT_QUALITY_FRAMEWORK_SPEC.md` (Sections 4 and 5), `quality/audits/stage-00-audit.md` (new) | Begin Stage 01 — Playwright foundation and environment safety |
+| 2026-09-10 | 01 | Installed `@playwright/test`, `typescript`, `zod`, `@types/node` as root devDependencies; created the full target directory skeleton (`e2e/`, `playwright-framework/`, `artifacts/playwright/`, all `.gitkeep`-tracked); implemented a zod-validated typed environment config, a fail-closed production/mutation guard wired into Playwright's `globalSetup` (blocks before any browser launches), `playwright.config.ts` (chromium as the run-by-default project; firefox/webkit defined but unused per DEC-003; native HTML+list reporter; trace/screenshot-on-failure), a framework health test, and root `tsconfig.json`. Added `pw:*` package scripts and gitignore rules for generated report/test-result output. Documented install/run commands in README. Two decisions recorded (DEC-006, DEC-007) | `pnpm exec tsc --noEmit` clean; `pnpm pw:list` shows exactly the 18 intended tests across 3 files with zero bleed from `apps/mobile/__tests__`; `pnpm pw:test` — 18/18 passed, including one real Chromium `page` launch; the production guard was proven end-to-end through Playwright itself in three live scenarios (mutating+production → blocked before any project ran, exit 1; read-only+production+no approval → blocked; read-only+production+approval → 18/18 passed); `git status` after `git add -A` shows only intended source/config/`.gitkeep` files staged, no generated report/test-result content | `package.json`, `pnpm-lock.yaml`, `.gitignore`, `README.md`, `tsconfig.json` (new), `playwright.config.ts` (new), `e2e/support/{env,productionGuard,globalSetup}.ts` (new), `e2e/tests/framework-health.spec.ts` (new), `playwright-framework/tests/{env,productionGuard}.spec.ts` (new), directory skeleton `.gitkeep`s (new), `PLAYWRIGHT_QUALITY_FRAMEWORK_SPEC.md` (Sections 4), `quality/audits/stage-01-audit.md` (new) | Begin Stage 02 — Test governance, metadata, tags, and value model |
 
 ---
 
