@@ -102,18 +102,18 @@ The completed framework shall provide:
 
 The implementing agent must maintain this section throughout the build.
 
-**Current stage:** 02 (implementation complete, pending independent audit)  
-**Current task:** Independent review of Stage 02 before it may be marked PASS  
-**Last verified task:** Stage 01 Playwright foundation and production guard, verified by an independent review pass  
-**Last passing audit:** `quality/audits/stage-01-audit.md` — PASS  
+**Current stage:** 02 (complete, audit PASS)  
+**Current task:** Awaiting human go-ahead to start Stage 03  
+**Last verified task:** Stage 02 test governance/metadata/tags/value model, verified by an independent review pass (one Medium finding closed post-audit; three Low findings correctly deferred to Stage 03/04)  
+**Last passing audit:** `quality/audits/stage-02-audit.md` — PASS  
 **Active blockers:** None recorded  
-**Next action:** Dispatch independent review of Stage 02, write `quality/audits/stage-02-audit.md`, then begin Stage 03
+**Next action:** Begin Stage 03 — Page objects, fixtures, test data, and evidence architecture
 
 ### Progress dashboard
 
 - [x] Stage 00 — Repository discovery and implementation plan
 - [x] Stage 01 — Playwright foundation and environment safety
-- [ ] Stage 02 — Test governance, metadata, tags, and value model
+- [x] Stage 02 — Test governance, metadata, tags, and value model
 - [ ] Stage 03 — Page objects, fixtures, test data, and evidence architecture
 - [ ] Stage 04 — Test-authoring standards, enforcement, and reference tests
 - [ ] Stage 05 — Tag-expression runner and safe execution workflow
@@ -155,6 +155,7 @@ Append one row before ending each implementation session.
 | 2026-09-10 | 00 | Repository discovery completed; Project Profile filled in with no unexplained TBDs; five decisions recorded (DEC-002..005); no framework dependency installed | Discovery claims cross-checked live against the repo (package manager/version, Node version, absence of Playwright/CI/`.claude` assets, ESLint/TypeScript config paths, existing `apps/mobile/__tests__`, absence of any deployment config) by an independent adversarial review pass before the audit was marked PASS | `PLAYWRIGHT_QUALITY_FRAMEWORK_SPEC.md` (Sections 4 and 5), `quality/audits/stage-00-audit.md` (new) | Begin Stage 01 — Playwright foundation and environment safety |
 | 2026-09-10 | 01 | Installed `@playwright/test`, `typescript`, `zod`, `@types/node` as root devDependencies; created the full target directory skeleton (`e2e/`, `playwright-framework/`, `artifacts/playwright/`, all `.gitkeep`-tracked); implemented a zod-validated typed environment config, a fail-closed production/mutation guard wired into Playwright's `globalSetup` (blocks before any browser launches), `playwright.config.ts` (chromium as the run-by-default project; firefox/webkit defined but unused per DEC-003; native HTML+list reporter; trace/screenshot-on-failure), a framework health test, and root `tsconfig.json`. Added `pw:*` package scripts and gitignore rules for generated report/test-result output. Documented install/run commands in README. Two decisions recorded (DEC-006, DEC-007) | `pnpm exec tsc --noEmit` clean; `pnpm pw:list` shows exactly the 18 intended tests across 3 files with zero bleed from `apps/mobile/__tests__`; `pnpm pw:test` — 18/18 passed, including one real Chromium `page` launch; the production guard was proven end-to-end through Playwright itself in three live scenarios (mutating+production → blocked before any project ran, exit 1; read-only+production+no approval → blocked; read-only+production+approval → 18/18 passed); `git status` after `git add -A` shows only intended source/config/`.gitkeep` files staged, no generated report/test-result content | `package.json`, `pnpm-lock.yaml`, `.gitignore`, `README.md`, `tsconfig.json` (new), `playwright.config.ts` (new), `e2e/support/{env,productionGuard,globalSetup}.ts` (new), `e2e/tests/framework-health.spec.ts` (new), `playwright-framework/tests/{env,productionGuard}.spec.ts` (new), directory skeleton `.gitkeep`s (new), `PLAYWRIGHT_QUALITY_FRAMEWORK_SPEC.md` (Sections 4), `quality/audits/stage-01-audit.md` (new) | Begin Stage 02 — Test governance, metadata, tags, and value model |
 | 2026-09-10 | 02 | Installed `yaml`, `tsx` as root devDependencies. Built versioned zod schemas for requirements/tag-taxonomy/value-model/overrides/test-inventory/run-result/maintenance-result (DEC-008); wrote `quality/requirements.yaml` (18 real entries seeded from README, 2 explicit fake placeholders — DEC-009), `quality/tag-taxonomy.yaml` (7 dimensions per Section 9.1, plus conflicts/aliases), `quality/test-value-model.yaml` (6 value + 8 quality criteria matching Section 8.3/8.5 exactly, weights validated to total 100 by the schema itself — DEC-010), generated `quality/test-value-model.md`, and an empty `quality/value-overrides.yaml`. Implemented deterministic value/quality scoring arithmetic (`playwright-framework/scoring/`) that treats a missing or human-review-flagged criterion as provisional rather than a fabricated zero, a value-band lookup, and a human-override layer that never mutates the calculated result. Implemented tag-taxonomy validation (unknown tags, exactly-one/at-least-one dimension rules, conflicts, aliases) and a cross-cutting metadata validator (unique test IDs, unmapped/unknown requirement references, empty objective/expectedOutcome). Implemented `defineQualityTest`, a thin wrapper around Playwright's native `test(title, {tag, annotation}, body)` that validates metadata at collection time (DEC-011). Added two CLI scripts wired into `package.json` (`pw:validate-metadata`, `pw:generate-value-model-md`) and folded the former into `pw:validate`. Added 53 new unit tests (schemas, tag validation, cross-cutting metadata validation, scoring boundaries/bands/missing-info/model-version-change/overrides, real-file loader round-trips including a malformed-YAML and a bad-weights failure case, markdown drift detection, and `defineQualityTest` against the live taxonomy) | `pnpm exec tsc --noEmit` clean; `pnpm pw:validate-metadata` reports 20 requirements / 7 dimensions (33 tags) / model 1.0.0 (6+8 criteria) / 0 overrides, all valid; `pnpm pw:test` — 71/71 passed (18 carried over from Stage 01 + 53 new), including a live manual check that intentionally desyncing `test-value-model.yaml` from the committed `.md` makes the drift-detection test fail, then passes again once reverted; `git status` shows only new framework/quality files plus `package.json`/`pnpm-lock.yaml` — no application code (`apps/`, `packages/`) touched | `package.json`, `pnpm-lock.yaml`, `quality/{requirements,tag-taxonomy,test-value-model}.yaml` (new), `quality/test-value-model.md` (new, generated), `quality/value-overrides.yaml` (new), `playwright-framework/metadata/{schemas,loaders,tagValidation,validateMetadata,defineQualityTest}.ts` (new), `playwright-framework/scoring/{types,bands,computeScore,valueScore,qualityScore,applyOverride}.ts` (new), `playwright-framework/cli/{validate-metadata,generate-value-model-md,renderValueModelMarkdown}.ts` (new), `playwright-framework/tests/{schemas,tagValidation,validateMetadata,scoring,loaders,valueModelMarkdown,defineQualityTest}.spec.ts` (new), `PLAYWRIGHT_QUALITY_FRAMEWORK_SPEC.md` (Section 4) | Independent review of Stage 02, then begin Stage 03 — Page objects, fixtures, test data, and evidence architecture |
+| 2026-09-10 | 02 | Post-audit fix: closed the independent review's one Medium finding — `ScoreSource`'s `"provisional"` value was declared but never produced; `computeScore.ts` now sets `source: "provisional"` (not `"calculated"`) whenever any criterion is unjudged/needs-human-review. Added a locking unit test | `pnpm exec tsc --noEmit` clean; `pnpm pw:test` 72/72 passed (71 + 1 new); `pnpm pw:validate-metadata` unchanged | `playwright-framework/scoring/computeScore.ts`, `playwright-framework/tests/scoring.spec.ts`, `quality/audits/stage-02-audit.md` (correction note appended) | Merge Stage 02's PR, sync to local checkout, update Jira, begin Stage 03 |
 
 ---
 
@@ -735,11 +736,11 @@ Hook requirements:
 
 ### Stage 02 audit gate
 
-- [ ] Review every criterion for ambiguity, double counting, and separation of value from quality.
-- [ ] Verify unknown information produces human review rather than fabricated evidence.
-- [ ] Test all schema failures and override rules.
-- [ ] Resolve findings and rerun unit tests.
-- [ ] Write a passing `quality/audits/stage-02-audit.md` and update the Progress Dashboard.
+- [x] Review every criterion for ambiguity, double counting, and separation of value from quality.
+- [x] Verify unknown information produces human review rather than fabricated evidence.
+- [x] Test all schema failures and override rules.
+- [x] Resolve findings and rerun unit tests. (Medium finding — unreachable `ScoreSource: "provisional"` — closed post-audit; 72/72 tests passing.)
+- [x] Write a passing `quality/audits/stage-02-audit.md` and update the Progress Dashboard.
 
 ## Stage 03 — Page objects, fixtures, test data, and evidence architecture
 

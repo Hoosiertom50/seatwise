@@ -82,7 +82,11 @@ export function computeScore(options: ComputeScoreOptions): ScoreResult {
     modelVersion,
     total,
     band: band ? band(total) : undefined,
-    source: "calculated",
+    // "provisional" is a real, reachable source (not just the separate `provisional` boolean):
+    // a score computed on an incomplete evidence set is reported as provisional, not silently as
+    // a fully-calculated one. See stage-02-audit.md's Medium finding for why this distinction
+    // matters once a report renderer starts keying off `source` directly.
+    source: provisional ? "provisional" : "calculated",
     criteria: criteriaResults,
     provisional,
   };

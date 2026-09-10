@@ -122,6 +122,13 @@ test.describe("missing and incomplete information", () => {
     const bCriterion = result.criteria.find((c) => c.criterionId === "b");
     expect(bCriterion?.needsHumanReview).toBe(true);
   });
+
+  test("source is \"provisional\" (not \"calculated\") whenever the result is incomplete", () => {
+    const incomplete = computeValueScore(modelV1, [judgment("a", 60)]);
+    expect(incomplete.source).toBe("provisional");
+    const complete = computeValueScore(modelV1, [judgment("a", 60), judgment("b", 40)]);
+    expect(complete.source).toBe("calculated");
+  });
 });
 
 test.describe("model version changes", () => {
