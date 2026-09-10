@@ -219,33 +219,33 @@ export function DayOfTab({
     }
   }
 
-  if (loading) return <p className="text-sm text-neutral-500">Loading day-of view...</p>;
+  if (loading) return <p className="text-sm text-neutral-500 dark:text-neutral-400">Loading day-of view...</p>;
 
   return (
     <div className="flex flex-col gap-6">
       <div>
         <h2 className="mb-1 text-lg font-medium">Day-of mode</h2>
-        <p className="text-sm text-neutral-500">
+        <p className="text-sm text-neutral-500 dark:text-neutral-400">
           Mark no-shows and walk-ins, re-seat or swap guests fast — without a full regeneration.
           Nobody else&apos;s seat changes unless you move them.
         </p>
       </div>
 
       {!canEdit && (
-        <p className="rounded-md bg-neutral-100 px-3 py-2 text-sm text-neutral-600">
+        <p className="rounded-md bg-neutral-100 dark:bg-neutral-800 px-3 py-2 text-sm text-neutral-600 dark:text-neutral-300">
           You have view-only access to this wedding — marking attendance, seating, walk-ins, and
           swaps are turned off. You can still search and see where everyone's seated.
         </p>
       )}
-      {error && <p className="text-sm text-red-600">{error}</p>}
+      {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}
       {notice && (
-        <p className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-800">
+        <p className="rounded-lg border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-950 p-3 text-sm text-blue-800 dark:text-blue-300">
           {notice}
         </p>
       )}
 
       {!detail && (
-        <p className="rounded-lg border border-neutral-200 p-4 text-sm text-neutral-500">
+        <p className="rounded-lg border border-neutral-200 dark:border-neutral-700 p-4 text-sm text-neutral-500 dark:text-neutral-400">
           No seating plan generated yet — attendance can still be marked below, but seating and
           swaps need a plan first (see the Seating plan tab).
         </p>
@@ -258,10 +258,10 @@ export function DayOfTab({
             {occupancy.map(({ table, seated }) => (
               <div
                 key={table.id}
-                className="shrink-0 rounded-lg border border-neutral-200 px-3 py-2 text-sm"
+                className="shrink-0 rounded-lg border border-neutral-200 dark:border-neutral-700 px-3 py-2 text-sm"
               >
                 <p className="font-medium">{table.label}</p>
-                <p className={seated >= table.capacity ? "text-red-600" : "text-neutral-500"}>
+                <p className={seated >= table.capacity ? "text-red-600 dark:text-red-400" : "text-neutral-500 dark:text-neutral-400"}>
                   {seated}/{table.capacity} seated
                 </p>
               </div>
@@ -276,7 +276,7 @@ export function DayOfTab({
         </label>
         <input
           id="dayof-guest-search"
-          className="min-h-11 w-full rounded-md border border-neutral-300 px-3 py-3 text-base"
+          className="min-h-11 w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-3 text-base"
           placeholder="Search by name or party..."
           value={search}
           onChange={(e) => setSearch(e.target.value)}
@@ -291,7 +291,7 @@ export function DayOfTab({
             <li
               key={g.id}
               className={`flex flex-wrap items-center justify-between gap-2 rounded-lg border px-4 py-3 ${
-                notAttending ? "border-neutral-200 bg-neutral-50 opacity-60" : "border-neutral-200"
+                notAttending ? "border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-900 opacity-60" : "border-neutral-200 dark:border-neutral-700"
               }`}
             >
               <div>
@@ -299,7 +299,7 @@ export function DayOfTab({
                   {g.firstName} {g.lastName}
                   {g.headcount > 1 ? ` (+${g.headcount - 1})` : ""}
                 </p>
-                <p className="text-sm text-neutral-500">
+                <p className="text-sm text-neutral-500 dark:text-neutral-400">
                   {notAttending
                     ? "Not attending"
                     : seatedAt
@@ -312,7 +312,7 @@ export function DayOfTab({
                   {!notAttending && detail && !seatedAt && (
                     <select
                       aria-label={`Seat ${g.firstName} ${g.lastName} at a table`}
-                      className="min-h-11 rounded-md border border-neutral-300 px-2 py-2 text-sm disabled:opacity-50"
+                      className="min-h-11 rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-2 text-sm disabled:opacity-50"
                       value=""
                       disabled={busyGuestId === g.id}
                       onChange={(e) => onSeatGuest(g.id, e.target.value)}
@@ -332,8 +332,8 @@ export function DayOfTab({
                     disabled={busyGuestId === g.id}
                     className={`min-h-11 rounded-md border px-3 py-2 text-sm font-medium disabled:opacity-50 ${
                       notAttending
-                        ? "border-neutral-300 hover:bg-neutral-50"
-                        : "border-red-300 text-red-600 hover:bg-red-50"
+                        ? "border-neutral-300 dark:border-neutral-600 hover:bg-neutral-50 dark:hover:bg-neutral-800 dark:hover:bg-neutral-800"
+                        : "border-red-300 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950 dark:hover:bg-red-950"
                     }`}
                   >
                     {notAttending ? "Mark attending" : "Mark not attending"}
@@ -344,12 +344,12 @@ export function DayOfTab({
           );
         })}
         {filteredGuests.length === 0 && (
-          <p className="text-sm text-neutral-500">No guests match &ldquo;{search}&rdquo;.</p>
+          <p className="text-sm text-neutral-500 dark:text-neutral-400">No guests match &ldquo;{search}&rdquo;.</p>
         )}
       </ul>
 
       {canEdit && (
-      <div className="rounded-lg border border-neutral-200 p-4">
+      <div className="rounded-lg border border-neutral-200 dark:border-neutral-700 p-4">
         <p className="mb-3 text-sm font-medium">Add a walk-in</p>
         <form onSubmit={onAddWalkIn} className="flex flex-col gap-3">
           <div className="flex flex-wrap gap-3">
@@ -358,7 +358,7 @@ export function DayOfTab({
             </label>
             <input
               id="walkin-first-name"
-              className="min-h-11 flex-1 rounded-md border border-neutral-300 px-3 py-3 text-base"
+              className="min-h-11 flex-1 rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-3 text-base"
               placeholder="First name"
               value={walkInFirst}
               onChange={(e) => setWalkInFirst(e.target.value)}
@@ -369,7 +369,7 @@ export function DayOfTab({
             </label>
             <input
               id="walkin-last-name"
-              className="min-h-11 flex-1 rounded-md border border-neutral-300 px-3 py-3 text-base"
+              className="min-h-11 flex-1 rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-3 text-base"
               placeholder="Last name"
               value={walkInLast}
               onChange={(e) => setWalkInLast(e.target.value)}
@@ -379,7 +379,7 @@ export function DayOfTab({
           {detail && (
             <select
               aria-label="Seat the walk-in at a table"
-              className="min-h-11 rounded-md border border-neutral-300 px-3 py-2 text-sm"
+              className="min-h-11 rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
               value={walkInTableId}
               onChange={(e) => setWalkInTableId(e.target.value)}
             >
@@ -394,7 +394,7 @@ export function DayOfTab({
           <button
             type="submit"
             disabled={addingWalkIn}
-            className="min-h-11 rounded-md bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-700 disabled:opacity-50"
+            className="min-h-11 rounded-md bg-neutral-900 dark:bg-neutral-100 px-4 py-2 text-sm font-medium text-white dark:text-neutral-900 hover:bg-neutral-700 dark:hover:bg-neutral-300 dark:hover:bg-neutral-300 disabled:opacity-50"
           >
             {addingWalkIn ? "Adding..." : "Add walk-in"}
           </button>
@@ -403,12 +403,12 @@ export function DayOfTab({
       )}
 
       {canEdit && detail && attendingSeatedGuests.length >= 2 && (
-        <div className="rounded-lg border border-neutral-200 p-4">
+        <div className="rounded-lg border border-neutral-200 dark:border-neutral-700 p-4">
           <p className="mb-3 text-sm font-medium">Swap two guests&apos; tables</p>
           <div className="flex flex-col gap-3 sm:flex-row">
             <select
               aria-label="First guest to swap"
-              className="min-h-11 flex-1 rounded-md border border-neutral-300 px-3 py-2 text-sm"
+              className="min-h-11 flex-1 rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
               value={swapAId}
               onChange={(e) => setSwapAId(e.target.value)}
             >
@@ -421,7 +421,7 @@ export function DayOfTab({
             </select>
             <select
               aria-label="Second guest to swap"
-              className="min-h-11 flex-1 rounded-md border border-neutral-300 px-3 py-2 text-sm"
+              className="min-h-11 flex-1 rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
               value={swapBId}
               onChange={(e) => setSwapBId(e.target.value)}
             >
@@ -437,7 +437,7 @@ export function DayOfTab({
             <button
               onClick={onSwap}
               disabled={swapping || !swapAId || !swapBId}
-              className="min-h-11 shrink-0 rounded-md bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-700 disabled:opacity-50"
+              className="min-h-11 shrink-0 rounded-md bg-neutral-900 dark:bg-neutral-100 px-4 py-2 text-sm font-medium text-white dark:text-neutral-900 hover:bg-neutral-700 dark:hover:bg-neutral-300 dark:hover:bg-neutral-300 disabled:opacity-50"
             >
               {swapping ? "Swapping..." : "Swap"}
             </button>

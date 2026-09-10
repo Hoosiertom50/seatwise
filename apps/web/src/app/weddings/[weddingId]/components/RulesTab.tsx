@@ -84,12 +84,12 @@ export function RulesTab({
     }
   }
 
-  if (loading) return <p className="text-sm text-neutral-500">Loading seating rules...</p>;
+  if (loading) return <p className="text-sm text-neutral-500 dark:text-neutral-400">Loading seating rules...</p>;
 
   return (
     <div>
       {!canEdit && (
-        <p className="mb-4 rounded-md bg-neutral-100 px-3 py-2 text-sm text-neutral-600">
+        <p className="mb-4 rounded-md bg-neutral-100 dark:bg-neutral-800 px-3 py-2 text-sm text-neutral-600 dark:text-neutral-300">
           You have view-only access to this wedding's seating rules — adding or removing rules is
           turned off.
         </p>
@@ -97,14 +97,14 @@ export function RulesTab({
       {canEdit && (
         <>
       <h2 className="mb-3 text-lg font-medium">Add a seating rule</h2>
-      <p className="mb-3 text-sm text-neutral-500">
+      <p className="mb-3 text-sm text-neutral-500 dark:text-neutral-400">
         &ldquo;Must&rdquo; rules are hard rules — they can never be violated once a seating chart
         is generated. &ldquo;Prefer&rdquo; and &ldquo;avoid&rdquo; are soft preferences the
         planner will try to honor.
       </p>
       <form
         onSubmit={onAdd}
-        className="mb-8 grid grid-cols-1 gap-3 rounded-lg border border-neutral-200 p-4 sm:grid-cols-3"
+        className="mb-8 grid grid-cols-1 gap-3 rounded-lg border border-neutral-200 dark:border-neutral-700 p-4 sm:grid-cols-3"
       >
         <div>
           <label htmlFor="rule-guest-a" className="mb-1 block text-sm font-medium">
@@ -112,7 +112,7 @@ export function RulesTab({
           </label>
           <select
             id="rule-guest-a"
-            className="w-full rounded-md border border-neutral-300 px-3 py-2 text-sm"
+            className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
             value={guestAId}
             onChange={(e) => setGuestAId(e.target.value)}
             required
@@ -131,7 +131,7 @@ export function RulesTab({
           </label>
           <select
             id="rule-guest-b"
-            className="w-full rounded-md border border-neutral-300 px-3 py-2 text-sm"
+            className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
             value={guestBId}
             onChange={(e) => setGuestBId(e.target.value)}
             required
@@ -150,7 +150,7 @@ export function RulesTab({
           </label>
           <select
             id="rule-type"
-            className="w-full rounded-md border border-neutral-300 px-3 py-2 text-sm"
+            className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
             value={type}
             onChange={(e) => setType(e.target.value as RelationshipTypeValue)}
           >
@@ -164,22 +164,22 @@ export function RulesTab({
         <button
           type="submit"
           disabled={adding || guests.length < 2}
-          className="rounded-md bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-700 disabled:opacity-50 sm:col-span-3"
+          className="rounded-md bg-neutral-900 dark:bg-neutral-100 px-4 py-2 text-sm font-medium text-white dark:text-neutral-900 hover:bg-neutral-700 dark:hover:bg-neutral-300 dark:hover:bg-neutral-300 disabled:opacity-50 sm:col-span-3"
         >
           {adding ? "Adding..." : "Add rule"}
         </button>
       </form>
 
       {guests.length < 2 && (
-        <p className="mb-4 text-sm text-neutral-500">Add at least two guests first.</p>
+        <p className="mb-4 text-sm text-neutral-500 dark:text-neutral-400">Add at least two guests first.</p>
       )}
-      {error && <p className="mb-4 text-sm text-red-600">{error}</p>}
+      {error && <p className="mb-4 text-sm text-red-600 dark:text-red-400">{error}</p>}
         </>
       )}
 
       <h2 className="mb-3 text-lg font-medium">Rules ({relationships.length})</h2>
       {relationships.length === 0 ? (
-        <p className="text-sm text-neutral-500">No seating rules yet.</p>
+        <p className="text-sm text-neutral-500 dark:text-neutral-400">No seating rules yet.</p>
       ) : (
         <ul className="flex flex-col gap-2">
           {relationships.map((r) => {
@@ -187,14 +187,14 @@ export function RulesTab({
             return (
               <li
                 key={r.id}
-                className="flex items-center justify-between rounded-lg border border-neutral-200 px-4 py-3"
+                className="flex items-center justify-between rounded-lg border border-neutral-200 dark:border-neutral-700 px-4 py-3"
               >
                 <div>
                   <p className="font-medium">
                     {r.guestAName} &amp; {r.guestBName}
                   </p>
-                  <p className="text-sm text-neutral-500">
-                    <span className={meta.hard ? "font-medium text-red-700" : ""}>
+                  <p className="text-sm text-neutral-500 dark:text-neutral-400">
+                    <span className={meta.hard ? "font-medium text-red-700 dark:text-red-400" : ""}>
                       {meta.label}
                     </span>
                   </p>
@@ -202,7 +202,7 @@ export function RulesTab({
                 {canEdit && (
                   <button
                     onClick={() => onRemove(r.id)}
-                    className="rounded-md border border-neutral-300 px-2 py-1 text-sm text-red-600 hover:bg-red-50"
+                    className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950 dark:hover:bg-red-950"
                   >
                     Remove
                   </button>

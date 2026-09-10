@@ -714,6 +714,22 @@ up for it.
     directly. It's now a checkbox on the create-table form and on every existing table's row, with a
     badge reflecting its state, matching how every other table flag already works.
 
+- **Dark mode**: the app now follows the OS/browser color-scheme preference instead of being
+  pinned to light mode. The earlier light-only pin (`color-scheme: light` in `globals.css`) was a
+  stopgap after every component turned out to be styled with hardcoded light-mode Tailwind colors
+  and nothing else — left to the browser's default dark media query, the page background flipped
+  dark while text stayed dark-on-light-assuming, producing illegible dark-on-dark text (most
+  visible on the wedding page's tab bar). Every component across the app (18 files) now carries a
+  matching `dark:` Tailwind variant alongside its light-mode color — cards, borders, muted text,
+  status badges (amber/red/green/blue), and the primary-button/selected-state pattern, which
+  inverts (a near-black button on a light page becomes a near-white button on a dark page) rather
+  than just getting a duller shade of the same dark-on-dark. `globals.css` now sets `color-scheme:
+  light dark` and defines dark values for the page background/foreground CSS variables under
+  `@media (prefers-color-scheme: dark)`. Verified headless under `colorScheme: "dark"` by checking
+  actual rendered contrast ratios (via an in-page canvas color read, needed because Tailwind v4's
+  computed colors don't always serialize as plain `rgb()`) across the tab bar, page headings, the
+  Collaborators and Plan tabs, the primary button, and the separate RSVP page.
+
 ## What's next
 
 **TS-4 is now fully built** — signup/login, per-owner wedding creation, full cross-wedding data

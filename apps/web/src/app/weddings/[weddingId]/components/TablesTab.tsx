@@ -334,7 +334,7 @@ export function TablesTab({
     }
   }
 
-  if (loading) return <p className="text-sm text-neutral-500">Loading tables...</p>;
+  if (loading) return <p className="text-sm text-neutral-500 dark:text-neutral-400">Loading tables...</p>;
 
   const totalCapacity = tables.reduce((sum, t) => sum + t.capacity, 0);
   const attendingHeadcount = guests
@@ -346,7 +346,7 @@ export function TablesTab({
   return (
     <div>
       {!canEdit && (
-        <p className="mb-4 rounded-md bg-neutral-100 px-3 py-2 text-sm text-neutral-600">
+        <p className="mb-4 rounded-md bg-neutral-100 dark:bg-neutral-800 px-3 py-2 text-sm text-neutral-600 dark:text-neutral-300">
           You have view-only access to this wedding's tables — adding, editing, and moving tables
           is turned off.
         </p>
@@ -356,7 +356,7 @@ export function TablesTab({
       <h2 className="mb-3 text-lg font-medium">Add a table</h2>
       <form
         onSubmit={onAdd}
-        className="mb-6 grid grid-cols-1 gap-3 rounded-lg border border-neutral-200 p-4 sm:grid-cols-2"
+        className="mb-6 grid grid-cols-1 gap-3 rounded-lg border border-neutral-200 dark:border-neutral-700 p-4 sm:grid-cols-2"
       >
         <div>
           <label htmlFor="table-name" className="mb-1 block text-sm font-medium">
@@ -364,7 +364,7 @@ export function TablesTab({
           </label>
           <input
             id="table-name"
-            className="w-full rounded-md border border-neutral-300 px-3 py-2 text-sm"
+            className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
             placeholder="Table 1"
             value={label}
             onChange={(e) => setLabel(e.target.value)}
@@ -380,7 +380,7 @@ export function TablesTab({
             type="number"
             min={1}
             max={50}
-            className="w-full rounded-md border border-neutral-300 px-3 py-2 text-sm"
+            className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
             value={capacity}
             onChange={(e) => setCapacity(Number(e.target.value))}
           />
@@ -391,7 +391,7 @@ export function TablesTab({
           </label>
           <select
             id="table-shape"
-            className="w-full rounded-md border border-neutral-300 px-3 py-2 text-sm"
+            className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
             value={shape}
             onChange={(e) => setShape(e.target.value as TableShape)}
           >
@@ -401,7 +401,7 @@ export function TablesTab({
               </option>
             ))}
           </select>
-          <p className="mt-1 text-xs text-neutral-500">Affects only the floor-plan drawing below.</p>
+          <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">Affects only the floor-plan drawing below.</p>
         </div>
         <div>
           <label htmlFor="table-purpose" className="mb-1 block text-sm font-medium">
@@ -409,12 +409,12 @@ export function TablesTab({
           </label>
           <input
             id="table-purpose"
-            className="w-full rounded-md border border-neutral-300 px-3 py-2 text-sm"
+            className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
             placeholder="e.g. Kids table, Head table"
             value={purpose}
             onChange={(e) => setPurpose(e.target.value)}
           />
-          <p className="mt-1 text-xs text-neutral-500">
+          <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
             Just a label on its own — pair it with a criterion below for it to actually affect
             generation.
           </p>
@@ -425,7 +425,7 @@ export function TablesTab({
           </label>
           <select
             id="table-criterion-type"
-            className="mb-2 w-full rounded-md border border-neutral-300 px-3 py-2 text-sm"
+            className="mb-2 w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
             value={criterionType}
             onChange={(e) => {
               const next = e.target.value as TablePurposeCriterionType | "";
@@ -445,7 +445,7 @@ export function TablesTab({
             <select
               id="table-criterion-value"
               aria-label="Purpose criterion value"
-              className="w-full rounded-md border border-neutral-300 px-3 py-2 text-sm"
+              className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
               value={criterionValue}
               onChange={(e) => setCriterionValue(e.target.value)}
             >
@@ -461,7 +461,7 @@ export function TablesTab({
               ))}
             </select>
           )}
-          <p className="mt-1 text-xs text-neutral-500">
+          <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
             A soft preference (FR-3.7) — favors matching guests but never blocks anyone else, and
             overflow is seated elsewhere rather than failing generation.
           </p>
@@ -494,13 +494,13 @@ export function TablesTab({
         <button
           type="submit"
           disabled={adding}
-          className="rounded-md bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-700 disabled:opacity-50 sm:col-span-2"
+          className="rounded-md bg-neutral-900 dark:bg-neutral-100 px-4 py-2 text-sm font-medium text-white dark:text-neutral-900 hover:bg-neutral-700 dark:hover:bg-neutral-300 dark:hover:bg-neutral-300 disabled:opacity-50 sm:col-span-2"
         >
           {adding ? "Adding..." : "Add table"}
         </button>
       </form>
 
-      <details className="mb-6 rounded-lg border border-neutral-200 p-4">
+      <details className="mb-6 rounded-lg border border-neutral-200 dark:border-neutral-700 p-4">
         <summary className="cursor-pointer text-sm font-medium">
           Quick-create a standard set of tables
         </summary>
@@ -514,7 +514,7 @@ export function TablesTab({
               type="number"
               min={1}
               max={100}
-              className="w-full rounded-md border border-neutral-300 px-2 py-1.5 text-sm"
+              className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1.5 text-sm"
               value={qcCount}
               onChange={(e) => setQcCount(Number(e.target.value))}
             />
@@ -528,7 +528,7 @@ export function TablesTab({
               type="number"
               min={1}
               max={50}
-              className="w-full rounded-md border border-neutral-300 px-2 py-1.5 text-sm"
+              className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1.5 text-sm"
               value={qcCapacity}
               onChange={(e) => setQcCapacity(Number(e.target.value))}
             />
@@ -539,7 +539,7 @@ export function TablesTab({
             </label>
             <select
               id="qc-shape"
-              className="w-full rounded-md border border-neutral-300 px-2 py-1.5 text-sm"
+              className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1.5 text-sm"
               value={qcShape}
               onChange={(e) => setQcShape(e.target.value as TableShape)}
             >
@@ -556,7 +556,7 @@ export function TablesTab({
             </label>
             <input
               id="qc-prefix"
-              className="w-full rounded-md border border-neutral-300 px-2 py-1.5 text-sm"
+              className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1.5 text-sm"
               value={qcPrefix}
               onChange={(e) => setQcPrefix(e.target.value)}
             />
@@ -564,7 +564,7 @@ export function TablesTab({
           <button
             type="submit"
             disabled={qcCreating}
-            className="col-span-2 rounded-md border border-neutral-300 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 disabled:opacity-50 sm:col-span-4"
+            className="col-span-2 rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800 dark:hover:bg-neutral-800 disabled:opacity-50 sm:col-span-4"
           >
             {qcCreating
               ? "Creating..."
@@ -573,11 +573,11 @@ export function TablesTab({
         </form>
       </details>
 
-      <details className="mb-6 rounded-lg border border-neutral-200 p-4">
+      <details className="mb-6 rounded-lg border border-neutral-200 dark:border-neutral-700 p-4">
         <summary className="cursor-pointer text-sm font-medium">
           Save as a reusable template
         </summary>
-        <p className="mt-2 mb-3 text-sm text-neutral-500">
+        <p className="mt-2 mb-3 text-sm text-neutral-500 dark:text-neutral-400">
           Saves this wedding&apos;s current table layout (labels, capacities, shapes, Purpose-table
           criteria) and its Side-Mixing setting as a template you can start a different wedding
           from later. Never includes any guest — a Restricted table&apos;s required-guest list
@@ -590,7 +590,7 @@ export function TablesTab({
             </label>
             <input
               id="template-name"
-              className="w-full rounded-md border border-neutral-300 px-2 py-1.5 text-sm"
+              className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1.5 text-sm"
               placeholder="e.g. Standard reception layout"
               value={templateName}
               onChange={(e) => setTemplateName(e.target.value)}
@@ -600,13 +600,13 @@ export function TablesTab({
           <button
             type="submit"
             disabled={savingTemplate}
-            className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 disabled:opacity-50"
+            className="rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800 dark:hover:bg-neutral-800 disabled:opacity-50"
           >
             {savingTemplate ? "Saving..." : "Save as template"}
           </button>
         </form>
         {savedTemplate && (
-          <p className="mt-2 text-sm text-green-700">
+          <p className="mt-2 text-sm text-green-700 dark:text-green-400">
             Saved &ldquo;{savedTemplate.name}&rdquo; ({savedTemplate.tableCount} table
             {savedTemplate.tableCount === 1 ? "" : "s"}) — pick it when creating a new wedding from
             your dashboard.
@@ -616,9 +616,9 @@ export function TablesTab({
         </>
       )}
 
-      {error && <p className="mb-4 text-sm text-red-600">{error}</p>}
+      {error && <p className="mb-4 text-sm text-red-600 dark:text-red-400">{error}</p>}
       {tableWarnings.length > 0 && (
-        <div className="mb-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+        <div className="mb-4 rounded-md border border-amber-200 bg-amber-50 dark:bg-amber-950 p-3 text-sm text-amber-800 dark:text-amber-300">
           {tableWarnings.map((w, i) => (
             <p key={i}>{w}</p>
           ))}
@@ -628,27 +628,27 @@ export function TablesTab({
       {/* FR-4.5: capacity overview -- Attending count, assigned count, remaining capacity, and
           the exact shortfall when guests exceed capacity. Not Attending guests are excluded
           (attendingHeadcount already filters to dayOfAttendance === "ATTENDING"). */}
-      <div className="mb-6 grid grid-cols-2 gap-3 rounded-lg border border-neutral-200 p-4 text-sm sm:grid-cols-4">
+      <div className="mb-6 grid grid-cols-2 gap-3 rounded-lg border border-neutral-200 dark:border-neutral-700 p-4 text-sm sm:grid-cols-4">
         <div>
-          <p className="text-neutral-500">Attending</p>
+          <p className="text-neutral-500 dark:text-neutral-400">Attending</p>
           <p className="text-lg font-medium">{attendingHeadcount}</p>
         </div>
         <div>
-          <p className="text-neutral-500">Total capacity</p>
+          <p className="text-neutral-500 dark:text-neutral-400">Total capacity</p>
           <p className="text-lg font-medium">{totalCapacity}</p>
         </div>
         <div>
-          <p className="text-neutral-500">Assigned</p>
+          <p className="text-neutral-500 dark:text-neutral-400">Assigned</p>
           <p className="text-lg font-medium">{totalAssigned}</p>
         </div>
         <div>
-          <p className="text-neutral-500">Remaining capacity</p>
-          <p className={`text-lg font-medium ${shortfall > 0 ? "text-red-600" : ""}`}>
+          <p className="text-neutral-500 dark:text-neutral-400">Remaining capacity</p>
+          <p className={`text-lg font-medium ${shortfall > 0 ? "text-red-600 dark:text-red-400" : ""}`}>
             {totalCapacity - attendingHeadcount}
           </p>
         </div>
         {shortfall > 0 && (
-          <p className="col-span-2 text-red-600 sm:col-span-4">
+          <p className="col-span-2 text-red-600 dark:text-red-400 sm:col-span-4">
             Short {shortfall} seat(s) for everyone attending — add capacity or generation will
             report the shortfall rather than overfilling a table.
           </p>
@@ -659,16 +659,16 @@ export function TablesTab({
         <h2 className="text-lg font-medium">
           Tables ({tables.length}, {totalCapacity} seats)
         </h2>
-        <div className="flex gap-1 rounded-md border border-neutral-300 p-0.5 text-sm">
+        <div className="flex gap-1 rounded-md border border-neutral-300 dark:border-neutral-600 p-0.5 text-sm">
           <button
             onClick={() => setView("list")}
-            className={`rounded px-2 py-1 ${view === "list" ? "bg-neutral-900 text-white" : "hover:bg-neutral-50"}`}
+            className={`rounded px-2 py-1 ${view === "list" ? "bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900" : "hover:bg-neutral-50 dark:hover:bg-neutral-800 dark:hover:bg-neutral-800"}`}
           >
             List
           </button>
           <button
             onClick={() => setView("floorplan")}
-            className={`rounded px-2 py-1 ${view === "floorplan" ? "bg-neutral-900 text-white" : "hover:bg-neutral-50"}`}
+            className={`rounded px-2 py-1 ${view === "floorplan" ? "bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900" : "hover:bg-neutral-50 dark:hover:bg-neutral-800 dark:hover:bg-neutral-800"}`}
           >
             Floor plan
           </button>
@@ -676,7 +676,7 @@ export function TablesTab({
       </div>
 
       {tables.length === 0 ? (
-        <p className="text-sm text-neutral-500">No tables yet — add your first one above.</p>
+        <p className="text-sm text-neutral-500 dark:text-neutral-400">No tables yet — add your first one above.</p>
       ) : view === "floorplan" ? (
         <FloorPlan
           tables={tables}
@@ -691,27 +691,27 @@ export function TablesTab({
             return (
               <li
                 key={t.id}
-                className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-neutral-200 px-4 py-3"
+                className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-neutral-200 dark:border-neutral-700 px-4 py-3"
               >
                 <div>
                   <p className="font-medium">
                     {t.label}
-                    <span className="ml-2 rounded bg-neutral-100 px-1.5 py-0.5 text-xs text-neutral-600">
+                    <span className="ml-2 rounded bg-neutral-100 dark:bg-neutral-800 px-1.5 py-0.5 text-xs text-neutral-600 dark:text-neutral-300">
                       {t.shape.charAt(0) + t.shape.slice(1).toLowerCase()}
                     </span>
                     {t.isRestricted && (
-                      <span className="ml-2 rounded bg-amber-50 px-1.5 py-0.5 text-xs text-amber-700">
+                      <span className="ml-2 rounded bg-amber-50 dark:bg-amber-950 px-1.5 py-0.5 text-xs text-amber-700 dark:text-amber-400">
                         restricted
                       </span>
                     )}
                     {t.isAccessible && (
-                      <span className="ml-2 rounded bg-blue-50 px-1.5 py-0.5 text-xs text-blue-700">
+                      <span className="ml-2 rounded bg-blue-50 dark:bg-blue-950 px-1.5 py-0.5 text-xs text-blue-700 dark:text-blue-400">
                         accessible
                       </span>
                     )}
                     {t.isLocked && (
                       <span
-                        className="ml-2 rounded bg-neutral-800 px-1.5 py-0.5 text-xs text-white"
+                        className="ml-2 rounded bg-neutral-800 dark:bg-neutral-700 px-1.5 py-0.5 text-xs text-white"
                         title="Locked — automated seating won't assign new guests here."
                       >
                         locked
@@ -731,7 +731,7 @@ export function TablesTab({
                       </span>
                     )}
                   </p>
-                  <p className="text-sm text-neutral-500">
+                  <p className="text-sm text-neutral-500 dark:text-neutral-400">
                     {assigned}/{t.capacity} seated ({t.capacity - assigned} remaining)
                     {t.purpose ? ` · ${t.purpose}` : ""}
                   </p>
@@ -758,19 +758,19 @@ export function TablesTab({
                       <button
                         onClick={() => onToggleLock(t.id, !t.isLocked)}
                         title="Locking reserves this table for its current guests during automated seating."
-                        className="rounded-md border border-neutral-300 px-2 py-1 text-sm hover:bg-neutral-50"
+                        className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800 dark:hover:bg-neutral-800"
                       >
                         {t.isLocked ? "Unlock" : "Lock"}
                       </button>
                       <button
                         onClick={() => onRemove(t.id)}
-                        className="rounded-md border border-neutral-300 px-2 py-1 text-sm text-red-600 hover:bg-red-50"
+                        className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950 dark:hover:bg-red-950"
                       >
                         Remove
                       </button>
                     </>
                   ) : (
-                    t.isAccessible && <span className="text-sm text-neutral-500">Accessible</span>
+                    t.isAccessible && <span className="text-sm text-neutral-500 dark:text-neutral-400">Accessible</span>
                   )}
                 </div>
               </li>
@@ -838,7 +838,7 @@ function FloorPlan({
 
   return (
     <div>
-      <p className="mb-2 text-sm text-neutral-500">
+      <p className="mb-2 text-sm text-neutral-500 dark:text-neutral-400">
         {canEdit
           ? "Drag a table to arrange the room. Position is saved automatically and never affects seating rules or generation."
           : "View-only — dragging tables to rearrange the room is turned off for your access level."}
@@ -848,7 +848,7 @@ function FloorPlan({
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
         style={{ width: "100%", height, maxWidth: width }}
-        className="relative overflow-hidden rounded-lg border border-neutral-200 bg-neutral-50"
+        className="relative overflow-hidden rounded-lg border border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-900"
       >
         {tables.map((t) => {
           const pos = positionFor(t);
@@ -859,18 +859,18 @@ function FloorPlan({
               key={t.id}
               onPointerDown={(e) => onPointerDown(e, t)}
               style={{ left: pos.x, top: pos.y, width: BOX_SIZE, height: BOX_SIZE }}
-              className={`absolute flex select-none flex-col items-center justify-center border-2 bg-white p-1 text-center text-xs shadow-sm ${
+              className={`absolute flex select-none flex-col items-center justify-center border-2 bg-white dark:bg-neutral-900 p-1 text-center text-xs shadow-sm ${
                 canEdit ? "cursor-grab active:cursor-grabbing" : "cursor-default"
               } ${SHAPE_STYLE[t.shape]} ${
-                over ? "border-red-400" : t.isAccessible ? "border-blue-400" : "border-neutral-300"
+                over ? "border-red-400 dark:border-red-500" : t.isAccessible ? "border-blue-400 dark:border-blue-500" : "border-neutral-300 dark:border-neutral-600"
               }`}
               title={`${t.label} — ${t.capacity} seats${t.purpose ? ` (${t.purpose})` : ""}`}
             >
               <span className="line-clamp-2 font-medium leading-tight">{t.label}</span>
-              <span className="text-neutral-500">
+              <span className="text-neutral-500 dark:text-neutral-400">
                 {assigned}/{t.capacity}
               </span>
-              {t.isRestricted && <span className="text-[10px] text-amber-700">restricted</span>}
+              {t.isRestricted && <span className="text-[10px] text-amber-700 dark:text-amber-400">restricted</span>}
             </div>
           );
         })}

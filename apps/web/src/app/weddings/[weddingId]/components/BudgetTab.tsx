@@ -209,14 +209,14 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
     }
   }
 
-  if (loading) return <p className="text-sm text-neutral-500">Loading budget & vendors...</p>;
+  if (loading) return <p className="text-sm text-neutral-500 dark:text-neutral-400">Loading budget & vendors...</p>;
 
   const overBudget = summary?.remainingCents !== null && summary?.remainingCents !== undefined && summary.remainingCents < 0;
 
   return (
     <div>
       {!canEdit && (
-        <p className="mb-4 rounded-md bg-neutral-100 px-3 py-2 text-sm text-neutral-600">
+        <p className="mb-4 rounded-md bg-neutral-100 dark:bg-neutral-800 px-3 py-2 text-sm text-neutral-600 dark:text-neutral-300">
           You have view-only access to this wedding's budget — adding, editing, and removing
           vendors is turned off.
         </p>
@@ -225,7 +225,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
       {/* FR-15.2: the overall budget figure, plus a running total/remaining as vendor costs are
           recorded. Deliberately never a real financial transaction or payment -- these are
           planner-entered figures only (see FR-15.3's own scope note). */}
-      <div className="mb-6 rounded-lg border border-neutral-200 p-4">
+      <div className="mb-6 rounded-lg border border-neutral-200 dark:border-neutral-700 p-4">
         <h2 className="mb-3 text-lg font-medium">Overall budget</h2>
         {canEdit && (
           <form onSubmit={onSaveBudget} className="mb-3 flex flex-wrap items-end gap-2">
@@ -239,7 +239,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
                 min={0}
                 step="0.01"
                 placeholder="e.g. 30000"
-                className="w-40 rounded-md border border-neutral-300 px-2 py-1.5 text-sm"
+                className="w-40 rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1.5 text-sm"
                 value={budgetInput}
                 onChange={(e) => setBudgetInput(e.target.value)}
               />
@@ -247,7 +247,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
             <button
               type="submit"
               disabled={savingBudget}
-              className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 disabled:opacity-50"
+              className="rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800 dark:hover:bg-neutral-800 disabled:opacity-50"
             >
               {savingBudget ? "Saving..." : "Save budget"}
             </button>
@@ -255,7 +255,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
         )}
         <div className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-3">
           <div>
-            <p className="text-neutral-500">Budget</p>
+            <p className="text-neutral-500 dark:text-neutral-400">Budget</p>
             <p className="text-lg font-medium">
               {summary?.budgetCents === null || summary?.budgetCents === undefined
                 ? "Not set"
@@ -263,12 +263,12 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
             </p>
           </div>
           <div>
-            <p className="text-neutral-500">Recorded so far</p>
+            <p className="text-neutral-500 dark:text-neutral-400">Recorded so far</p>
             <p className="text-lg font-medium">{formatCents(summary?.totalCostCents ?? 0)}</p>
           </div>
           <div>
-            <p className="text-neutral-500">Remaining</p>
-            <p className={`text-lg font-medium ${overBudget ? "text-red-600" : ""}`}>
+            <p className="text-neutral-500 dark:text-neutral-400">Remaining</p>
+            <p className={`text-lg font-medium ${overBudget ? "text-red-600 dark:text-red-400" : ""}`}>
               {summary?.remainingCents === null || summary?.remainingCents === undefined
                 ? "—"
                 : formatCents(summary.remainingCents)}
@@ -276,7 +276,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
           </div>
         </div>
         {overBudget && (
-          <p className="mt-2 text-sm text-red-600">
+          <p className="mt-2 text-sm text-red-600 dark:text-red-400">
             Recorded vendor costs are over budget by {formatCents(Math.abs(summary!.remainingCents!))}.
           </p>
         )}
@@ -287,7 +287,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
           <h2 className="mb-3 text-lg font-medium">Add a vendor</h2>
           <form
             onSubmit={onAdd}
-            className="mb-8 grid grid-cols-1 gap-3 rounded-lg border border-neutral-200 p-4 sm:grid-cols-2"
+            className="mb-8 grid grid-cols-1 gap-3 rounded-lg border border-neutral-200 dark:border-neutral-700 p-4 sm:grid-cols-2"
           >
             <div>
               <label htmlFor="vendor-name" className="mb-1 block text-sm font-medium">
@@ -295,7 +295,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
               </label>
               <input
                 id="vendor-name"
-                className="w-full rounded-md border border-neutral-300 px-3 py-2 text-sm"
+                className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 required
@@ -307,7 +307,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
               </label>
               <select
                 id="vendor-category"
-                className="mb-2 w-full rounded-md border border-neutral-300 px-3 py-2 text-sm"
+                className="mb-2 w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
                 value={category}
                 onChange={(e) => setCategory(e.target.value as VendorCategory)}
               >
@@ -321,7 +321,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
                 <input
                   aria-label="Category label"
                   placeholder="e.g. Officiant"
-                  className="w-full rounded-md border border-neutral-300 px-3 py-2 text-sm"
+                  className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
                   value={categoryOther}
                   onChange={(e) => setCategoryOther(e.target.value)}
                   required
@@ -334,7 +334,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
               </label>
               <input
                 id="vendor-contact-name"
-                className="w-full rounded-md border border-neutral-300 px-3 py-2 text-sm"
+                className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
                 value={contactName}
                 onChange={(e) => setContactName(e.target.value)}
               />
@@ -348,7 +348,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
                 type="number"
                 min={0}
                 step="0.01"
-                className="w-full rounded-md border border-neutral-300 px-3 py-2 text-sm"
+                className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
                 value={cost}
                 onChange={(e) => setCost(e.target.value)}
               />
@@ -360,7 +360,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
               <input
                 id="vendor-contact-email"
                 type="email"
-                className="w-full rounded-md border border-neutral-300 px-3 py-2 text-sm"
+                className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
                 value={contactEmail}
                 onChange={(e) => setContactEmail(e.target.value)}
               />
@@ -371,7 +371,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
               </label>
               <input
                 id="vendor-contact-phone"
-                className="w-full rounded-md border border-neutral-300 px-3 py-2 text-sm"
+                className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
                 value={contactPhone}
                 onChange={(e) => setContactPhone(e.target.value)}
               />
@@ -384,7 +384,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
                 id="vendor-notes"
                 rows={2}
                 placeholder="e.g. 50% deposit due 30 days before, final due day-of"
-                className="w-full rounded-md border border-neutral-300 px-3 py-2 text-sm"
+                className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
                 value={contractNotes}
                 onChange={(e) => setContractNotes(e.target.value)}
               />
@@ -392,7 +392,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
             <button
               type="submit"
               disabled={adding}
-              className="rounded-md bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-700 disabled:opacity-50 sm:col-span-2"
+              className="rounded-md bg-neutral-900 dark:bg-neutral-100 px-4 py-2 text-sm font-medium text-white dark:text-neutral-900 hover:bg-neutral-700 dark:hover:bg-neutral-300 dark:hover:bg-neutral-300 disabled:opacity-50 sm:col-span-2"
             >
               {adding ? "Adding..." : "Add vendor"}
             </button>
@@ -400,27 +400,27 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
         </>
       )}
 
-      {error && <p className="mb-4 text-sm text-red-600">{error}</p>}
+      {error && <p className="mb-4 text-sm text-red-600 dark:text-red-400">{error}</p>}
 
       <h2 className="mb-3 text-lg font-medium">Vendors ({vendors.length})</h2>
       {vendors.length === 0 ? (
-        <p className="text-sm text-neutral-500">No vendors recorded yet.</p>
+        <p className="text-sm text-neutral-500 dark:text-neutral-400">No vendors recorded yet.</p>
       ) : (
         <ul className="flex flex-col gap-2">
           {vendors.map((v) => (
-            <li key={v.id} className="rounded-lg border border-neutral-200 px-4 py-3">
+            <li key={v.id} className="rounded-lg border border-neutral-200 dark:border-neutral-700 px-4 py-3">
               {editingId === v.id ? (
                 <div className="flex flex-col gap-2">
                   <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                     <input
                       aria-label="Edit vendor name"
-                      className="rounded-md border border-neutral-300 px-2 py-1 text-sm"
+                      className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm"
                       value={editVendor.name ?? ""}
                       onChange={(e) => setEditVendor({ ...editVendor, name: e.target.value })}
                     />
                     <select
                       aria-label="Edit category"
-                      className="rounded-md border border-neutral-300 px-2 py-1 text-sm"
+                      className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm"
                       value={editVendor.category}
                       onChange={(e) => setEditVendor({ ...editVendor, category: e.target.value as VendorCategory })}
                     >
@@ -433,7 +433,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
                     {editVendor.category === "OTHER" && (
                       <input
                         aria-label="Edit category label"
-                        className="rounded-md border border-neutral-300 px-2 py-1 text-sm"
+                        className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm"
                         value={editVendor.categoryOther ?? ""}
                         onChange={(e) => setEditVendor({ ...editVendor, categoryOther: e.target.value })}
                       />
@@ -441,21 +441,21 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
                     <input
                       aria-label="Edit contact name"
                       placeholder="Contact name"
-                      className="rounded-md border border-neutral-300 px-2 py-1 text-sm"
+                      className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm"
                       value={editVendor.contactName ?? ""}
                       onChange={(e) => setEditVendor({ ...editVendor, contactName: e.target.value })}
                     />
                     <input
                       aria-label="Edit contact email"
                       placeholder="Contact email"
-                      className="rounded-md border border-neutral-300 px-2 py-1 text-sm"
+                      className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm"
                       value={editVendor.contactEmail ?? ""}
                       onChange={(e) => setEditVendor({ ...editVendor, contactEmail: e.target.value })}
                     />
                     <input
                       aria-label="Edit contact phone"
                       placeholder="Contact phone"
-                      className="rounded-md border border-neutral-300 px-2 py-1 text-sm"
+                      className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm"
                       value={editVendor.contactPhone ?? ""}
                       onChange={(e) => setEditVendor({ ...editVendor, contactPhone: e.target.value })}
                     />
@@ -465,7 +465,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
                       min={0}
                       step="0.01"
                       placeholder="Cost ($)"
-                      className="rounded-md border border-neutral-300 px-2 py-1 text-sm"
+                      className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm"
                       value={centsToDollarsString(editVendor.costCents ?? null)}
                       onChange={(e) =>
                         setEditVendor({ ...editVendor, costCents: dollarsStringToCents(e.target.value) })
@@ -475,7 +475,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
                   <textarea
                     aria-label="Edit contract notes"
                     rows={2}
-                    className="w-full rounded-md border border-neutral-300 px-2 py-1 text-sm"
+                    className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm"
                     value={editVendor.contractNotes ?? ""}
                     onChange={(e) => setEditVendor({ ...editVendor, contractNotes: e.target.value })}
                   />
@@ -483,13 +483,13 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
                     <button
                       onClick={() => onSaveEdit(v.id)}
                       disabled={saving}
-                      className="rounded-md bg-neutral-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-neutral-700 disabled:opacity-50"
+                      className="rounded-md bg-neutral-900 dark:bg-neutral-100 px-3 py-1.5 text-sm font-medium text-white dark:text-neutral-900 hover:bg-neutral-700 dark:hover:bg-neutral-300 dark:hover:bg-neutral-300 disabled:opacity-50"
                     >
                       Save
                     </button>
                     <button
                       onClick={() => setEditingId(null)}
-                      className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm hover:bg-neutral-50"
+                      className="rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800 dark:hover:bg-neutral-800"
                     >
                       Cancel
                     </button>
@@ -500,14 +500,14 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
                   <div>
                     <p className="font-medium">
                       {v.name}
-                      <span className="ml-2 rounded bg-neutral-100 px-1.5 py-0.5 text-xs text-neutral-600">
+                      <span className="ml-2 rounded bg-neutral-100 dark:bg-neutral-800 px-1.5 py-0.5 text-xs text-neutral-600 dark:text-neutral-300">
                         {v.category === "OTHER" && v.categoryOther ? v.categoryOther : CATEGORY_LABEL[v.category]}
                       </span>
                     </p>
-                    <p className="text-sm text-neutral-500">
+                    <p className="text-sm text-neutral-500 dark:text-neutral-400">
                       {[v.contactName, v.contactEmail, v.contactPhone].filter(Boolean).join(" · ") || "No contact info"}
                     </p>
-                    {v.contractNotes && <p className="mt-1 text-sm text-neutral-500">{v.contractNotes}</p>}
+                    {v.contractNotes && <p className="mt-1 text-sm text-neutral-500 dark:text-neutral-400">{v.contractNotes}</p>}
                   </div>
                   <div className="flex items-center gap-2">
                     <span className="font-medium">{v.costCents === null ? "No cost set" : formatCents(v.costCents)}</span>
@@ -515,13 +515,13 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
                       <>
                         <button
                           onClick={() => startEdit(v)}
-                          className="rounded-md border border-neutral-300 px-2 py-1 text-sm hover:bg-neutral-50"
+                          className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800 dark:hover:bg-neutral-800"
                         >
                           Edit
                         </button>
                         <button
                           onClick={() => onRemove(v.id)}
-                          className="rounded-md border border-neutral-300 px-2 py-1 text-sm text-red-600 hover:bg-red-50"
+                          className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950 dark:hover:bg-red-950"
                         >
                           Remove
                         </button>
