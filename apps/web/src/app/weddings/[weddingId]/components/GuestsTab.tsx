@@ -479,7 +479,7 @@ export function GuestsTab({
   return (
     <div>
       {!canEdit && (
-        <p className="mb-4 rounded-md bg-neutral-100 px-3 py-2 text-sm text-neutral-600">
+        <p className="mb-4 rounded-md bg-neutral-100 dark:bg-neutral-800 px-3 py-2 text-sm text-neutral-600 dark:text-neutral-300">
           You have view-only access to this wedding's guest list — adding, importing, and editing
           guests is turned off.
         </p>
@@ -489,7 +489,7 @@ export function GuestsTab({
       <h2 className="mb-3 text-lg font-medium">Add a guest</h2>
       <form
         onSubmit={onAddGuest}
-        className="mb-8 grid grid-cols-1 gap-3 rounded-lg border border-neutral-200 p-4 sm:grid-cols-2"
+        className="mb-8 grid grid-cols-1 gap-3 rounded-lg border border-neutral-200 dark:border-neutral-700 p-4 sm:grid-cols-2"
       >
         <div>
           <label htmlFor="guest-first-name" className="mb-1 block text-sm font-medium">
@@ -497,7 +497,7 @@ export function GuestsTab({
           </label>
           <input
             id="guest-first-name"
-            className="w-full rounded-md border border-neutral-300 px-3 py-2 text-sm"
+            className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
             value={firstName}
             onChange={(e) => setFirstName(e.target.value)}
             required
@@ -509,7 +509,7 @@ export function GuestsTab({
           </label>
           <input
             id="guest-last-name"
-            className="w-full rounded-md border border-neutral-300 px-3 py-2 text-sm"
+            className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
             value={lastName}
             onChange={(e) => setLastName(e.target.value)}
             required
@@ -521,7 +521,7 @@ export function GuestsTab({
           </label>
           <input
             id="guest-party-name"
-            className="w-full rounded-md border border-neutral-300 px-3 py-2 text-sm"
+            className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
             placeholder="e.g. The Carter Family"
             value={partyName}
             onChange={(e) => setPartyName(e.target.value)}
@@ -534,7 +534,7 @@ export function GuestsTab({
           <input
             id="guest-email"
             type="email"
-            className="w-full rounded-md border border-neutral-300 px-3 py-2 text-sm"
+            className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
             placeholder="Optional -- lets you send them their own RSVP link"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
@@ -549,7 +549,7 @@ export function GuestsTab({
             type="number"
             min={1}
             max={20}
-            className="w-full rounded-md border border-neutral-300 px-3 py-2 text-sm"
+            className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
             value={headcount}
             onChange={(e) => setHeadcount(Number(e.target.value))}
           />
@@ -560,7 +560,7 @@ export function GuestsTab({
           </label>
           <select
             id="guest-tier"
-            className="w-full rounded-md border border-neutral-300 px-3 py-2 text-sm"
+            className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
             value={tier}
             onChange={(e) => setTier(e.target.value as GuestTier)}
           >
@@ -577,7 +577,7 @@ export function GuestsTab({
           </label>
           <select
             id="guest-rsvp"
-            className="w-full rounded-md border border-neutral-300 px-3 py-2 text-sm"
+            className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
             value={rsvpStatus}
             onChange={(e) => setRsvpStatus(e.target.value as RsvpStatus)}
           >
@@ -594,7 +594,7 @@ export function GuestsTab({
           </label>
           <select
             id="guest-side"
-            className="w-full rounded-md border border-neutral-300 px-3 py-2 text-sm"
+            className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
             value={side}
             onChange={(e) => setSide(e.target.value as GuestSide)}
           >
@@ -611,7 +611,7 @@ export function GuestsTab({
           </label>
           <select
             id="guest-age-category"
-            className="w-full rounded-md border border-neutral-300 px-3 py-2 text-sm"
+            className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
             value={ageCategory}
             onChange={(e) => setAgeCategory(e.target.value as AgeCategory)}
           >
@@ -621,7 +621,7 @@ export function GuestsTab({
               </option>
             ))}
           </select>
-          <p className="mt-1 text-xs text-neutral-500">
+          <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
             Only used as a soft preference for a Purpose table&apos;s Age Category criterion
             (e.g. a &quot;Kids&apos; Table&quot;).
           </p>
@@ -637,19 +637,19 @@ export function GuestsTab({
         <button
           type="submit"
           disabled={adding}
-          className="rounded-md bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-700 disabled:opacity-50 sm:col-span-2"
+          className="rounded-md bg-neutral-900 dark:bg-neutral-100 px-4 py-2 text-sm font-medium text-white dark:text-neutral-900 hover:bg-neutral-700 dark:hover:bg-neutral-300 dark:hover:bg-neutral-300 disabled:opacity-50 sm:col-span-2"
         >
           {adding ? "Adding..." : "Add guest"}
         </button>
       </form>
 
-      {error && <p className="mb-4 text-sm text-red-600">{error}</p>}
+      {error && <p className="mb-4 text-sm text-red-600 dark:text-red-400">{error}</p>}
 
-      <div className="mb-8 rounded-lg border border-neutral-200 p-4">
+      <div className="mb-8 rounded-lg border border-neutral-200 dark:border-neutral-700 p-4">
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
           <h2 className="text-lg font-medium">Bulk import guests (CSV)</h2>
         </div>
-        <p className="mb-3 text-sm text-neutral-500">
+        <p className="mb-3 text-sm text-neutral-500 dark:text-neutral-400">
           Add many guests at once, or update existing ones. Map a &quot;Guest ID&quot; column
           (from a prior export) to update those exact guests instead of creating new ones — a
           blank cell leaves that guest&apos;s existing value alone; type <code>CLEAR</code> in a
@@ -661,13 +661,13 @@ export function GuestsTab({
           <button
             type="button"
             onClick={() => setShowImportExample((v) => !v)}
-            className="text-sm text-neutral-600 underline hover:text-neutral-900"
+            className="text-sm text-neutral-600 dark:text-neutral-300 underline hover:text-neutral-900 dark:hover:text-neutral-100 dark:hover:text-neutral-100"
           >
             {showImportExample ? "Hide example" : "See an example"}
           </button>
           {showImportExample && (
-            <div className="mt-2 rounded-md border border-neutral-200 bg-neutral-50 p-3">
-              <p className="mb-2 text-xs text-neutral-500">
+            <div className="mt-2 rounded-md border border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-900 p-3">
+              <p className="mb-2 text-xs text-neutral-500 dark:text-neutral-400">
                 Column order and header names don&apos;t have to match this exactly — you&apos;ll
                 map each of your file&apos;s columns to a guest field below once it&apos;s chosen.
                 This is just one example of a clean file:
@@ -675,7 +675,7 @@ export function GuestsTab({
               <div className="overflow-x-auto">
                 <table className="min-w-full text-xs">
                   <thead>
-                    <tr className="text-left text-neutral-500">
+                    <tr className="text-left text-neutral-500 dark:text-neutral-400">
                       {IMPORT_EXAMPLE.headers.map((h) => (
                         <th key={h} className="whitespace-nowrap pb-1 pr-3 font-medium">
                           {h}
@@ -685,10 +685,10 @@ export function GuestsTab({
                   </thead>
                   <tbody>
                     {IMPORT_EXAMPLE.rows.map((row, i) => (
-                      <tr key={i} className="border-t border-neutral-200">
+                      <tr key={i} className="border-t border-neutral-200 dark:border-neutral-700">
                         {row.map((cell, j) => (
                           <td key={j} className="whitespace-nowrap py-1 pr-3">
-                            {cell || <span className="text-neutral-400">—</span>}
+                            {cell || <span className="text-neutral-400 dark:text-neutral-500">—</span>}
                           </td>
                         ))}
                       </tr>
@@ -696,7 +696,7 @@ export function GuestsTab({
                   </tbody>
                 </table>
               </div>
-              <p className="mt-2 text-xs text-neutral-500">
+              <p className="mt-2 text-xs text-neutral-500 dark:text-neutral-400">
                 Accepted values (not case-sensitive) — Tier: VIP, Family, Friend, Plus One, Other.
                 RSVP status: Pending, Confirmed, Declined. Accessible table?: Yes/No. Attendance:
                 Attending, Not Attending. Side: {sideLabel1}, {sideLabel2}, or Both. Age category:
@@ -705,7 +705,7 @@ export function GuestsTab({
               <button
                 type="button"
                 onClick={onDownloadImportExample}
-                className="mt-2 rounded-md border border-neutral-300 px-2 py-1 text-xs font-medium hover:bg-white"
+                className="mt-2 rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-xs font-medium hover:bg-white"
               >
                 Download example CSV
               </button>
@@ -729,12 +729,12 @@ export function GuestsTab({
             <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
               {IMPORT_FIELDS.map(({ field, label, required }) => (
                 <div key={field}>
-                  <label className="mb-1 block text-xs font-medium text-neutral-600">
+                  <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-300">
                     {label}
-                    {required && <span className="text-red-600"> *</span>}
+                    {required && <span className="text-red-600 dark:text-red-400"> *</span>}
                   </label>
                   <select
-                    className="w-full rounded-md border border-neutral-300 px-2 py-1.5 text-sm"
+                    className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1.5 text-sm"
                     value={mapping[field] ?? ""}
                     onChange={(e) => onMappingChange(field, e.target.value)}
                   >
@@ -752,13 +752,13 @@ export function GuestsTab({
               <button
                 onClick={onRequestPreview}
                 disabled={previewing || !mapping.firstName || !mapping.lastName}
-                className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 disabled:opacity-50"
+                className="rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800 dark:hover:bg-neutral-800 disabled:opacity-50"
               >
                 {previewing ? "Checking..." : "Preview import"}
               </button>
               <button
                 onClick={resetImport}
-                className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm hover:bg-neutral-50"
+                className="rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800 dark:hover:bg-neutral-800"
               >
                 Cancel
               </button>
@@ -766,15 +766,15 @@ export function GuestsTab({
           </div>
         )}
 
-        {importError && <p className="mb-3 text-sm text-red-600">{importError}</p>}
+        {importError && <p className="mb-3 text-sm text-red-600 dark:text-red-400">{importError}</p>}
         {importResult && (
           <div className="mb-3">
-            <p className="text-sm text-green-700">
+            <p className="text-sm text-green-700 dark:text-green-400">
               Import complete: {importResult.createdCount} guest(s) added, {importResult.updatedCount}{" "}
               updated.
             </p>
             {importResult.warnings.length > 0 && (
-              <ul className="mt-1 list-inside list-disc text-sm text-amber-700">
+              <ul className="mt-1 list-inside list-disc text-sm text-amber-700 dark:text-amber-400">
                 {importResult.warnings.map((w, i) => (
                   <li key={i}>{w}</li>
                 ))}
@@ -791,28 +791,28 @@ export function GuestsTab({
               <strong>{importPreview.summary.errorCount}</strong> with errors (of{" "}
               {importPreview.summary.totalRows} row(s)).
             </p>
-            <ul className="mb-3 max-h-64 overflow-y-auto rounded-md border border-neutral-200">
+            <ul className="mb-3 max-h-64 overflow-y-auto rounded-md border border-neutral-200 dark:border-neutral-700">
               {importPreview.rows.map((r) => (
                 <li
                   key={r.rowNumber}
-                  className={`flex flex-wrap items-center gap-2 border-b border-neutral-100 px-2 py-1.5 text-sm last:border-b-0 ${
-                    r.kind === "error" ? "bg-red-50" : r.kind === "update" ? "bg-blue-50" : ""
+                  className={`flex flex-wrap items-center gap-2 border-b border-neutral-100 dark:border-neutral-800 px-2 py-1.5 text-sm last:border-b-0 ${
+                    r.kind === "error" ? "bg-red-50 dark:bg-red-950" : r.kind === "update" ? "bg-blue-50 dark:bg-blue-950" : ""
                   }`}
                 >
-                  <span className="w-12 shrink-0 text-neutral-400">Row {r.rowNumber}</span>
+                  <span className="w-12 shrink-0 text-neutral-400 dark:text-neutral-500">Row {r.rowNumber}</span>
                   <span
                     className={`shrink-0 rounded px-1.5 py-0.5 text-xs font-medium ${
                       r.kind === "error"
-                        ? "bg-red-100 text-red-700"
+                        ? "bg-red-100 dark:bg-red-900 text-red-700 dark:text-red-400"
                         : r.kind === "update"
-                          ? "bg-blue-100 text-blue-700"
-                          : "bg-neutral-100 text-neutral-700"
+                          ? "bg-blue-100 text-blue-700 dark:text-blue-400"
+                          : "bg-neutral-100 dark:bg-neutral-800 text-neutral-700 dark:text-neutral-300"
                     }`}
                   >
                     {r.kind}
                   </span>
                   {r.kind === "error" ? (
-                    <span className="text-red-700">{r.reason}</span>
+                    <span className="text-red-700 dark:text-red-400">{r.reason}</span>
                   ) : (
                     <span>
                       {r.preview.firstName} {r.preview.lastName}
@@ -825,14 +825,14 @@ export function GuestsTab({
             <button
               onClick={onConfirmImport}
               disabled={committing || importPreview.summary.errorCount > 0 || importPreview.summary.totalRows === 0}
-              className="rounded-md bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-700 disabled:opacity-50"
+              className="rounded-md bg-neutral-900 dark:bg-neutral-100 px-4 py-2 text-sm font-medium text-white dark:text-neutral-900 hover:bg-neutral-700 dark:hover:bg-neutral-300 dark:hover:bg-neutral-300 disabled:opacity-50"
             >
               {committing
                 ? "Importing..."
                 : `Confirm import (${importPreview.summary.newCount + importPreview.summary.updatingCount} guest(s))`}
             </button>
             {importPreview.summary.errorCount > 0 && (
-              <p className="mt-2 text-sm text-red-600">
+              <p className="mt-2 text-sm text-red-600 dark:text-red-400">
                 Fix the error row(s) above (or unmap the offending column) before importing —
                 nothing saves until every row is clean.
               </p>
@@ -849,19 +849,19 @@ export function GuestsTab({
         </h2>
         <a
           href={`/api/v1/weddings/${weddingId}/guests/export`}
-          className="rounded-md border border-neutral-300 min-h-11 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50"
+          className="rounded-md border border-neutral-300 dark:border-neutral-600 min-h-11 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800 dark:hover:bg-neutral-800"
         >
           Export guest list (CSV)
         </a>
       </div>
       {guests.length === 0 ? (
-        <p className="text-sm text-neutral-500">No guests yet — add your first one above.</p>
+        <p className="text-sm text-neutral-500 dark:text-neutral-400">No guests yet — add your first one above.</p>
       ) : (
         <ul className="flex flex-col gap-2">
           {guests.map((g) => (
             <li
               key={g.id}
-              className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-neutral-200 px-4 py-3"
+              className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-neutral-200 dark:border-neutral-700 px-4 py-3"
             >
               <div>
                 <div className="flex flex-wrap items-center font-medium">
@@ -869,13 +869,13 @@ export function GuestsTab({
                     <span className="flex items-center gap-1">
                       <input
                         aria-label={`First name for ${g.firstName} ${g.lastName}`}
-                        className="w-24 rounded-md border border-transparent px-1 py-0.5 font-medium hover:border-neutral-200 focus:border-neutral-300 focus:outline-none"
+                        className="w-24 rounded-md border border-transparent px-1 py-0.5 font-medium hover:border-neutral-200 dark:hover:border-neutral-700 dark:hover:border-neutral-700 focus:border-neutral-300 dark:focus:border-neutral-600 dark:focus:border-neutral-600 focus:outline-none"
                         defaultValue={g.firstName}
                         onBlur={(e) => onUpdateName(g.id, "firstName", e.target.value)}
                       />
                       <input
                         aria-label={`Last name for ${g.firstName} ${g.lastName}`}
-                        className="w-28 rounded-md border border-transparent px-1 py-0.5 font-medium hover:border-neutral-200 focus:border-neutral-300 focus:outline-none"
+                        className="w-28 rounded-md border border-transparent px-1 py-0.5 font-medium hover:border-neutral-200 dark:hover:border-neutral-700 dark:hover:border-neutral-700 focus:border-neutral-300 dark:focus:border-neutral-600 dark:focus:border-neutral-600 focus:outline-none"
                         defaultValue={g.lastName}
                         onBlur={(e) => onUpdateName(g.id, "lastName", e.target.value)}
                       />
@@ -887,13 +887,13 @@ export function GuestsTab({
                   )}
                   {g.headcount > 1 ? ` (+${g.headcount - 1})` : ""}
                   {g.requiresAccessibleTable && (
-                    <span className="ml-2 rounded bg-blue-50 px-1.5 py-0.5 text-xs text-blue-700">
+                    <span className="ml-2 rounded bg-blue-50 dark:bg-blue-950 px-1.5 py-0.5 text-xs text-blue-700 dark:text-blue-400">
                       accessible table
                     </span>
                   )}
                   {g.isLocked && (
                     <span
-                      className="ml-2 rounded bg-neutral-800 px-1.5 py-0.5 text-xs text-white"
+                      className="ml-2 rounded bg-neutral-800 dark:bg-neutral-700 px-1.5 py-0.5 text-xs text-white"
                       title="Locked — automated seating won't move this guest to a different table."
                     >
                       locked
@@ -901,7 +901,7 @@ export function GuestsTab({
                   )}
                   {g.dayOfAttendance === "NOT_ATTENDING" && (
                     <span
-                      className="ml-2 rounded bg-red-50 px-1.5 py-0.5 text-xs text-red-700"
+                      className="ml-2 rounded bg-red-50 dark:bg-red-950 px-1.5 py-0.5 text-xs text-red-700 dark:text-red-400"
                       title="Marked not attending in Day-of mode — their seat has been freed."
                     >
                       not attending
@@ -911,7 +911,7 @@ export function GuestsTab({
                       planner edit -- so this badge means exactly "responded via their link". */}
                   <span
                     className={`ml-2 rounded px-1.5 py-0.5 text-xs ${
-                      g.rsvpRespondedAt ? "bg-green-50 text-green-700" : "bg-neutral-100 text-neutral-500"
+                      g.rsvpRespondedAt ? "bg-green-50 dark:bg-green-950 text-green-700 dark:text-green-400" : "bg-neutral-100 dark:bg-neutral-800 text-neutral-500 dark:text-neutral-400"
                     }`}
                     title={
                       g.rsvpRespondedAt
@@ -922,7 +922,7 @@ export function GuestsTab({
                     {g.rsvpRespondedAt ? "responded" : "no self-RSVP yet"}
                   </span>
                 </div>
-                <p className="text-sm text-neutral-500">
+                <p className="text-sm text-neutral-500 dark:text-neutral-400">
                   {g.partyName ? `${g.partyName} · ` : ""}
                   {g.tier.replace("_", " ")}
                   {g.side !== "BOTH" ? ` · ${sideLabelFor(g.side)}` : ""}
@@ -933,7 +933,7 @@ export function GuestsTab({
                   <input
                     type="email"
                     aria-label={`Email for ${g.firstName} ${g.lastName}`}
-                    className="mt-1 w-56 rounded-md border border-neutral-200 px-2 py-1 text-xs"
+                    className="mt-1 w-56 rounded-md border border-neutral-200 dark:border-neutral-700 px-2 py-1 text-xs"
                     placeholder="Email (for their RSVP link)"
                     defaultValue={g.email ?? ""}
                     onBlur={(e) => {
@@ -941,10 +941,10 @@ export function GuestsTab({
                     }}
                   />
                 ) : (
-                  g.email && <p className="mt-1 text-xs text-neutral-400">{g.email}</p>
+                  g.email && <p className="mt-1 text-xs text-neutral-400 dark:text-neutral-500">{g.email}</p>
                 )}
                 {rsvpLinkResult[g.id] && (
-                  <p className="mt-1 text-xs text-neutral-500">{rsvpLinkResult[g.id]}</p>
+                  <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">{rsvpLinkResult[g.id]}</p>
                 )}
               </div>
               <div className="flex items-center gap-2">
@@ -952,7 +952,7 @@ export function GuestsTab({
                   <>
                     <select
                       aria-label={`Side for ${g.firstName} ${g.lastName}`}
-                      className="rounded-md border border-neutral-300 px-2 py-1 text-sm"
+                      className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm"
                       value={g.side}
                       onChange={(e) => onUpdateSide(g.id, e.target.value as GuestSide)}
                     >
@@ -964,7 +964,7 @@ export function GuestsTab({
                     </select>
                     <select
                       aria-label={`RSVP status for ${g.firstName} ${g.lastName}`}
-                      className="rounded-md border border-neutral-300 px-2 py-1 text-sm"
+                      className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm"
                       value={g.rsvpStatus}
                       onChange={(e) => onUpdateRsvp(g.id, e.target.value as RsvpStatus)}
                     >
@@ -977,7 +977,7 @@ export function GuestsTab({
                     <button
                       onClick={() => onToggleLock(g.id, !g.isLocked)}
                       title="Locking keeps this guest at their current table when a new plan is generated."
-                      className="rounded-md border border-neutral-300 px-2 py-1 text-sm hover:bg-neutral-50"
+                      className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800 dark:hover:bg-neutral-800"
                     >
                       {g.isLocked ? "Unlock" : "Lock"}
                     </button>
@@ -988,7 +988,7 @@ export function GuestsTab({
                       onClick={() => onRsvpLink(g.id, g.email, false)}
                       disabled={rsvpLinkBusy === g.id}
                       title="Copies this guest's RSVP link, and emails it to them if they have an address on file."
-                      className="rounded-md border border-neutral-300 px-2 py-1 text-sm hover:bg-neutral-50 disabled:opacity-50"
+                      className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800 dark:hover:bg-neutral-800 disabled:opacity-50"
                     >
                       {rsvpLinkBusy === g.id ? "..." : "RSVP link"}
                     </button>
@@ -996,19 +996,19 @@ export function GuestsTab({
                       onClick={() => onRsvpLink(g.id, g.email, true)}
                       disabled={rsvpLinkBusy === g.id}
                       title="Issues a brand new RSVP link, invalidating this guest's old one."
-                      className="rounded-md border border-neutral-300 px-2 py-1 text-sm hover:bg-neutral-50 disabled:opacity-50"
+                      className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800 dark:hover:bg-neutral-800 disabled:opacity-50"
                     >
                       New link
                     </button>
                     <button
                       onClick={() => onDeleteGuest(g.id)}
-                      className="rounded-md border border-neutral-300 px-2 py-1 text-sm text-red-600 hover:bg-red-50"
+                      className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950 dark:hover:bg-red-950"
                     >
                       Remove
                     </button>
                   </>
                 ) : (
-                  <span className="text-sm text-neutral-500">{g.rsvpStatus}</span>
+                  <span className="text-sm text-neutral-500 dark:text-neutral-400">{g.rsvpStatus}</span>
                 )}
               </div>
             </li>

@@ -50,7 +50,7 @@ export default function InviteAcceptPage() {
   }
 
   if (loading || !preview) {
-    return <main className="flex flex-1 items-center justify-center text-neutral-500">Loading...</main>;
+    return <main className="flex flex-1 items-center justify-center text-neutral-500 dark:text-neutral-400">Loading...</main>;
   }
 
   const signedIn = currentUserEmail !== null && currentUserEmail !== undefined;
@@ -61,21 +61,21 @@ export default function InviteAcceptPage() {
         <h1 className="mb-4 text-2xl font-semibold">Wedding invite</h1>
 
         {preview.status === "NOT_FOUND" && (
-          <p className="text-sm text-neutral-600">This invite link doesn&apos;t exist.</p>
+          <p className="text-sm text-neutral-600 dark:text-neutral-300">This invite link doesn&apos;t exist.</p>
         )}
         {preview.status === "REVOKED" && (
-          <p className="text-sm text-neutral-600">This invite has been revoked by the wedding&apos;s owner.</p>
+          <p className="text-sm text-neutral-600 dark:text-neutral-300">This invite has been revoked by the wedding&apos;s owner.</p>
         )}
         {preview.status === "EXPIRED" && (
-          <p className="text-sm text-neutral-600">
+          <p className="text-sm text-neutral-600 dark:text-neutral-300">
             This invite has expired. Ask the wedding&apos;s owner to send a new one.
           </p>
         )}
         {preview.status === "ACCEPTED" && (
-          <p className="text-sm text-neutral-600">This invite has already been accepted.</p>
+          <p className="text-sm text-neutral-600 dark:text-neutral-300">This invite has already been accepted.</p>
         )}
         {preview.status === "MISMATCHED_ACCOUNT" && (
-          <p className="text-sm text-neutral-600">
+          <p className="text-sm text-neutral-600 dark:text-neutral-300">
             This invite was sent to a different email address than the account you&apos;re signed
             in with. Sign out and sign in with the invited address to accept it.
           </p>
@@ -83,33 +83,33 @@ export default function InviteAcceptPage() {
 
         {preview.status === "PENDING" && (
           <>
-            <p className="mb-1 text-sm text-neutral-600">
+            <p className="mb-1 text-sm text-neutral-600 dark:text-neutral-300">
               You&apos;ve been invited to join <span className="font-medium">{preview.weddingName}</span>{" "}
               on Seatwise as {preview.role === "COUPLE" ? "a Couple member" : "a collaborator"}, with{" "}
               {preview.permissionLevel?.toLowerCase()} access.
             </p>
-            <p className="mb-6 text-xs text-neutral-400">Invited: {preview.invitedEmail}</p>
+            <p className="mb-6 text-xs text-neutral-400 dark:text-neutral-500">Invited: {preview.invitedEmail}</p>
 
             {signedIn ? (
               <>
-                {error && <p className="mb-3 text-sm text-red-600">{error}</p>}
+                {error && <p className="mb-3 text-sm text-red-600 dark:text-red-400">{error}</p>}
                 <button
                   onClick={onAccept}
                   disabled={accepting}
-                  className="w-full rounded-md bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-700 disabled:opacity-50"
+                  className="w-full rounded-md bg-neutral-900 dark:bg-neutral-100 px-4 py-2 text-sm font-medium text-white dark:text-neutral-900 hover:bg-neutral-700 dark:hover:bg-neutral-300 dark:hover:bg-neutral-300 disabled:opacity-50"
                 >
                   {accepting ? "Accepting..." : "Accept invite"}
                 </button>
               </>
             ) : (
               <div className="flex flex-col gap-3">
-                <p className="text-sm text-neutral-500">
+                <p className="text-sm text-neutral-500 dark:text-neutral-400">
                   Sign in or create an account with {preview.invitedEmail} to accept — then come
                   back to this link.
                 </p>
                 <Link
                   href="/login"
-                  className="w-full rounded-md bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-700"
+                  className="w-full rounded-md bg-neutral-900 dark:bg-neutral-100 px-4 py-2 text-sm font-medium text-white dark:text-neutral-900 hover:bg-neutral-700 dark:hover:bg-neutral-300 dark:hover:bg-neutral-300"
                 >
                   Log in
                 </Link>
