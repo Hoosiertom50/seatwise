@@ -371,6 +371,121 @@ Section 10.1: "report generation errors cause a nonzero result without erasing r
 output." Playwright's own `list`/`html` reporters are unaffected either way, since they run
 independently.
 
+## Suite review, coverage analysis, and test catalog (Stage 07)
+
+`pnpm pw:review` generates the **suite review**: a single point-in-time snapshot of the whole
+discovered test suite's coverage, value, quality, duplication, and health, written to
+
+```
+artifacts/playwright/runs/suite-reviews/<reviewId>.json   # machine-readable, validated against SuiteReviewSchema
+artifacts/playwright/runs/suite-reviews/<reviewId>.html   # a self-contained, offline-viewable companion
+```
+
+`pnpm pw:review:serve` serves the most recent one (or `pnpm pw:review:serve <reviewId>` for a
+specific one, default port 4301, override with `PW_REVIEW_PORT`) so its links back to each test's
+source file resolve. Unlike a run report, generating a suite review never launches a browser or a
+test — it only reads the real discovered test suite, the governance YAML files under `quality/`,
+and whatever Stage 06 run-report history already exists on disk (zero, one, or many reports; all
+are treated as normal, never required).
+
+**How a test's value and quality scores get computed.** Stage 02 built the scoring arithmetic
+(`computeScore`/`applyOverride`/`bandForValueScore`) and the 14-criterion value/quality model
+(`quality/test-value-model.yaml`) but had no real per-test evidence to drive it with. Stage 07 closes
+that gap with a three-way split (Decision Log DEC-021), because Section 8.6 is explicit that missing
+business information must be flagged as `needsHumanReview`, never invented:
+
+- **9 criteria are computed mechanically**, fresh on every `pnpm pw:review` invocation, from real
+  tool output — never hand-typed, so they can never silently go stale as the codebase changes.
+  Quality: independence-and-parallel-safety (does the test import the shared fixtures module?),
+  deterministic-waiting-and-state-control and page-component-object-and-locator-design (both read
+  straight from `pnpm pw:lint-tests`'s own findings for that file), test-data-setup-and-cleanup
+  (shared fixtures again, capped at 8/10 to disclose the real, permanent account-cleanup gap —
+  DEC-012, no account-deletion endpoint exists), readability-and-diagnostic-steps (named
+  `test.step` count, from the latest real run report when one exists, else a source scan),
+  evidence-and-failure-diagnostics (from the run report's recorded success checkpoints/failure
+  bundle, else a source-text scan for `evidence.checkpoint()`), and
+  metadata-completeness-and-standards-compliance (objective length + requirementIds presence).
+  Value: unique-coverage, computed by comparing every test against every other discovered test
+  (same requirement + same data-impact tag + a shared feature tag + objective-text similarity —
+  see "Duplicate detection" below, which reuses the identical comparison).
+- **2 criteria require genuinely reading what a specific test's assertions verify** — quality's
+  assertion-strength-and-objective-traceability and value's security-compliance-data-integrity —
+  and are read from a hand-authored `quality/test-evaluations.yaml` entry (a human or an AI
+  evaluator citing real evidence, keyed by `testId`). A test with no entry there scores
+  `needsHumanReview: true` on both, with a rationale explaining exactly what to add.
+- **4 value criteria are permanently, mechanically forced to `needsHumanReview: true`** —
+  business-criticality, user-impact-and-frequency, risk-and-defect-likelihood,
+  release-decision-usefulness — because no data source in this repo yet quantifies a
+  requirement's real business priority (`quality/requirements.yaml` has no priority/impact field,
+  and every real requirement is still `status: needs-human-review`, not `confirmed` — DEC-009).
+  This means every current test's **value** score is `provisional` today (4 of 6 criteria
+  unresolved), while **quality** scores are fully calculable once a `quality/test-evaluations.yaml`
+  entry exists. This is expected, not a bug — it will stop being true once a human confirms real
+  requirement priorities.
+
+An override in `quality/value-overrides.yaml` (Stage 02, still empty in this repo) always applies on
+top of a calculated score, never replacing it silently — the report shows both.
+
+**Coverage.** Two numbers, both stating their own denominator (Stage 07 acceptance criterion:
+"coverage percentages state their denominator and exclusions"):
+
+- **Requirement coverage** — covered / total requirements, where the denominator is every
+  requirement with `status: needs-human-review` or `confirmed` (`placeholder` and `retired`
+  requirements are excluded, and the exclusion count is stated alongside the percentage).
+- **Risk-weighted coverage** (Decision Log DEC-022) — each covered requirement is weighted by the
+  **highest** `@risk:*` tier among its covering test(s) (critical=4, high=3, normal=2, low=1); an
+  **uncovered** requirement is conservatively weighted as `@risk:critical` (4), since its real risk
+  is unconfirmed without a test. This is a deliberate, proven invariant: risk-weighted coverage can
+  never read higher than plain requirement coverage (`computeCoverage.spec.ts` asserts this
+  directly against synthetic data) — missing coverage never looks better just because its real risk
+  is still unknown.
+
+The report also separately calls out requirements **covered only by unhealthy tests** (every
+covering test is currently quarantined, stale, never-executed, or failing — distinct from
+"uncovered", a more severe bucket with zero covering tests at all) and **dimension coverage**
+(per-tag counts across every taxonomy dimension — data-impact, feature, risk, role, suite,
+test-type, lifecycle — including tags with zero uses, disclosed as `0` rather than omitted).
+
+**Duplicate detection** (`playwright-framework/coverage/detectDuplicates.ts`) flags two tests as
+possible duplicates only when **all four** hold: they share at least one `requirementId`, the
+**same** data-impact tag (`@readonly` vs `@mutating` — critically, a *different* data-impact tag
+means never flagged, even with everything else matching, since e.g. "view an existing guest" and
+"add a guest" are different actions on the same requirement), a shared feature tag, and an
+objective-text word-overlap similarity of at least 0.5. This is proven against the real suite: the
+`guest-viewing`/`guest-management` pair shares a requirement and a feature tag but has different
+data-impact tags, and is correctly never flagged
+(`detectDuplicates.spec.ts`). Flagged pairs are always a **recommendation for human review**, never
+an automatic deletion.
+
+**Test health** (`classifyTestHealth`) is exactly one of `healthy`, `quarantined` (has the
+`@quarantined` tag), `never-executed` (no run-report history at all), `stale` (last run older than
+the configured freshness window — 14 days by default, override per-invocation with
+`--freshness-window-days <n>`), or `failing` (most recent recorded status was
+consistent-failure/timeout/setup-failure/skipped).
+
+**The prioritized review queue** (`playwright-framework/coverage/buildReviewQueue.ts`) is a worklist,
+not a restatement of the full roster — a test appears only when a concrete, additive reason fires
+(never-executed, failing, stale, quarantined, the only coverage for an at-risk-and-unhealthy
+requirement, a duplicate-candidate member, a low quality score — with an extra bonus when that's
+paired with a high value score, missing hand-authored evaluation criteria, or disproportionate
+execution time relative to the suite average alongside a low value score). Deliberately excluded:
+every test's value score being `needsHumanReview` on the 4 forced-unresolvable business criteria is
+**not** by itself a queue reason — with no real business-priority data yet, that is true of the
+entire suite today, and surfacing it per-test would swamp the queue with noise instead of signal.
+
+**Changes from the previous review** (`playwright-framework/coverage/diffSuiteReviews.ts`) — added/
+removed tests and every test's value/quality total score change — appear automatically once a prior
+suite-review JSON exists on disk (the most recently modified one is used); the very first review
+says plainly that there is nothing to compare against yet.
+
+**The HTML report** lets you search by title/ID/tag and filter the test catalog by quarantined-only,
+needs-human-review-only, stale-or-never-executed-only, risk tag, feature tag, and result status —
+same "self-contained, offline-viewable, real `<input>`/`<select>` filters reachable by Tab" posture
+as Stage 06's run report. Every discovered test's entry expands to show its full value and quality
+criterion breakdown (points, confidence, and the exact rationale behind every judgment — mechanical
+or hand-authored), last known execution result and age, and any recommendations requiring human
+review.
+
 ## Verifying independence
 
 Reference tests are expected to pass individually, regardless of what ran before them, and under

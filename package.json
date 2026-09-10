@@ -24,7 +24,9 @@
     "pw:run:smoke": "tsx playwright-framework/cli/run-tests.ts --selection smoke",
     "pw:run:regression": "tsx playwright-framework/cli/run-tests.ts --selection regression",
     "pw:run:critical": "tsx playwright-framework/cli/run-tests.ts --selection critical",
-    "pw:report:run": "tsx playwright-framework/cli/serve-run-report.ts"
+    "pw:report:run": "tsx playwright-framework/cli/serve-run-report.ts",
+    "pw:review": "tsx playwright-framework/cli/suite-review.ts",
+    "pw:review:serve": "tsx playwright-framework/cli/serve-suite-review.ts"
   },
   "workspaces": [
     "apps/*",

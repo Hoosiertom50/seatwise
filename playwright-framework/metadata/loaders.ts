@@ -16,11 +16,13 @@ import {
   TestValueModelFileSchema,
   ValueOverridesFileSchema,
   SavedSelectionsFileSchema,
+  TestEvaluationsFileSchema,
   type RequirementsFile,
   type TagTaxonomyFile,
   type TestValueModelFile,
   type ValueOverridesFile,
   type SavedSelectionsFile,
+  type TestEvaluationsFile,
 } from "./schemas.js";
 
 export class MetadataValidationError extends Error {
@@ -85,4 +87,8 @@ export function loadValueOverrides(path: string): ValueOverridesFile {
 
 export function loadSavedSelections(path: string): SavedSelectionsFile {
   return loadYamlFile(path, SavedSelectionsFileSchema);
+}
+
+export function loadTestEvaluations(path: string): TestEvaluationsFile {
+  return loadYamlFile(path, TestEvaluationsFileSchema);
 }

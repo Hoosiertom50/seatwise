@@ -1168,10 +1168,14 @@ start there if you're writing or reviewing a test. The basics, as of Stage 06:
   and — as of Stage 05 — the tag-expression parser/compiler under `playwright-framework/runner/`
   and the `pnpm pw:run` CLI under `playwright-framework/cli/`; as of Stage 06, the custom reporter
   and HTML renderer under `playwright-framework/reporting/`, the shared spec-discovery helper under
-  `playwright-framework/validation/discoverAllTests.ts`, and the `pnpm pw:report:run` CLI); `quality/`
-  holds versioned config (including Stage 05's `quality/saved-selections.yaml`) and audit reports;
-  `artifacts/playwright/` holds generated, gitignored run output, including Stage 05's run manifests
-  and Stage 06's run reports.
+  `playwright-framework/validation/discoverAllTests.ts`, and the `pnpm pw:report:run` CLI; as of
+  Stage 07, coverage/duplicate-detection/review-queue logic under `playwright-framework/coverage/`,
+  the mechanical/hand-authored test evaluator under `playwright-framework/evaluation/`, and the
+  `pnpm pw:review` / `pnpm pw:review:serve` CLIs); `quality/` holds versioned config (including
+  Stage 05's `quality/saved-selections.yaml` and Stage 07's hand-authored
+  `quality/test-evaluations.yaml`) and audit reports; `artifacts/playwright/` holds generated,
+  gitignored run output, including Stage 05's run manifests, Stage 06's run reports, and Stage 07's
+  suite reviews.
 - **Test-authoring standards and enforcement (Stage 04):** `pnpm pw:lint-tests` statically checks
   every real `e2e/tests/**/*.spec.ts` file (no browser launch needed) against the rules
   `PLAYWRIGHT_TESTING.md` documents — no raw selectors/screenshots/fixed-waits in a test file, no
@@ -1201,6 +1205,15 @@ start there if you're writing or reviewing a test. The basics, as of Stage 06:
   outcome/step data — never guessed — and writes a normalized JSON + self-contained HTML report per
   run, viewable with `pnpm pw:report:run`. See `PLAYWRIGHT_TESTING.md`'s "Test-run reports" section
   for the full category definitions and what's in each test's entry.
+- **Suite review, coverage, and test catalog (Stage 07):** `pnpm pw:review` generates a
+  point-in-time snapshot of the whole discovered suite — requirement/risk-weighted/dimension
+  coverage (each stating its own denominator and exclusions), duplicate-test candidates, every
+  test's value and quality scores with a full criterion-by-criterion rationale, a prioritized
+  human-review queue, and changes since the previous review — as JSON + a self-contained HTML
+  report, viewable with `pnpm pw:review:serve`. Value/quality judgments follow a mechanical/
+  hand-authored/forced-needs-human-review split (Section 8.6: missing business information is
+  flagged, never invented) — see `PLAYWRIGHT_TESTING.md`'s "Suite review, coverage analysis, and
+  test catalog" section for the full breakdown.
 - **Test governance and value model (Stage 02):** `quality/requirements.yaml`,
   `quality/tag-taxonomy.yaml`, and `quality/test-value-model.yaml` (+ generated
   `quality/test-value-model.md`) are the canonical, versioned data behind the framework's tagging

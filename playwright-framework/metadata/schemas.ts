@@ -451,6 +451,217 @@ export const RunReportSchema = z.object({
 export type RunReport = z.infer<typeof RunReportSchema>;
 
 // ---------------------------------------------------------------------------
+// Test evaluations (Stage 07 — quality/test-evaluations.yaml): the hand-authored half of the
+// value/quality judgment split (see DEC-021). Two criteria genuinely require reading a specific
+// test's own assertions/behavior rather than mechanical suite-wide facts —
+// `assertion-strength-and-objective-traceability` (quality) and
+// `security-compliance-data-integrity` (value) — so those live here, authored by a human or by an
+// AI evaluator citing real evidence (Section 8.6: "AI may evaluate evidence and recommend
+// criterion points, but must provide criterion-by-criterion rationale and confidence"). A test
+// with no entry here is NOT scored generously by default — the Stage 07 evaluator
+// (playwright-framework/evaluation/evaluateTest.ts) treats a missing entry as
+// `needsHumanReview: true` for both of these criteria, exactly like an unconfirmed requirement.
+// Every other value/quality criterion is computed fresh, mechanically, on every report generation
+// (never stored here) so it can never silently go stale as the codebase changes.
+// ---------------------------------------------------------------------------
+
+export const EvaluationConfidenceSchema = z.enum(["high", "medium", "low"]);
+
+/** Mirrors `playwright-framework/scoring/types.ts`'s `ScoreResult`/`CriterionResult` structurally
+ * (that module is Stage 02's deterministic scoring arithmetic and stays the single source of
+ * truth for the TypeScript shape) -- defined again here, as a real zod schema rather than
+ * `z.custom`, so a `SuiteReview`'s embedded score results are genuinely structurally validated
+ * like every other field, not merely type-cast through. */
+export const CriterionResultSchema = z.object({
+  criterionId: NonEmptyStringSchema,
+  label: NonEmptyStringSchema,
+  weight: z.number(),
+  points: z.number(),
+  rationale: NonEmptyStringSchema,
+  confidence: EvaluationConfidenceSchema,
+  needsHumanReview: z.boolean(),
+});
+export type CriterionResultShape = z.infer<typeof CriterionResultSchema>;
+
+export const ScoreResultSchema = z.object({
+  modelVersion: NonEmptyStringSchema,
+  total: z.number(),
+  band: z.string().optional(),
+  source: z.enum(["calculated", "override", "provisional"]),
+  criteria: z.array(CriterionResultSchema),
+  provisional: z.boolean(),
+  overrideRef: z
+    .object({
+      testId: NonEmptyStringSchema,
+      rationale: NonEmptyStringSchema,
+      approver: NonEmptyStringSchema,
+      date: NonEmptyStringSchema,
+    })
+    .optional(),
+});
+export type ScoreResultShape = z.infer<typeof ScoreResultSchema>;
+
+export const TestEvaluationJudgmentSchema = z.object({
+  criterionId: NonEmptyStringSchema,
+  /** 0..the criterion's weight in the current value/quality model. Omit (or null) alongside
+   * needsHumanReview: true for a criterion that cannot yet be honestly judged. */
+  points: z.number().nonnegative().nullable().optional(),
+  rationale: NonEmptyStringSchema,
+  confidence: EvaluationConfidenceSchema,
+  needsHumanReview: z.boolean(),
+});
+export type TestEvaluationJudgment = z.infer<typeof TestEvaluationJudgmentSchema>;
+
+export const TestEvaluationEntrySchema = z.object({
+  testId: NonEmptyStringSchema,
+  evaluatedAt: IsoDateSchema,
+  evaluatedBy: NonEmptyStringSchema,
+  valueJudgments: z.array(TestEvaluationJudgmentSchema),
+  qualityJudgments: z.array(TestEvaluationJudgmentSchema),
+});
+export type TestEvaluationEntry = z.infer<typeof TestEvaluationEntrySchema>;
+
+export const TestEvaluationsFileSchema = z.object({
+  schemaVersion: z.literal("1.0.0"),
+  /** The `test-value-model.yaml` `modelVersion` these judgments were authored against — a value-
+   * model version bump (Section 8.6: "a value-model change must trigger reevaluation of every
+   * discovered test") is detected by the suite-review CLI comparing this against the live model
+   * and flagging every entry here as stale until re-authored, rather than silently reusing
+   * judgments made against a retired rubric. */
+  modelVersion: NonEmptyStringSchema,
+  evaluations: z.array(TestEvaluationEntrySchema),
+});
+export type TestEvaluationsFile = z.infer<typeof TestEvaluationsFileSchema>;
+
+// ---------------------------------------------------------------------------
+// Suite review (Stage 07 — Section 10.3): coverage analysis, duplicate detection, full value/
+// quality scoring, and a prioritized human-review queue over every discovered application test.
+// Written by playwright-framework/cli/suite-review.ts to
+// artifacts/playwright/runs/suite-reviews/<reviewId>.{json,html}.
+// ---------------------------------------------------------------------------
+
+export const CoverageBucketSchema = z.object({
+  covered: z.number().int().nonnegative(),
+  total: z.number().int().nonnegative(),
+  /** What "total" counts, and what it deliberately excludes (Stage 07 acceptance criterion:
+   * "coverage percentages state their denominator and exclusions") -- e.g. "requirements with
+   * status needs-human-review or confirmed (2 placeholder and 0 retired requirements excluded)". */
+  denominatorLabel: NonEmptyStringSchema,
+});
+export type CoverageBucket = z.infer<typeof CoverageBucketSchema>;
+
+export const RequirementCoverageEntrySchema = z.object({
+  requirementId: NonEmptyStringSchema,
+  title: NonEmptyStringSchema,
+  status: RequirementStatusSchema,
+  coveringTestIds: z.array(NonEmptyStringSchema),
+  /** True when every covering test is currently skipped, quarantined, stale (outside the
+   * freshness window), or last known to be failing -- Section 10.3's "requirements covered only
+   * by skipped, quarantined, stale, or failing tests" -- false when there are zero covering tests
+   * at all (that's "uncovered", a separate, more severe bucket). */
+  coveredOnlyByUnhealthyTests: z.boolean(),
+});
+export type RequirementCoverageEntry = z.infer<typeof RequirementCoverageEntrySchema>;
+
+export const DimensionCoverageEntrySchema = z.object({
+  dimension: NonEmptyStringSchema,
+  /** Per-tag test counts within this dimension, e.g. {"@readonly": 1, "@mutating": 1}. A tag
+   * absent from this object was never used by any discovered test. */
+  countsByTag: z.record(z.string(), z.number().int().nonnegative()),
+});
+export type DimensionCoverageEntry = z.infer<typeof DimensionCoverageEntrySchema>;
+
+export const DuplicateCandidateSchema = z.object({
+  testIds: z.array(NonEmptyStringSchema).min(2),
+  sharedRequirementIds: z.array(NonEmptyStringSchema),
+  sharedTags: z.array(NonEmptyStringSchema),
+  /** 0..1 word-overlap similarity between the tests' own objective text -- a recommendation
+   * signal only (Stage 07 task: "label them as recommendations, not automatic deletions"), never
+   * an automatic removal. */
+  objectiveSimilarity: z.number().min(0).max(1),
+  rationale: NonEmptyStringSchema,
+});
+export type DuplicateCandidate = z.infer<typeof DuplicateCandidateSchema>;
+
+export const SuiteReviewTestEntrySchema = z.object({
+  testId: NonEmptyStringSchema,
+  title: NonEmptyStringSchema,
+  filePath: NonEmptyStringSchema,
+  line: z.number().int().positive(),
+  tags: z.array(NonEmptyStringSchema),
+  requirementIds: z.array(NonEmptyStringSchema),
+  objective: NonEmptyStringSchema,
+  expectedOutcome: NonEmptyStringSchema,
+  valueScore: ScoreResultSchema,
+  qualityScore: ScoreResultSchema,
+  lastKnownResult: z
+    .object({
+      status: NonEmptyStringSchema,
+      runId: NonEmptyStringSchema,
+      endedAt: z.string(),
+      ageDays: z.number().nonnegative(),
+      staleBeyondFreshnessWindow: z.boolean(),
+      /** From the same run report's own recorded duration -- feeds the review queue's "low-value
+       * tests consuming disproportionate execution time" signal (Section 10.3). Absent only if a
+       * test has never executed (no lastKnownResult at all, a separate, earlier case). */
+      durationMs: z.number().nonnegative(),
+    })
+    .optional(),
+  quarantined: z.boolean(),
+  recommendations: z.array(NonEmptyStringSchema),
+});
+export type SuiteReviewTestEntry = z.infer<typeof SuiteReviewTestEntrySchema>;
+
+export const ReviewQueueItemSchema = z.object({
+  testId: NonEmptyStringSchema,
+  priority: z.number().int().nonnegative(),
+  reasons: z.array(NonEmptyStringSchema).min(1),
+});
+export type ReviewQueueItemShape = z.infer<typeof ReviewQueueItemSchema>;
+
+export const SuiteReviewChangeSchema = z.object({
+  previousReviewId: NonEmptyStringSchema,
+  previousGeneratedAt: z.string(),
+  addedTestIds: z.array(NonEmptyStringSchema),
+  removedTestIds: z.array(NonEmptyStringSchema),
+  valueScoreChanges: z.array(
+    z.object({ testId: NonEmptyStringSchema, previousTotal: z.number(), currentTotal: z.number() }),
+  ),
+  qualityScoreChanges: z.array(
+    z.object({ testId: NonEmptyStringSchema, previousTotal: z.number(), currentTotal: z.number() }),
+  ),
+});
+
+export const SuiteReviewSchema = z.object({
+  schemaVersion: z.literal("1.0.0"),
+  reviewId: NonEmptyStringSchema,
+  generatedAt: z.string(),
+  frameworkVersion: NonEmptyStringSchema,
+  gitCommit: NonEmptyStringSchema,
+  workingTreeClean: z.boolean(),
+  valueModelVersion: NonEmptyStringSchema,
+  freshnessWindowDays: z.number().int().positive(),
+  parseErrorCount: z.number().int().nonnegative(),
+  requirementCoverage: CoverageBucketSchema,
+  riskWeightedCoverage: CoverageBucketSchema.extend({
+    /** Documents the exact weighting rule used (DEC-022) so the percentage is never a mystery
+     * number -- e.g. "critical=4, high=3, normal=2, low=1; an uncovered requirement is
+     * conservatively weighted as @risk:critical (4) since its real risk is unconfirmed". */
+    weightingRule: NonEmptyStringSchema,
+  }),
+  dimensionCoverage: z.array(DimensionCoverageEntrySchema),
+  requirementDetails: z.array(RequirementCoverageEntrySchema),
+  duplicateCandidates: z.array(DuplicateCandidateSchema),
+  tests: z.array(SuiteReviewTestEntrySchema),
+  valueScoreDistribution: z.record(z.string(), z.number().int().nonnegative()),
+  qualityScoreDistribution: z.record(z.string(), z.number().int().nonnegative()),
+  reviewQueue: z.array(ReviewQueueItemSchema),
+  changesFromPreviousReview: SuiteReviewChangeSchema.optional(),
+});
+export type SuiteReview = z.infer<typeof SuiteReviewSchema>;
+export type SuiteReviewChange = z.infer<typeof SuiteReviewChangeSchema>;
+
+// ---------------------------------------------------------------------------
 // Maintenance results (future stage: triage output against a failed run — Section 10.4)
 // ---------------------------------------------------------------------------
 
