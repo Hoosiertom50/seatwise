@@ -64,6 +64,11 @@ export function CollaboratorsTab({
   const [inviteSent, setInviteSent] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [savingSettings, setSavingSettings] = useState(false);
+  // The wedding's own name (e.g. "Alex & Jordan's Wedding") -- previously only settable at
+  // creation, with no way to fix a typo afterward even though the API already supported it. Same
+  // local-input-then-save-on-blur pattern as the fields below.
+  const [weddingName, setWeddingName] = useState(wedding?.name ?? "");
+  const [savingName, setSavingName] = useState(false);
   // FR-1.3a: this wedding's own names for its two sides -- edited here, then PATCHed as a pure
   // label rename. Local input state so typing doesn't PATCH on every keystroke; saved on blur.
   const [sideLabel1, setSideLabel1] = useState(wedding?.sideLabel1 ?? "Bride");
@@ -108,6 +113,7 @@ export function CollaboratorsTab({
 
   useEffect(() => {
     if (wedding) {
+      setWeddingName(wedding.name);
       setSideLabel1(wedding.sideLabel1);
       setSideLabel2(wedding.sideLabel2);
       setNote(wedding.note ?? "");
@@ -115,6 +121,34 @@ export function CollaboratorsTab({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [wedding?.id]);
+
+  // The wedding's name is required (min length 1) server-side -- an emptied-out field just
+  // reverts to the last saved name on blur rather than being sent.
+  async function onSaveName() {
+    if (!wedding) return;
+    const trimmed = weddingName.trim();
+    if (trimmed === wedding.name) return;
+    if (trimmed === "") {
+      setError("Wedding name can't be blank.");
+      setWeddingName(wedding.name);
+      return;
+    }
+    setSavingName(true);
+    setError(null);
+    try {
+      const { wedding: updated } = await api.patch<{ wedding: WeddingDTO }>(
+        `/api/v1/weddings/${weddingId}`,
+        { name: trimmed }
+      );
+      setWedding(updated);
+      setWeddingName(updated.name);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Couldn't save the wedding name.");
+      setWeddingName(wedding.name);
+    } finally {
+      setSavingName(false);
+    }
+  }
 
   async function onSaveSideLabels() {
     if (!wedding) return;
@@ -385,6 +419,25 @@ export function CollaboratorsTab({
               />
               Also send email notifications for this wedding (in-app notifications always happen)
             </label>
+          )}
+
+          {wedding && (
+            <div className="mb-8 rounded-lg border border-neutral-200 p-4">
+              <h3 className="mb-1 text-sm font-medium">Wedding name</h3>
+              <p className="mb-3 text-sm text-neutral-500">
+                Shown at the top of every tab for this wedding — fix a typo here any time.
+              </p>
+              <input
+                id="wedding-name"
+                aria-label="Wedding name"
+                className="w-full rounded-md border border-neutral-300 px-3 py-2 text-sm disabled:opacity-50"
+                value={weddingName}
+                onChange={(e) => setWeddingName(e.target.value)}
+                onBlur={onSaveName}
+                maxLength={200}
+                disabled={savingName}
+              />
+            </div>
           )}
 
           {wedding && (

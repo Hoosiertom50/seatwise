@@ -150,6 +150,15 @@ up for it.
     (same save-on-blur pattern as the side labels below); a non-owner collaborator, even at Edit
     level, is refused. Verified at the API level (`test_wedding_note.py`) and end-to-end through
     both the create form and the edit panel (`test_wedding_note_ui.py`).
+  - **Wedding name, editable after creation**: a planner flagged that there was no way to fix a
+    typo in the wedding's own name (e.g. a misspelled name in "Alex & Jordan's Wedding") once it
+    was created — the API already supported renaming it (`PATCH /api/v1/weddings/:weddingId`
+    already accepted `name`), the UI simply never exposed it. Now editable from the Collaborators
+    tab's owner-only "Wedding name" panel, same save-on-blur pattern as the note/side labels here.
+    Worth noting explicitly: this app has never had a dedicated "bride's name"/"groom's name"
+    field of its own — Bride/Groom only exist as a guest's *Side* (BRIDE/GROOM/BOTH, with
+    renameable display labels, see FR-1.3a below); the couple's actual names live only in this one
+    free-text wedding-name field, which is what this fix makes editable.
   - **FR-1.3a — per-wedding side labels**: each wedding names its own two sides
     (`sideLabel1`/`sideLabel2`, default "Bride"/"Groom") — set on the Collaborators tab's new
     "Side labels" panel (owner-only), shown everywhere a guest's side is set or displayed (the
@@ -218,13 +227,22 @@ up for it.
     button is disabled while any row still has an error.
   - **FR-2.9 re-check on edit/import** (see its own bullet under Table & Venue Layout below for
     the full explanation): editing a guest's Attendance Status, Side, Relationship Tier, household
-    (partyName), or Requires Accessible Table — through this tab's inline controls, a future full
-    edit form, or a bulk import update row — re-checks hard rules and flags **Needs
-    Reassignment** if their current seat is no longer valid, or (for Attendance Status specifically)
-    frees their seat outright the same way the dedicated Day-of endpoint always has.
+    (partyName), or Requires Accessible Table — through this tab's inline controls or a bulk
+    import update row — re-checks hard rules and flags **Needs Reassignment** if their current
+    seat is no longer valid, or (for Attendance Status specifically) frees their seat outright the
+    same way the dedicated Day-of endpoint always has.
   - **Deliberately left out:** Excel (`.xlsx`) isn't parsed, only CSV — spreadsheet software
     exports CSV directly, and adding a binary-format parser for the same acceptance criteria
     wasn't judged worth a new dependency for this pass.
+  - **Inline guest name editing**: a planner flagged that there was no way to fix a misspelled
+    guest's first/last name short of a full CSV re-import (matching by Guest ID) or deleting and
+    re-adding the guest — the API and DB already accepted a name change on update
+    (`PATCH /api/v1/weddings/:weddingId/guests/:guestId`), the Guests tab simply never exposed an
+    edit control for it. Each guest's name is now two small inline text fields (first/last),
+    save-on-blur, the same per-field optimistic-update-then-reconcile pattern as every other
+    inline guest edit here (Side, RSVP status, email). This also retires the "a future full edit
+    form" phrasing the FR-2.9 bullet below used to have — the inline controls are the edit form
+    now, name included.
 - Seating rules between guests (must sit together / must not sit together / prefer near / avoid),
   with the FR-0.1 hard-rule invariant enforced server-side: a pair of guests can't simultaneously
   be required to sit together and forbidden from it — that's blocked outright with a clear error,
