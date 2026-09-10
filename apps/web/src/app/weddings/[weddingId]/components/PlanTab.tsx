@@ -22,10 +22,10 @@ const COMPARISON_STATUS_LABEL: Record<PlanVersionComparisonDTO["guests"][number]
 };
 
 const COMPARISON_STATUS_CLASS: Record<PlanVersionComparisonDTO["guests"][number]["status"], string> = {
-  unchanged: "bg-neutral-100 text-neutral-600",
-  moved: "bg-blue-50 text-blue-700",
-  added: "bg-green-50 text-green-700",
-  removed: "bg-red-50 text-red-700",
+  unchanged: "bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-300",
+  moved: "bg-blue-50 dark:bg-blue-950 text-blue-700 dark:text-blue-400",
+  added: "bg-green-50 dark:bg-green-950 text-green-700 dark:text-green-400",
+  removed: "bg-red-50 dark:bg-red-950 text-red-700 dark:text-red-400",
 };
 
 function versionOptionLabel(v: PlanVersionDTO): string {
@@ -63,9 +63,9 @@ const STATUS_LABEL: Record<PlanVersionStatusValue, string> = {
 };
 
 const STATUS_BADGE_CLASS: Record<PlanVersionStatusValue, string> = {
-  DRAFT: "bg-neutral-100 text-neutral-700",
-  IN_REVIEW: "bg-blue-50 text-blue-700",
-  APPROVED: "bg-green-50 text-green-700",
+  DRAFT: "bg-neutral-100 dark:bg-neutral-800 text-neutral-700 dark:text-neutral-300",
+  IN_REVIEW: "bg-blue-50 dark:bg-blue-950 text-blue-700 dark:text-blue-400",
+  APPROVED: "bg-green-50 dark:bg-green-950 text-green-700 dark:text-green-400",
 };
 
 export function PlanTab({
@@ -462,7 +462,7 @@ export function PlanTab({
     }
   }
 
-  if (loading) return <p className="text-sm text-neutral-500">Loading seating plans...</p>;
+  if (loading) return <p className="text-sm text-neutral-500 dark:text-neutral-400">Loading seating plans...</p>;
 
   // FR-6.1: "Unassigned/Needs Reassignment guests appear in a separate prominent area rather than
   // a false valid table." A Needs Reassignment guest's seat assignment row still exists (they're
@@ -488,7 +488,7 @@ export function PlanTab({
       <div className="mb-6 flex items-center justify-between">
         <div>
           <h2 className="text-lg font-medium">Seating plan</h2>
-          <p className="text-sm text-neutral-500">
+          <p className="text-sm text-neutral-500 dark:text-neutral-400">
             Generates a new version — hard rules (must/must not sit together, accessible tables,
             capacity) are never violated; guests who can&apos;t be placed are listed below rather
             than silently dropped.
@@ -499,13 +499,13 @@ export function PlanTab({
             <button
               onClick={onGenerate}
               disabled={generating}
-              className="min-h-11 rounded-md bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-700 disabled:opacity-50"
+              className="min-h-11 rounded-md bg-neutral-900 dark:bg-neutral-100 px-4 py-2 text-sm font-medium text-white dark:text-neutral-900 hover:bg-neutral-700 dark:hover:bg-neutral-300 dark:hover:bg-neutral-300 disabled:opacity-50"
             >
               {generating ? "Generating..." : "Generate new plan"}
             </button>
             {/* FR-5.6: chosen upfront, before the run -- an unsuccessful run (a hard-rule
                 conflict) only ever produces a conflict report either way, nothing is saved. */}
-            <label className="flex items-center gap-2 text-xs text-neutral-600">
+            <label className="flex items-center gap-2 text-xs text-neutral-600 dark:text-neutral-300">
               <input
                 type="checkbox"
                 checked={saveAsDraft}
@@ -518,37 +518,37 @@ export function PlanTab({
         )}
       </div>
       {!canEdit && (
-        <p className="mb-4 rounded-md bg-neutral-100 px-3 py-2 text-sm text-neutral-600">
+        <p className="mb-4 rounded-md bg-neutral-100 dark:bg-neutral-800 px-3 py-2 text-sm text-neutral-600 dark:text-neutral-300">
           You have view-only access to this wedding's seating plan.
         </p>
       )}
 
       {conflicts.length > 0 && (
-        <div className="mb-6 rounded-lg border border-red-200 bg-red-50 p-4">
-          <p className="mb-2 text-sm font-medium text-red-800">
+        <div className="mb-6 rounded-lg border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-950 p-4">
+          <p className="mb-2 text-sm font-medium text-red-800 dark:text-red-300">
             These rule conflicts need to be fixed first:
           </p>
-          <ul className="list-inside list-disc text-sm text-red-700">
+          <ul className="list-inside list-disc text-sm text-red-700 dark:text-red-400">
             {conflicts.map((c, i) => (
               <li key={i}>{c}</li>
             ))}
           </ul>
         </div>
       )}
-      {error && <p className="mb-4 text-sm text-red-600">{error}</p>}
+      {error && <p className="mb-4 text-sm text-red-600 dark:text-red-400">{error}</p>}
 
       {/* FR-5.3: shown once, right after the generation run that produced it -- not persisted, so
           reloading or switching versions clears it, same as the moveWarnings/conflicts above. */}
       {scoreReport && (
-        <div className="mb-6 rounded-lg border border-neutral-200 p-4">
+        <div className="mb-6 rounded-lg border border-neutral-200 dark:border-neutral-700 p-4">
           <div className="mb-2 flex items-center justify-between gap-3">
-            <p className="text-sm font-medium text-neutral-800">
+            <p className="text-sm font-medium text-neutral-800 dark:text-neutral-200">
               Soft-preference results — weighting-configuration version {scoreReport.ruleConfigVersion},
               total score {scoreReport.totalScore}
             </p>
             <button
               onClick={() => setShowScoreDetail((s) => !s)}
-              className="shrink-0 text-xs font-medium text-blue-700 hover:underline"
+              className="shrink-0 text-xs font-medium text-blue-700 dark:text-blue-400 hover:underline"
             >
               {showScoreDetail ? "Hide calculation" : "How is this calculated?"}
             </button>
@@ -556,7 +556,7 @@ export function PlanTab({
           {scoreReport.preferences.length > 0 && (
             <ul className="mb-2 list-inside list-disc text-sm">
               {scoreReport.preferences.map((p, i) => (
-                <li key={i} className={p.satisfied ? "text-neutral-700" : "text-amber-700"}>
+                <li key={i} className={p.satisfied ? "text-neutral-700 dark:text-neutral-300" : "text-amber-700 dark:text-amber-400"}>
                   {p.guestAName} and {p.guestBName} (
                   {p.type === "PREFER_NEAR" ? "prefer near each other" : "avoid each other"}):{" "}
                   {p.satisfied ? "satisfied" : "not satisfied"}
@@ -565,7 +565,7 @@ export function PlanTab({
             </ul>
           )}
           {scoreReport.purposeTables.length > 0 && (
-            <ul className="mb-2 list-inside list-disc text-sm text-neutral-700">
+            <ul className="mb-2 list-inside list-disc text-sm text-neutral-700 dark:text-neutral-300">
               {scoreReport.purposeTables.map((t) => (
                 <li key={t.tableId}>
                   &quot;{t.tableLabel}&quot; Purpose table ({t.criterionType.toLowerCase().replace("_", " ")}
@@ -575,7 +575,7 @@ export function PlanTab({
               ))}
             </ul>
           )}
-          <p className="text-sm text-neutral-700">
+          <p className="text-sm text-neutral-700 dark:text-neutral-300">
             Side-Mixing ({scoreReport.sideMixing.setting}): {scoreReport.sideMixing.mixedTableCount} mixed
             table(s), {scoreReport.sideMixing.singleSideTableCount} single-side table(s)
             {scoreReport.sideMixing.singleSideOnlyViolations > 0
@@ -584,7 +584,7 @@ export function PlanTab({
             .
           </p>
           {showScoreDetail && (
-            <pre className="mt-3 overflow-x-auto rounded bg-neutral-50 p-3 text-xs text-neutral-600">
+            <pre className="mt-3 overflow-x-auto rounded bg-neutral-50 dark:bg-neutral-900 p-3 text-xs text-neutral-600 dark:text-neutral-300">
               {JSON.stringify(RULE_WEIGHT_CONFIG, null, 2)}
             </pre>
           )}
@@ -598,7 +598,7 @@ export function PlanTab({
           </label>
           <select
             id="plan-version-select"
-            className="min-h-11 rounded-md border border-neutral-300 px-3 py-2 text-sm"
+            className="min-h-11 rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
             value={detail?.id ?? ""}
             onChange={(e) => onSelectVersion(e.target.value)}
           >
@@ -616,7 +616,7 @@ export function PlanTab({
       )}
 
       {versions.length > 1 && (
-        <div className="mb-6 rounded-lg border border-neutral-200 p-4">
+        <div className="mb-6 rounded-lg border border-neutral-200 dark:border-neutral-700 p-4">
           <button
             onClick={() => {
               setShowCompare((s) => !s);
@@ -625,7 +625,7 @@ export function PlanTab({
                 setCompareToId(versions[0]?.id ?? "");
               }
             }}
-            className="text-sm font-medium text-neutral-700 hover:text-neutral-900"
+            className="text-sm font-medium text-neutral-700 dark:text-neutral-300 hover:text-neutral-900 dark:hover:text-neutral-100 dark:hover:text-neutral-100"
           >
             {showCompare ? "Hide version comparison" : "Compare two versions..."}
           </button>
@@ -633,12 +633,12 @@ export function PlanTab({
             <div className="mt-3">
               <div className="mb-3 flex flex-wrap items-end gap-3">
                 <div>
-                  <label htmlFor="compare-from" className="mb-1 block text-xs font-medium text-neutral-500">
+                  <label htmlFor="compare-from" className="mb-1 block text-xs font-medium text-neutral-500 dark:text-neutral-400">
                     From
                   </label>
                   <select
                     id="compare-from"
-                    className="min-h-11 rounded-md border border-neutral-300 px-2 py-1 text-sm"
+                    className="min-h-11 rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm"
                     value={compareFromId}
                     onChange={(e) => setCompareFromId(e.target.value)}
                   >
@@ -650,12 +650,12 @@ export function PlanTab({
                   </select>
                 </div>
                 <div>
-                  <label htmlFor="compare-to" className="mb-1 block text-xs font-medium text-neutral-500">
+                  <label htmlFor="compare-to" className="mb-1 block text-xs font-medium text-neutral-500 dark:text-neutral-400">
                     To
                   </label>
                   <select
                     id="compare-to"
-                    className="min-h-11 rounded-md border border-neutral-300 px-2 py-1 text-sm"
+                    className="min-h-11 rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm"
                     value={compareToId}
                     onChange={(e) => setCompareToId(e.target.value)}
                   >
@@ -669,15 +669,15 @@ export function PlanTab({
                 <button
                   onClick={onCompare}
                   disabled={comparing || !compareFromId || !compareToId}
-                  className="min-h-11 rounded-md bg-neutral-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-neutral-700 disabled:opacity-50"
+                  className="min-h-11 rounded-md bg-neutral-900 dark:bg-neutral-100 px-3 py-1.5 text-sm font-medium text-white dark:text-neutral-900 hover:bg-neutral-700 dark:hover:bg-neutral-300 dark:hover:bg-neutral-300 disabled:opacity-50"
                 >
                   {comparing ? "Comparing..." : "Compare"}
                 </button>
               </div>
-              {compareError && <p className="mb-2 text-sm text-red-600">{compareError}</p>}
+              {compareError && <p className="mb-2 text-sm text-red-600 dark:text-red-400">{compareError}</p>}
               {comparison && (
                 <div>
-                  <p className="mb-2 text-sm text-neutral-600">
+                  <p className="mb-2 text-sm text-neutral-600 dark:text-neutral-300">
                     v{comparison.from.versionNumber}
                     {comparison.from.label ? ` (${comparison.from.label})` : ""} →{" "}
                     v{comparison.to.versionNumber}
@@ -685,9 +685,9 @@ export function PlanTab({
                     moved, {comparison.summary.addedCount} added, {comparison.summary.removedCount} removed,{" "}
                     {comparison.summary.unchangedCount} unchanged
                   </p>
-                  <div className="max-h-96 overflow-y-auto rounded-md border border-neutral-200">
+                  <div className="max-h-96 overflow-y-auto rounded-md border border-neutral-200 dark:border-neutral-700">
                     <table className="w-full text-left text-sm">
-                      <thead className="sticky top-0 bg-neutral-50">
+                      <thead className="sticky top-0 bg-neutral-50 dark:bg-neutral-900">
                         <tr>
                           <th className="px-3 py-2 font-medium">Guest</th>
                           <th className="px-3 py-2 font-medium">From table</th>
@@ -697,10 +697,10 @@ export function PlanTab({
                       </thead>
                       <tbody>
                         {comparison.guests.map((g) => (
-                          <tr key={g.guestId} className="border-t border-neutral-100">
+                          <tr key={g.guestId} className="border-t border-neutral-100 dark:border-neutral-800">
                             <td className="px-3 py-1.5">{g.guestName}</td>
-                            <td className="px-3 py-1.5 text-neutral-500">{g.fromTableLabel ?? "—"}</td>
-                            <td className="px-3 py-1.5 text-neutral-500">{g.toTableLabel ?? "—"}</td>
+                            <td className="px-3 py-1.5 text-neutral-500 dark:text-neutral-400">{g.fromTableLabel ?? "—"}</td>
+                            <td className="px-3 py-1.5 text-neutral-500 dark:text-neutral-400">{g.toTableLabel ?? "—"}</td>
                             <td className="px-3 py-1.5">
                               <span
                                 className={`rounded px-2 py-0.5 text-xs font-medium ${COMPARISON_STATUS_CLASS[g.status]}`}
@@ -721,7 +721,7 @@ export function PlanTab({
       )}
 
       {!detail ? (
-        <p className="text-sm text-neutral-500">
+        <p className="text-sm text-neutral-500 dark:text-neutral-400">
           No plan generated yet — add guests and tables, then click &ldquo;Generate new
           plan&rdquo;.
         </p>
@@ -730,7 +730,7 @@ export function PlanTab({
           <div className="mb-4 flex flex-wrap items-center gap-2">
             <span
               className={`rounded px-2 py-0.5 text-xs font-medium ${
-                detail.isComplete ? "bg-green-50 text-green-700" : "bg-amber-50 text-amber-700"
+                detail.isComplete ? "bg-green-50 dark:bg-green-950 text-green-700 dark:text-green-400" : "bg-amber-50 dark:bg-amber-950 text-amber-700 dark:text-amber-400"
               }`}
             >
               Version {detail.versionNumber} — {detail.isComplete ? "complete" : "incomplete"}
@@ -738,11 +738,11 @@ export function PlanTab({
             <span className={`rounded px-2 py-0.5 text-xs font-medium ${STATUS_BADGE_CLASS[detail.status]}`}>
               {STATUS_LABEL[detail.status]}
             </span>
-            <span className="text-sm text-neutral-500">
+            <span className="text-sm text-neutral-500 dark:text-neutral-400">
               {detail.assignedGuestCount} seated, {detail.unassignedGuestCount} unassigned
             </span>
             {!canEdit ? (
-              detail.label && <span className="text-sm text-neutral-500">“{detail.label}”</span>
+              detail.label && <span className="text-sm text-neutral-500 dark:text-neutral-400">“{detail.label}”</span>
             ) : editingLabel ? (
               <span className="flex items-center gap-1">
                 <input
@@ -751,19 +751,19 @@ export function PlanTab({
                   onChange={(e) => setLabelInput(e.target.value)}
                   placeholder="Version nickname"
                   maxLength={100}
-                  className="min-h-11 rounded-md border border-neutral-300 px-2 py-1 text-sm"
+                  className="min-h-11 rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm"
                 />
                 <button
                   onClick={onSaveLabel}
                   disabled={savingLabel}
-                  className="min-h-11 rounded-md bg-neutral-900 px-2 py-1 text-xs font-medium text-white hover:bg-neutral-700 disabled:opacity-50"
+                  className="min-h-11 rounded-md bg-neutral-900 dark:bg-neutral-100 px-2 py-1 text-xs font-medium text-white dark:text-neutral-900 hover:bg-neutral-700 dark:hover:bg-neutral-300 dark:hover:bg-neutral-300 disabled:opacity-50"
                 >
                   {savingLabel ? "Saving..." : "Save"}
                 </button>
                 <button
                   onClick={() => setEditingLabel(false)}
                   disabled={savingLabel}
-                  className="min-h-11 rounded-md border border-neutral-300 px-2 py-1 text-xs font-medium hover:bg-neutral-50 disabled:opacity-50"
+                  className="min-h-11 rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-xs font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800 dark:hover:bg-neutral-800 disabled:opacity-50"
                 >
                   Cancel
                 </button>
@@ -774,7 +774,7 @@ export function PlanTab({
                   setLabelInput(detail.label ?? "");
                   setEditingLabel(true);
                 }}
-                className="text-sm text-neutral-500 underline hover:text-neutral-700"
+                className="text-sm text-neutral-500 dark:text-neutral-400 underline hover:text-neutral-700 dark:hover:text-neutral-300 dark:hover:text-neutral-300"
               >
                 {detail.label ? `“${detail.label}” (rename)` : "Add a nickname..."}
               </button>
@@ -782,13 +782,13 @@ export function PlanTab({
           </div>
 
           {detail.status === "APPROVED" && (
-            <div className="mb-6 flex flex-wrap items-center gap-2 rounded-lg border border-neutral-200 p-3">
+            <div className="mb-6 flex flex-wrap items-center gap-2 rounded-lg border border-neutral-200 dark:border-neutral-700 p-3">
               <span className="text-sm font-medium">Export (FR-9.1/9.2/9.3):</span>
               <a
                 href={`/api/v1/weddings/${weddingId}/plan-versions/${detail.id}/export/chart`}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="rounded-md border border-neutral-300 min-h-11 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50"
+                className="rounded-md border border-neutral-300 dark:border-neutral-600 min-h-11 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800 dark:hover:bg-neutral-800"
               >
                 Seating chart (PDF)
               </a>
@@ -796,7 +796,7 @@ export function PlanTab({
                 href={`/api/v1/weddings/${weddingId}/plan-versions/${detail.id}/export/lookup`}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="rounded-md border border-neutral-300 min-h-11 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50"
+                className="rounded-md border border-neutral-300 dark:border-neutral-600 min-h-11 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800 dark:hover:bg-neutral-800"
               >
                 Guest lookup list (PDF)
               </a>
@@ -804,7 +804,7 @@ export function PlanTab({
                 href={`/api/v1/weddings/${weddingId}/plan-versions/${detail.id}/export/cards`}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="rounded-md border border-neutral-300 min-h-11 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50"
+                className="rounded-md border border-neutral-300 dark:border-neutral-600 min-h-11 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800 dark:hover:bg-neutral-800"
               >
                 Place cards (PDF)
               </a>
@@ -812,8 +812,8 @@ export function PlanTab({
           )}
 
           {!detail.isCurrent && (
-            <div className="mb-6 rounded-lg border border-neutral-200 p-4">
-              <p className="mb-2 text-sm text-neutral-500">
+            <div className="mb-6 rounded-lg border border-neutral-200 dark:border-neutral-700 p-4">
+              <p className="mb-2 text-sm text-neutral-500 dark:text-neutral-400">
                 This is a past version — status can only be changed on the current one. Restoring
                 it (FR-9.4) makes a brand-new current version with a copy of its assignments,
                 re-checked against today's guests/tables/rules — it never rewrites this version or
@@ -823,21 +823,21 @@ export function PlanTab({
                 <button
                   onClick={onPreviewRestore}
                   disabled={previewingRestore}
-                  className="rounded-md border border-neutral-300 min-h-11 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 disabled:opacity-50"
+                  className="rounded-md border border-neutral-300 dark:border-neutral-600 min-h-11 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800 dark:hover:bg-neutral-800 disabled:opacity-50"
                 >
                   {previewingRestore ? "Checking..." : `Restore version ${detail.versionNumber}...`}
                 </button>
               )}
               {canEdit && restorePreview && restorePreview.sourceVersionNumber === detail.versionNumber && (
-                <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3">
-                  <p className="mb-2 text-sm font-medium text-amber-800">
+                <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-950 p-3">
+                  <p className="mb-2 text-sm font-medium text-amber-800 dark:text-amber-300">
                     Restoring version {restorePreview.sourceVersionNumber} will create a new
                     version {restorePreview.isComplete ? "(complete)" : "(incomplete)"}: {restorePreview.keptCount}{" "}
                     guest(s) kept exactly as seated, {restorePreview.unassignedGuestIds.length} left
                     unassigned.
                   </p>
                   {restorePreview.droppedGuests.length > 0 && (
-                    <ul className="mb-2 list-inside list-disc text-sm text-amber-700">
+                    <ul className="mb-2 list-inside list-disc text-sm text-amber-700 dark:text-amber-400">
                       {restorePreview.droppedGuests.map((d, i) => (
                         <li key={i}>
                           {d.guestName} — {d.reason}
@@ -846,7 +846,7 @@ export function PlanTab({
                     </ul>
                   )}
                   {restorePreview.warnings.length > 0 && (
-                    <ul className="mb-2 list-inside list-disc text-sm text-amber-700">
+                    <ul className="mb-2 list-inside list-disc text-sm text-amber-700 dark:text-amber-400">
                       {restorePreview.warnings.map((w, i) => (
                         <li key={i}>{w}</li>
                       ))}
@@ -856,14 +856,14 @@ export function PlanTab({
                     <button
                       onClick={onConfirmRestore}
                       disabled={restoring}
-                      className="rounded-md bg-neutral-900 min-h-11 px-3 py-1.5 text-sm font-medium text-white hover:bg-neutral-700 disabled:opacity-50"
+                      className="rounded-md bg-neutral-900 dark:bg-neutral-100 min-h-11 px-3 py-1.5 text-sm font-medium text-white dark:text-neutral-900 hover:bg-neutral-700 dark:hover:bg-neutral-300 dark:hover:bg-neutral-300 disabled:opacity-50"
                     >
                       {restoring ? "Restoring..." : "Confirm restore"}
                     </button>
                     <button
                       onClick={() => setRestorePreview(null)}
                       disabled={restoring}
-                      className="rounded-md border border-neutral-300 min-h-11 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 disabled:opacity-50"
+                      className="rounded-md border border-neutral-300 dark:border-neutral-600 min-h-11 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800 dark:hover:bg-neutral-800 disabled:opacity-50"
                     >
                       Cancel
                     </button>
@@ -879,7 +879,7 @@ export function PlanTab({
                 <button
                   onClick={() => onSetStatus("IN_REVIEW")}
                   disabled={statusUpdating}
-                  className="rounded-md border border-neutral-300 min-h-11 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 disabled:opacity-50"
+                  className="rounded-md border border-neutral-300 dark:border-neutral-600 min-h-11 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800 dark:hover:bg-neutral-800 disabled:opacity-50"
                 >
                   Move to review
                 </button>
@@ -889,7 +889,7 @@ export function PlanTab({
                   <button
                     onClick={() => onSetStatus("DRAFT")}
                     disabled={statusUpdating}
-                    className="rounded-md border border-neutral-300 min-h-11 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 disabled:opacity-50"
+                    className="rounded-md border border-neutral-300 dark:border-neutral-600 min-h-11 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800 dark:hover:bg-neutral-800 disabled:opacity-50"
                   >
                     Move back to draft
                   </button>
@@ -897,12 +897,12 @@ export function PlanTab({
                     onClick={() => onSetStatus("APPROVED")}
                     disabled={statusUpdating || !detail.isComplete}
                     title={!detail.isComplete ? "Every guest must be seated before a plan can be approved." : undefined}
-                    className="rounded-md bg-green-700 min-h-11 px-3 py-1.5 text-sm font-medium text-white hover:bg-green-800 disabled:opacity-50"
+                    className="rounded-md bg-green-700 dark:bg-green-600 min-h-11 px-3 py-1.5 text-sm font-medium text-white hover:bg-green-800 dark:hover:bg-green-500 dark:hover:bg-green-500 disabled:opacity-50"
                   >
                     Approve
                   </button>
                   {!detail.isComplete && (
-                    <span className="text-sm text-neutral-500">
+                    <span className="text-sm text-neutral-500 dark:text-neutral-400">
                       Seat every guest before this can be approved.
                     </span>
                   )}
@@ -912,7 +912,7 @@ export function PlanTab({
                 <button
                   onClick={() => onSetStatus("IN_REVIEW")}
                   disabled={statusUpdating}
-                  className="rounded-md border border-neutral-300 min-h-11 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 disabled:opacity-50"
+                  className="rounded-md border border-neutral-300 dark:border-neutral-600 min-h-11 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800 dark:hover:bg-neutral-800 disabled:opacity-50"
                 >
                   Reopen for review
                 </button>
@@ -921,11 +921,11 @@ export function PlanTab({
           )}
 
           {detail.status === "APPROVED" && detail.modifiedSinceApproval.active && (
-            <div className="mb-6 rounded-lg border border-amber-200 bg-amber-50 p-4">
-              <p className="text-sm font-medium text-amber-800">
+            <div className="mb-6 rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-950 p-4">
+              <p className="text-sm font-medium text-amber-800 dark:text-amber-300">
                 Modified since approval
               </p>
-              <p className="text-sm text-amber-700">
+              <p className="text-sm text-amber-700 dark:text-amber-400">
                 First change {new Date(detail.modifiedSinceApproval.firstModifiedAt!).toLocaleString()},
                 latest {new Date(detail.modifiedSinceApproval.latestModifiedAt!).toLocaleString()}.
                 Approval doesn&apos;t lock anything — this plan is still Approved, but review what
@@ -935,9 +935,9 @@ export function PlanTab({
           )}
 
           {detail.warnings.length > 0 && (
-            <div className="mb-6 rounded-lg border border-amber-200 bg-amber-50 p-4">
-              <p className="mb-2 text-sm font-medium text-amber-800">Notes on this plan:</p>
-              <ul className="list-inside list-disc text-sm text-amber-700">
+            <div className="mb-6 rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-950 p-4">
+              <p className="mb-2 text-sm font-medium text-amber-800 dark:text-amber-300">Notes on this plan:</p>
+              <ul className="list-inside list-disc text-sm text-amber-700 dark:text-amber-400">
                 {detail.warnings.map((w, i) => (
                   <li key={i}>{w}</li>
                 ))}
@@ -946,11 +946,11 @@ export function PlanTab({
           )}
 
           {moveWarnings.length > 0 && (
-            <div className="mb-6 rounded-lg border border-amber-200 bg-amber-50 p-4">
-              <p className="mb-2 text-sm font-medium text-amber-800">
+            <div className="mb-6 rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-950 p-4">
+              <p className="mb-2 text-sm font-medium text-amber-800 dark:text-amber-300">
                 That move was made, but note:
               </p>
-              <ul className="list-inside list-disc text-sm text-amber-700">
+              <ul className="list-inside list-disc text-sm text-amber-700 dark:text-amber-400">
                 {moveWarnings.map((w, i) => (
                   <li key={i}>{w}</li>
                 ))}
@@ -959,7 +959,7 @@ export function PlanTab({
           )}
 
           {!canEditThisVersion && (
-            <p className="mb-4 text-sm text-neutral-500">
+            <p className="mb-4 text-sm text-neutral-500 dark:text-neutral-400">
               {canEdit
                 ? "This is a past version — guests can only be manually moved on the current one."
                 : "You have view-only access to this wedding's seating plan — manual moves are turned off."}
@@ -973,7 +973,7 @@ export function PlanTab({
                 onClick={onUndo}
                 disabled={undoStack.length === 0 || undoRedoBusy || movingGuestId !== null}
                 title={undoStack.length > 0 ? `Undo: ${undoStack[undoStack.length - 1].description}` : undefined}
-                className="min-h-11 rounded-md border border-neutral-300 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 disabled:opacity-50"
+                className="min-h-11 rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800 dark:hover:bg-neutral-800 disabled:opacity-50"
               >
                 {undoRedoBusy ? "Working..." : "Undo"}
               </button>
@@ -982,11 +982,11 @@ export function PlanTab({
                 onClick={onRedo}
                 disabled={redoStack.length === 0 || undoRedoBusy || movingGuestId !== null}
                 title={redoStack.length > 0 ? `Redo: ${redoStack[redoStack.length - 1].description}` : undefined}
-                className="min-h-11 rounded-md border border-neutral-300 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 disabled:opacity-50"
+                className="min-h-11 rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800 dark:hover:bg-neutral-800 disabled:opacity-50"
               >
                 Redo
               </button>
-              <span className="text-xs text-neutral-500">
+              <span className="text-xs text-neutral-500 dark:text-neutral-400">
                 Undo/redo covers this browser session's own moves only (FR-7.5) — reload or switch
                 versions and use version history instead.
               </span>
@@ -994,7 +994,7 @@ export function PlanTab({
           )}
 
           {planView === "list" && detail.unassignedGuestIds.length > 0 && (
-            <div className="mb-6 rounded-lg border border-neutral-200 p-4">
+            <div className="mb-6 rounded-lg border border-neutral-200 dark:border-neutral-700 p-4">
               <p className="mb-2 text-sm font-medium">Unassigned guests</p>
               <ul className="flex flex-col gap-2">
                 {detail.unassignedGuestIds.map((id) => (
@@ -1003,7 +1003,7 @@ export function PlanTab({
                     {canEditThisVersion && (
                       <select
                         aria-label={`Move ${guestName(id)} to a table`}
-                        className="min-h-11 rounded-md border border-neutral-300 px-2 py-1 text-sm disabled:opacity-50"
+                        className="min-h-11 rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm disabled:opacity-50"
                         value=""
                         disabled={movingGuestId === id}
                         onChange={(e) => onMoveGuest(id, e.target.value)}
@@ -1025,9 +1025,9 @@ export function PlanTab({
           )}
 
           {planView === "list" && needsReassignmentGuests.length > 0 && (
-            <div className="mb-6 rounded-lg border border-amber-200 bg-amber-50/40 p-4">
-              <p className="mb-1 text-sm font-medium text-amber-800">Needs reassignment</p>
-              <p className="mb-3 text-xs text-neutral-500">
+            <div className="mb-6 rounded-lg border border-amber-200 bg-amber-50/40 dark:bg-amber-950/40 p-4">
+              <p className="mb-1 text-sm font-medium text-amber-800 dark:text-amber-300">Needs reassignment</p>
+              <p className="mb-3 text-xs text-neutral-500 dark:text-neutral-400">
                 Their current table no longer fits a hard rule for them (e.g. an edited field, or a
                 table setting changed) — shown here rather than under that table, since it&apos;s no
                 longer a valid placement for them.
@@ -1037,12 +1037,12 @@ export function PlanTab({
                   <li key={g.guestId} className="flex items-center justify-between gap-2 text-sm">
                     <span>
                       {g.guestName}{" "}
-                      <span className="text-xs text-neutral-400">(currently at {g.tableLabel})</span>
+                      <span className="text-xs text-neutral-400 dark:text-neutral-500">(currently at {g.tableLabel})</span>
                     </span>
                     {canEditThisVersion && (
                       <select
                         aria-label={`Move ${g.guestName} to a different table`}
-                        className="min-h-11 rounded-md border border-neutral-300 px-2 py-1 text-sm disabled:opacity-50"
+                        className="min-h-11 rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm disabled:opacity-50"
                         value=""
                         disabled={movingGuestId === g.guestId}
                         onChange={(e) => onMoveGuest(g.guestId, e.target.value)}
@@ -1066,17 +1066,17 @@ export function PlanTab({
           )}
 
           <div className="mb-3 flex items-center justify-between">
-            <h3 className="text-sm font-medium text-neutral-700">Tables</h3>
-            <div className="flex gap-1 rounded-md border border-neutral-300 p-0.5 text-sm">
+            <h3 className="text-sm font-medium text-neutral-700 dark:text-neutral-300">Tables</h3>
+            <div className="flex gap-1 rounded-md border border-neutral-300 dark:border-neutral-600 p-0.5 text-sm">
               <button
                 onClick={() => setPlanView("list")}
-                className={`rounded px-2 py-1 ${planView === "list" ? "bg-neutral-900 text-white" : "hover:bg-neutral-50"}`}
+                className={`rounded px-2 py-1 ${planView === "list" ? "bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900" : "hover:bg-neutral-50 dark:hover:bg-neutral-800 dark:hover:bg-neutral-800"}`}
               >
                 List
               </button>
               <button
                 onClick={() => setPlanView("floorplan")}
-                className={`rounded px-2 py-1 ${planView === "floorplan" ? "bg-neutral-900 text-white" : "hover:bg-neutral-50"}`}
+                className={`rounded px-2 py-1 ${planView === "floorplan" ? "bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900" : "hover:bg-neutral-50 dark:hover:bg-neutral-800 dark:hover:bg-neutral-800"}`}
               >
                 Floor plan
               </button>
@@ -1097,7 +1097,7 @@ export function PlanTab({
           ) : (
             <div className="flex flex-col gap-3">
               {[...grouped.entries()].map(([tableId, t]) => (
-                <div key={tableId} className="rounded-lg border border-neutral-200 px-4 py-3">
+                <div key={tableId} className="rounded-lg border border-neutral-200 dark:border-neutral-700 px-4 py-3">
                   <p className="mb-2 font-medium">{t.tableLabel}</p>
                   <ul className="flex flex-col gap-1.5">
                     {t.guests.map((g) => (
@@ -1106,7 +1106,7 @@ export function PlanTab({
                         {canEditThisVersion && (
                           <select
                             aria-label={`Move ${g.guestName} to a different table`}
-                            className="min-h-11 rounded-md border border-neutral-300 px-2 py-1 text-xs disabled:opacity-50"
+                            className="min-h-11 rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-xs disabled:opacity-50"
                             value=""
                             disabled={movingGuestId === g.guestId}
                             onChange={(e) => onMoveGuest(g.guestId, e.target.value)}
@@ -1181,14 +1181,14 @@ function PlanFloorPlan({
 
   return (
     <div>
-      <p className="mb-3 text-sm text-neutral-500">
+      <p className="mb-3 text-sm text-neutral-500 dark:text-neutral-400">
         {canEditThisVersion
           ? "Drag a guest onto a different table to move them — hard rules are enforced exactly as with the dropdowns above."
           : "View-only — dragging guests between tables is turned off for your access level."}
       </p>
       {unassignedGuestIds.length > 0 && (
-        <div className="mb-4 rounded-lg border border-neutral-200 p-3">
-          <p className="mb-2 text-xs font-medium text-neutral-500">Unassigned — drag onto a table</p>
+        <div className="mb-4 rounded-lg border border-neutral-200 dark:border-neutral-700 p-3">
+          <p className="mb-2 text-xs font-medium text-neutral-500 dark:text-neutral-400">Unassigned — drag onto a table</p>
           <div className="flex flex-wrap gap-1.5">
             {unassignedGuestIds.map((id) => (
               <span
@@ -1196,7 +1196,7 @@ function PlanFloorPlan({
                 data-guest-id={id}
                 draggable={canEditThisVersion}
                 onDragStart={(e) => onGuestDragStart(e, id)}
-                className={`rounded-full border border-dashed border-neutral-300 bg-white px-2 py-1 text-xs ${
+                className={`rounded-full border border-dashed border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-900 px-2 py-1 text-xs ${
                   canEditThisVersion ? "cursor-grab active:cursor-grabbing" : ""
                 } ${movingGuestId === id ? "opacity-50" : ""}`}
               >
@@ -1211,8 +1211,8 @@ function PlanFloorPlan({
           than shown there with a badge, so the floor plan never implies a placement that's no
           longer rule-compliant. */}
       {needsReassignmentGuests.length > 0 && (
-        <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50/40 p-3">
-          <p className="mb-2 text-xs font-medium text-amber-800">Needs reassignment — drag onto a table</p>
+        <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50/40 dark:bg-amber-950/40 p-3">
+          <p className="mb-2 text-xs font-medium text-amber-800 dark:text-amber-300">Needs reassignment — drag onto a table</p>
           <div className="flex flex-wrap gap-1.5">
             {needsReassignmentGuests.map((g) => (
               <span
@@ -1221,7 +1221,7 @@ function PlanFloorPlan({
                 draggable={canEditThisVersion}
                 onDragStart={(e) => onGuestDragStart(e, g.guestId)}
                 title={`Currently at ${g.tableLabel}, which no longer fits a hard rule for them`}
-                className={`rounded-full border border-dashed border-amber-300 bg-white px-2 py-1 text-xs text-amber-800 ${
+                className={`rounded-full border border-dashed border-amber-300 dark:border-amber-700 bg-white dark:bg-neutral-900 px-2 py-1 text-xs text-amber-800 dark:text-amber-300 ${
                   canEditThisVersion ? "cursor-grab active:cursor-grabbing" : ""
                 } ${movingGuestId === g.guestId ? "opacity-50" : ""}`}
               >
@@ -1233,7 +1233,7 @@ function PlanFloorPlan({
       )}
       <div
         style={{ width: "100%", height, maxWidth: width }}
-        className="relative overflow-auto rounded-lg border border-neutral-200 bg-neutral-50"
+        className="relative overflow-auto rounded-lg border border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-900"
       >
         {tables.map((t) => {
           const entry = grouped.get(t.id);
@@ -1255,15 +1255,15 @@ function PlanFloorPlan({
                 width: PLAN_BOX_WIDTH,
                 height: PLAN_BOX_HEIGHT,
               }}
-              className={`absolute flex flex-col overflow-hidden rounded-md border-2 bg-white p-2 text-xs shadow-sm ${
-                dragOverTableId === t.id ? "border-blue-500 bg-blue-50" : "border-neutral-300"
+              className={`absolute flex flex-col overflow-hidden rounded-md border-2 bg-white dark:bg-neutral-900 p-2 text-xs shadow-sm ${
+                dragOverTableId === t.id ? "border-blue-500 dark:border-blue-400 bg-blue-50 dark:bg-blue-950" : "border-neutral-300 dark:border-neutral-600"
               }`}
             >
               <p className="mb-1 truncate font-medium" title={t.label}>
                 {t.label}
               </p>
               <div className="flex max-h-36 flex-col gap-1 overflow-y-auto">
-                {tableGuests.length === 0 && <span className="text-neutral-400">Empty</span>}
+                {tableGuests.length === 0 && <span className="text-neutral-400 dark:text-neutral-500">Empty</span>}
                 {tableGuests.map((g) => (
                   <span
                     key={g.guestId}
@@ -1271,7 +1271,7 @@ function PlanFloorPlan({
                     draggable={canEditThisVersion}
                     onDragStart={(e) => onGuestDragStart(e, g.guestId)}
                     title={g.guestName}
-                    className={`truncate rounded px-1.5 py-0.5 bg-neutral-100 text-neutral-900 ${
+                    className={`truncate rounded px-1.5 py-0.5 bg-neutral-100 dark:bg-neutral-800 text-neutral-900 dark:text-neutral-100 ${
                       canEditThisVersion ? "cursor-grab active:cursor-grabbing" : ""
                     } ${movingGuestId === g.guestId ? "opacity-50" : ""}`}
                   >

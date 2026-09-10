@@ -140,13 +140,13 @@ export default function WeddingDetailPage() {
   }, [weddingId, error]);
 
   if (loading) {
-    return <main className="flex flex-1 items-center justify-center text-neutral-500">Loading...</main>;
+    return <main className="flex flex-1 items-center justify-center text-neutral-500 dark:text-neutral-400">Loading...</main>;
   }
 
   if (error && !wedding) {
     return (
       <main className="flex flex-1 flex-col items-center justify-center gap-3">
-        <p className="text-sm text-red-600">{error}</p>
+        <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
         <Link href="/dashboard" className="text-sm underline">
           Back to dashboard
         </Link>
@@ -160,8 +160,8 @@ export default function WeddingDetailPage() {
   if (accessRevoked) {
     return (
       <main className="flex flex-1 flex-col items-center justify-center gap-3">
-        <p className="text-sm text-red-600">{accessNotice}</p>
-        <p className="text-sm text-neutral-500">Taking you back to your dashboard...</p>
+        <p className="text-sm text-red-600 dark:text-red-400">{accessNotice}</p>
+        <p className="text-sm text-neutral-500 dark:text-neutral-400">Taking you back to your dashboard...</p>
         <Link href="/dashboard" className="text-sm underline">
           Go now
         </Link>
@@ -176,7 +176,7 @@ export default function WeddingDetailPage() {
   return (
     <main className="mx-auto w-full max-w-3xl flex-1 px-6 py-10">
       <div className="flex items-center justify-between">
-        <Link href="/dashboard" className="text-sm text-neutral-500 hover:underline">
+        <Link href="/dashboard" className="text-sm text-neutral-500 dark:text-neutral-400 hover:underline">
           &larr; Back to dashboard
         </Link>
         <NotificationsBell />
@@ -185,36 +185,36 @@ export default function WeddingDetailPage() {
         // FR-1.6: access changed (but was not revoked entirely) while this tab was already open --
         // a non-blocking notice, dismissable by the user, rather than the full-page redirect used
         // for a full revocation above.
-        <div className="mt-3 flex items-center justify-between gap-3 rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-800">
+        <div className="mt-3 flex items-center justify-between gap-3 rounded-md bg-amber-50 dark:bg-amber-950 px-3 py-2 text-sm text-amber-800 dark:text-amber-300">
           <span>{accessNotice}</span>
           <button
             onClick={() => setAccessNotice(null)}
-            className="shrink-0 text-amber-800 underline hover:no-underline"
+            className="shrink-0 text-amber-800 dark:text-amber-300 underline hover:no-underline"
           >
             Dismiss
           </button>
         </div>
       )}
       <h1 className="mt-2 mb-1 text-2xl font-semibold">{wedding?.name}</h1>
-      <p className="mb-6 text-sm text-neutral-500">
+      <p className="mb-6 text-sm text-neutral-500 dark:text-neutral-400">
         {wedding?.eventDate ? new Date(wedding.eventDate).toLocaleDateString() : "No date set"}
         {wedding?.venueName ? ` · ${wedding.venueName}` : ""}
         {accessLevel && accessLevel !== "OWNER" && (
-          <span className="ml-2 rounded-full bg-neutral-100 px-2 py-0.5 text-xs text-neutral-500">
+          <span className="ml-2 rounded-full bg-neutral-100 dark:bg-neutral-800 px-2 py-0.5 text-xs text-neutral-500 dark:text-neutral-400">
             Your access: {accessLevel === "EDIT" ? "Edit" : accessLevel === "COMMENT" ? "Comment" : "View"}
           </span>
         )}
       </p>
 
-      <div className="mb-8 flex gap-1 overflow-x-auto border-b border-neutral-200">
+      <div className="mb-8 flex gap-1 overflow-x-auto border-b border-neutral-200 dark:border-neutral-700">
         {TABS.map((t) => (
           <button
             key={t.value}
             onClick={() => setTab(t.value)}
             className={`whitespace-nowrap px-4 py-2 text-sm font-medium ${
               tab === t.value
-                ? "border-b-2 border-neutral-900 text-neutral-900"
-                : "text-neutral-500 hover:text-neutral-700"
+                ? "border-b-2 border-neutral-900 dark:border-neutral-100 text-neutral-900 dark:text-neutral-100"
+                : "text-neutral-500 dark:text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-300 dark:hover:text-neutral-300"
             }`}
           >
             {t.label}
