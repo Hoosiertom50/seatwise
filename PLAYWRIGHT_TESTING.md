@@ -486,6 +486,141 @@ criterion breakdown (points, confidence, and the exact rationale behind every ju
 or hand-authored), last known execution result and age, and any recommendations requiring human
 review.
 
+## Claude Code integration (Stage 08)
+
+Section 11 asks for the framework's deterministic tools (everything above) to be reachable through
+Claude Code's own skills, subagents, and hooks, rather than reimplemented in prose. Everything below
+lives under `.claude/` and is committed like any other framework source.
+
+### Skills (`.claude/skills/`, invoked as `/pw-...`)
+
+| Skill | Responsibility |
+|---|---|
+| `/pw-bootstrap` | Resume/advance the staged spec build one stage at a time, gated on a passing audit |
+| `/pw-author-test` | Author a new test from an approved requirement or manual case |
+| `/pw-run-tests` | Preview a tag selection, safety-check it, run it, produce reports |
+| `/pw-review-suite` | Discover, validate, score, and generate the Stage 07 suite-review report |
+| `/pw-triage-failures` | Classify a failed run's root cause from real evidence, never fix it |
+| `/pw-repair-test` | Repair exactly one explicitly-confirmed test, hook-enforced scope |
+| `/pw-validate-framework` | Run every offline deterministic check (schemas/lint/types/tests/discovery) |
+
+Every skill's own `SKILL.md` states, in this order: when to use it and when not to, required
+arguments, allowed scope of file changes, preflight checks, the deterministic commands it invokes,
+expected output, stop conditions requiring a human, and an explicit prohibition against silently
+changing application behavior or test expectations. None of them reimplement tag parsing or scoring
+in prose — every one delegates to the real `pnpm pw:*` CLIs documented earlier in this file.
+`/pw-repair-test` sets `disable-model-invocation: true` (only a human can invoke it, never the
+assistant on its own initiative) and `context: fork` into the `playwright-repair` subagent below,
+rather than running in the main session.
+
+### Subagents (`.claude/agents/`)
+
+| Subagent | Tools | Role |
+|---|---|---|
+| `playwright-reviewer` | `Read, Grep, Glob, Bash` | Independent stage-audit and suite-quality evaluator |
+| `playwright-triage` | `Read, Grep, Glob, Bash` | Failure-evidence analyst |
+| `playwright-repair` | `Read, Grep, Glob, Bash, Edit, Write` | Scoped repair worker, forked into only by `/pw-repair-test` |
+
+`playwright-reviewer` and `playwright-triage` have no `Write`/`Edit`/`NotebookEdit` in their tools
+list at all, and each also carries its own `PreToolUse` hook
+(`.claude/hooks/readonly-bash-guard.mjs`, scoped to that subagent alone via its frontmatter's own
+`hooks:` field) that denies those three tools outright as defense in depth, and blocks any `Bash`
+call matching a documented, intentionally conservative mutation blocklist (`rm`, `mv`, `sed -i`,
+output redirection, mutating `git` subcommands, and similar — see the script's own comments for the
+full list and rationale). This is not sandboxing — Claude Code has no per-command Bash sandbox today
+— but it is enough to catch the overwhelming majority of accidental or careless attempts from an
+agent whose entire system prompt already assumes it never writes anything.
+
+`playwright-repair` is deliberately given `Edit`/`Write`, but only within a hook-enforced scope — see
+the next section — and its own `Bash` calls are separately guarded by the same
+`readonly-bash-guard.mjs` blocklist, so every file mutation it makes goes through `Edit`/`Write`
+where the scope guard can actually reason about the target, never through a raw shell command.
+
+### The scoped repair write guard (hook requirement #1)
+
+`.claude/hooks/repair-write-guard.mjs`, wired only into `playwright-repair`'s own frontmatter
+(matcher `Edit|Write`), enforces two independent conditions on every write that subagent attempts:
+
+1. **The target must fall under a directory `quality/repair-allowed-dirs.yaml` lists.** This file is
+   committed and human-owned (today: `e2e/tests`, `e2e/pages`, `e2e/components` — deliberately
+   excluding `e2e/fixtures`, `e2e/data`, `e2e/support`, all of `playwright-framework/`,
+   `quality/*.yaml`, `package.json`, `playwright.config.ts`, and application source under
+   `apps/`/`packages/`). No skill, hook, or subagent in this framework ever writes to it — widening
+   it is a human editing the repo directly, which is what "unless the human explicitly expands
+   scope" (Section 11.4) means in practice.
+2. **The target must also appear in `artifacts/playwright/repair-scope.json`'s `approvedPaths`** —
+   an ephemeral, gitignored, per-session file `/pw-repair-test`'s own preflight writes only after
+   explicitly confirming the exact target with a human. Nothing is writable by `playwright-repair`
+   until this file names it, even fully within the outer allowlist above.
+
+A `Write` is additionally refused unless the target file already exists — repair modifies an
+already-identified test, it never authors a new one. Every check fails safe: a missing or
+unparseable `quality/repair-allowed-dirs.yaml`, a missing or unparseable
+`artifacts/playwright/repair-scope.json`, or a target outside the repository root entirely all deny,
+never default to permissive.
+
+### The lightweight post-edit validator (hook requirement #2)
+
+`.claude/hooks/post-edit-validator.mjs`, wired project-wide in `.claude/settings.json` as a
+`PostToolUse` hook (matcher `Edit|Write`, so it applies in the main session and every subagent
+alike). It cannot block anything — the edit has already happened by the time a `PostToolUse` hook
+runs — so it runs the smallest relevant offline check and surfaces a failure loudly if one exists:
+
+- A changed `quality/*.yaml` governance file → `pnpm pw:validate-metadata` (zod-only).
+- A changed `*.ts` file under `e2e/` or `playwright-framework/` → `pnpm exec tsc --noEmit`.
+- ...and if that file is itself a test spec → also `pnpm pw:lint-tests` (AST-only, no browser).
+- Anything else → a no-op.
+
+It never launches a browser-backed test project, per Section 11.4's explicit "never run the complete
+browser suite after every file edit." Fails open on anything it can't make sense of (malformed
+input, a file that no longer exists) — a hook that can't block anyway should never manufacture a
+false failure report.
+
+### The scoped bootstrap stage-gate check (hook requirement #3)
+
+`.claude/hooks/stage-gate-check.mjs`, wired project-wide in `.claude/settings.json` as a
+`PreToolUse` hook (matcher `Edit|Write`). It is "scoped" to exactly one file: the first thing it does
+is check whether the edit's target is `PLAYWRIGHT_QUALITY_FRAMEWORK_SPEC.md` at all, and immediately
+gets out of the way (a fast no-op) if it isn't — which is true for the overwhelming majority of edits
+in this repository. When it is that file, the hook computes what the file's content would become if
+the edit were applied (reading the real current content and, for an `Edit`, applying the same
+`old_string`/`new_string` substitution the tool itself would make) and requires: for every Progress
+Dashboard line the result would leave checked (`- [x] Stage NN — ...`),
+`quality/audits/stage-NN-audit.md` must already exist and its own first `Result:` line must start
+with `PASS` (matching every real audit from Stage 00 through Stage 07 — `PASS WITH FINDINGS` counts,
+a verdict that isn't a form of PASS, or a missing audit file, does not). It checks specifically the
+file's *first* `Result:` line, not merely whether the string appears anywhere in the document — a
+Stage 08 audit finding (fixed) showed that a substring-anywhere check could be satisfied by an
+unrelated `Result: PASS` line elsewhere in the file (e.g. a quoted example in an appendix) even while
+the audit's own real verdict was a `FAIL`. This fails safe: an `Edit` whose `old_string` can't be
+located in the file's real current content is denied rather than assumed harmless, since this script
+cannot otherwise know what the resulting content would be.
+
+### Testing the hooks
+
+Every one of the four hook scripts above has its own `playwright-framework/tests/hooks/*.spec.ts`
+covering an allowed case, a denied case (where applicable — `post-edit-validator` can't block, so its
+"denied" case is "surfaces a real failure" instead), a malformed-input case, and a missing-field
+case, run as real spawned `node <script>.mjs` child processes fed real stdin — never by importing
+internals, since a hook has none to import; it is a script Claude Code itself spawns. The two
+guards that depend on repository state (`repair-write-guard`, `stage-gate-check`) run against a
+throwaway temporary fake repository root for every test, never this real repo's own files, so they
+can run safely alongside a real `/pw-repair-test` or `/pw-bootstrap` session.
+
+### When Claude Code features are unavailable
+
+This framework targets current, documented Claude Code project skills, subagent, and hook syntax
+(verified against the live documentation while building this stage, not assumed from training data).
+If an installed Claude Code version predates project skills or the subagent/hook fields used here
+(`hooks:` in subagent frontmatter, `disable-model-invocation`, `context: fork`), the `/pw-*` slash
+invocations simply won't appear — there is no separate legacy `.claude/commands/` compatibility layer
+committed alongside them, per Section 11.1's "create compatibility command files only when the
+installed version requires them, and record that decision": no version in use during this build ever
+required one, so none was created. In that situation, every workflow above is still fully usable by
+running its documented `pnpm pw:*` commands directly from a shell — nothing in this framework's
+actual behavior depends on the skills/hooks layer existing; it is a convenience wrapper over
+commands that already work standalone.
+
 ## Verifying independence
 
 Reference tests are expected to pass individually, regardless of what ran before them, and under

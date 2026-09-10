@@ -1140,7 +1140,7 @@ A reusable Playwright Test framework is being built out per
 `PLAYWRIGHT_QUALITY_FRAMEWORK_SPEC.md` (also the resumable implementation ledger — see its own
 Progress Dashboard for what's done). Tracked in Jira as TS-22 with one story per stage (TS-23
 through TS-34). **`PLAYWRIGHT_TESTING.md` is the full manual-tester/authoring guide** (Stage 06) —
-start there if you're writing or reviewing a test. The basics, as of Stage 06:
+start there if you're writing or reviewing a test. The basics, as of Stage 08:
 
 - **Install:** `pnpm install` (top-level, same as the rest of the repo) gets `@playwright/test`
   itself; then `pnpm pw:install` downloads the Chromium browser binary Playwright needs (Firefox
@@ -1173,9 +1173,11 @@ start there if you're writing or reviewing a test. The basics, as of Stage 06:
   the mechanical/hand-authored test evaluator under `playwright-framework/evaluation/`, and the
   `pnpm pw:review` / `pnpm pw:review:serve` CLIs); `quality/` holds versioned config (including
   Stage 05's `quality/saved-selections.yaml` and Stage 07's hand-authored
-  `quality/test-evaluations.yaml`) and audit reports; `artifacts/playwright/` holds generated,
-  gitignored run output, including Stage 05's run manifests, Stage 06's run reports, and Stage 07's
-  suite reviews.
+  `quality/test-evaluations.yaml`, and, as of Stage 08, the human-owned
+  `quality/repair-allowed-dirs.yaml`) and audit reports; `artifacts/playwright/` holds generated,
+  gitignored run output, including Stage 05's run manifests, Stage 06's run reports, Stage 07's
+  suite reviews, and Stage 08's ephemeral per-session `repair-scope.json`; `.claude/` holds the
+  Stage 08 Claude Code integration layer (`skills/`, `agents/`, `hooks/`, `settings.json`).
 - **Test-authoring standards and enforcement (Stage 04):** `pnpm pw:lint-tests` statically checks
   every real `e2e/tests/**/*.spec.ts` file (no browser launch needed) against the rules
   `PLAYWRIGHT_TESTING.md` documents — no raw selectors/screenshots/fixed-waits in a test file, no
@@ -1214,6 +1216,19 @@ start there if you're writing or reviewing a test. The basics, as of Stage 06:
   hand-authored/forced-needs-human-review split (Section 8.6: missing business information is
   flagged, never invented) — see `PLAYWRIGHT_TESTING.md`'s "Suite review, coverage analysis, and
   test catalog" section for the full breakdown.
+- **Claude Code integration (Stage 08):** every framework workflow above is also reachable as a
+  Claude Code project skill under `.claude/skills/` (`/pw-bootstrap`, `/pw-author-test`,
+  `/pw-run-tests`, `/pw-review-suite`, `/pw-triage-failures`, `/pw-repair-test`,
+  `/pw-validate-framework`), each stating its own scope, preflight, and stop conditions rather than
+  reimplementing any of this in prose. Two read-only subagents (`playwright-reviewer`,
+  `playwright-triage`) and one scoped, hook-guarded repair worker (`playwright-repair`) live under
+  `.claude/agents/`; three hooks under `.claude/hooks/` enforce (not just document) that the reviewer
+  and triage agents can never write files, that `/pw-repair-test` can only ever touch an explicitly
+  human-confirmed test within `quality/repair-allowed-dirs.yaml`'s committed allowlist, that every
+  edit runs a lightweight offline validator, and that `PLAYWRIGHT_QUALITY_FRAMEWORK_SPEC.md` refuses
+  to have a stage marked complete without a passing `quality/audits/stage-NN-audit.md`. See
+  `PLAYWRIGHT_TESTING.md`'s "Claude Code integration" section for the full design and how each hook
+  is tested.
 - **Test governance and value model (Stage 02):** `quality/requirements.yaml`,
   `quality/tag-taxonomy.yaml`, and `quality/test-value-model.yaml` (+ generated
   `quality/test-value-model.md`) are the canonical, versioned data behind the framework's tagging

@@ -6,4 +6,4 @@
  * this constant tracks the highest PLAYWRIGHT_QUALITY_FRAMEWORK_SPEC.md stage completed and
  * audited so far -- bump it in the same commit that closes out a stage's audit.
  */
-export const FRAMEWORK_VERSION = "0.7.0"; // Stage 07: suite review, coverage analysis, and test catalog
+export const FRAMEWORK_VERSION = "0.8.0"; // Stage 08: Claude Code skills, commands, subagents, and hooks
