@@ -27,32 +27,32 @@ export function ActivityTab({ weddingId }: { weddingId: string }) {
       .finally(() => setLoading(false));
   }, [weddingId]);
 
-  if (loading) return <p className="text-sm text-neutral-500">Loading activity...</p>;
-  if (error) return <p className="text-sm text-red-600">{error}</p>;
+  if (loading) return <p className="text-sm text-neutral-500 dark:text-neutral-400">Loading activity...</p>;
+  if (error) return <p className="text-sm text-red-600 dark:text-red-400">{error}</p>;
 
   return (
     <div>
       <h2 className="mb-1 text-lg font-medium">Activity</h2>
-      <p className="mb-4 text-sm text-neutral-500">
+      <p className="mb-4 text-sm text-neutral-500 dark:text-neutral-400">
         Every change across every version of this wedding&apos;s seating plan, newest first.
       </p>
       {entries.length === 0 ? (
-        <p className="text-sm text-neutral-500">Nothing has happened yet.</p>
+        <p className="text-sm text-neutral-500 dark:text-neutral-400">Nothing has happened yet.</p>
       ) : (
         <ul className="flex flex-col gap-2">
           {entries.map((e) => (
-            <li key={e.id} className="rounded-lg border border-neutral-200 px-4 py-3">
+            <li key={e.id} className="rounded-lg border border-neutral-200 dark:border-neutral-700 px-4 py-3">
               <div className="flex items-center justify-between gap-2">
                 <span className="text-sm font-medium">
                   {ACTION_LABELS[e.action] ?? e.action}
-                  <span className="ml-2 font-normal text-neutral-500">v{e.versionNumber}</span>
+                  <span className="ml-2 font-normal text-neutral-500 dark:text-neutral-400">v{e.versionNumber}</span>
                 </span>
-                <span className="text-xs text-neutral-500">
+                <span className="text-xs text-neutral-500 dark:text-neutral-400">
                   {new Date(e.createdAt).toLocaleString()}
                 </span>
               </div>
-              <p className="mt-1 text-sm text-neutral-700">{e.description}</p>
-              {e.actorName && <p className="mt-1 text-xs text-neutral-500">by {e.actorName}</p>}
+              <p className="mt-1 text-sm text-neutral-700 dark:text-neutral-300">{e.description}</p>
+              {e.actorName && <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">by {e.actorName}</p>}
             </li>
           ))}
         </ul>

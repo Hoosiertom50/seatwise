@@ -3,14 +3,20 @@
 :root {
   --background: #ffffff;
   --foreground: #171717;
-  /* Every component in this app is built with hardcoded light-mode colors (white cards, dark
-     text) -- none of them have a matching dark-mode counterpart yet. Left to the browser's
-     default dark-mode media query, the page background flips dark while text colors stay
-     dark-on-light-assuming, producing illegible dark-on-dark text (most visible on the active
-     tab in the wedding page's tab bar). Pinning color-scheme to light keeps the whole app
-     visually consistent regardless of the OS/browser theme until a real dark theme -- with its
-     own considered colors for every component -- is built as its own pass. */
-  color-scheme: light;
+  /* Every component now carries a matching `dark:` Tailwind variant alongside its light-mode
+     color (bg-white -> dark:bg-neutral-900, text-neutral-500 -> dark:text-neutral-400, etc.),
+     so it's safe to let the page follow the OS/browser theme again instead of pinning to light
+     the way the original quick fix did. `light dark` tells the browser both themes are
+     supported, so native chrome (scrollbars, form control defaults) can render appropriately
+     for whichever one is active. */
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #0a0a0a;
+    --foreground: #ededed;
+  }
 }
 
 @theme inline {

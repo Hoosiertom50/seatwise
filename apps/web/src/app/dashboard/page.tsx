@@ -24,9 +24,9 @@ const PLAN_STATUS_LABELS: Record<"DRAFT" | "IN_REVIEW" | "APPROVED", string> = {
 };
 
 const PLAN_STATUS_BADGE_CLASSES: Record<"DRAFT" | "IN_REVIEW" | "APPROVED", string> = {
-  DRAFT: "bg-amber-100 text-amber-700",
-  IN_REVIEW: "bg-blue-100 text-blue-700",
-  APPROVED: "bg-green-100 text-green-700",
+  DRAFT: "bg-amber-100 text-amber-700 dark:text-amber-400",
+  IN_REVIEW: "bg-blue-100 text-blue-700 dark:text-blue-400",
+  APPROVED: "bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-400",
 };
 
 // FR-11.3: "needing attention soonest" is a combination of two independent things -- an
@@ -209,7 +209,7 @@ export default function DashboardPage() {
   }
 
   if (loading) {
-    return <main className="flex flex-1 items-center justify-center text-neutral-500">Loading...</main>;
+    return <main className="flex flex-1 items-center justify-center text-neutral-500 dark:text-neutral-400">Loading...</main>;
   }
 
   return (
@@ -217,13 +217,13 @@ export default function DashboardPage() {
       <div className="mb-8 flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-semibold">Your weddings</h1>
-          {userName && <p className="text-sm text-neutral-500">Signed in as {userName}</p>}
+          {userName && <p className="text-sm text-neutral-500 dark:text-neutral-400">Signed in as {userName}</p>}
         </div>
         <div className="flex items-center gap-2">
           <NotificationsBell />
           <button
             onClick={onLogout}
-            className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm hover:bg-neutral-50"
+            className="rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800 dark:hover:bg-neutral-800"
           >
             Log out
           </button>
@@ -232,12 +232,12 @@ export default function DashboardPage() {
 
       <form
         onSubmit={onCreate}
-        className="mb-8 flex flex-col gap-3 rounded-lg border border-neutral-200 p-4"
+        className="mb-8 flex flex-col gap-3 rounded-lg border border-neutral-200 dark:border-neutral-700 p-4"
       >
         {/* FR-11.4: a wedding you create is yours -- you're its planner and owner from the start,
             and the couple is someone you invite in afterward (see the Collaborators tab once
             it's created), not the other way around. */}
-        <p className="text-sm text-neutral-500">
+        <p className="text-sm text-neutral-500 dark:text-neutral-400">
           You&apos;ll own and manage this wedding as its planner. Once it&apos;s created, invite the
           couple (and anyone else helping) as collaborators from the Collaborators tab.
         </p>
@@ -248,7 +248,7 @@ export default function DashboardPage() {
             </label>
             <input
               id="new-wedding-name"
-              className="w-full rounded-md border border-neutral-300 px-3 py-2 text-sm"
+              className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
               placeholder="Alex &amp; Jordan's Wedding"
               value={newName}
               onChange={(e) => setNewName(e.target.value)}
@@ -262,7 +262,7 @@ export default function DashboardPage() {
             <input
               id="new-wedding-date"
               type="date"
-              className="rounded-md border border-neutral-300 px-3 py-2 text-sm"
+              className="rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
               value={newDate}
               onChange={(e) => setNewDate(e.target.value)}
             />
@@ -273,7 +273,7 @@ export default function DashboardPage() {
             </label>
             <input
               id="new-wedding-venue"
-              className="w-full rounded-md border border-neutral-300 px-3 py-2 text-sm"
+              className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
               value={newVenue}
               onChange={(e) => setNewVenue(e.target.value)}
             />
@@ -281,7 +281,7 @@ export default function DashboardPage() {
           <button
             type="submit"
             disabled={creating || (!!selectedTemplateId && !applyTemplateTables && !applyTemplateRules)}
-            className="rounded-md bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-700 disabled:opacity-50"
+            className="rounded-md bg-neutral-900 dark:bg-neutral-100 px-4 py-2 text-sm font-medium text-white dark:text-neutral-900 hover:bg-neutral-700 dark:hover:bg-neutral-300 dark:hover:bg-neutral-300 disabled:opacity-50"
           >
             {creating ? "Adding..." : "Add wedding"}
           </button>
@@ -289,13 +289,13 @@ export default function DashboardPage() {
         {/* TS-19 (FR-14.4): entirely optional -- leaving this at "Start from scratch" behaves
             exactly as before this feature existed. */}
         {templates.length > 0 && (
-          <div className="rounded-md border border-neutral-200 p-3">
+          <div className="rounded-md border border-neutral-200 dark:border-neutral-700 p-3">
             <label htmlFor="new-wedding-template" className="mb-1 block text-sm font-medium">
               Start from a template (optional)
             </label>
             <select
               id="new-wedding-template"
-              className="w-full rounded-md border border-neutral-300 px-3 py-2 text-sm sm:max-w-sm"
+              className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm sm:max-w-sm"
               value={selectedTemplateId}
               onChange={(e) => setSelectedTemplateId(e.target.value)}
             >
@@ -330,11 +330,11 @@ export default function DashboardPage() {
                   )
                 </label>
                 {!applyTemplateTables && !applyTemplateRules && (
-                  <p className="text-xs text-red-600">
+                  <p className="text-xs text-red-600 dark:text-red-400">
                     Pick at least one, or choose &ldquo;Start from scratch&rdquo; instead.
                   </p>
                 )}
-                <p className="text-xs text-neutral-500">
+                <p className="text-xs text-neutral-500 dark:text-neutral-400">
                   Everything pre-filled from the template stays fully editable afterward.
                 </p>
               </div>
@@ -350,7 +350,7 @@ export default function DashboardPage() {
             </label>
             <textarea
               id="new-wedding-note"
-              className="w-full rounded-md border border-neutral-300 px-3 py-2 text-sm"
+              className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
               rows={2}
               placeholder="Anything worth remembering about this wedding"
               value={newNote}
@@ -361,30 +361,30 @@ export default function DashboardPage() {
           <button
             type="button"
             onClick={() => setShowNote(true)}
-            className="self-start text-sm text-neutral-500 underline hover:text-neutral-700"
+            className="self-start text-sm text-neutral-500 dark:text-neutral-400 underline hover:text-neutral-700 dark:hover:text-neutral-300 dark:hover:text-neutral-300"
           >
             + Add a note
           </button>
         )}
       </form>
 
-      {error && <p className="mb-4 text-sm text-red-600">{error}</p>}
+      {error && <p className="mb-4 text-sm text-red-600 dark:text-red-400">{error}</p>}
 
       {templates.length > 0 && (
-        <details className="mb-8 rounded-lg border border-neutral-200 p-4">
+        <details className="mb-8 rounded-lg border border-neutral-200 dark:border-neutral-700 p-4">
           <summary className="cursor-pointer text-sm font-medium">
             Your templates ({templates.length})
           </summary>
-          {templatesError && <p className="mt-2 text-sm text-red-600">{templatesError}</p>}
+          {templatesError && <p className="mt-2 text-sm text-red-600 dark:text-red-400">{templatesError}</p>}
           <ul className="mt-3 flex flex-col gap-2">
             {templates.map((t) => (
               <li
                 key={t.id}
-                className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-neutral-200 px-3 py-2"
+                className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-neutral-200 dark:border-neutral-700 px-3 py-2"
               >
                 <div>
                   <p className="font-medium">{t.name}</p>
-                  <p className="text-xs text-neutral-500">
+                  <p className="text-xs text-neutral-500 dark:text-neutral-400">
                     {t.tableCount} table{t.tableCount === 1 ? "" : "s"} ·{" "}
                     {SIDE_MIXING_LABELS[t.sideMixing]}
                     {t.sourceWeddingName ? ` · saved from ${t.sourceWeddingName}` : ""}
@@ -392,7 +392,7 @@ export default function DashboardPage() {
                 </div>
                 <button
                   onClick={() => onDeleteTemplate(t.id)}
-                  className="rounded-md border border-neutral-300 px-2 py-1 text-sm text-red-600 hover:bg-red-50"
+                  className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950 dark:hover:bg-red-950"
                 >
                   Delete
                 </button>
@@ -409,13 +409,13 @@ export default function DashboardPage() {
               type="search"
               aria-label="Search weddings"
               placeholder="Search by name or venue..."
-              className="flex-1 rounded-md border border-neutral-300 px-3 py-1.5 text-sm sm:max-w-xs"
+              className="flex-1 rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 text-sm sm:max-w-xs"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
             />
             <select
               aria-label="Filter by plan status"
-              className="rounded-md border border-neutral-300 px-2 py-1.5 text-sm"
+              className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1.5 text-sm"
               value={planStatusFilter}
               onChange={(e) => setPlanStatusFilter(e.target.value as PlanStatusFilter)}
             >
@@ -428,7 +428,7 @@ export default function DashboardPage() {
           </div>
           <select
             aria-label="Sort weddings"
-            className="rounded-md border border-neutral-300 px-2 py-1.5 text-sm"
+            className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1.5 text-sm"
             value={sortKey}
             onChange={(e) => setSortKey(e.target.value as SortKey)}
           >
@@ -442,15 +442,15 @@ export default function DashboardPage() {
       )}
 
       {weddings.length === 0 ? (
-        <p className="text-sm text-neutral-500">
+        <p className="text-sm text-neutral-500 dark:text-neutral-400">
           No weddings yet — add one above to start building a guest list.
         </p>
       ) : visibleWeddings.length === 0 ? (
-        <p className="text-sm text-neutral-500">No weddings match your search/filter.</p>
+        <p className="text-sm text-neutral-500 dark:text-neutral-400">No weddings match your search/filter.</p>
       ) : (
         <>
           {(search.trim() || planStatusFilter !== "ALL") && (
-            <p className="mb-2 text-xs text-neutral-500">
+            <p className="mb-2 text-xs text-neutral-500 dark:text-neutral-400">
               Showing {visibleWeddings.length} of {weddings.length} weddings.
             </p>
           )}
@@ -461,13 +461,13 @@ export default function DashboardPage() {
                 <li key={w.id}>
                   <Link
                     href={`/weddings/${w.id}`}
-                    className="flex flex-col gap-2 rounded-lg border border-neutral-200 px-4 py-3 hover:border-neutral-400 sm:flex-row sm:items-center sm:justify-between"
+                    className="flex flex-col gap-2 rounded-lg border border-neutral-200 dark:border-neutral-700 px-4 py-3 hover:border-neutral-400 dark:hover:border-neutral-500 dark:hover:border-neutral-500 sm:flex-row sm:items-center sm:justify-between"
                   >
                     <div>
                       <p className="flex flex-wrap items-center gap-2 font-medium">
                         {w.name}
                         {userId && w.ownerId !== userId && (
-                          <span className="rounded-full bg-neutral-100 px-2 py-0.5 text-xs font-normal text-neutral-500">
+                          <span className="rounded-full bg-neutral-100 dark:bg-neutral-800 px-2 py-0.5 text-xs font-normal text-neutral-500 dark:text-neutral-400">
                             Shared with you
                           </span>
                         )}
@@ -475,20 +475,20 @@ export default function DashboardPage() {
                           className={`rounded-full px-2 py-0.5 text-xs font-normal ${
                             w.planStatus
                               ? PLAN_STATUS_BADGE_CLASSES[w.planStatus]
-                              : "bg-neutral-100 text-neutral-500"
+                              : "bg-neutral-100 dark:bg-neutral-800 text-neutral-500 dark:text-neutral-400"
                           }`}
                         >
                           {w.planStatus ? PLAN_STATUS_LABELS[w.planStatus] : "No plan yet"}
                         </span>
                       </p>
-                      <p className="text-sm text-neutral-500">
+                      <p className="text-sm text-neutral-500 dark:text-neutral-400">
                         {w.eventDate ? new Date(w.eventDate).toLocaleDateString() : "No date set"}
                         {w.venueName ? ` · ${w.venueName}` : ""}
                       </p>
                     </div>
-                    <div className="flex flex-wrap items-center gap-3 text-sm text-neutral-500 sm:text-right">
+                    <div className="flex flex-wrap items-center gap-3 text-sm text-neutral-500 dark:text-neutral-400 sm:text-right">
                       {totalIssues > 0 && (
-                        <span className="rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700">
+                        <span className="rounded-full bg-red-100 dark:bg-red-900 px-2 py-0.5 text-xs font-medium text-red-700 dark:text-red-400">
                           {w.unassignedCount > 0 && `${w.unassignedCount} unassigned`}
                           {w.unassignedCount > 0 && w.needsReassignmentCount > 0 && " · "}
                           {w.needsReassignmentCount > 0 &&

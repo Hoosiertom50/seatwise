@@ -70,7 +70,7 @@ export default function GuestRsvpPage() {
   }
 
   if (loading || !preview) {
-    return <main className="flex flex-1 items-center justify-center text-neutral-500">Loading...</main>;
+    return <main className="flex flex-1 items-center justify-center text-neutral-500 dark:text-neutral-400">Loading...</main>;
   }
 
   if (preview.status === "NOT_FOUND") {
@@ -78,7 +78,7 @@ export default function GuestRsvpPage() {
       <main className="flex flex-1 items-center justify-center px-6">
         <div className="w-full max-w-sm text-center">
           <h1 className="mb-4 text-2xl font-semibold">RSVP</h1>
-          <p className="text-sm text-neutral-600">This RSVP link doesn&apos;t exist.</p>
+          <p className="text-sm text-neutral-600 dark:text-neutral-300">This RSVP link doesn&apos;t exist.</p>
         </div>
       </main>
     );
@@ -92,12 +92,12 @@ export default function GuestRsvpPage() {
         <h1 className="mb-1 text-2xl font-semibold">
           {preview.weddingName}
         </h1>
-        <p className="mb-6 text-sm text-neutral-500">
+        <p className="mb-6 text-sm text-neutral-500 dark:text-neutral-400">
           Hi {preview.firstName} — please let us know if you&apos;ll be able to join us.
         </p>
 
         {closed && (
-          <p className="mb-6 rounded-md bg-neutral-100 px-3 py-2 text-sm text-neutral-600">
+          <p className="mb-6 rounded-md bg-neutral-100 dark:bg-neutral-800 px-3 py-2 text-sm text-neutral-600 dark:text-neutral-300">
             RSVP responses have closed
             {preview.rsvpCutoffDate ? ` (the deadline was ${preview.rsvpCutoffDate})` : ""}. Shown
             below is what&apos;s currently on file — contact the couple directly if anything needs
@@ -105,7 +105,7 @@ export default function GuestRsvpPage() {
           </p>
         )}
         {!closed && justSubmitted && (
-          <p className="mb-6 rounded-md bg-green-50 px-3 py-2 text-sm text-green-700">
+          <p className="mb-6 rounded-md bg-green-50 dark:bg-green-950 px-3 py-2 text-sm text-green-700 dark:text-green-400">
             Thanks — your RSVP has been recorded. You can come back to this link any time to update it.
           </p>
         )}
@@ -118,8 +118,8 @@ export default function GuestRsvpPage() {
                 onClick={() => setAttending("CONFIRMED")}
                 className={`flex-1 rounded-md border px-3 py-2 text-sm font-medium ${
                   attending === "CONFIRMED"
-                    ? "border-neutral-900 bg-neutral-900 text-white"
-                    : "border-neutral-300 text-neutral-700"
+                    ? "border-neutral-900 dark:border-neutral-100 bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900"
+                    : "border-neutral-300 dark:border-neutral-600 text-neutral-700 dark:text-neutral-300"
                 }`}
               >
                 Joyfully attending
@@ -129,8 +129,8 @@ export default function GuestRsvpPage() {
                 onClick={() => setAttending("DECLINED")}
                 className={`flex-1 rounded-md border px-3 py-2 text-sm font-medium ${
                   attending === "DECLINED"
-                    ? "border-neutral-900 bg-neutral-900 text-white"
-                    : "border-neutral-300 text-neutral-700"
+                    ? "border-neutral-900 dark:border-neutral-100 bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900"
+                    : "border-neutral-300 dark:border-neutral-600 text-neutral-700 dark:text-neutral-300"
                 }`}
               >
                 Regretfully declining
@@ -140,31 +140,31 @@ export default function GuestRsvpPage() {
             {attending === "CONFIRMED" && (
               <>
                 <label className="text-sm">
-                  <span className="mb-1 block text-neutral-700">Total in your party (including you)</span>
+                  <span className="mb-1 block text-neutral-700 dark:text-neutral-300">Total in your party (including you)</span>
                   <input
                     type="number"
                     min={1}
                     max={20}
                     value={headcount}
                     onChange={(e) => setHeadcount(Number(e.target.value))}
-                    className="w-full rounded-md border border-neutral-300 px-3 py-2 text-sm"
+                    className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
                   />
                 </label>
 
                 {headcount > 1 && (
                   <label className="text-sm">
-                    <span className="mb-1 block text-neutral-700">Who&apos;s coming with you?</span>
+                    <span className="mb-1 block text-neutral-700 dark:text-neutral-300">Who&apos;s coming with you?</span>
                     <input
                       type="text"
                       value={plusOneNames}
                       onChange={(e) => setPlusOneNames(e.target.value)}
                       placeholder="e.g. Jamie Lee"
-                      className="w-full rounded-md border border-neutral-300 px-3 py-2 text-sm"
+                      className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
                     />
                   </label>
                 )}
 
-                <label className="flex items-center gap-2 text-sm text-neutral-700">
+                <label className="flex items-center gap-2 text-sm text-neutral-700 dark:text-neutral-300">
                   <input
                     type="checkbox"
                     checked={requiresAccessibleTable}
@@ -176,23 +176,23 @@ export default function GuestRsvpPage() {
             )}
 
             <label className="text-sm">
-              <span className="mb-1 block text-neutral-700">
+              <span className="mb-1 block text-neutral-700 dark:text-neutral-300">
                 Dietary restrictions or anything else we should know
               </span>
               <textarea
                 value={notes}
                 onChange={(e) => setNotes(e.target.value)}
                 rows={3}
-                className="w-full rounded-md border border-neutral-300 px-3 py-2 text-sm"
+                className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
               />
             </label>
 
-            {error && <p className="text-sm text-red-600">{error}</p>}
+            {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}
 
             <button
               type="submit"
               disabled={submitting}
-              className="w-full rounded-md bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-700 disabled:opacity-50"
+              className="w-full rounded-md bg-neutral-900 dark:bg-neutral-100 px-4 py-2 text-sm font-medium text-white dark:text-neutral-900 hover:bg-neutral-700 dark:hover:bg-neutral-300 dark:hover:bg-neutral-300 disabled:opacity-50"
             >
               {submitting ? "Submitting..." : "Submit RSVP"}
             </button>
