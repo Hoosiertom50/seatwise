@@ -1,0 +1,162 @@
+# Canonical tag taxonomy (Playwright Quality Engineering Framework, Section 9.1).
+# Validated against playwright-framework/metadata/schemas.ts:TagTaxonomyFileSchema.
+#
+# Every test's tags are checked against this file (playwright-framework/metadata/tagValidation.ts):
+# unknown tags fail validation, each dimension's "requirement" is enforced, aliases resolve to
+# their canonical tag before checking, and declared conflicts may never appear together.
+#
+# Changing this file (adding/removing/renaming a tag or dimension) requires a changeHistory entry.
+
+schemaVersion: "1.0.0"
+
+changeHistory:
+  - date: "2026-09-10"
+    change: "Initial taxonomy created for Stage 02, matching spec Section 9.1's initial table exactly."
+
+dimensions:
+  - name: data-impact
+    description: >
+      Whether running this test can change persistent state. Governs production eligibility
+      directly (Section 9.3): a @mutating test must never run against a production host.
+    requirement: exactly-one
+    tags:
+      - name: "@readonly"
+        description: "Test only reads state; makes no persistent changes."
+        productionEligible: true
+      - name: "@mutating"
+        description: "Test creates, updates, or deletes persistent state."
+        productionEligible: false
+
+  - name: feature
+    description: "Which product feature area this test exercises."
+    requirement: at-least-one
+    tags:
+      - name: "@feature:authentication"
+        description: "Signup, login, session/token handling."
+        productionEligible: true
+      - name: "@feature:guests"
+        description: "Guest list management: add/list/update/remove, bulk import/export."
+        productionEligible: true
+      - name: "@feature:relationships"
+        description: "Seating rules between guests (must/must-not/prefer/avoid)."
+        productionEligible: true
+      - name: "@feature:tables"
+        description: "Table and venue layout."
+        productionEligible: true
+      - name: "@feature:seating-plan"
+        description: "Automated seat assignment engine and plan review/status workflow."
+        productionEligible: true
+      - name: "@feature:manual-adjustment"
+        description: "Manual seat adjustment on an existing plan."
+        productionEligible: true
+      - name: "@feature:day-of-mode"
+        description: "Day-of / emergency mode."
+        productionEligible: true
+      - name: "@feature:export"
+        description: "Export, print, and plan-version restore."
+        productionEligible: true
+      - name: "@feature:collaboration"
+        description: "Multi-user collaboration and notifications, including RSVP email delivery."
+        productionEligible: true
+      - name: "@feature:rsvp"
+        description: "Guest-facing RSVP link generation and submission."
+        productionEligible: true
+      - name: "@feature:portfolio"
+        description: "Planner portfolio and multi-client account model."
+        productionEligible: true
+      - name: "@feature:timeline"
+        description: "Day-of timeline / run-of-show."
+        productionEligible: true
+      - name: "@feature:templates"
+        description: "Reusable wedding templates."
+        productionEligible: true
+      - name: "@feature:budget"
+        description: "Budget and vendor tracking."
+        productionEligible: true
+      - name: "@feature:mobile"
+        description: "The React Native / Expo day-of floor plan app."
+        productionEligible: true
+      - name: "@feature:non-functional"
+        description: "Cross-cutting performance, security, availability, or accessibility checks."
+        productionEligible: true
+      - name: "@feature:framework"
+        description: "The Playwright Quality Engineering Framework's own code (not the app)."
+        productionEligible: true
+
+  - name: suite
+    description: "Which named test run(s) this test belongs to."
+    requirement: at-least-one
+    tags:
+      - name: "@suite:smoke"
+        description: "Fast, high-confidence subset run on every change."
+        productionEligible: true
+      - name: "@suite:regression"
+        description: "Full regression coverage, run before release."
+        productionEligible: true
+      - name: "@suite:framework"
+        description: "The framework's own self-tests (env config, guards, scoring, etc.)."
+        productionEligible: true
+
+  - name: risk
+    description: "The severity of the consequence if the behavior this test protects breaks."
+    requirement: exactly-one
+    tags:
+      - name: "@risk:critical"
+        description: "Revenue-producing, mission-critical, or irreversible-action risk."
+        productionEligible: true
+      - name: "@risk:high"
+        description: "Significant user or business impact if this breaks."
+        productionEligible: true
+      - name: "@risk:normal"
+        description: "Standard expected-behavior risk."
+        productionEligible: true
+      - name: "@risk:low"
+        description: "Cosmetic or low-impact behavior."
+        productionEligible: true
+
+  - name: role
+    description: "The user role this test exercises as, when relevant."
+    requirement: optional
+    tags:
+      - name: "@role:anonymous"
+        description: "Unauthenticated guest/visitor."
+        productionEligible: true
+      - name: "@role:user"
+        description: "Authenticated planner/owner account."
+        productionEligible: true
+      - name: "@role:administrator"
+        description: "Elevated/administrative account, if the app ever defines one."
+        productionEligible: true
+
+  - name: test-type
+    description: "Cross-cutting test technique, orthogonal to feature area."
+    requirement: optional
+    tags:
+      - name: "@visual"
+        description: "Visual/screenshot comparison."
+        productionEligible: false
+      - name: "@accessibility"
+        description: "Automated accessibility check."
+        productionEligible: true
+      - name: "@external-service"
+        description: "Exercises a real third-party integration (e.g. Resend email delivery)."
+        productionEligible: false
+
+  - name: lifecycle
+    description: "Controlled exceptions to normal execution."
+    requirement: optional
+    tags:
+      - name: "@quarantined"
+        description: >
+          Temporarily excluded from required runs due to a known issue. Requires an
+          `annotation: [{ type: "quarantine-reason", description: "..." }]` on the test — enforced
+          by a later stage's metadata validation once quarantine has a real workflow.
+        productionEligible: false
+
+conflicts:
+  - tags: ["@mutating", "@readonly"]
+    reason: "data-impact is exactly-one; a test cannot be both readonly and mutating"
+  - tags: ["@quarantined", "@suite:smoke"]
+    reason: "a quarantined test must not be relied on as part of the required smoke suite"
+
+aliases: []

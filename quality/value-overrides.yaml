@@ -1,0 +1,17 @@
+# Human overrides of calculated value/quality scores (Playwright Quality Engineering Framework,
+# Section 8.6). Validated against playwright-framework/metadata/schemas.ts:ValueOverridesFileSchema.
+#
+# An override never replaces the calculated score silently -- playwright-framework/scoring/
+# applyOverride.ts always returns a new result with source: "override" and this entry's rationale/
+# approver/date attached, alongside the original calculated criteria for comparison. Every override
+# requires a human approver; the framework itself must never write to this file.
+#
+# overrideType "total-score" replaces the whole total; "criterion-score" replaces exactly one
+# criterion's points (criterionId required) and the total is re-derived from the updated criteria.
+#
+# This file starts empty -- there is no real test inventory yet (that begins in a later stage), so
+# there is nothing to override. Add entries here once a real, human-reviewed override is needed.
+
+schemaVersion: "1.0.0"
+
+overrides: []

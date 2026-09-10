@@ -1140,7 +1140,7 @@ A reusable Playwright Test framework is being built out per
 `PLAYWRIGHT_QUALITY_FRAMEWORK_SPEC.md` (also the resumable implementation ledger — see its own
 Progress Dashboard for what's done). Tracked in Jira as TS-22 with one story per stage (TS-23
 through TS-34); a full manual-tester guide (`PLAYWRIGHT_TESTING.md`) arrives in Stage 04/10. In the
-meantime, the basics that exist as of Stage 01:
+meantime, the basics that exist as of Stage 02:
 
 - **Install:** `pnpm install` (top-level, same as the rest of the repo) gets `@playwright/test`
   itself; then `pnpm pw:install` downloads the Chromium browser binary Playwright needs (Firefox
@@ -1162,3 +1162,11 @@ meantime, the basics that exist as of Stage 01:
   itself (`e2e/support/productionGuard.ts`) is fully implemented and unit-tested so that whenever a
   real production host does exist, it can be added to that list and mutating tests will be blocked
   against it automatically, by default, with no further code changes needed.
+- **Test governance and value model (Stage 02):** `quality/requirements.yaml`,
+  `quality/tag-taxonomy.yaml`, and `quality/test-value-model.yaml` (+ generated
+  `quality/test-value-model.md`) are the canonical, versioned data behind the framework's tagging
+  and scoring rules — see the spec's Section 8/9 for what each encodes. `pnpm pw:validate-metadata`
+  checks all of it (and every other quality/*.yaml file) for consistency; `defineQualityTest` (in
+  `playwright-framework/metadata/`) is the typed helper a real test will use, starting in Stage 03,
+  to attach governed metadata (objective, expected outcome, requirement IDs, tags) and have it
+  validated at collection time.
