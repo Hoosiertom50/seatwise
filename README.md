@@ -1140,7 +1140,7 @@ A reusable Playwright Test framework is being built out per
 `PLAYWRIGHT_QUALITY_FRAMEWORK_SPEC.md` (also the resumable implementation ledger — see its own
 Progress Dashboard for what's done). Tracked in Jira as TS-22 with one story per stage (TS-23
 through TS-34). **`PLAYWRIGHT_TESTING.md` is the full manual-tester/authoring guide** (Stage 06) —
-start there if you're writing or reviewing a test. The basics, as of Stage 09:
+start there if you're writing or reviewing a test. The basics, as of Stage 10:
 
 - **Install:** `pnpm install` (top-level, same as the rest of the repo) gets `@playwright/test`
   itself; then `pnpm pw:install` downloads the Chromium browser binary Playwright needs (Firefox
@@ -1173,10 +1173,14 @@ start there if you're writing or reviewing a test. The basics, as of Stage 09:
   the mechanical/hand-authored test evaluator under `playwright-framework/evaluation/`, and the
   `pnpm pw:review` / `pnpm pw:review:serve` CLIs; as of Stage 09, the failure-classification logic
   under `playwright-framework/triage/`, its HTML renderer under `playwright-framework/reporting/`,
-  and the `pnpm pw:triage` / `pnpm pw:triage:serve` CLIs); `quality/` holds versioned config
+  and the `pnpm pw:triage` / `pnpm pw:triage:serve` CLIs; as of Stage 10, the CI status-gating logic
+  under `playwright-framework/reporting/ciSummary.ts` and the `ci-summary.ts` /
+  `print-ci-selection.ts` CLIs); `quality/` holds versioned config
   (including Stage 05's `quality/saved-selections.yaml`, Stage 07's hand-authored
-  `quality/test-evaluations.yaml`, Stage 08's human-owned `quality/repair-allowed-dirs.yaml`, and
-  Stage 09's hand-authored `quality/failure-classifications.yaml`) and audit reports;
+  `quality/test-evaluations.yaml`, Stage 08's human-owned `quality/repair-allowed-dirs.yaml`,
+  Stage 09's hand-authored `quality/failure-classifications.yaml`, and Stage 10's
+  `quality/manual-test-to-automation-worksheet.md`) and audit reports; `.github/workflows/` holds
+  Stage 10's three CI workflows (`ci.yml`, `scheduled-regression.yml`, `weekly-quality-review.yml`);
   `artifacts/playwright/` holds generated, gitignored run output, including Stage 05's run
   manifests, Stage 06's run reports, Stage 07's suite reviews, Stage 08's ephemeral per-session
   `repair-scope.json`, and Stage 09's maintenance/triage reports under `maintenance/`; `.claude/`
@@ -1249,6 +1253,24 @@ start there if you're writing or reviewing a test. The basics, as of Stage 09:
   page/component object, fixture, governance, or scoring-relevant file change. See
   `PLAYWRIGHT_TESTING.md`'s "Failure triage and controlled test repair" section for the full design,
   the classification-tier split (DEC-028), and how it was live-verified.
+- **CI, documentation, and operational hardening (Stage 10):** three GitHub Actions workflows
+  (`.github/workflows/`) gate every push/PR (typecheck + metadata + lint + framework unit tests,
+  then a 2-shard application E2E run against a real Postgres service container, then a merged HTML
+  report), re-confirm the regression suite nightly, and proactively re-check for new flakiness plus
+  regenerate the suite review weekly. A real, verified gap drove the one CI-specific addition:
+  `playwright test` exits 0 for both a zero-match `--grep` and an empty `--shard`, so
+  `playwright-framework/cli/ci-summary.ts` reads the run report those cases still produce and (1)
+  turns a genuine zero-test run into a hard CI failure and (2) surfaces a flaky (retry-pass) or
+  quarantined result via a `::warning::` annotation and job summary table, so neither can look like
+  an ordinary clean pass on the PR checks list. `playwright-framework/cli/print-ci-selection.ts`
+  gives CI's sharded run the exact same test selection `pnpm pw:run --selection regression --list`
+  would show, without widening Stage 05's own `pw:run` to accommodate CI's sharding/blob-reporter
+  needs. `PLAYWRIGHT_TESTING.md` was completed for a manual tester with a first-test tutorial,
+  tagging cheat sheet, common-commands reference, report-review guide, good/bad examples, a
+  manual-test-to-automation worksheet (`quality/manual-test-to-automation-worksheet.md`), and
+  guidance on adding requirements/tags/page-objects/fixtures/test-data, updating the value model,
+  report retention/cleanup, and framework upgrades. See `PLAYWRIGHT_TESTING.md`'s "CI, sharding, and
+  report merging" section for the full design and how each mechanism was verified live.
 - **Test governance and value model (Stage 02):** `quality/requirements.yaml`,
   `quality/tag-taxonomy.yaml`, and `quality/test-value-model.yaml` (+ generated
   `quality/test-value-model.md`) are the canonical, versioned data behind the framework's tagging

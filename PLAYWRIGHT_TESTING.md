@@ -820,3 +820,296 @@ pw:lint-tests` and the specific test file afterward — both should stay clean.
 - A failed test's console messages and failed network requests are attached automatically
   (redacted) via the `diagnostics` auto-fixture — check the HTML report's attachments before
   reaching for `console.log`.
+
+## First-test tutorial: writing your very first Playwright test (Stage 10)
+
+This walks a manual tester with no prior Playwright experience through writing one real, passing
+test from nothing. It assumes the app is already runnable locally (`pnpm install`, a Postgres
+database matching `.env`'s `DATABASE_URL`, `pnpm dev`).
+
+1. **Read a reference test first.** Open `e2e/tests/guest-viewing.spec.ts` top to bottom — see
+   **Walking through a reference test** above for exactly what to look for. Do not skip this; every
+   step below assumes you recognize the shapes it establishes.
+2. **Pick (or add) a requirement.** Every test declares which `quality/requirements.yaml` entry it
+   covers, via `requirementIds`. Skim that file for one that matches what you're about to test; if
+   none fits, see **Adding a new requirement** below before writing the test itself.
+3. **Decide readonly or mutating.** Does your test only navigate/read (`@readonly`), or does it
+   create/update/delete data (`@mutating`)? This single decision picks your fixture (`weddingData`
+   for read-only setup via the fixtures in `e2e/fixtures/index.ts`, `managedWedding` for anything
+   your test itself mutates) and one of your two required tags.
+4. **Create the file.** Name it `e2e/tests/<feature>.spec.ts` (a new file) or add a case to an
+   existing one if it's a close variant of what's already there (see **Extending an existing test
+   vs. authoring a new one** in the pw-author-test skill for that judgment call). Copy the overall
+   shape of whichever reference test matches your data-impact tag most closely — the
+   `defineQualityTest({...}, ({ page, ... }) => {...})` wrapper, the metadata object, the
+   Arrange/Act/Assert `test.step`s.
+5. **Fill in the metadata object** — `id` (prefixed with your file's slug, e.g.
+   `guest-export.download-produces-a-pdf`), `title`, `objective` (one sentence: what user-facing
+   behavior does this protect?), `expectedOutcome` (one sentence: what does "it worked" look like?),
+   `requirementIds` (from step 2), `tags` (data-impact + feature + suite + risk, at minimum — see
+   the **Tagging cheat sheet** below for the full list).
+6. **Write Arrange/Act/Assert as named `test.step`s.** Arrange sets up data (through a fixture or
+   the real API, never the UI, unless the UI setup path IS what you're testing). Act performs the
+   one behavior under test. Assert checks the outcome via `expect`/`expect.poll` against a page or
+   component object method — never a raw `page.locator(...)` call in the test file itself (see
+   **Enforcement** above for why, and what happens if you do).
+7. **If the page doesn't have a method for what you need, add one** to `e2e/pages/` or
+   `e2e/components/` first, following `WeddingGuestsPage.addGuest()`'s shape (constructor-injected
+   `Page`/`Locator`, a business-readable method name, no test-specific logic leaking into the page
+   object itself).
+8. **Run it for real, repeatedly, before you trust it:**
+
+   ```bash
+   pnpm exec tsc --noEmit                                       # your new file must typecheck
+   pnpm pw:lint-tests                                            # catches raw selectors, fixed waits, etc.
+   pnpm exec playwright test --project=chromium e2e/tests/<your-file>.spec.ts
+   pnpm exec playwright test --project=chromium e2e/tests/<your-file>.spec.ts --repeat-each=3
+   ```
+
+9. **Check the generated report** (`pnpm pw:report`) — confirm your named steps show up clearly and
+   the pass/fail reasoning reads the way you'd explain it to a colleague.
+10. **Run `pnpm pw:validate`** one more time before considering the test done — it re-checks
+    typecheck, metadata, and lint together, the same gate CI runs.
+
+## Tagging cheat sheet (Stage 10)
+
+Every governed test needs at least the tags each dimension marked **required** below demands (an
+`exactly-one` dimension needs precisely one of its tags; `at-least-one` needs one or more;
+`optional` needs none unless it genuinely applies). `pnpm pw:validate-metadata` rejects a test
+missing a required dimension, an unknown tag, or a combination `quality/tag-taxonomy.yaml` marks as
+conflicting (e.g. `@quarantined` + `@suite:smoke`) — the full authoritative list always lives there;
+this table is a quick-reference copy of it as of Stage 10, not a second source of truth.
+
+| Dimension | Required? | Tags |
+|---|---|---|
+| data-impact | exactly one | `@readonly`, `@mutating` |
+| feature | at least one | `@feature:authentication`, `@feature:guests`, `@feature:relationships`, `@feature:tables`, `@feature:seating-plan`, `@feature:manual-adjustment`, `@feature:day-of-mode`, `@feature:export`, `@feature:collaboration`, `@feature:rsvp`, `@feature:portfolio`, `@feature:timeline`, `@feature:templates`, `@feature:budget`, `@feature:mobile`, `@feature:non-functional`, `@feature:framework` |
+| suite | at least one | `@suite:smoke`, `@suite:regression`, `@suite:framework` |
+| risk | exactly one | `@risk:critical`, `@risk:high`, `@risk:normal`, `@risk:low` |
+| role | optional | `@role:anonymous`, `@role:user`, `@role:administrator` |
+| test-type | optional | `@visual`, `@accessibility`, `@external-service` |
+| lifecycle | optional | `@quarantined` (requires an `annotation: [{ type: "quarantine-reason", ... }]`; conflicts with `@suite:smoke`) |
+
+Common combinations, as real saved selections (`quality/saved-selections.yaml`, run via `pnpm
+pw:run --selection <name>` or `pnpm pw:run:<name>`):
+
+- `readonly` — `@readonly` (safe against any environment, including production with explicit
+  approval).
+- `smoke` — `@suite:smoke AND NOT @quarantined` (fast PR-gate subset).
+- `regression` — `@suite:regression AND NOT @quarantined` (deeper coverage; what CI's E2E job runs
+  today — see **CI, sharding, and report merging** below).
+- `critical` — `@risk:critical` (every test protecting a critical-risk behavior, regardless of
+  suite).
+
+## Common commands (Stage 10)
+
+A single consolidated reference — every command below is a real `package.json` script.
+
+| Command | What it does |
+|---|---|
+| `pnpm pw:install` | Installs Playwright's Chromium binary. |
+| `pnpm pw:list` | Lists every discoverable test (chromium + framework-unit projects) without running anything. |
+| `pnpm pw:test` | Runs the full suite (application tests + framework unit tests). |
+| `pnpm pw:test:headed` / `pnpm pw:test:debug` / `pnpm pw:test:ui` | Headed browser / step-through Inspector / interactive UI mode, for local debugging. |
+| `pnpm pw:validate` | Typecheck + metadata validation + lint + a dry `--list` — the one command to run before considering any change done; matches CI's `validate` job. |
+| `pnpm pw:validate-metadata` | Validates `quality/*.yaml` and every test's governed metadata against the schemas and tag taxonomy. |
+| `pnpm pw:lint-tests` | Static authoring-standards checks (raw selectors, fixed waits, `.only`, unreasoned skips, swallowed catches, missing assertions). |
+| `pnpm pw:run "<expr>"` / `pnpm pw:run --selection <name>` | The safe, tag-aware execution engine — production/mutation guard, preview, run manifest. |
+| `pnpm pw:run:readonly` / `:smoke` / `:regression` / `:critical` | Shortcuts for the four saved selections. |
+| `pnpm pw:report` / `pnpm pw:serve-report` | Opens/serves Playwright's own native HTML report for the last run. |
+| `pnpm pw:report:run` | Serves the Stage 06 normalized run report (JSON + self-contained HTML) with working relative links. |
+| `pnpm pw:review` / `pnpm pw:review:serve` | Regenerates / serves the Stage 07 suite review (coverage, value/quality scores, requirement traceability). |
+| `pnpm pw:triage [--run-id <id>]` | Classifies a completed run's real failures against Section 10.4's 7 categories (Stage 09). |
+| `pnpm pw:triage:serve` | Serves the maintenance/triage report. |
+| `pnpm exec tsx playwright-framework/cli/ci-summary.ts` | Prints the CI pass/flaky/quarantined/zero-test summary for the most recent (or a named) run report; exits non-zero on a zero-test run (Stage 10). |
+| `pnpm exec tsx playwright-framework/cli/print-ci-selection.ts <selection>` | Prints the `--grep` pattern + matched files for a saved selection, for CI's sharded invocation (Stage 10). |
+| `pnpm exec tsc --noEmit` | Typechecks the whole framework + test suite (no build artifacts). |
+
+## Report-review guide (Stage 10)
+
+Three distinct report families exist; know which one answers your actual question before opening
+one.
+
+- **Run report** (`artifacts/playwright/runs/run-reports/<runId>.{json,html}`, `pnpm
+  pw:report:run` to serve) — "what happened the last time the suite ran?" Per-test status (one of
+  the 8 Section 10.2 categories — initial-pass, retry-pass, consistent-failure, timeout, skipped,
+  expected-failure, quarantined, setup-failure), named Arrange/Act/Assert steps, why-passed/
+  why-failed explanations, evidence attachments (screenshot/trace/console/network, all redacted).
+  Start here for "did my change break anything, and specifically what."
+- **Suite review** (`artifacts/playwright/runs/suite-reviews/<reviewId>.{json,html}`, `pnpm
+  pw:review:serve`) — "how healthy and well-covered is the whole suite?" Requirement coverage
+  (plain and risk-weighted), per-test value/quality scores (mechanical criteria calculated fresh;
+  business-value criteria `provisional`/`needsHumanReview` until a human supplies them — see
+  **Updating the value model** below), a review queue of anything needing human attention. Start
+  here for "are we testing the right things, and how well."
+- **Maintenance/triage report** (`artifacts/playwright/maintenance/<reportId>.{json,html}`, `pnpm
+  pw:triage:serve`) — "why did this specific failure happen, and can it safely be repaired?" One
+  of Section 10.4's 7 classifications per real failure, evidence for/against an application defect
+  vs. a test defect, and a `repairAllowed` verdict `/pw-repair-test` and `repair-write-guard.mjs`
+  both defer to. Start here before touching a failing test's own code.
+
+Reading a report's status: every status is conveyed by symbol **and** text, never color alone
+(accessibility — confirmed via a real WCAG contrast check in Stage 06's own audit). A run report
+entry marked "flaky" (retry-pass) or a run summary showing `counts.retryPass > 0` is genuinely
+different from a clean pass, even though Playwright's own exit code treats both as success — see
+**CI, sharding, and report merging** below for exactly how CI surfaces that difference.
+
+## Good and bad examples (Stage 10)
+
+| Instead of… | Do this | Why |
+|---|---|---|
+| `await page.locator(".guest-row").first().click()` in a test | `await guestsPage.guestRow(name).edit()` (a page/component object method) | A raw selector in a test file breaks `pw:lint-tests`'s `raw-selector-in-test` rule and couples every test to the DOM directly — one real markup change breaks every test that touched it, instead of one page-object method. |
+| `await page.waitForTimeout(2000)` | `await expect(locator).toBeVisible()` / `await expect.poll(...)` | A fixed wait is either too short (flaky) or too long (slow) by construction; Playwright's own auto-waiting assertions retry until the real condition is true or a real timeout elapses. Flagged by `pw:lint-tests`'s `fixed-wait` rule. |
+| `test.skip()` with no comment | `test.skip(true, "TS-42: blocked on FR-9.2 shipping")` or a `// pw-lint-exception: ... -- <rationale>` | An unreasoned skip is invisible technical debt; a reasoned one is a documented, reviewable decision. Flagged by `pw:lint-tests`'s `unreasoned-skip` rule. |
+| `try { ... } catch { /* ignore */ }` around a real assertion | Let it throw, or `catch` only to attach diagnostic evidence before re-throwing | A swallowed error can hide a real failure behind a false green pass. Flagged by `pw:lint-tests`'s `swallowed-error` rule. |
+| One test asserting five unrelated outcomes on one page | One test per distinct behavior/failure mode (see **Extending an existing test vs. authoring a new one**, `pw-author-test` skill) | A test with several unrelated assertions doesn't tell you WHICH thing broke when it fails, and inflates independence/traceability scoring without adding real coverage. |
+| A test that reaches into another test's data | Each test creates its own account/wedding via `account`/`weddingData`/`managedWedding` fixtures | Shared mutable state is exactly what breaks parallel execution and order-independence — see **Test isolation and reliability** above. |
+
+## Manual-test-to-automation worksheet (Stage 10)
+
+A fillable template for turning an existing manual test case into this framework's structure lives
+at `quality/manual-test-to-automation-worksheet.md`. Copy it, fill in each field for the manual case
+you're automating, and the filled-in worksheet maps directly onto a `defineQualityTest(...)` call's
+metadata plus its Arrange/Act/Assert steps — see the **First-test tutorial** above for what happens
+next.
+
+## Adding requirements, features, tags, page objects, fixtures, and test data (Stage 10)
+
+- **A new requirement**: add an entry to `quality/requirements.yaml` (id, title, ticket reference if
+  one exists, `status: needs-human-review` — never `confirmed` until a human actually reviews it;
+  see DEC-009). Run `pnpm pw:validate-metadata` to confirm it parses.
+- **A new feature tag**: add it under the `feature` dimension in `quality/tag-taxonomy.yaml` (name,
+  description). Feature tags are deliberately open-ended — add one whenever a genuinely new area of
+  the product needs its own tag, rather than overloading an existing one.
+- **A new tag in another dimension** (risk/role/etc.): same file, same shape; check
+  `requirement`/conflicts first — adding a tag to an `exactly-one` dimension changes what every
+  existing test in that dimension must now choose between.
+- **A new page object**: add a class to `e2e/pages/` (or a component to `e2e/components/` for a
+  reusable sub-element like a table row), constructor-injected `Page`/`Locator` only, no module-level
+  mutable state, business-readable method names (`addGuest`, not `clickButton3`). See
+  `WeddingGuestsPage`/`GuestRow` for the established shape.
+- **A new fixture**: add it to `e2e/fixtures/index.ts`, composing the existing `account` →
+  `weddingData` → `managedWedding` chain rather than reinventing setup/teardown — see **Test
+  isolation and reliability** above for why cleanup failures are attached as warnings, never thrown.
+- **New test data**: use `e2e/data/ids.ts`'s `uniquePersonName()`/`uniqueTitle()` helpers for
+  worker-safe unique values — never hardcode a name/title a parallel run could collide on. If a new
+  field needs its own uniqueness scheme (a new app-side pattern constraint discovered live, the way
+  `PERSON_NAME_PATTERN`/`WEDDING_NAME_PATTERN` were), add a new helper there rather than ad hoc
+  string-building inside a test.
+
+## Updating the value model and approving overrides (Stage 10)
+
+The value/quality rubric lives in `quality/test-value-model.yaml` (weights must total 100 per
+category, schema-enforced) with a generated, human-readable `quality/test-value-model.md` — run
+`pnpm pw:generate-value-model-md` after any change to the `.yaml` to keep them in sync (checked by
+`pw:validate`'s own drift detection). Changing a criterion's weight or description is a real
+decision about what this framework considers valuable — treat it like any other reviewed change,
+not a quick edit.
+
+A **human override** of a calculated score (Section 8.6) goes in `quality/value-overrides.yaml` —
+never written by the framework itself. Each entry needs `overrideType` (`total-score` or
+`criterion-score`, the latter also needs `criterionId`), the new score, an `approver`, a `date`, and
+a `rationale` explaining why the calculated result was wrong or incomplete. `applyOverride.ts`
+always preserves the original calculated criteria alongside the override for comparison — an
+override never silently erases the mechanical result it's replacing.
+
+## Report retention, cleanup, and disk-usage expectations (Stage 10)
+
+Locally, every generated report/artifact lives under `artifacts/playwright/` (gitignored in full —
+see `.gitignore` — only `.gitkeep` placeholders and the framework source that PRODUCES these
+artifacts are ever committed). Nothing here needs manual cleanup for correctness — every CLI writes
+a new, uniquely-`runId`/`reportId`-named file rather than overwriting previous runs — but the
+directory grows unbounded over time with real use (traces and videos are the largest contributors).
+`rm -rf artifacts/playwright/runs/test-results/*` (or the whole `artifacts/playwright/` tree, since
+nothing there is source) is always safe to run locally when disk space matters; nothing outside that
+directory depends on old report content persisting.
+
+In CI, every workflow (`.github/workflows/{ci,scheduled-regression,weekly-quality-review}.yml`)
+uploads its reports via `actions/upload-artifact` with an explicit `retention-days` (14 days for the
+PR gate and nightly regression, 30 days for the weekly quality review's suite-review/maintenance
+artifacts, since those are meant to show trend/drift over a longer window). These are defaults, not
+a considered policy — a human should confirm the actual desired retention window for this
+repository/organization (GitHub's own maximum is 90 days) and adjust the `retention-days` values
+directly in each workflow file; nothing else depends on the current numbers.
+
+## CI, sharding, and report merging (Stage 10)
+
+Three workflows live under `.github/workflows/`:
+
+- **`ci.yml`** — runs on every push/PR to `main`. A `validate` job (typecheck, metadata validation,
+  lint, framework unit tests — no browser, no database) gates a separate `e2e` job (the real
+  application suite, sharded across 2 shards against a real Postgres service container and a real
+  built-and-started Next.js app), followed by a `merge-reports` job that combines both shards' blob
+  reports into one native HTML report.
+- **`scheduled-regression.yml`** — the same regression selection, nightly, independent of push/PR
+  activity (catches drift on a quiet day — an environment change, a dependency update).
+- **`weekly-quality-review.yml`** — optional/best-effort: re-runs the regression selection with
+  `--repeat-each=3` to proactively surface newly-flaky tests, then regenerates the suite review
+  (`pnpm pw:review`) on a fixed weekly cadence.
+
+**Why the E2E job doesn't use `pnpm pw:run`.** `pw:run`'s `--reporter` flag forwards a single
+Playwright-native reporter name that REPLACES the whole configured reporter array (a Stage 06
+finding, still true), and it has no `--shard` support at all. Using it for CI's sharded run would
+silence the Stage 06/09 normalized reporter `ci-summary.ts` and `pw:triage` both depend on. Instead,
+`playwright-framework/cli/print-ci-selection.ts` (a new, narrowly-scoped, read-only Stage 10 script)
+computes the exact same `--grep` pattern and matched spec files `pw:run --selection regression
+--list` would show — reusing the identical `evaluateExpression`/`compileToGrepPattern` primitives,
+so CI's real invocation can never silently drift from what a human previewing the same selection
+locally would see — and the workflow spawns `playwright test` directly with that plus `--shard` and
+a real `blob,<normalizedReporter path>` multi-reporter list. This intentionally bypasses `pw:run`'s
+own production/mutation preflight; DEC-018 already discloses this exact bypass for any bare
+`playwright test --grep` invocation, and it is a no-op here regardless since `PRODUCTION_HOSTNAMES`
+is always empty in this repository (DEC-005 — there is no real production deployment). **`pw:run`
+remains the only way to safely run a selection against a real, configured production host** — never
+adapt this CI pattern for that case.
+
+**CI secrets and scoping.** The E2E job needs `DATABASE_URL` (points at an ephemeral, job-lifetime-
+only `postgres:16` service container — never a secret, since the container and its data cease to
+exist the moment the job ends) and `JWT_SECRET`/`ENCRYPTION_KEY` (generated fresh per run via
+`openssl rand -hex 32`, written to `$GITHUB_ENV`, never echoed to the log or persisted anywhere).
+None of these gate anything real, so none are stored as GitHub repository secrets — the baseline
+gate needs zero configured secrets. `RESEND_API_KEY` is deliberately left unset in CI, falling back
+to the app's own console-log stand-in for email (see `.env.example`'s own comment) rather than
+wiring a real email provider into CI.
+
+**Branch/PR status behavior for failed, flaky, quarantined, and zero-test runs** — the acceptance
+criterion this framework had to actually go verify, not assume: `pnpm exec playwright test -g
+"<pattern that matches nothing>"` and `--shard=N/M` with an empty shard both print "No tests found"/
+nothing alarming but **exit 0** (verified live during Stage 10's implementation) — Playwright still
+writes a normalized run report for either case, with every count at zero, indistinguishable at a
+glance from a report worth calling a clean pass. `playwright-framework/cli/ci-summary.ts` (run as a
+dedicated `if: always()` step right after every real Playwright invocation in all three workflows)
+is the mechanical fix: it reads that run report and (1) exits non-zero on a genuine zero-test run —
+the one case this script actually overrides Playwright's own exit code for — (2) writes a
+`$GITHUB_STEP_SUMMARY` table and emits a `::warning::` annotation for any flaky (retry-pass) result,
+so a pass that only succeeded after a retry is never visually identical to an ordinary clean pass on
+the PR checks list, and (3) does the same for any quarantined test that actually executed (normally
+excluded from `smoke`/`regression` by tag conflict, so seeing one at all is worth a human's
+attention). A real, ordinary failure doesn't need this script to fail the job — Playwright's own
+exit code already does that; `ci-summary.ts`'s job is strictly the visibility Playwright's exit code
+alone doesn't provide.
+
+## Framework upgrade and compatibility checks (Stage 10)
+
+Before bumping `@playwright/test`, Node, or `pnpm`'s pinned version (`packageManager` in
+`package.json`):
+
+1. Read the new version's changelog for anything affecting reporter APIs, tag/annotation handling,
+   or sharding/blob-report behavior — this framework's own custom reporter
+   (`normalizedReporter.ts`), tag-expression compiler, and CI sharding all depend on specific,
+   documented Playwright behavior that a major version could change.
+2. Bump the version, reinstall (`pnpm install`), and re-run the FULL validation sequence before
+   trusting anything: `pnpm exec tsc --noEmit`, `pnpm pw:validate`, `pnpm pw:test` (all framework
+   unit tests, including every hook test under `playwright-framework/tests/hooks/`), then a real
+   `pnpm exec playwright test --project=chromium` run against a live app.
+3. Re-verify the CI-specific mechanisms live, the same way Stage 10 originally did: a real
+   zero-match `--grep` still needs to exit non-zero from `ci-summary.ts` even if Playwright's own
+   exit-0-on-no-tests behavior ever changes upstream; a real sharded run (`--shard=1/2` and
+   `--shard=2/2`) still needs to produce mergeable blob reports (`playwright merge-reports`).
+4. Bump `playwright-framework/version.ts`'s `FRAMEWORK_VERSION` only once every check above is
+   green — it is this framework's own compatibility marker embedded in every run report/suite
+   review/maintenance report, not Playwright's version (already tracked separately as
+   `RunReport.playwrightVersion`).
+5. If the upgrade changes any documented command's behavior, update the specific section of this
+   guide (and `README.md`) that describes it in the same change — never let this document silently
+   drift out of sync with what the pinned versions actually do.
