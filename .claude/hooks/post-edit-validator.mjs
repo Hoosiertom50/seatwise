@@ -21,6 +21,14 @@
  *     playwright-framework/tests) -> also `pnpm pw:lint-tests`
  *   - Anything else (docs, config outside the above, etc.)  -> no-op
  *
+ * Stage 09 addition -- Section 09 task "Regenerate the suite-review report after any test, page
+ * object, fixture, metadata, or scoring change": a changed file under `e2e/tests/`, `e2e/pages/`,
+ * `e2e/components/`, `e2e/fixtures/`, `quality/*.yaml`, or `playwright-framework/{scoring,
+ * evaluation,coverage}/` also runs `pnpm pw:review`. This is still read-only/discovery-only work
+ * (no browser, no Playwright test execution -- suite-review.ts's own doc comment: "there is nothing
+ * to execute here, only to read and compute from"), so it stays within "lightweight" even though it
+ * is the most expensive check this hook runs.
+ *
  * Fails open throughout (an unparseable hook input or a file that no longer exists on disk is a
  * silent no-op, never a false failure report) since this hook cannot block and a noisy false
  * positive would only train whoever reads the transcript to ignore it.
@@ -57,8 +65,20 @@ const relPath = relative(root, resolvedTarget).split(sep).join("/");
 const isGovernanceYaml = /^quality\/.+\.ya?ml$/.test(relPath);
 const isFrameworkTs = /\.ts$/.test(relPath) && (relPath.startsWith("e2e/") || relPath.startsWith("playwright-framework/"));
 const isTestSpec = /\.spec\.ts$/.test(relPath) && (relPath.startsWith("e2e/tests/") || relPath.startsWith("playwright-framework/tests/"));
+// Stage 09: anything whose content can change what a suite review reports -- a test itself, a
+// page/component object or fixture a test depends on, a governance YAML file, or the
+// scoring/evaluation/coverage logic that computes the review's own numbers.
+const isReviewRelevant =
+  isGovernanceYaml ||
+  relPath.startsWith("e2e/tests/") ||
+  relPath.startsWith("e2e/pages/") ||
+  relPath.startsWith("e2e/components/") ||
+  relPath.startsWith("e2e/fixtures/") ||
+  relPath.startsWith("playwright-framework/scoring/") ||
+  relPath.startsWith("playwright-framework/evaluation/") ||
+  relPath.startsWith("playwright-framework/coverage/");
 
-if (!isGovernanceYaml && !isFrameworkTs) {
+if (!isGovernanceYaml && !isFrameworkTs && !isReviewRelevant) {
   noop(`post-edit-validator: "${relPath}" is not a test, page-object, metadata, reporter, or framework file -- nothing to check`);
 }
 
@@ -66,6 +86,7 @@ const checks = [];
 if (isGovernanceYaml) checks.push({ label: "pnpm pw:validate-metadata", cmd: "pnpm", args: ["pw:validate-metadata"] });
 if (isFrameworkTs) checks.push({ label: "pnpm exec tsc --noEmit", cmd: "pnpm", args: ["exec", "tsc", "--noEmit"] });
 if (isTestSpec) checks.push({ label: "pnpm pw:lint-tests", cmd: "pnpm", args: ["pw:lint-tests"] });
+if (isReviewRelevant) checks.push({ label: "pnpm pw:review", cmd: "pnpm", args: ["pw:review"] });
 
 const failures = [];
 for (const check of checks) {

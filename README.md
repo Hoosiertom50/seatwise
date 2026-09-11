@@ -1140,7 +1140,7 @@ A reusable Playwright Test framework is being built out per
 `PLAYWRIGHT_QUALITY_FRAMEWORK_SPEC.md` (also the resumable implementation ledger — see its own
 Progress Dashboard for what's done). Tracked in Jira as TS-22 with one story per stage (TS-23
 through TS-34). **`PLAYWRIGHT_TESTING.md` is the full manual-tester/authoring guide** (Stage 06) —
-start there if you're writing or reviewing a test. The basics, as of Stage 08:
+start there if you're writing or reviewing a test. The basics, as of Stage 09:
 
 - **Install:** `pnpm install` (top-level, same as the rest of the repo) gets `@playwright/test`
   itself; then `pnpm pw:install` downloads the Chromium browser binary Playwright needs (Firefox
@@ -1171,13 +1171,17 @@ start there if you're writing or reviewing a test. The basics, as of Stage 08:
   `playwright-framework/validation/discoverAllTests.ts`, and the `pnpm pw:report:run` CLI; as of
   Stage 07, coverage/duplicate-detection/review-queue logic under `playwright-framework/coverage/`,
   the mechanical/hand-authored test evaluator under `playwright-framework/evaluation/`, and the
-  `pnpm pw:review` / `pnpm pw:review:serve` CLIs); `quality/` holds versioned config (including
-  Stage 05's `quality/saved-selections.yaml` and Stage 07's hand-authored
-  `quality/test-evaluations.yaml`, and, as of Stage 08, the human-owned
-  `quality/repair-allowed-dirs.yaml`) and audit reports; `artifacts/playwright/` holds generated,
-  gitignored run output, including Stage 05's run manifests, Stage 06's run reports, Stage 07's
-  suite reviews, and Stage 08's ephemeral per-session `repair-scope.json`; `.claude/` holds the
-  Stage 08 Claude Code integration layer (`skills/`, `agents/`, `hooks/`, `settings.json`).
+  `pnpm pw:review` / `pnpm pw:review:serve` CLIs; as of Stage 09, the failure-classification logic
+  under `playwright-framework/triage/`, its HTML renderer under `playwright-framework/reporting/`,
+  and the `pnpm pw:triage` / `pnpm pw:triage:serve` CLIs); `quality/` holds versioned config
+  (including Stage 05's `quality/saved-selections.yaml`, Stage 07's hand-authored
+  `quality/test-evaluations.yaml`, Stage 08's human-owned `quality/repair-allowed-dirs.yaml`, and
+  Stage 09's hand-authored `quality/failure-classifications.yaml`) and audit reports;
+  `artifacts/playwright/` holds generated, gitignored run output, including Stage 05's run
+  manifests, Stage 06's run reports, Stage 07's suite reviews, Stage 08's ephemeral per-session
+  `repair-scope.json`, and Stage 09's maintenance/triage reports under `maintenance/`; `.claude/`
+  holds the Stage 08 Claude Code integration layer (`skills/`, `agents/`, `hooks/`,
+  `settings.json`), extended in Stage 09.
 - **Test-authoring standards and enforcement (Stage 04):** `pnpm pw:lint-tests` statically checks
   every real `e2e/tests/**/*.spec.ts` file (no browser launch needed) against the rules
   `PLAYWRIGHT_TESTING.md` documents — no raw selectors/screenshots/fixed-waits in a test file, no
@@ -1229,6 +1233,22 @@ start there if you're writing or reviewing a test. The basics, as of Stage 08:
   to have a stage marked complete without a passing `quality/audits/stage-NN-audit.md`. See
   `PLAYWRIGHT_TESTING.md`'s "Claude Code integration" section for the full design and how each hook
   is tested.
+- **Failure triage and controlled test repair (Stage 09):** `pnpm pw:triage [--run-id <id>]` reads
+  one already-completed run report by run ID (never rerunning anything) and classifies every real
+  failure into one of Section 10.4's 7 categories — mechanical signals first (run-report status,
+  known infrastructure error patterns, cross-run flaky history), then hand-authored
+  `quality/failure-classifications.yaml` entries, then a fail-closed `insufficient-evidence` default
+  — as a schema-validated JSON + HTML report (`pnpm pw:triage:serve` to view it). `repair-write-guard.mjs`
+  was extended with two more independent, hook-enforced conditions on top of Stage 08's scope check:
+  a coarse diff-safety proxy (denies a decreased assertion count, a new fixed wait, a new
+  `.only`/`.skip`/`.fixme`, a new raw selector in a test, or any page/component-object change,
+  unless a human-given `justifiedExceptions` reason is on file) and an independent re-check of the
+  latest maintenance report's own `repairAllowed` verdict (mechanically refusing repair for a
+  probable application defect or insufficient evidence, regardless of what a skill or a human
+  believes). `post-edit-validator.mjs` now also regenerates the suite review after any test,
+  page/component object, fixture, governance, or scoring-relevant file change. See
+  `PLAYWRIGHT_TESTING.md`'s "Failure triage and controlled test repair" section for the full design,
+  the classification-tier split (DEC-028), and how it was live-verified.
 - **Test governance and value model (Stage 02):** `quality/requirements.yaml`,
   `quality/tag-taxonomy.yaml`, and `quality/test-value-model.yaml` (+ generated
   `quality/test-value-model.md`) are the canonical, versioned data behind the framework's tagging

@@ -35,11 +35,53 @@ function stdin(toolName: "Edit" | "Write", filePath: string, extra: Record<strin
   return JSON.stringify({ tool_name: toolName, tool_input: { file_path: filePath, ...extra }, cwd: fakeRoot });
 }
 
+// Stage 09: repair-write-guard.mjs's final check requires the most recent maintenance report
+// (artifacts/playwright/maintenance/*.json) to contain a finding whose "Test source" evidence link
+// names the file being edited, with repairAllowed: true -- every test below that expects an
+// ultimate "allow" must provide one; every test that only exercises an EARLIER check (scope,
+// symlink, diff-safety) intentionally does not, since those are expected to deny first anyway.
+function writeMaintenanceReport(testSourceRelPath: string, repairAllowed: boolean): void {
+  write(
+    "artifacts/playwright/maintenance/report-1.json",
+    JSON.stringify({
+      schemaVersion: "1.0.0",
+      reportId: "report-1",
+      generatedAt: "2026-09-10T12:00:00.000Z",
+      frameworkVersion: "0.9.0",
+      sourceRunId: "run-1",
+      findings: [
+        {
+          testId: "fixture.test",
+          runId: "run-1",
+          classification: repairAllowed ? "probable-test-defect" : "insufficient-evidence",
+          confidence: "medium",
+          expectedBehavior: "e",
+          observedBehavior: "o",
+          evidenceLinks: [{ label: "Test source (line 1)", path: testSourceRelPath }],
+          comparisonNotes: "n",
+          evidenceForApplicationDefect: [],
+          evidenceAgainstApplicationDefect: [],
+          evidenceForTestDefect: [],
+          evidenceAgainstTestDefect: [],
+          recommendedNextAction: "a",
+          repairAllowed,
+          repairAllowedFiles: repairAllowed ? [testSourceRelPath] : [],
+          needsHumanReview: !repairAllowed,
+          source: "mechanical",
+        },
+      ],
+    }),
+  );
+}
+
 test("allowed: editing an existing file that is both under an allowed directory and in the approved scope", () => {
   write("artifacts/playwright/repair-scope.json", JSON.stringify({ approvedPaths: ["e2e/tests/existing.spec.ts"] }));
-  const result = runHook("repair-write-guard.mjs", stdin("Edit", "e2e/tests/existing.spec.ts", { old_string: "a", new_string: "b" }), {
-    CLAUDE_PROJECT_DIR: fakeRoot,
-  });
+  writeMaintenanceReport("e2e/tests/existing.spec.ts", true);
+  const result = runHook(
+    "repair-write-guard.mjs",
+    stdin("Edit", "e2e/tests/existing.spec.ts", { old_string: "existing test fixture", new_string: "existing test fixture, edited" }),
+    { CLAUDE_PROJECT_DIR: fakeRoot },
+  );
   expect(result.status).toBe(0);
   expect(permissionDecision(result)).toBe("allow");
 });
@@ -127,6 +169,200 @@ test("denied: target is a symlink under an allowed, approved path that resolves 
   expect(result.stderr).toContain("is a symlink or contains one in its path");
   // Confirm the write genuinely never happened -- the real application-source file is untouched.
   expect(readFileSync(join(fakeRoot, "apps/web/src/foo.ts"), "utf-8")).toBe("export const x = 1;\n");
+});
+
+// --- Stage 09: diff-safety proxy (assessDiffRisk) -----------------------------------------------
+// "Repair cannot broaden selectors, remove assertions, add sleeps, or skip a test without explicit
+// justified review" (Section 09 acceptance criteria). Each risky category below is denied unless
+// artifacts/playwright/repair-scope.json's justifiedExceptions names it with a non-empty reason.
+
+test("denied: an edit that decreases the expect(...)/expect.poll(...) count is flagged (Stage 09 diff-safety proxy)", () => {
+  write(
+    "e2e/tests/risky.spec.ts",
+    "test('t', async () => {\n  await expect(a).toBeVisible();\n  await expect(b).toBeVisible();\n});\n",
+  );
+  write("artifacts/playwright/repair-scope.json", JSON.stringify({ approvedPaths: ["e2e/tests/risky.spec.ts"] }));
+  const result = runHook(
+    "repair-write-guard.mjs",
+    stdin("Write", "e2e/tests/risky.spec.ts", {
+      content: "test('t', async () => {\n  await expect(a).toBeVisible();\n});\n",
+    }),
+    { CLAUDE_PROJECT_DIR: fakeRoot },
+  );
+  expect(result.status).toBe(2);
+  expect(result.stderr).toContain("assertion-count-decrease");
+});
+
+test("allowed: assertion-count-decrease is allowed once justifiedExceptions names it with a real reason", () => {
+  write(
+    "e2e/tests/risky.spec.ts",
+    "test('t', async () => {\n  await expect(a).toBeVisible();\n  await expect(b).toBeVisible();\n});\n",
+  );
+  write(
+    "artifacts/playwright/repair-scope.json",
+    JSON.stringify({
+      approvedPaths: ["e2e/tests/risky.spec.ts"],
+      justifiedExceptions: [{ category: "assertion-count-decrease", reason: "Human confirmed the second assertion was a duplicate of the first; safe to remove." }],
+    }),
+  );
+  writeMaintenanceReport("e2e/tests/risky.spec.ts", true);
+  const result = runHook(
+    "repair-write-guard.mjs",
+    stdin("Write", "e2e/tests/risky.spec.ts", {
+      content: "test('t', async () => {\n  await expect(a).toBeVisible();\n});\n",
+    }),
+    { CLAUDE_PROJECT_DIR: fakeRoot },
+  );
+  expect(result.status).toBe(0);
+  expect(permissionDecision(result)).toBe("allow");
+});
+
+test("denied: introducing a new .waitForTimeout(...) call is flagged even though no assertion changed", () => {
+  write("e2e/tests/risky.spec.ts", "test('t', async () => {\n  await expect(a).toBeVisible();\n});\n");
+  write("artifacts/playwright/repair-scope.json", JSON.stringify({ approvedPaths: ["e2e/tests/risky.spec.ts"] }));
+  const result = runHook(
+    "repair-write-guard.mjs",
+    stdin("Edit", "e2e/tests/risky.spec.ts", {
+      old_string: "test('t', async () => {\n  await expect(a).toBeVisible();\n});\n",
+      new_string: "test('t', async () => {\n  await page.waitForTimeout(2000);\n  await expect(a).toBeVisible();\n});\n",
+    }),
+    { CLAUDE_PROJECT_DIR: fakeRoot },
+  );
+  expect(result.status).toBe(2);
+  expect(result.stderr).toContain("new-fixed-wait");
+});
+
+test("denied: introducing a new .skip(...) call is flagged", () => {
+  write("e2e/tests/risky.spec.ts", "test('t', async () => {\n  await expect(a).toBeVisible();\n});\n");
+  write("artifacts/playwright/repair-scope.json", JSON.stringify({ approvedPaths: ["e2e/tests/risky.spec.ts"] }));
+  const result = runHook(
+    "repair-write-guard.mjs",
+    stdin("Edit", "e2e/tests/risky.spec.ts", {
+      old_string: "test('t',",
+      new_string: "test.skip('t',",
+    }),
+    { CLAUDE_PROJECT_DIR: fakeRoot },
+  );
+  expect(result.status).toBe(2);
+  expect(result.stderr).toContain("new-skip-only-or-fixme");
+});
+
+test("denied: introducing a new raw page.locator(...) call directly inside a test file is flagged", () => {
+  write("e2e/tests/risky.spec.ts", "test('t', async () => {\n  await expect(a).toBeVisible();\n});\n");
+  write("artifacts/playwright/repair-scope.json", JSON.stringify({ approvedPaths: ["e2e/tests/risky.spec.ts"] }));
+  const result = runHook(
+    "repair-write-guard.mjs",
+    stdin("Edit", "e2e/tests/risky.spec.ts", {
+      old_string: "await expect(a).toBeVisible();",
+      new_string: "await expect(page.locator('.raw')).toBeVisible();",
+    }),
+    { CLAUDE_PROJECT_DIR: fakeRoot },
+  );
+  expect(result.status).toBe(2);
+  expect(result.stderr).toContain("new-raw-selector-in-test");
+});
+
+test("denied: ANY edit to a page/component object file is always flagged, even a comment-only change", () => {
+  write("artifacts/playwright/repair-scope.json", JSON.stringify({ approvedPaths: ["e2e/pages/ExistingPage.ts"] }));
+  const result = runHook(
+    "repair-write-guard.mjs",
+    stdin("Edit", "e2e/pages/ExistingPage.ts", {
+      old_string: "// existing page object fixture",
+      new_string: "// existing page object fixture (touched)",
+    }),
+    { CLAUDE_PROJECT_DIR: fakeRoot },
+  );
+  expect(result.status).toBe(2);
+  expect(result.stderr).toContain("page-object-or-component-change");
+});
+
+test("allowed: a page/component object edit is allowed once justifiedExceptions names page-object-or-component-change", () => {
+  write(
+    "artifacts/playwright/repair-scope.json",
+    JSON.stringify({
+      approvedPaths: ["e2e/pages/ExistingPage.ts"],
+      justifiedExceptions: [{ category: "page-object-or-component-change", reason: "Human confirmed a stale locator needed updating, not a broadening." }],
+    }),
+  );
+  writeMaintenanceReport("e2e/pages/ExistingPage.ts", true);
+  const result = runHook(
+    "repair-write-guard.mjs",
+    stdin("Edit", "e2e/pages/ExistingPage.ts", {
+      old_string: "// existing page object fixture",
+      new_string: "// existing page object fixture (touched)",
+    }),
+    { CLAUDE_PROJECT_DIR: fakeRoot },
+  );
+  expect(result.status).toBe(0);
+  expect(permissionDecision(result)).toBe("allow");
+});
+
+test("denied: a justifiedExceptions entry with an empty reason does not count as justified (fails safe)", () => {
+  write("e2e/tests/risky.spec.ts", "test('t', async () => {\n  await expect(a).toBeVisible();\n  await expect(b).toBeVisible();\n});\n");
+  write(
+    "artifacts/playwright/repair-scope.json",
+    JSON.stringify({
+      approvedPaths: ["e2e/tests/risky.spec.ts"],
+      justifiedExceptions: [{ category: "assertion-count-decrease", reason: "   " }],
+    }),
+  );
+  const result = runHook(
+    "repair-write-guard.mjs",
+    stdin("Write", "e2e/tests/risky.spec.ts", { content: "test('t', async () => {\n  await expect(a).toBeVisible();\n});\n" }),
+    { CLAUDE_PROJECT_DIR: fakeRoot },
+  );
+  expect(result.status).toBe(2);
+  expect(result.stderr).toContain("assertion-count-decrease");
+});
+
+// --- Stage 09: mechanical enforcement of the maintenance report's own repairAllowed verdict ------
+
+test("denied: no maintenance report exists at all under artifacts/playwright/maintenance/", () => {
+  write("artifacts/playwright/repair-scope.json", JSON.stringify({ approvedPaths: ["e2e/tests/existing.spec.ts"] }));
+  const result = runHook(
+    "repair-write-guard.mjs",
+    stdin("Edit", "e2e/tests/existing.spec.ts", { old_string: "existing test fixture", new_string: "existing test fixture, edited" }),
+    { CLAUDE_PROJECT_DIR: fakeRoot },
+  );
+  expect(result.status).toBe(2);
+  expect(result.stderr).toContain("no maintenance report exists");
+});
+
+test("denied: a maintenance report exists but no finding's test source names this file", () => {
+  write("artifacts/playwright/repair-scope.json", JSON.stringify({ approvedPaths: ["e2e/tests/existing.spec.ts"] }));
+  writeMaintenanceReport("e2e/tests/some-other-test.spec.ts", true);
+  const result = runHook(
+    "repair-write-guard.mjs",
+    stdin("Edit", "e2e/tests/existing.spec.ts", { old_string: "existing test fixture", new_string: "existing test fixture, edited" }),
+    { CLAUDE_PROJECT_DIR: fakeRoot },
+  );
+  expect(result.status).toBe(2);
+  expect(result.stderr).toContain("contains no finding whose test source is");
+});
+
+test("denied: the matching finding's own repairAllowed is false (e.g. insufficient-evidence)", () => {
+  write("artifacts/playwright/repair-scope.json", JSON.stringify({ approvedPaths: ["e2e/tests/existing.spec.ts"] }));
+  writeMaintenanceReport("e2e/tests/existing.spec.ts", false);
+  const result = runHook(
+    "repair-write-guard.mjs",
+    stdin("Edit", "e2e/tests/existing.spec.ts", { old_string: "existing test fixture", new_string: "existing test fixture, edited" }),
+    { CLAUDE_PROJECT_DIR: fakeRoot },
+  );
+  expect(result.status).toBe(2);
+  expect(result.stderr).toContain("repairAllowed: false");
+  expect(result.stderr).toContain("insufficient-evidence");
+});
+
+test("denied: the most recent maintenance report file is not valid JSON (fails safe)", () => {
+  write("artifacts/playwright/repair-scope.json", JSON.stringify({ approvedPaths: ["e2e/tests/existing.spec.ts"] }));
+  write("artifacts/playwright/maintenance/report-1.json", "{ not valid json");
+  const result = runHook(
+    "repair-write-guard.mjs",
+    stdin("Edit", "e2e/tests/existing.spec.ts", { old_string: "existing test fixture", new_string: "existing test fixture, edited" }),
+    { CLAUDE_PROJECT_DIR: fakeRoot },
+  );
+  expect(result.status).toBe(2);
+  expect(result.stderr).toContain("is not valid JSON");
 });
 
 test("ignores tool calls that aren't Edit or Write (defensive fallback)", () => {

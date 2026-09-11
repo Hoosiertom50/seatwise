@@ -559,6 +559,33 @@ unparseable `quality/repair-allowed-dirs.yaml`, a missing or unparseable
 `artifacts/playwright/repair-scope.json`, or a target outside the repository root entirely all deny,
 never default to permissive.
 
+**Stage 09 added two more independent conditions to this same hook** (see "Failure triage and
+controlled test repair" below for the maintenance report they both depend on):
+
+3. **A coarse, self-contained diff-safety proxy.** The canonical structural check for a test's own
+   quality (`checkTestSource`, `playwright-framework/validation/lintRules.ts`) is TypeScript and
+   needs a build step this dependency-free `.mjs` hook cannot take on. `assessDiffRisk` inside the
+   hook itself is a deliberately coarser regex-based stand-in: it compares the file's real current
+   content against what the attempted `Edit`/`Write` would make it, and flags a decreased
+   `expect(...)`/`expect.poll(...)` count, a new `.waitForTimeout(...)` call, a new
+   `.only`/`.skip`/`.fixme`, a new raw `page.locator()`/`page.$()`/`page.getBy...()` call inside a
+   test file, or *any* change at all to a page/component object file (treated as an always-flagged
+   proxy for "a locator may have been broadened", since a coarse regex hook cannot itself judge
+   locator strictness). Each flagged category is denied unless
+   `artifacts/playwright/repair-scope.json`'s `justifiedExceptions` array already names that exact
+   category with a non-empty, human-given reason — populated only by `/pw-repair-test`'s own
+   preflight, after asking the human specifically about that risk. This is a second, coarser safety
+   net alongside (never instead of) the canonical `pw:lint-tests` check `post-edit-validator.mjs`
+   already runs post-edit.
+4. **The most recent maintenance report must classify this test as `repairAllowed: true`.** The hook
+   independently loads `artifacts/playwright/maintenance/*.json` (the newest by mtime), finds the
+   finding whose own "Test source" evidence link names the file being written, and denies outright
+   if no such finding exists (no triage yet means no repair yet) or if its `repairAllowed` is
+   `false` (always the case for "Probable application defect" and "Insufficient evidence" — Stage
+   09's acceptance criteria). This is mechanical enforcement of "prohibit repair for probable
+   application defects and insufficient-evidence outcomes" — `/pw-repair-test`'s own preflight is
+   expected to check this too, but the hook does not trust that alone.
+
 ### The lightweight post-edit validator (hook requirement #2)
 
 `.claude/hooks/post-edit-validator.mjs`, wired project-wide in `.claude/settings.json` as a
@@ -606,6 +633,9 @@ internals, since a hook has none to import; it is a script Claude Code itself sp
 guards that depend on repository state (`repair-write-guard`, `stage-gate-check`) run against a
 throwaway temporary fake repository root for every test, never this real repo's own files, so they
 can run safely alongside a real `/pw-repair-test` or `/pw-bootstrap` session.
+`repair-write-guard.spec.ts` covers Stage 09's two additional conditions the same way: a fake
+maintenance report and `justifiedExceptions` fixture per test, never the real
+`artifacts/playwright/maintenance/` this repo's own `pnpm pw:triage` writes to.
 
 ### When Claude Code features are unavailable
 
@@ -620,6 +650,115 @@ required one, so none was created. In that situation, every workflow above is st
 running its documented `pnpm pw:*` commands directly from a shell — nothing in this framework's
 actual behavior depends on the skills/hooks layer existing; it is a convenience wrapper over
 commands that already work standalone.
+
+## Failure triage and controlled test repair (Stage 09)
+
+Section 10.4 asks for a maintenance report that classifies each real failure into one of 7
+categories, with a defined set of required fields per failure, and Section 09's acceptance criteria
+require that classification to actually gate what `/pw-repair-test` may do — not just describe it.
+
+### `pnpm pw:triage` — the maintenance/failure-triage CLI
+
+`playwright-framework/cli/triage.ts` reads one already-completed Stage 06 run report **by run ID,
+never rerunning anything** (`pnpm pw:triage [--run-id <id>]`, defaulting to the most recent report
+on disk), classifies every real failure in it (`status` one of `consistent-failure`, `timeout`,
+`setup-failure`), and writes a schema-validated `artifacts/playwright/maintenance/<reportId>.json`
++ `.html` (`MaintenanceReportSchema`, `playwright-framework/metadata/schemas.ts`). `pnpm
+pw:triage:serve [reportId]` serves it (mirroring `pw:review:serve`'s own fix for relative source-
+file links resolving from a one-directory-deep served page — `serve-maintenance-report.ts` serves
+`artifacts/playwright/` as one root precisely so a maintenance report's own sibling links into
+`runs/run-reports/...` resolve the same way).
+
+DEC-027 replaced an earlier, unused Stage 02 placeholder schema (`MaintenanceClassificationSchema` —
+a 5-category enum that predated Section 10.4's real requirements) with one matching Section 10.4
+exactly: 7 categories (`probable-application-defect`, `probable-test-defect`,
+`intended-application-change`, `test-data-problem`, `environment-or-infrastructure-problem`,
+`intermittent-flaky-behavior`, `insufficient-evidence`) and all 12 required per-failure fields (test
+and run IDs; classification and confidence; expected vs. observed behavior; first failed step;
+evidence links; comparison notes; evidence for/against an application defect and a test defect;
+recommended next action; `repairAllowed`; `repairAllowedFiles`; a suggested defect description).
+`MaintenanceFindingSchema` itself refuses (via a zod `.refine`) any document where
+`repairAllowed: true` accompanies `probable-application-defect` or `insufficient-evidence` — a
+second, schema-level backstop behind `classifyFailure.ts`'s own logic and `repair-write-guard.mjs`'s
+independent re-check.
+
+### Classification tiers (DEC-028) — `playwright-framework/triage/classifyFailure.ts`
+
+Deliberately mirrors DEC-021's mechanical/hand-authored/forced-human-review split (Stage 07,
+`evaluateTest.ts`), applied to failure classification instead of scoring:
+
+1. **Mechanical (computed fresh, every run)** — only the two categories a structural signal can
+   actually support without reading the failure's meaning: `environment-or-infrastructure-problem`
+   (the run report's own `status: "setup-failure"`, or a known infrastructure error-text pattern —
+   `ECONNREFUSED`, a browser launch failure, and similar) and `intermittent-flaky-behavior` (this
+   exact test has both passed and failed across different real run reports on file — read via
+   `runReportHistory.ts`, the same Stage 07 already depends on).
+2. **Hand-authored (`quality/failure-classifications.yaml`)** — the remaining four categories
+   (`probable-application-defect`, `probable-test-defect`, `intended-application-change`,
+   `test-data-problem`) genuinely require judging what a specific failure's error text and the
+   test's intent mean, which this module never guesses at from a regex. Mirrors
+   `quality/test-evaluations.yaml`'s established shape exactly: per-test entries (optionally scoped
+   further to one distinct error text via `errorFingerprint`, since one test can fail more than one
+   distinct way over its lifetime), each citing real evidence for/against both an application defect
+   and a test defect.
+3. **Insufficient evidence (fail-closed default)** — a failure matching neither tier gets
+   `insufficient-evidence`, `confidence: "low"`, `needsHumanReview: true`, `repairAllowed: false` —
+   the same fail-closed default `evaluateTest.ts` uses for an unscored criterion, never a fabricated
+   middle-ground guess.
+
+Every finding also cross-references the latest Stage 07 suite review (when one exists) for sibling
+tests covering the same requirement(s), surfaced as a `comparisonNotes` fact — evidence toward
+"this looks scoped to one specific behavior" rather than a suite-wide environment problem, never a
+deciding signal on its own.
+
+### Repair is gated on the maintenance report, not just asked to check it
+
+`repair-write-guard.mjs`'s two new Stage 09 conditions (documented in full under "The scoped repair
+write guard" above) are what actually enforce Section 09's acceptance criteria:
+
+- **Repair cannot broaden selectors, remove assertions, add sleeps, or skip a test without explicit
+  justified review** — the diff-safety proxy, gated on `repair-scope.json`'s `justifiedExceptions`.
+- **Prohibit repair for probable application defects and insufficient-evidence outcomes** — the
+  maintenance-report `repairAllowed` re-check, independent of whatever `/pw-repair-test`'s own
+  preflight or a human believes.
+
+`post-edit-validator.mjs` was also extended this stage: any changed test, page/component object,
+fixture, governance YAML, or scoring/evaluation/coverage module now also triggers `pnpm pw:review`
+(Section 09 task: "Regenerate the suite-review report after any test, page object, fixture,
+metadata, or scoring change") — still read-only/discovery work, never a browser-backed run, so it
+stays within the "lightweight" bound Section 11.4 sets for this hook.
+
+### Extending an existing test vs. authoring a new one
+
+`.claude/skills/pw-author-test/SKILL.md` now states this explicitly (Section 09 task): when new
+functionality is a direct, small extension of an already-tested behavior, add a focused
+`test.step` to the existing test; when it's its own distinct behavior or failure mode, author a
+separate test with its own `requirementIds`/objective. Never overload one test with unrelated
+outcomes just because they touch the same page.
+
+### Visual-regression baselines: not applicable
+
+Section 09's "prohibit automatic visual-baseline updates" has nothing to gate today — this
+repository has no visual-regression/snapshot testing anywhere (`toHaveScreenshot`/`toMatchSnapshot`/
+`--update-snapshots`, confirmed absent via a repo-wide grep before this stage was built). Disclosed
+here rather than silently skipped; if visual-regression testing is ever added, its baseline-update
+path must go through the same explicit-human-approval discipline as everything else in this section.
+
+### Live verification (Stage 09)
+
+Verified against a real, deliberately-broken scratch test (`e2e/tests/_scratch-stage09-live-
+verification.spec.ts`, mirroring Stage 06's own precedent — created, run, triaged, and deleted along
+with every artifact it produced; never committed): a real `pnpm pw:run` failure was classified
+`insufficient-evidence` (no mechanical signal or hand-authored entry matched it — the correct,
+honest default), `pnpm pw:triage:serve` served the report with every evidence/source link resolving
+(200, confirmed via direct HTTP requests; a path-traversal and a bare-repo-root request both still
+404), and a real attempt to write to that classified-`insufficient-evidence` test through
+`repair-write-guard.mjs` itself (not just its test suite) was denied, citing the exact
+classification. The mechanical `environment-or-infrastructure-problem` and
+`intermittent-flaky-behavior` tiers, and the hand-authored tier, are covered by real unit tests
+(`playwright-framework/tests/classifyFailure.spec.ts`) rather than a live run, since reproducing a
+genuine environment outage or a naturally-occurring flake on demand would mean deliberately
+destabilizing the shared dev environment this whole framework runs against.
 
 ## Verifying independence
 

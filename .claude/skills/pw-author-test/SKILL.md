@@ -28,6 +28,22 @@ needs, never `e2e/fixtures/**`, `e2e/support/**`, or anything under `playwright-
 case seems to require changing shared fixture/support code, stop and say so rather than doing it
 silently as part of "authoring a test."
 
+## Extending an existing test vs. authoring a new one (Stage 09)
+
+When the application gains new functionality closely related to an already-tested behavior, decide
+deliberately rather than defaulting to either extreme:
+
+- **Add a focused validation to the existing test** when the new behavior is a direct, small
+  extension of what that test already Arranges/Acts on (e.g. the same guest-list view now also
+  shows a new field) -- add a named `test.step` for it, and update `expectedOutcome` to say so.
+- **Create a separate, independent test** when the new functionality is its own distinct behavior,
+  user flow, or failure mode (a new mutating action, a different page, a different access-control
+  boundary) even if it's topically related -- give it its own `requirementIds`/objective.
+
+Never overload one test with unrelated outcomes just because they happen to touch the same page --
+that produces a test whose failure doesn't say which of several unrelated things actually broke,
+and inflates the "independence" and "objective-traceability" criteria's real meaning per test.
+
 ## Preflight
 
 1. Confirm the app is reachable (`pnpm dev`, Postgres cluster) -- a new test must be verified

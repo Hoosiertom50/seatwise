@@ -39,16 +39,31 @@ outer directory allowlist requires a human directly editing
 
 ## Preflight (hard requirement, not optional)
 
-1. Identify the exact target file(s) from the triage report or the human's own description.
-2. **Confirm the exact target with the human before writing anything** (via `AskUserQuestion` if
+1. **Run (or locate) a `/pw-triage-failures` maintenance report that actually covers this test**,
+   and confirm its finding's `repairAllowed` is `true`. If it's `false` (always the case for
+   "Probable application defect" and "Insufficient evidence" -- Stage 09 acceptance criteria) or no
+   finding covers this test at all, **stop here** -- this is not a "confirm harder" situation.
+   `repair-write-guard.mjs` independently re-derives this from the most recent maintenance report
+   itself and will refuse the write regardless of what this skill decides, so there is no path
+   around it; the human confirmation in step 2 below can only ever narrow what a `repairAllowed:
+   true` finding already permits, never override a `false` one.
+2. Identify the exact target file(s) from that triage report.
+3. **Confirm the exact target with the human before writing anything** (via `AskUserQuestion` if
    available, or by stating the exact file(s) and diagnosed root cause and requiring an explicit
    go-ahead otherwise). This is the "unless the human explicitly expands scope" half of the
    requirement -- do not skip it because the target seems obvious.
-3. Only after that confirmation, write `artifacts/playwright/repair-scope.json`:
+4. Only after that confirmation, write `artifacts/playwright/repair-scope.json`:
    `{"approvedPaths": ["<relative path(s)>"], "reason": "...", "confirmedAt": "<ISO timestamp>"}`.
    This file is what the `playwright-repair` subagent's write guard checks against; nothing is
    writable by that subagent until this file names it.
-4. Reproduce the failure for real (`pnpm pw:run` against the specific test) before forking into
+5. **If the diagnosed fix would broaden a selector, remove/weaken an assertion, add a fixed sleep,
+   or add `.only`/`.skip`/`.fixme`, or touches a page/component object file at all** (Stage 09's own
+   coarse diff-safety proxy in `repair-write-guard.mjs` flags every one of these), ask the human
+   specifically about that additional risk before proceeding, then add it to
+   `repair-scope.json`'s `justifiedExceptions` array as `{"category": "<the flagged category>",
+   "reason": "<what the human said>"}`. An empty or missing reason does not count -- the hook fails
+   safe and denies. Never add a justified exception the human wasn't actually asked about.
+6. Reproduce the failure for real (`pnpm pw:run` against the specific test) before forking into
    repair, so the before-state is concretely established, not assumed from the triage report alone.
 
 ## What this skill does
@@ -66,10 +81,13 @@ real re-run backing it.
 
 ## Stop conditions
 
+- No maintenance report finding covers this test, or its `repairAllowed` is `false` -- run/re-run
+  `/pw-triage-failures` and follow ITS recommendation instead; do not attempt this workflow anyway.
 - The human declines to confirm the target, or the target is ambiguous.
-- `repair-write-guard.mjs` denies a write the subagent attempts -- that means the scope given was
-  too narrow for what's actually needed; stop and ask the human to confirm a wider, still-specific
-  scope rather than trying to route around the denial.
+- `repair-write-guard.mjs` denies a write the subagent attempts -- that means either the scope given
+  was too narrow for what's actually needed, a diff-safety category needs a `justifiedException` you
+  haven't asked the human about yet, or the maintenance report itself doesn't permit this repair;
+  stop and address whichever the denial reason names rather than trying to route around it.
 - The fix would need to touch application source, a shared fixture, or a governance file -- that is
   out of scope for this workflow entirely.
 

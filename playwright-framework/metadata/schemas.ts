@@ -662,29 +662,148 @@ export type SuiteReview = z.infer<typeof SuiteReviewSchema>;
 export type SuiteReviewChange = z.infer<typeof SuiteReviewChangeSchema>;
 
 // ---------------------------------------------------------------------------
-// Maintenance results (future stage: triage output against a failed run — Section 10.4)
+// Maintenance / failure-triage results (Stage 09 — Section 10.4): the output of triaging one run
+// report's real failures against the 7 categories Section 10.4 requires.
+//
+// DEC-027 records a full replacement here. A placeholder `MaintenanceClassificationSchema` /
+// `MaintenanceFindingSchema` / `MaintenanceResultFileSchema` was scaffolded back in Stage 02 (before
+// Section 10.4's real requirements were ever implemented against) with a 5-category enum
+// ("product-defect" / "test-defect" / "environment-issue" / "flaky-infrastructure" /
+// "needs-human-review") that matches neither Section 10.4's actual 7 categories nor its 12 required
+// per-failure fields, and neither type was ever consumed anywhere else in the codebase (confirmed
+// via `grep -rln "MaintenanceClassificationSchema\|MaintenanceFindingSchema\|MaintenanceResultFileSchema"`
+// before deleting them here) — so this is a clean replacement, not a migration of any real data.
 // ---------------------------------------------------------------------------
 
-export const MaintenanceClassificationSchema = z.enum([
-  "product-defect",
-  "test-defect",
-  "environment-issue",
-  "flaky-infrastructure",
-  "needs-human-review",
+/** Section 10.4's exact 7 classification categories, verbatim. */
+export const FailureClassificationSchema = z.enum([
+  "probable-application-defect",
+  "probable-test-defect",
+  "intended-application-change",
+  "test-data-problem",
+  "environment-or-infrastructure-problem",
+  "intermittent-flaky-behavior",
+  "insufficient-evidence",
 ]);
+export type FailureClassification = z.infer<typeof FailureClassificationSchema>;
+
+export const EvidenceLinkSchema = z.object({
+  label: NonEmptyStringSchema,
+  /** Repository- or artifacts-relative path (never absolute — Section 10.1's convention applies
+   * here too): a log, request capture, screenshot, trace, or test source link. */
+  path: z.string(),
+});
+export type EvidenceLink = z.infer<typeof EvidenceLinkSchema>;
 
 export const MaintenanceFindingSchema = z.object({
+  // "Test and run IDs"
   testId: NonEmptyStringSchema,
-  classification: MaintenanceClassificationSchema,
-  rationale: NonEmptyStringSchema,
-  confidence: z.enum(["high", "medium", "low"]),
-  recommendedAction: NonEmptyStringSchema,
-});
-
-export const MaintenanceResultFileSchema = z.object({
-  schemaVersion: z.literal("1.0.0"),
   runId: NonEmptyStringSchema,
+  // "Classification and confidence"
+  classification: FailureClassificationSchema,
+  confidence: z.enum(["high", "medium", "low"]),
+  // "Expected versus observed behavior"
+  expectedBehavior: NonEmptyStringSchema,
+  observedBehavior: NonEmptyStringSchema,
+  // "First meaningful failed step and assertion"
+  firstFailedStep: z.string().optional(),
+  // "Relevant logs, requests, screenshots, trace, and source links"
+  evidenceLinks: z.array(EvidenceLinkSchema),
+  // "Comparison with requirements and recent relevant code changes when available"
+  comparisonNotes: NonEmptyStringSchema,
+  // "Evidence for and against an application defect" / "Evidence for and against a test defect"
+  evidenceForApplicationDefect: z.array(NonEmptyStringSchema),
+  evidenceAgainstApplicationDefect: z.array(NonEmptyStringSchema),
+  evidenceForTestDefect: z.array(NonEmptyStringSchema),
+  evidenceAgainstTestDefect: z.array(NonEmptyStringSchema),
+  // "Recommended next action"
+  recommendedNextAction: NonEmptyStringSchema,
+  // "Whether automated repair is allowed" -- mechanically forced false for
+  // probable-application-defect and insufficient-evidence (Stage 09 acceptance criteria: "A
+  // probable application bug remains visible and is not 'fixed' by changing the test"); the CLI
+  // that assembles this document enforces that rule and this schema cannot itself express it, so
+  // playwright-framework/triage/classifyFailure.ts is the single place that decides this value.
+  repairAllowed: z.boolean(),
+  // "Exact files that a proposed repair may modify"
+  repairAllowedFiles: z.array(NonEmptyStringSchema),
+  // "Suggested defect description when an application bug is probable"
+  suggestedDefectDescription: z.string().optional(),
+  /** Not itself one of Section 10.4's listed fields, but required by this stage's own acceptance
+   * criteria ("evidence-for, evidence-against, confidence, and missing-information fields") and by
+   * DEC-021's established mechanical/hand-authored/forced-human-review discipline. */
+  needsHumanReview: z.boolean(),
+  /** Which of the three tiers produced this finding — mirrors DEC-021's value/quality scoring
+   * discipline, applied here to failure classification instead. */
+  source: z.enum(["mechanical", "hand-authored", "insufficient-evidence-default"]),
+}).refine(
+  (finding) =>
+    finding.classification !== "probable-application-defect" &&
+    finding.classification !== "insufficient-evidence"
+      ? true
+      : finding.repairAllowed === false,
+  {
+    // Enforced here, not just by classifyFailure.ts's own logic, so a schema-validating document
+    // that somehow set repairAllowed: true for one of these two categories fails LOUD (the CLI's
+    // own schema-validation step, mirroring suite-review.ts's "a schema violation here is a bug in
+    // this CLI, not something to silently coerce past") rather than ever reaching a report a human
+    // or /pw-repair-test could act on. Stage 09 acceptance criteria: "A probable application bug
+    // remains visible and is not 'fixed' by changing the test" and "Prohibit repair for probable
+    // application defects and insufficient-evidence outcomes."
+    message:
+      "repairAllowed must be false whenever classification is probable-application-defect or insufficient-evidence",
+    path: ["repairAllowed"],
+  },
+);
+export type MaintenanceFinding = z.infer<typeof MaintenanceFindingSchema>;
+
+export const MaintenanceReportSchema = z.object({
+  schemaVersion: z.literal("1.0.0"),
+  reportId: NonEmptyStringSchema,
   generatedAt: z.string(),
+  frameworkVersion: NonEmptyStringSchema,
+  /** The Stage 06 run report this triage was generated from -- Stage 09's own task requires
+   * "artifact collection by run ID without rerunning first", so a maintenance report is always
+   * anchored to one specific, already-completed run's own report file. */
+  sourceRunId: NonEmptyStringSchema,
   findings: z.array(MaintenanceFindingSchema),
 });
-export type MaintenanceResultFile = z.infer<typeof MaintenanceResultFileSchema>;
+export type MaintenanceReport = z.infer<typeof MaintenanceReportSchema>;
+
+// ---------------------------------------------------------------------------
+// Failure classifications (Stage 09 — quality/failure-classifications.yaml): the hand-authored half
+// of failure triage, mirroring quality/test-evaluations.yaml's own pattern (Stage 07, DEC-021) --
+// mechanical signals (playwright-framework/triage/classifyFailure.ts) resolve most failures without
+// ever consulting this file; what's left over is either matched here against a human- or AI-
+// authored judgment citing real evidence, or defaults to "insufficient-evidence" /
+// needsHumanReview: true if no entry matches either.
+// ---------------------------------------------------------------------------
+
+export const FailureClassificationOverrideSchema = z.object({
+  testId: NonEmptyStringSchema,
+  /** Optional: when present, this entry only matches a failure whose own `errorMessage` CONTAINS
+   * this exact substring -- lets one test have multiple hand-authored judgments for genuinely
+   * different failure modes. Omitted, an entry matches any otherwise-unresolved failure of
+   * `testId` regardless of its error text. */
+  errorFingerprint: z.string().optional(),
+  evaluatedAt: IsoDateSchema,
+  evaluatedBy: NonEmptyStringSchema,
+  classification: FailureClassificationSchema,
+  confidence: z.enum(["high", "medium", "low"]),
+  needsHumanReview: z.boolean(),
+  rationale: NonEmptyStringSchema,
+  evidenceForApplicationDefect: z.array(NonEmptyStringSchema).default([]),
+  evidenceAgainstApplicationDefect: z.array(NonEmptyStringSchema).default([]),
+  evidenceForTestDefect: z.array(NonEmptyStringSchema).default([]),
+  evidenceAgainstTestDefect: z.array(NonEmptyStringSchema).default([]),
+  recommendedNextAction: NonEmptyStringSchema,
+  repairAllowed: z.boolean(),
+  repairAllowedFiles: z.array(NonEmptyStringSchema).default([]),
+  suggestedDefectDescription: z.string().optional(),
+});
+export type FailureClassificationOverride = z.infer<typeof FailureClassificationOverrideSchema>;
+
+export const FailureClassificationsFileSchema = z.object({
+  schemaVersion: z.literal("1.0.0"),
+  classifications: z.array(FailureClassificationOverrideSchema),
+});
+export type FailureClassificationsFile = z.infer<typeof FailureClassificationsFileSchema>;

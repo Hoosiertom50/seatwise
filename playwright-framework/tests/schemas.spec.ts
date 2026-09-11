@@ -3,6 +3,9 @@ import {
   TestValueModelFileSchema,
   ValueOverrideSchema,
   RequirementsFileSchema,
+  MaintenanceFindingSchema,
+  MaintenanceReportSchema,
+  FailureClassificationsFileSchema,
 } from "../metadata/schemas.js";
 
 function validModelFixture(overrides: Partial<Record<string, unknown>> = {}) {
@@ -119,6 +122,128 @@ test.describe("RequirementsFileSchema", () => {
           sourceRefs: [],
           status: "not-a-real-status",
           provenance: "p",
+        },
+      ],
+    });
+    expect(result.success).toBe(false);
+  });
+});
+
+// Stage 09 -- DEC-027: replaces an earlier, incomplete placeholder schema that was never consumed
+// anywhere in the codebase (see schemas.ts's own module doc above MaintenanceReportSchema).
+test.describe("MaintenanceFindingSchema", () => {
+  function validFindingFixture(overrides: Partial<Record<string, unknown>> = {}) {
+    return {
+      testId: "suite.some-test",
+      runId: "run-1",
+      classification: "probable-test-defect",
+      confidence: "high",
+      expectedBehavior: "e",
+      observedBehavior: "o",
+      evidenceLinks: [{ label: "Test source", path: "e2e/tests/suite.spec.ts" }],
+      comparisonNotes: "n",
+      evidenceForApplicationDefect: [],
+      evidenceAgainstApplicationDefect: [],
+      evidenceForTestDefect: ["stale locator"],
+      evidenceAgainstTestDefect: [],
+      recommendedNextAction: "fix the locator",
+      repairAllowed: true,
+      repairAllowedFiles: ["e2e/tests/suite.spec.ts"],
+      needsHumanReview: false,
+      source: "hand-authored",
+      ...overrides,
+    };
+  }
+
+  test("accepts a well-formed finding for a repairable classification", () => {
+    const result = MaintenanceFindingSchema.safeParse(validFindingFixture());
+    expect(result.success).toBe(true);
+  });
+
+  test("rejects an unknown classification value", () => {
+    const result = MaintenanceFindingSchema.safeParse(validFindingFixture({ classification: "not-a-real-category" }));
+    expect(result.success).toBe(false);
+  });
+
+  test("rejects repairAllowed: true when classification is probable-application-defect (schema-level invariant)", () => {
+    const result = MaintenanceFindingSchema.safeParse(
+      validFindingFixture({ classification: "probable-application-defect", repairAllowed: true }),
+    );
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.some((i) => i.path.join(".") === "repairAllowed")).toBe(true);
+    }
+  });
+
+  test("rejects repairAllowed: true when classification is insufficient-evidence (schema-level invariant)", () => {
+    const result = MaintenanceFindingSchema.safeParse(
+      validFindingFixture({ classification: "insufficient-evidence", repairAllowed: true }),
+    );
+    expect(result.success).toBe(false);
+  });
+
+  test("accepts repairAllowed: false for probable-application-defect", () => {
+    const result = MaintenanceFindingSchema.safeParse(
+      validFindingFixture({ classification: "probable-application-defect", repairAllowed: false, repairAllowedFiles: [] }),
+    );
+    expect(result.success).toBe(true);
+  });
+});
+
+test.describe("MaintenanceReportSchema", () => {
+  test("accepts a report with zero findings (a clean run)", () => {
+    const result = MaintenanceReportSchema.safeParse({
+      schemaVersion: "1.0.0",
+      reportId: "report-1",
+      generatedAt: "2026-09-10T12:00:00.000Z",
+      frameworkVersion: "0.9.0",
+      sourceRunId: "run-1",
+      findings: [],
+    });
+    expect(result.success).toBe(true);
+  });
+});
+
+test.describe("FailureClassificationsFileSchema", () => {
+  test("accepts an empty classifications list", () => {
+    const result = FailureClassificationsFileSchema.safeParse({ schemaVersion: "1.0.0", classifications: [] });
+    expect(result.success).toBe(true);
+  });
+
+  test("accepts a well-formed override entry with an errorFingerprint", () => {
+    const result = FailureClassificationsFileSchema.safeParse({
+      schemaVersion: "1.0.0",
+      classifications: [
+        {
+          testId: "suite.some-test",
+          errorFingerprint: "ECONNREFUSED",
+          evaluatedAt: "2026-09-10",
+          evaluatedBy: "Human QA",
+          classification: "environment-or-infrastructure-problem",
+          confidence: "high",
+          needsHumanReview: false,
+          rationale: "r",
+          recommendedNextAction: "n",
+          repairAllowed: false,
+        },
+      ],
+    });
+    expect(result.success).toBe(true);
+  });
+
+  test("rejects an override missing rationale", () => {
+    const result = FailureClassificationsFileSchema.safeParse({
+      schemaVersion: "1.0.0",
+      classifications: [
+        {
+          testId: "suite.some-test",
+          evaluatedAt: "2026-09-10",
+          evaluatedBy: "Human QA",
+          classification: "test-data-problem",
+          confidence: "medium",
+          needsHumanReview: true,
+          recommendedNextAction: "n",
+          repairAllowed: true,
         },
       ],
     });

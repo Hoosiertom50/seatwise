@@ -17,12 +17,14 @@ import {
   ValueOverridesFileSchema,
   SavedSelectionsFileSchema,
   TestEvaluationsFileSchema,
+  FailureClassificationsFileSchema,
   type RequirementsFile,
   type TagTaxonomyFile,
   type TestValueModelFile,
   type ValueOverridesFile,
   type SavedSelectionsFile,
   type TestEvaluationsFile,
+  type FailureClassificationsFile,
 } from "./schemas.js";
 
 export class MetadataValidationError extends Error {
@@ -91,4 +93,13 @@ export function loadSavedSelections(path: string): SavedSelectionsFile {
 
 export function loadTestEvaluations(path: string): TestEvaluationsFile {
   return loadYamlFile(path, TestEvaluationsFileSchema);
+}
+
+/** Stage 09 — loads quality/failure-classifications.yaml (the hand-authored half of failure
+ * triage; see schemas.ts's module doc above MaintenanceReportSchema). Behaves exactly like every
+ * other loader here: a missing file, invalid YAML, or a schema violation throws
+ * MetadataValidationError rather than being treated as "no classifications yet" (an intentionally
+ * empty `classifications: []` list is how that case is expressed, and parses successfully). */
+export function loadFailureClassifications(path: string): FailureClassificationsFile {
+  return loadYamlFile(path, FailureClassificationsFileSchema);
 }

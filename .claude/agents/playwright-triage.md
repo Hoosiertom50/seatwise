@@ -31,22 +31,33 @@ objects, or fixtures.
 Given a run report (`artifacts/playwright/runs/run-reports/<runId>.json`, or the most recent one if
 none is named):
 
-1. Read the report's per-test entries: status classification (Section 10.2's 8 categories),
-   assertion counts, named steps, the deterministic why-passed/why-failed explanation, and every
-   linked evidence attachment (failure screenshot, trace, console messages, failed network
-   requests).
-2. Open and actually read the evidence -- a screenshot (`Read` renders images), the redacted
-   console/network logs, the trace summary -- rather than inferring a cause from the status alone.
-3. Distinguish, with evidence for each: a genuine application regression, a flaky/timing issue, an
-   environment problem (dev server or Postgres unreachable, a stale fixture), and a test that is
-   itself wrong (a locator that no longer matches, an assertion that encodes an outdated
-   expectation).
-4. For each failing test, write a maintenance report entry: root-cause classification, the specific
-   evidence that supports it, whether it is safe to hand to `/pw-repair-test` at all (some failures
-   -- a real product regression -- should never be "fixed" by editing the test), and if so, exactly
-   which file and what change is likely needed. Recommending a fix is different from making one:
-   you write the recommendation, a human decides, and `/pw-repair-test` (a separate, scoped,
-   write-guarded workflow) is what may eventually act on it.
-5. Never guess past what the evidence shows. "Insufficient evidence to classify -- needs human
-   review" is a correct, honest output when the report and its attachments genuinely don't resolve
-   the cause.
+1. **Run `pnpm pw:triage [--run-id <id>]` first (Stage 09) -- this is the deterministic authority
+   for classification, not a starting draft you re-derive from scratch.** It reads the target run
+   report by run ID (never rerunning anything), classifies every real failure against Section
+   10.4's 7 categories via `playwright-framework/triage/classifyFailure.ts` (mechanical signals --
+   run-report status, known infrastructure error patterns, cross-run flaky history -- first, then
+   `quality/failure-classifications.yaml`'s hand-authored entries, then a fail-closed
+   "insufficient-evidence" default), and writes a schema-validated `artifacts/playwright/
+   maintenance/<reportId>.json` you then read and explain. Running this is a read/diagnostic Bash
+   command, not a mutation -- it is explicitly allowed.
+2. Open and actually read the evidence the report's `evidenceLinks` point at -- a screenshot
+   (`Read` renders images), the run report's own console/network text, the trace -- to add the
+   human-facing narrative and comparison-with-requirements context `pw:triage`'s own mechanical
+   signals cannot supply, never to overrule what it already determined mechanically.
+3. When `pw:triage` classified a failure "insufficient-evidence" and you, reading the actual
+   evidence, can honestly determine a more specific cause, **recommend** the exact
+   `quality/failure-classifications.yaml` entry a human or the orchestrating session should add
+   (testId, optional errorFingerprint, classification, confidence, rationale, evidence for/against
+   each side, recommendedNextAction, repairAllowed) -- you do not write that file yourself (no Write
+   tool), and re-running `pw:triage` after it's added is what actually changes the report.
+4. Present, per failing test: `pw:triage`'s classification and confidence, whether it's safe to hand
+   to `/pw-repair-test` at all (`repairAllowed` -- mechanically `false` for "Probable application
+   defect" and "Insufficient evidence"; a real product regression should never be "fixed" by editing
+   the test that caught it), and if repairable, which file and what change is likely needed.
+   Recommending a fix is different from making one: `/pw-repair-test` (a separate, scoped,
+   write-guarded workflow) is what may eventually act on it, and it independently re-checks
+   `repairAllowed` itself regardless of what you say here.
+5. Never guess past what the evidence shows, and never talk a mechanically "insufficient-evidence"
+   or "probable-application-defect" finding into something that sounds more repairable than the
+   report says -- "insufficient evidence to classify further -- needs human review" is a correct,
+   honest output when the report and its attachments genuinely don't resolve the cause.

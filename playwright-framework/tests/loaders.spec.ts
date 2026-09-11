@@ -7,6 +7,7 @@ import {
   loadTagTaxonomy,
   loadTestValueModel,
   loadValueOverrides,
+  loadFailureClassifications,
   MetadataValidationError,
 } from "../metadata/loaders.js";
 
@@ -34,6 +35,11 @@ test.describe("real quality/*.yaml files load and validate cleanly", () => {
   test("value-overrides.yaml", () => {
     const file = loadValueOverrides("quality/value-overrides.yaml");
     expect(Array.isArray(file.overrides)).toBe(true);
+  });
+
+  test("failure-classifications.yaml (Stage 09)", () => {
+    const file = loadFailureClassifications("quality/failure-classifications.yaml");
+    expect(Array.isArray(file.classifications)).toBe(true);
   });
 });
 

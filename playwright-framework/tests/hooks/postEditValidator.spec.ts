@@ -30,7 +30,9 @@ test("passes: a real, already-valid framework .ts file (tsc --noEmit)", () => {
 test("passes: a real, already-valid governance yaml file (pw:validate-metadata)", () => {
   const result = runHook("post-edit-validator.mjs", editStdin("quality/tag-taxonomy.yaml"));
   expect(result.status).toBe(0);
-  expect((result.json as any)?.systemMessage).toContain("pw:validate-metadata passed");
+  const message = (result.json as any)?.systemMessage as string;
+  expect(message).toContain("pnpm pw:validate-metadata");
+  expect(message).toContain("passed for quality/tag-taxonomy.yaml");
 });
 
 test("passes: a real, already-valid test spec file (both tsc --noEmit and pw:lint-tests run)", () => {
@@ -40,6 +42,20 @@ test("passes: a real, already-valid test spec file (both tsc --noEmit and pw:lin
   expect(message).toContain("pnpm exec tsc --noEmit");
   expect(message).toContain("pnpm pw:lint-tests");
   expect(message).toContain("passed for e2e/tests/guest-viewing.spec.ts");
+});
+
+test("Stage 09: editing a real test spec also regenerates the suite review (pnpm pw:review runs)", () => {
+  const result = runHook("post-edit-validator.mjs", editStdin("e2e/tests/guest-viewing.spec.ts"));
+  expect(result.status).toBe(0);
+  const message = (result.json as any)?.systemMessage as string;
+  expect(message).toContain("pnpm pw:review");
+});
+
+test("Stage 09: editing a governance quality/*.yaml file also regenerates the suite review", () => {
+  const result = runHook("post-edit-validator.mjs", editStdin("quality/tag-taxonomy.yaml"));
+  expect(result.status).toBe(0);
+  const message = (result.json as any)?.systemMessage as string;
+  expect(message).toContain("pnpm pw:review");
 });
 
 test("surfaces a real failure: a deliberately broken scratch .ts file makes the project-wide typecheck fail", () => {

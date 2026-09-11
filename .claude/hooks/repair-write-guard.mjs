@@ -30,13 +30,107 @@
  * A Write is additionally refused unless the target file already exists -- repair modifies an
  * already-identified failing test, it does not author new ones (that is /pw-author-test's job).
  *
+ * Stage 09 -- Section 09 acceptance criterion: "Repair cannot broaden selectors, remove
+ * assertions, add sleeps, or skip a test without explicit justified review." The canonical check
+ * for this (checkTestSource, playwright-framework/validation/lintRules.ts) is TypeScript and needs
+ * a build step this dependency-free .mjs hook cannot take on -- see that module and
+ * PLAYWRIGHT_TESTING.md's Stage 09 section for why. `assessDiffRisk` below is a deliberately
+ * coarser, self-contained regex-based PROXY living directly in this hook: it compares the file's
+ * real current content against what this Edit/Write would make it, flags a small, named set of
+ * risky patterns, and requires each one to have a matching, human-reasoned entry in this session's
+ * own `repair-scope.json` under `justifiedExceptions` (populated only after the human is asked
+ * specifically about that additional risk -- see .claude/skills/pw-repair-test/SKILL.md). This is
+ * an intentional second, coarser safety net alongside (never instead of) the canonical
+ * `pw:lint-tests` check `post-edit-validator.mjs` already runs post-edit.
+ *
+ * Stage 09 -- Section 09 tasks "Prohibit repair for probable application defects and insufficient-
+ * evidence outcomes" and "Require explicit test ID and maintenance recommendation for
+ * /pw-repair-test": this hook does not trust a skill's own prose to honor that -- it independently
+ * loads the most recently generated `artifacts/playwright/maintenance/*.json` report, finds the
+ * finding whose own "Test source" evidence link names this file, and denies unless that finding's
+ * own `repairAllowed` is `true`. No matching maintenance finding at all is ALSO denied (no triage
+ * yet means no repair yet) -- this is the mechanical enforcement of a maintenance recommendation
+ * actually existing, not just the skill remembering to check one.
+ *
  * Fails safe throughout: any missing file, unparseable YAML/JSON, or absent field denies the
  * write rather than guessing a permissive default.
  */
-import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { readStdinJson, projectRoot, allow, deny, noop } from "./lib/hookIO.mjs";
+
+// --- Stage 09 diff-safety proxy (see module doc above) -----------------------------------------
+const ASSERTION_RE = /\bexpect(?:\.poll)?\s*\(/g;
+const FIXED_WAIT_RE = /\.waitForTimeout\s*\(/g;
+const SKIP_ONLY_FIXME_RE = /\.(?:only|skip|fixme)\s*\(/g;
+const RAW_SELECTOR_RE = /\bpage\.(?:locator|\$\$?|getBy\w+)\s*\(/g;
+
+function countMatches(re, text) {
+  const matches = text.match(re);
+  return matches ? matches.length : 0;
+}
+
+/** Returns `[{category, detail}]` for every risky pattern this edit would introduce/worsen in
+ * `relPath`. An empty array means nothing here needs a justified exception. */
+function assessDiffRisk(oldText, newText, relPath) {
+  const categories = [];
+  const isPageOrComponent = relPath.startsWith("e2e/pages/") || relPath.startsWith("e2e/components/");
+  const isTestSpec = relPath.startsWith("e2e/tests/");
+
+  const oldAssertions = countMatches(ASSERTION_RE, oldText);
+  const newAssertions = countMatches(ASSERTION_RE, newText);
+  if (newAssertions < oldAssertions) {
+    categories.push({
+      category: "assertion-count-decrease",
+      detail: `expect(...)/expect.poll(...) call count dropped from ${oldAssertions} to ${newAssertions}`,
+    });
+  }
+
+  const oldFixedWait = countMatches(FIXED_WAIT_RE, oldText);
+  const newFixedWait = countMatches(FIXED_WAIT_RE, newText);
+  if (newFixedWait > oldFixedWait) {
+    categories.push({
+      category: "new-fixed-wait",
+      detail: `.waitForTimeout(...) call count increased from ${oldFixedWait} to ${newFixedWait}`,
+    });
+  }
+
+  const oldSkip = countMatches(SKIP_ONLY_FIXME_RE, oldText);
+  const newSkip = countMatches(SKIP_ONLY_FIXME_RE, newText);
+  if (newSkip > oldSkip) {
+    categories.push({
+      category: "new-skip-only-or-fixme",
+      detail: `.only(...)/.skip(...)/.fixme(...) call count increased from ${oldSkip} to ${newSkip}`,
+    });
+  }
+
+  if (isTestSpec) {
+    const oldRaw = countMatches(RAW_SELECTOR_RE, oldText);
+    const newRaw = countMatches(RAW_SELECTOR_RE, newText);
+    if (newRaw > oldRaw) {
+      categories.push({
+        category: "new-raw-selector-in-test",
+        detail:
+          `raw page.locator()/page.$()/page.getBy...() call count increased from ${oldRaw} to ${newRaw} inside ` +
+          `a test file -- interactions should go through a page/component object, and a new raw call here is ` +
+          `also this hook's coarse proxy for "a selector may have been broadened"`,
+      });
+    }
+  }
+
+  if (isPageOrComponent) {
+    categories.push({
+      category: "page-object-or-component-change",
+      detail:
+        `"${relPath}" is a shared page/component object -- ANY change here is always flagged as a proxy for ` +
+        `"a locator may have been broadened", since this coarse regex-based hook cannot itself judge whether ` +
+        `a locator became stricter or looser`,
+    });
+  }
+
+  return categories;
+}
 
 const parsed = readStdinJson();
 if (!parsed.ok) {
@@ -167,6 +261,113 @@ if (realTarget !== expectedRealTarget) {
     `repair-write-guard: refusing -- "${relPath}" is a symlink or contains one in its path ` +
       `(resolves to "${realTarget}", expected "${expectedRealTarget}"); repair may only write to a ` +
       `real, non-symlinked file inside the approved scope`,
+  );
+}
+
+// --- Stage 09 diff-safety check: repair cannot broaden selectors, remove assertions, add sleeps,
+// or skip a test without explicit justified review ---------------------------------------------
+const currentContent = readFileSync(resolvedTarget, "utf-8");
+let candidateNewContent;
+if (toolName === "Write") {
+  if (typeof toolInput.content !== "string") {
+    deny("repair-write-guard: refusing -- Write tool_input.content is missing or not a string");
+  }
+  candidateNewContent = toolInput.content;
+} else {
+  const { old_string: oldString, new_string: newString, replace_all: replaceAll } = toolInput;
+  if (typeof oldString !== "string" || typeof newString !== "string") {
+    deny("repair-write-guard: refusing -- Edit tool_input.old_string/new_string is missing or not a string");
+  }
+  if (!currentContent.includes(oldString)) {
+    deny(
+      `repair-write-guard: refusing -- could not locate old_string in the real, current content of ` +
+        `"${relPath}" to assess diff safety; refusing out of caution`,
+    );
+  }
+  candidateNewContent = replaceAll
+    ? currentContent.split(oldString).join(newString)
+    : currentContent.replace(oldString, newString);
+}
+
+const riskCategories = assessDiffRisk(currentContent, candidateNewContent, relPath);
+if (riskCategories.length > 0) {
+  const justifiedExceptions = Array.isArray(scopeDoc.justifiedExceptions) ? scopeDoc.justifiedExceptions : [];
+  const unjustified = riskCategories.filter(
+    (risk) =>
+      !justifiedExceptions.some(
+        (exception) =>
+          exception &&
+          exception.category === risk.category &&
+          typeof exception.reason === "string" &&
+          exception.reason.trim().length > 0,
+      ),
+  );
+  if (unjustified.length > 0) {
+    deny(
+      `repair-write-guard: refusing -- this edit to "${relPath}" was flagged by the repair diff-safety check ` +
+        `(${unjustified.map((r) => `${r.category}: ${r.detail}`).join("; ")}); a repair cannot broaden selectors, ` +
+        `remove assertions, add sleeps, or skip a test without explicit justified review -- add a matching entry ` +
+        `to artifacts/playwright/repair-scope.json's justifiedExceptions (each {category, reason}, one per ` +
+        `flagged category above) only after asking the human specifically about this additional risk`,
+    );
+  }
+}
+
+// --- Stage 09: the most recent maintenance report must actually classify this test as
+// repair-allowed -- mechanical enforcement of "prohibit repair for probable application defects
+// and insufficient-evidence outcomes" and "require ... a maintenance recommendation" ---------------
+const maintenanceDir = join(root, "artifacts/playwright/maintenance");
+let maintenanceFiles;
+try {
+  maintenanceFiles = readdirSync(maintenanceDir).filter((f) => f.endsWith(".json"));
+} catch {
+  maintenanceFiles = [];
+}
+if (maintenanceFiles.length === 0) {
+  deny(
+    "repair-write-guard: refusing -- no maintenance report exists under artifacts/playwright/maintenance/; " +
+      `run \`pnpm pw:triage\` first so a real classification exists for "${relPath}" before repairing it`,
+  );
+}
+let latestReportPath;
+let latestMtimeMs = -Infinity;
+for (const file of maintenanceFiles) {
+  const abs = join(maintenanceDir, file);
+  const mtimeMs = statSync(abs).mtimeMs;
+  if (mtimeMs > latestMtimeMs) {
+    latestMtimeMs = mtimeMs;
+    latestReportPath = abs;
+  }
+}
+let maintenanceDoc;
+try {
+  maintenanceDoc = JSON.parse(readFileSync(latestReportPath, "utf-8"));
+} catch (err) {
+  deny(
+    `repair-write-guard: refusing -- the most recent maintenance report ` +
+      `(${relative(root, latestReportPath)}) is not valid JSON (${err.message})`,
+  );
+}
+const findings = Array.isArray(maintenanceDoc.findings) ? maintenanceDoc.findings : [];
+const matchingFinding = findings.find(
+  (finding) =>
+    finding &&
+    Array.isArray(finding.evidenceLinks) &&
+    finding.evidenceLinks.some((link) => link && link.path === relPath),
+);
+if (!matchingFinding) {
+  deny(
+    `repair-write-guard: refusing -- the most recent maintenance report ` +
+      `(${relative(root, latestReportPath)}) contains no finding whose test source is "${relPath}"; ` +
+      "run `pnpm pw:triage` against a run that actually covers this test's failure, then retry",
+  );
+}
+if (matchingFinding.repairAllowed !== true) {
+  deny(
+    `repair-write-guard: refusing -- the most recent maintenance report classifies this test as ` +
+      `"${matchingFinding.classification}" with repairAllowed: ${matchingFinding.repairAllowed} -- Stage 09's ` +
+      "acceptance criteria prohibit repair here, and this hook enforces that verdict mechanically rather " +
+      "than relying on a skill's own prose to check it",
   );
 }
 

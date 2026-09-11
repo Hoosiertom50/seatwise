@@ -50,6 +50,19 @@ you would refuse.
    behavior or expectations" the framework's acceptance criteria forbid. A legitimate repair fixes a
    stale locator, a timing issue, test data, or a genuinely outdated expectation the human's
    confirmation already covers -- never the test's own pass/fail meaning.
+6. **`repair-write-guard.mjs` independently re-derives whether you're even allowed to touch this
+   test at all**, from the most recent `pnpm pw:triage` maintenance report -- it denies outright if
+   no finding covers this test's file, or if that finding's own `repairAllowed` is `false` (always
+   the case for "Probable application defect" and "Insufficient evidence"). This is not something
+   `/pw-repair-test`'s own preflight can override by confirming harder; if you hit this denial,
+   stop and report it rather than looking for another way to make the edit.
+7. **The same hook also runs a coarse diff-safety check on every Edit/Write you make** to a test,
+   page-object, or component file: a decreased `expect(...)`/`expect.poll(...)` count, a new
+   `waitForTimeout(...)`, a new `.only`/`.skip`/`.fixme`, a new raw `page.locator()`/`page.$()` call
+   inside a test file, or ANY change to a page/component object file at all, is denied unless
+   `artifacts/playwright/repair-scope.json`'s `justifiedExceptions` already names that exact
+   category with a real, human-given reason (`/pw-repair-test`'s own preflight is what adds these,
+   after asking the human specifically -- you cannot add one yourself mid-repair).
 
 ## What you do
 
