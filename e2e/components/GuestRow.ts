@@ -46,6 +46,23 @@ export class GuestRow {
     return this.root.getByRole("button", { name: "Remove" });
   }
 
+  /** TS-38: the Lock/Unlock toggle -- its accessible name flips with the guest's own `isLocked`
+   * state (see GuestsTab.tsx), so `{ exact: true }` keeps "Lock" from also matching "Unlock". */
+  private lockButton() {
+    return this.root.getByRole("button", { name: "Lock", exact: true }).or(
+      this.root.getByRole("button", { name: "Unlock", exact: true }),
+    );
+  }
+
+  /** Clicks the Lock/Unlock toggle, whichever state it's currently in. */
+  async toggleLock(): Promise<void> {
+    await this.lockButton().click();
+  }
+
+  async isLocked(): Promise<boolean> {
+    return (await this.lockButton().textContent())?.trim() === "Unlock";
+  }
+
   /** Reads the guest's displayed name. Deliberately reads the editable-name `<input>`'s *value*
    * (via `.inputValue()`), not the row's text content -- an input's value is never part of an
    * element's rendered text, so a caller who reaches for `toContainText`/`hasText` against this

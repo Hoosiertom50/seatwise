@@ -12,6 +12,12 @@ schemaVersion: "1.0.0"
 changeHistory:
   - date: "2026-09-10"
     change: "Initial taxonomy created for Stage 02, matching spec Section 9.1's initial table exactly."
+  - date: "2026-09-14"
+    change: >
+      Added @feature:account for TS-37 (Account & Wedding Management test authoring). Basic wedding
+      creation/listing and same-account cross-wedding data isolation (REQ-ACCOUNT-WEDDING-MANAGEMENT)
+      didn't fit an existing tag: @feature:authentication is explicitly scoped to signup/login/session
+      mechanics, and @feature:portfolio is TS-16's later multi-client planner model specifically.
 
 dimensions:
   - name: data-impact
@@ -33,6 +39,12 @@ dimensions:
     tags:
       - name: "@feature:authentication"
         description: "Signup, login, session/token handling."
+        productionEligible: true
+      - name: "@feature:account"
+        description: >
+          Account/wedding ownership: creating, listing, and managing a planner's own weddings, and
+          per-wedding data isolation on the same account. Distinct from @feature:authentication
+          (signup/login/session mechanics) and @feature:portfolio (TS-16's later multi-client model).
         productionEligible: true
       - name: "@feature:guests"
         description: "Guest list management: add/list/update/remove, bulk import/export."

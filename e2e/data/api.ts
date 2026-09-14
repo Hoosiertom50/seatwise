@@ -32,7 +32,45 @@ export interface CreateGuestInput {
   firstName: string;
   lastName: string;
   email?: string;
+  // TS-38: the seat-assignment engine's own inputs -- optional because most callers (guest
+  // list/RSVP tests) only need a plain attending guest, but the engine tests need to set these
+  // explicitly rather than rely on the API's own defaults (ATTENDING/false/false) to build a
+  // specific scenario (a Not Attending guest, a guest requiring an accessible table, a guest
+  // created already locked).
+  dayOfAttendance?: "ATTENDING" | "NOT_ATTENDING";
+  requiresAccessibleTable?: boolean;
+  isLocked?: boolean;
 }
+
+export interface CreatedTable {
+  id: string;
+  label: string;
+  capacity: number;
+}
+
+// TS-54: a single table with the specific flags the cross-cutting hard-rule tests need
+// (isRestricted, isAccessible) -- the quick-create endpoint below only makes plain identical
+// tables, with no way to set either flag.
+export interface CreateTableInput {
+  label: string;
+  capacity: number;
+  isRestricted?: boolean;
+  isAccessible?: boolean;
+}
+
+export interface CreatedTableDetail extends CreatedTable {
+  isRestricted: boolean;
+  isAccessible: boolean;
+}
+
+export interface QuickCreateTablesInput {
+  count: number;
+  capacity: number;
+  shape?: "ROUND" | "RECTANGULAR" | "SQUARE" | "OVAL" | "OTHER";
+  labelPrefix?: string;
+}
+
+export type RelationshipType = "MUST_SIT_TOGETHER" | "MUST_NOT_SIT_TOGETHER" | "PREFER_NEAR" | "AVOID";
 
 async function assertOk(res: { ok(): boolean; status(): number; text(): Promise<string> }, action: string) {
   if (!res.ok()) {
@@ -57,6 +95,49 @@ export class WeddingDataSetup {
       guest: { id: string; firstName: string; lastName: string };
     };
     return body.guest;
+  }
+
+  /** TS-38: creates a batch of identical tables in one call, via the same "12 round tables of 8"
+   * quick-create endpoint the Tables tab's own UI uses (`POST .../tables/quick-create`). */
+  async quickCreateTables(weddingId: string, input: QuickCreateTablesInput): Promise<CreatedTable[]> {
+    const res = await this.request.post(`/api/v1/weddings/${weddingId}/tables/quick-create`, { data: input });
+    await assertOk(res, `quickCreateTables(${JSON.stringify(input)})`);
+    const body = (await res.json()) as { tables: CreatedTable[] };
+    return body.tables;
+  }
+
+  /** TS-54: creates one table with specific flags (isRestricted/isAccessible), via the plain
+   * table-creation endpoint (POST .../tables) rather than the identical-batch quick-create one. */
+  async createTable(weddingId: string, input: CreateTableInput): Promise<CreatedTableDetail> {
+    const res = await this.request.post(`/api/v1/weddings/${weddingId}/tables`, { data: input });
+    await assertOk(res, `createTable("${input.label}")`);
+    const body = (await res.json()) as { table: CreatedTableDetail };
+    return body.table;
+  }
+
+  /** TS-54: replaces a Restricted table's entire required-guest list (PUT .../required-guests) --
+   * the only hard-rule fixture setup a manual-move test needs beyond a plain guest/table/rule. */
+  async setRequiredGuests(weddingId: string, tableId: string, guestIds: string[]): Promise<void> {
+    const res = await this.request.put(`/api/v1/weddings/${weddingId}/tables/${tableId}/required-guests`, {
+      data: { guestIds },
+    });
+    await assertOk(res, `setRequiredGuests(${tableId}, [${guestIds.join(", ")}])`);
+  }
+
+  /** TS-38: creates a seating rule between two guests (must/must-not sit together, prefer near,
+   * avoid) -- the seat-assignment engine's own rule input. */
+  async createRelationship(
+    weddingId: string,
+    guestAId: string,
+    guestBId: string,
+    type: RelationshipType,
+  ): Promise<{ id: string }> {
+    const res = await this.request.post(`/api/v1/weddings/${weddingId}/relationships`, {
+      data: { guestAId, guestBId, type },
+    });
+    await assertOk(res, `createRelationship(${guestAId}, ${guestBId}, ${type})`);
+    const body = (await res.json()) as { relationship: { id: string } };
+    return body.relationship;
   }
 
   /** Deletes a single guest. Supported by the app's API (DELETE
