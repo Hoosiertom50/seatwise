@@ -50,8 +50,14 @@ defineQualityTest(
 
     await test.step("Assert: a soft-preference score report names the PREFER_NEAR pair's outcome", async () => {
       await expect(planTabPage.textLocator("Soft-preference results")).toBeVisible();
+      // The engine doesn't promise which of the pair it names first in the report (confirmed by a
+      // real run failing with the opposite order from what a fixed-order assertion expected --
+      // the same non-determinism already fixed in impossible-hard-rule-set-is-reported.spec.ts),
+      // so match either order rather than asserting on that implementation detail.
+      const fullNameA = `${attendingA.firstName} ${attendingA.lastName}`;
+      const fullNameB = `${attendingB.firstName} ${attendingB.lastName}`;
       await expect(
-        planTabPage.textLocator(`${attendingA.firstName} ${attendingA.lastName} and ${attendingB.firstName} ${attendingB.lastName}`),
+        planTabPage.textLocator(new RegExp(`(${fullNameA} and ${fullNameB})|(${fullNameB} and ${fullNameA})`)),
       ).toBeVisible();
     });
 
