@@ -1,0 +1,212 @@
+# Canonical, versioned high-value-test model (Playwright Quality Engineering Framework,
+# Section 8). Validated against playwright-framework/metadata/schemas.ts:TestValueModelFileSchema.
+#
+# quality/test-value-model.md is GENERATED from this file by
+# `pnpm pw:generate-value-model-md` -- never edit the .md directly, edit this file and regenerate.
+#
+# Section 8.1's separation is load-bearing: valueCriteria score business/risk importance and must
+# never be affected by whether a test currently passes; qualityCriteria score engineering quality
+# and must never be affected by how important the behavior under test is. A value-model change
+# (a new modelVersion) must trigger reevaluation of every discovered test (Section 8.6) -- this
+# file's modelVersion is the version every ScoreResult in this framework carries.
+
+schemaVersion: "1.0.0"
+modelVersion: "1.0.0"
+effectiveDate: "2026-09-10"
+
+changeHistory:
+  - date: "2026-09-10"
+    modelVersion: "1.0.0"
+    change: "Initial value and quality rubrics created for Stage 02, matching spec Section 8.3/8.5 exactly."
+
+valueCriteria:
+  - id: business-criticality
+    label: "Business criticality"
+    weight: 25
+    question: "How seriously would failure affect the organization's core operation or release decision?"
+    anchors:
+      "0": "No plausible effect on core operation or any release decision."
+      "25": "Minor inconvenience; would not itself change a release decision."
+      "50": "Noticeable operational impact; could factor into a release decision alongside other issues."
+      "75": "Serious operational impact; would likely block or delay a release on its own."
+      "100": "Failure would stop core operation or must block release outright."
+    example: "A wedding owner being unable to sign up or log in at all would score at or near 100."
+
+  - id: user-impact-and-frequency
+    label: "User impact and frequency"
+    weight: 15
+    question: "How many users are affected, and how often is this behavior used?"
+    anchors:
+      "0": "Affects effectively no users, or a behavior almost never exercised."
+      "25": "Affects a small subset of users or an infrequently used path."
+      "50": "Affects a common user segment or a regularly used path."
+      "75": "Affects most users or a frequently used path."
+      "100": "Affects nearly all users on a path used in nearly every session."
+    example: "Adding a guest to the guest list is exercised by every planner, every wedding."
+
+  - id: risk-and-defect-likelihood
+    label: "Risk and defect likelihood"
+    weight: 20
+    question: "How likely and costly is a defect in this behavior, considering history and complexity?"
+    anchors:
+      "0": "Simple, stable behavior with no history of defects and low complexity."
+      "25": "Modest complexity; a defect would be low-cost to detect and fix."
+      "50": "Moderate complexity or a prior history of related bugs."
+      "75": "High complexity, prior defects, or a costly-to-detect failure mode."
+      "100": "Historically defect-prone, complex, and costly if a defect reaches users."
+    example: "The automated seat-assignment engine (TS-8) combines multiple seating rules and constraints."
+
+  - id: security-compliance-data-integrity
+    label: "Security, compliance, and data integrity"
+    weight: 15
+    question: "Does this protect access, privacy, regulated behavior, calculations, or durable data?"
+    anchors:
+      "0": "No access, privacy, calculation, or persisted-data concern at all."
+      "25": "Touches persisted data but with low sensitivity and easy recovery."
+      "50": "Touches access control or data integrity for a moderately sensitive resource."
+      "75": "Touches authentication/authorization boundaries or important calculations."
+      "100": "Directly protects authentication, cross-account access control, or irreversible data changes."
+    example: "Wedding-scoped access control (a user cannot read another owner's wedding) scores at or near 100."
+
+  - id: unique-coverage
+    label: "Unique coverage"
+    weight: 15
+    question: "How much important behavior would become unprotected if this test were removed?"
+    anchors:
+      "0": "Fully duplicated by another reliable test; removing this one loses nothing."
+      "25": "Mostly overlaps another test, with a small distinguishing condition."
+      "50": "Partially unique: some overlap, but also covers a condition nothing else does."
+      "75": "Mostly unique coverage with only incidental overlap elsewhere."
+      "100": "The only test protecting this behavior; removing it eliminates all coverage of it."
+    example: "The only test exercising the Day-of Mode read-only view during an active event."
+
+  - id: release-decision-usefulness
+    label: "Release-decision usefulness"
+    weight: 10
+    question: "If this intended behavior were reliably tested, would its result materially inform release or operational decisions?"
+    anchors:
+      "0": "A failure here would never change a release or operational decision."
+      "25": "A failure here might be noted but would rarely change a decision."
+      "50": "A failure here would often prompt a closer look before release."
+      "75": "A failure here would usually delay or gate a release pending investigation."
+      "100": "A failure here reliably and directly determines a release/operational go/no-go call."
+    example: "A failing RSVP-link email-delivery test should reliably gate a release touching that flow."
+
+valueBands:
+  - band: "Critical"
+    minScore: 90
+    maxScore: 100
+    meaning: "Essential release confidence; failure normally blocks release or demands explicit risk acceptance"
+  - band: "High value"
+    minScore: 75
+    maxScore: 89
+    meaning: "Strong protection of important workflows or risks"
+  - band: "Useful"
+    minScore: 50
+    maxScore: 74
+    meaning: "Meaningful coverage but not normally release-critical by itself"
+  - band: "Limited"
+    minScore: 25
+    maxScore: 49
+    meaning: "Narrow, low-impact, overlapping, or weakly justified coverage"
+  - band: "Questionable"
+    minScore: 0
+    maxScore: 24
+    meaning: "Little demonstrated value; improve, replace, or retire after human review"
+
+qualityCriteria:
+  - id: independence-and-parallel-safety
+    label: "Independence and parallel safety"
+    weight: 20
+    question: "Can this test run in any order, in parallel, and in isolation, without depending on other tests' state?"
+    anchors:
+      "0": "Depends on execution order or leaks/depends on state from other tests."
+      "25": "Mostly independent, with one identifiable order or shared-state dependency."
+      "50": "Independent under normal conditions but not proven safe under parallel execution."
+      "75": "Independent and parallel-safe, with minor shared-fixture coupling."
+      "100": "Fully independent: creates its own data, runs in any order, safe under full parallelism."
+    example: "A test that assumes a guest created by a prior test still exists would score low."
+
+  - id: assertion-strength-and-objective-traceability
+    label: "Assertion strength and objective traceability"
+    weight: 20
+    question: "Do the assertions actually verify the stated objective, with meaningful failure detail?"
+    anchors:
+      "0": "Assertions are missing, trivial (e.g. checking the page didn't crash), or unrelated to the objective."
+      "25": "Assertions exist but only weakly relate to the stated objective."
+      "50": "Assertions cover the objective's main case but miss important detail or edge conditions."
+      "75": "Assertions directly and specifically verify the objective, with clear failure messages."
+      "100": "Assertions fully and precisely verify the objective, distinguishing every meaningful outcome."
+    example: "Asserting the exact guest row's tier value, not just that some row exists."
+
+  - id: deterministic-waiting-and-state-control
+    label: "Deterministic waiting and state control"
+    weight: 15
+    question: "Does the test wait on real, observable state instead of arbitrary timeouts, and control the state it depends on?"
+    anchors:
+      "0": "Relies on fixed sleeps/timeouts or unmanaged ambient state."
+      "25": "Mostly fixed waits, with a little real state-based waiting."
+      "50": "Mixed: some deterministic waits, some fragile timing assumptions remain."
+      "75": "Deterministic waits throughout, with state fully controlled by the test."
+      "100": "Fully deterministic: waits only on real, specific application state; test-controlled data throughout."
+    example: "Waiting for a specific network response or DOM state rather than page.waitForTimeout()."
+
+  - id: page-component-object-and-locator-design
+    label: "Page/component object and locator design"
+    weight: 15
+    question: "Are interactions expressed through resilient, well-structured page/component objects and locators?"
+    anchors:
+      "0": "Brittle raw locators (e.g. nth-child chains) scattered directly in the test body."
+      "25": "Some structure, but locators are fragile or duplicated across tests."
+      "50": "Reasonable page-object use with a few fragile or duplicated locators."
+      "75": "Consistent, resilient page/component objects with accessible-role/testid locators."
+      "100": "Clean, reusable page/component objects; locators are resilient and semantically meaningful."
+    example: "getByRole('button', { name: 'Add guest' }) inside a GuestListPage object."
+
+  - id: test-data-setup-and-cleanup
+    label: "Test-data setup and cleanup"
+    weight: 10
+    question: "Does the test create the data it needs and leave the environment clean afterward?"
+    anchors:
+      "0": "Relies on preexisting/shared data and leaves created data behind."
+      "25": "Creates some of its own data but leaves significant cleanup undone."
+      "50": "Creates its own data; cleanup is partial or best-effort."
+      "75": "Creates its own data and reliably cleans up in the common case."
+      "100": "Fully self-contained setup and guaranteed cleanup, including on failure."
+    example: "Creating a fresh wedding/guest via the signup API per test, per Stage 03's data-setup approach."
+
+  - id: readability-and-diagnostic-steps
+    label: "Readability and diagnostic steps"
+    weight: 10
+    question: "Can a human quickly understand what the test does and where it failed, from named steps?"
+    anchors:
+      "0": "No named steps; a failure gives no indication of which part of the flow broke."
+      "25": "A few named steps; large ungrouped stretches remain."
+      "50": "Most of the flow is broken into named steps."
+      "75": "Clear, well-named steps covering the whole flow."
+      "100": "Fully step-annotated, self-documenting flow; a failure immediately localizes to one step."
+    example: "test.step('fill guest form') / test.step('submit and verify row appears')."
+
+  - id: evidence-and-failure-diagnostics
+    label: "Evidence and failure diagnostics"
+    weight: 5
+    question: "Does a failure leave enough evidence (screenshots, trace, console/network) to diagnose without rerunning?"
+    anchors:
+      "0": "No failure artifacts beyond the bare error message."
+      "25": "Only the default Playwright failure screenshot."
+      "50": "Screenshot plus trace, but no console/network capture."
+      "75": "Screenshot, trace, and console/network capture on failure."
+      "100": "Full evidence bundle on failure, plus a success checkpoint screenshot for key assertions."
+    example: "Attaching the network log for a failed RSVP-submission request."
+
+  - id: metadata-completeness-and-standards-compliance
+    label: "Metadata completeness and standards compliance"
+    weight: 5
+    question: "Is the test's governed metadata (id, objective, expectedOutcome, requirementIds, tags) complete and valid?"
+    anchors:
+      "0": "Missing required metadata or fails tag-taxonomy validation."
+      "25": "Metadata present but objective/expectedOutcome are vague or requirementIds is empty."
+      "50": "Metadata complete but generic; tags are valid but coarse-grained."
+      "75": "Metadata complete, specific, and correctly tagged."
+      "100": "Metadata is complete, precise, correctly tagged, and clearly traceable to a real requirement."
+    example: "objective/expectedOutcome that name the exact business rule under test, not just \"it works\"."

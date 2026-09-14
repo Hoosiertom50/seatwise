@@ -1,0 +1,82 @@
+# Stage 10 -- nightly regression re-confirmation, independent of any push/PR activity. Runs the
+# exact same regression selection as the PR gate (.github/workflows/ci.yml), on a schedule, so a
+# regression is caught even on a day nobody opens a PR (a flaky-looking failure that only reproduces
+# under certain timing, an environment drift, a dependency update via Dependabot landing quietly).
+#
+# Today this necessarily re-runs the same 2 real application tests the PR gate already runs on
+# every push -- disclosed here rather than silently presented as covering more than it does. Once
+# this framework has tests tagged @suite:smoke (a smaller, fast PR-gate subset) versus
+# @suite:regression (deeper, slower coverage intended for less-frequent runs), this workflow's
+# separation from the PR gate becomes meaningful on its own terms rather than duplicating it.
+name: Nightly regression
+
+on:
+  schedule:
+    # 09:00 UTC daily -- an arbitrary but fixed off-peak time; adjust to the team's own timezone
+    # preference in a follow-up PR rather than guessing one here.
+    - cron: "0 9 * * *"
+  workflow_dispatch: {}
+
+env:
+  DATABASE_URL: postgresql://postgres:postgres@localhost:5432/seatwise_ci?schema=public
+
+jobs:
+  regression:
+    name: Full regression suite
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: seatwise_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "pnpm"
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright install --with-deps chromium
+      - name: Generate ephemeral, non-secret app config for this CI run only
+        run: |
+          echo "JWT_SECRET=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
+          echo "ENCRYPTION_KEY=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
+      - run: pnpm --filter @seatwise/db migrate:deploy
+      - run: pnpm build
+      - name: Start the application and wait for it to be ready
+        run: |
+          pnpm --filter @seatwise/web start -p 3000 &
+          npx --yes wait-on http://localhost:3000 --timeout 60000
+      - name: Run the full regression selection
+        env:
+          CI: "true"
+        run: |
+          SELECTION_OUTPUT="$(pnpm exec tsx playwright-framework/cli/print-ci-selection.ts regression)"
+          PATTERN="$(echo "$SELECTION_OUTPUT" | sed -n '1p')"
+          FILES="$(echo "$SELECTION_OUTPUT" | sed -n '2p')"
+          pnpm exec playwright test --project=chromium --grep "$PATTERN" $FILES \
+            --reporter=list,html,./playwright-framework/reporting/normalizedReporter.ts
+      - name: CI status gate -- fail on a zero-test run, surface flaky/quarantined results
+        if: always()
+        run: pnpm exec tsx playwright-framework/cli/ci-summary.ts
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-regression-report
+          path: |
+            artifacts/playwright/runs/html-report
+            artifacts/playwright/runs/run-reports
+            artifacts/playwright/runs/test-results
+          retention-days: 14
+          if-no-files-found: warn

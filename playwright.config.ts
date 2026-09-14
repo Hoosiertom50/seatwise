@@ -23,6 +23,17 @@ export default defineConfig({
   retries: env.CI ? 1 : 0,
   workers: env.CI ? 2 : undefined,
 
+  // Stage 10: explicit, CI-appropriate timeouts rather than relying on Playwright's bare defaults
+  // (30s per test, no global ceiling). A per-test timeout that's too tight for a shared CI runner
+  // would turn ordinary machine slowness into false "consistent-failure"/"timeout" classifications;
+  // a global ceiling exists so a genuinely hung run (e.g. a wedged dev server) fails the CI job
+  // outright rather than running until the platform's own job-level timeout silently kills it with
+  // no normalized report ever written. Local runs keep Playwright's un-ceilinged default so a
+  // developer attached to a debugger is never cut off.
+  timeout: env.CI ? 45_000 : 30_000,
+  expect: { timeout: env.CI ? 10_000 : 5_000 },
+  globalTimeout: env.CI ? 10 * 60_000 : undefined,
+
   // Blocks any browser project from launching before this runs -- see e2e/support/globalSetup.ts
   // for what it actually checks (the production/mutation guard).
   globalSetup: "./e2e/support/globalSetup.ts",
@@ -30,6 +41,10 @@ export default defineConfig({
   reporter: [
     ["list"],
     ["html", { outputFolder: "artifacts/playwright/runs/html-report", open: "never" }],
+    // Stage 06: a normalized, schema-validated JSON + self-contained HTML companion report
+    // (playwright-framework/reporting/normalizedReporter.ts) alongside Playwright's own native
+    // ones above -- see PLAYWRIGHT_TESTING.md's "Test-run reports" section.
+    ["./playwright-framework/reporting/normalizedReporter.ts"],
   ],
   outputDir: "artifacts/playwright/runs/test-results",
 

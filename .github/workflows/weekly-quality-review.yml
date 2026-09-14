@@ -1,0 +1,93 @@
+# Stage 10 -- optional weekly stale/flaky review job (spec Section 11's "scheduled ... optional
+# stale/flaky review jobs" task). Two things a push/PR gate and the nightly regression run don't do:
+#
+#   1. Proactively hunts for newly-flaky tests by re-running the regression selection with
+#      --repeat-each=3 -- a test that only flakes 1 time in 3 would likely still show as a clean
+#      pass on an ordinary single-run PR gate, and this job's own ci-summary step will surface any
+#      retry-pass found here exactly the same way the PR gate does.
+#   2. Regenerates the suite review (pnpm pw:review -- coverage, value/quality scores, requirement
+#      traceability) on a fixed cadence independent of any human remembering to run it, so a stale
+#      suite review is never more than a week old even during a quiet period with no test changes
+#      (post-edit-validator.mjs's Stage 09 pw:review trigger only fires on an actual edit).
+#
+# This is explicitly best-effort/optional per the spec's own wording -- if this job finds nothing
+# (no flakes, no coverage drift), it succeeds quietly; a human is expected to check the uploaded
+# suite-review artifact periodically, not to be paged by this workflow.
+name: Weekly quality review
+
+on:
+  schedule:
+    # 09:00 UTC every Monday -- an arbitrary but fixed off-peak time.
+    - cron: "0 9 * * 1"
+  workflow_dispatch: {}
+
+env:
+  DATABASE_URL: postgresql://postgres:postgres@localhost:5432/seatwise_ci?schema=public
+
+jobs:
+  quality-review:
+    name: Flaky re-check and suite review regeneration
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: seatwise_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "pnpm"
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright install --with-deps chromium
+      - name: Generate ephemeral, non-secret app config for this CI run only
+        run: |
+          echo "JWT_SECRET=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
+          echo "ENCRYPTION_KEY=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
+      - run: pnpm --filter @seatwise/db migrate:deploy
+      - run: pnpm build
+      - name: Start the application and wait for it to be ready
+        run: |
+          pnpm --filter @seatwise/web start -p 3000 &
+          npx --yes wait-on http://localhost:3000 --timeout 60000
+      - name: Re-run the regression selection 3x to proactively surface new flakiness
+        env:
+          CI: "true"
+        run: |
+          SELECTION_OUTPUT="$(pnpm exec tsx playwright-framework/cli/print-ci-selection.ts regression)"
+          PATTERN="$(echo "$SELECTION_OUTPUT" | sed -n '1p')"
+          FILES="$(echo "$SELECTION_OUTPUT" | sed -n '2p')"
+          pnpm exec playwright test --project=chromium --grep "$PATTERN" $FILES \
+            --repeat-each=3 --retries=0 \
+            --reporter=list,./playwright-framework/reporting/normalizedReporter.ts
+      - name: Surface any flaky/failed results found by the repeat-each re-check
+        if: always()
+        run: pnpm exec tsx playwright-framework/cli/ci-summary.ts
+      - name: Triage the most recent run if it had real failures
+        if: always()
+        run: pnpm pw:triage || true
+      - name: Regenerate the suite review (coverage, value/quality scores, requirement traceability)
+        if: always()
+        run: pnpm pw:review
+      - name: Upload the suite review and maintenance reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: weekly-quality-review
+          path: |
+            artifacts/playwright/runs/suite-reviews
+            artifacts/playwright/maintenance
+            artifacts/playwright/runs/run-reports
+          retention-days: 30
+          if-no-files-found: warn

@@ -1,0 +1,18 @@
+# Hand-authored per-failure judgments (Playwright Quality Engineering Framework, Stage 09).
+# Validated against playwright-framework/metadata/schemas.ts:FailureClassificationsFileSchema.
+#
+# Mirrors quality/test-evaluations.yaml's own pattern (Stage 07, DEC-021): most failures are
+# resolved without ever consulting this file at all, by playwright-framework/triage/
+# classifyFailure.ts's mechanical signals (the failing test's own Stage 06 run-report status,
+# error-message pattern matches for known environment/infrastructure signatures, and run-history
+# comparison for intermittent/flaky behavior -- see that module's own doc comment for the full
+# decision tree). What mechanical signals cannot resolve is matched here against a human- or
+# AI-authored judgment citing real evidence for a SPECIFIC test (optionally scoped further to one
+# specific error text via errorFingerprint, since one test can fail in more than one distinct way
+# over its lifetime). A failure with no matching entry here is NOT guessed at: it is classified
+# "insufficient-evidence" with needsHumanReview: true and repairAllowed: false, the same
+# fail-closed default quality/test-evaluations.yaml uses for an unscored criterion.
+
+schemaVersion: "1.0.0"
+
+classifications: []

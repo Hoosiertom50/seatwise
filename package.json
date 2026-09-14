@@ -15,7 +15,20 @@
     "pw:test:ui": "playwright test --ui",
     "pw:report": "playwright show-report artifacts/playwright/runs/html-report",
     "pw:serve-report": "playwright show-report artifacts/playwright/runs/html-report --host 0.0.0.0",
-    "pw:validate": "tsc --noEmit && playwright test --project=chromium --project=framework-unit --list"
+    "pw:validate-metadata": "tsx playwright-framework/cli/validate-metadata.ts",
+    "pw:generate-value-model-md": "tsx playwright-framework/cli/generate-value-model-md.ts",
+    "pw:lint-tests": "tsx playwright-framework/cli/lint-tests.ts",
+    "pw:validate": "tsc --noEmit && pnpm pw:validate-metadata && pnpm pw:lint-tests && playwright test --project=chromium --project=framework-unit --list",
+    "pw:run": "tsx playwright-framework/cli/run-tests.ts",
+    "pw:run:readonly": "tsx playwright-framework/cli/run-tests.ts --selection readonly",
+    "pw:run:smoke": "tsx playwright-framework/cli/run-tests.ts --selection smoke",
+    "pw:run:regression": "tsx playwright-framework/cli/run-tests.ts --selection regression",
+    "pw:run:critical": "tsx playwright-framework/cli/run-tests.ts --selection critical",
+    "pw:report:run": "tsx playwright-framework/cli/serve-run-report.ts",
+    "pw:review": "tsx playwright-framework/cli/suite-review.ts",
+    "pw:review:serve": "tsx playwright-framework/cli/serve-suite-review.ts",
+    "pw:triage": "tsx playwright-framework/cli/triage.ts",
+    "pw:triage:serve": "tsx playwright-framework/cli/serve-maintenance-report.ts"
   },
   "workspaces": [
     "apps/*",
@@ -32,7 +45,9 @@
   "devDependencies": {
     "@playwright/test": "1.63.0",
     "@types/node": "^22.20.2",
+    "tsx": "^4.23.13",
     "typescript": "^5.9.3",
+    "yaml": "^2.9.0",
     "zod": "^3.25.76"
   }
 }

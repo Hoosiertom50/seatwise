@@ -1,0 +1,216 @@
+# Stage 10 -- Playwright Quality Engineering Framework CI gate.
+#
+# Two jobs, deliberately separated so a typecheck/lint/metadata problem fails fast without ever
+# spinning up Postgres or a browser:
+#   1. validate  -- typecheck, metadata validation, lint, and the framework's own unit tests
+#      (playwright-framework/tests/**). No browser, no database: these are plain TypeScript/Node
+#      checks run through `playwright test --project=framework-unit` (see playwright.config.ts).
+#   2. e2e        -- the real application end-to-end suite (e2e/tests/**) against a real Postgres
+#      service container and a real built-and-started Next.js app, sharded across 2 shards to
+#      exercise Playwright.config.ts's CI-only retries/workers/timeout settings and the sharding
+#      mechanism this stage adds (see PLAYWRIGHT_TESTING.md's "CI, sharding, and report merging"
+#      section for why 2 shards is a deliberately modest default given the current 2-test suite,
+#      and how to raise it as the suite grows).
+#
+# Every command below is one this repo's own documented `pnpm pw:*` scripts already run locally --
+# nothing here invents a CI-only code path. `playwright-framework/cli/ci-summary.ts` is the one
+# CI-specific addition: a real, verified gap (documented in its own file header and in
+# PLAYWRIGHT_TESTING.md) where `playwright test` exits 0 for a zero-match `--grep` or an empty
+# shard, which would otherwise show up on a PR as an ordinary green check.
+name: Playwright Quality Engineering Framework CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # No secret here: an ephemeral, CI-job-lifetime-only Postgres database that never holds anything
+  # but throwaway test data, matching this framework's own e2e/support/env.ts default APP_URL and
+  # the .env.example DATABASE_URL shape.
+  DATABASE_URL: postgresql://postgres:postgres@localhost:5432/seatwise_ci?schema=public
+  # PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH is intentionally left UNSET here -- see playwright.config.ts's
+  # own comment: it's a sandbox-only workaround for this development environment's pre-installed
+  # Chromium build. A real CI runner installs its own browser via `playwright install` below, and
+  # Playwright's default resolution finds it without this variable.
+
+jobs:
+  validate:
+    name: Typecheck, metadata validation, lint, framework unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck (framework + e2e sources)
+        run: pnpm exec tsc --noEmit
+
+      - name: Validate governed metadata (requirements, tags, value model, test IDs)
+        run: pnpm pw:validate-metadata
+
+      - name: Lint tests (authoring-standards static checks)
+        run: pnpm pw:lint-tests
+
+      - name: Run framework unit tests (no browser -- schemas, scoring, hooks, CLIs)
+        run: pnpm exec playwright test --project=framework-unit
+
+  e2e:
+    name: "Application E2E (shard ${{ matrix.shard }}/2)"
+    runs-on: ubuntu-latest
+    needs: validate
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: seatwise_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright's Chromium (with OS deps)
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Generate ephemeral, non-secret app config for this CI run only
+        # These gate a throwaway CI-only Postgres database and app instance that stops existing the
+        # moment this job ends -- never a real credential, so generating them fresh per run (rather
+        # than storing a long-lived repository secret nothing actually needs to persist) is the
+        # narrower-scoped choice. Written to GITHUB_ENV, never echoed to the log; see
+        # PLAYWRIGHT_TESTING.md's "CI secrets and scoping" section for the full rationale.
+        run: |
+          echo "JWT_SECRET=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
+          echo "ENCRYPTION_KEY=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
+
+      - name: Apply database migrations
+        run: pnpm --filter @seatwise/db migrate:deploy
+
+      - name: Build the application
+        run: pnpm build
+
+      - name: Start the application and wait for it to be ready
+        run: |
+          pnpm --filter @seatwise/web start -p 3000 &
+          npx --yes wait-on http://localhost:3000 --timeout 60000
+
+      - name: Run the application E2E suite (this shard, regression selection minus quarantined)
+        # pnpm pw:run (Stage 05) has no --shard support and its --reporter forwards a single
+        # Playwright-native reporter name that REPLACES the whole configured array (Stage 06's own
+        # disclosed finding) -- using it here would silence the Stage 06/09 normalized reporter
+        # ci-summary.ts depends on. Instead, print-ci-selection.ts (Stage 10) computes the exact
+        # same --grep pattern and matched spec files pw:run itself would use (reusing the same
+        # evaluateExpression/compileToGrepPattern primitives, so this can never drift from what
+        # `pnpm pw:run --selection regression --list` shows), and this step invokes `playwright
+        # test` directly with that plus --shard and a real multi-reporter list. This intentionally
+        # bypasses pw:run's own production/mutation preflight -- an accepted, disclosed limitation
+        # for CI specifically (DEC-018 already discloses this same bypass for any bare `playwright
+        # test --grep` invocation): PRODUCTION_HOSTNAMES is always empty here (DEC-005), so that
+        # guard would be a no-op regardless. See PLAYWRIGHT_TESTING.md's "CI, sharding, and report
+        # merging" section for the full rationale.
+        env:
+          CI: "true"
+        run: |
+          SELECTION_OUTPUT="$(pnpm exec tsx playwright-framework/cli/print-ci-selection.ts regression)"
+          PATTERN="$(echo "$SELECTION_OUTPUT" | sed -n '1p')"
+          FILES="$(echo "$SELECTION_OUTPUT" | sed -n '2p')"
+          pnpm exec playwright test --project=chromium --grep "$PATTERN" $FILES \
+            --shard=${{ matrix.shard }}/2 \
+            --reporter=blob,./playwright-framework/reporting/normalizedReporter.ts
+
+      - name: CI status gate -- fail on a zero-test shard, surface flaky/quarantined results
+        # Runs even when the step above failed (a real test failure must still get a summary), but
+        # never overrides a real failure's own non-zero exit code -- see the CLI's own doc comment.
+        if: always()
+        run: pnpm exec tsx playwright-framework/cli/ci-summary.ts
+
+      - name: Upload blob report (for merging into one combined HTML report)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: blob-report-shard-${{ matrix.shard }}
+          path: blob-report
+          retention-days: 14
+          if-no-files-found: warn
+
+      - name: Upload normalized run report, traces, and screenshots for this shard
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: run-artifacts-shard-${{ matrix.shard }}
+          path: |
+            artifacts/playwright/runs/run-reports
+            artifacts/playwright/runs/test-results
+          retention-days: 14
+          if-no-files-found: warn
+
+  merge-reports:
+    name: Merge sharded HTML report
+    if: always()
+    needs: [e2e]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Download every shard's blob report
+        uses: actions/download-artifact@v4
+        with:
+          pattern: blob-report-shard-*
+          path: all-blob-reports
+          merge-multiple: true
+
+      - name: Merge into one combined native HTML report
+        env:
+          PLAYWRIGHT_HTML_REPORT: merged-html-report
+        run: pnpm exec playwright merge-reports --reporter=html ./all-blob-reports
+
+      - name: Upload the merged report
+        uses: actions/upload-artifact@v4
+        with:
+          name: merged-html-report
+          path: merged-html-report
+          retention-days: 14
+          if-no-files-found: warn

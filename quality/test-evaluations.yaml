@@ -1,0 +1,84 @@
+# Hand-authored per-test judgments (Playwright Quality Engineering Framework, Stage 07).
+# Validated against playwright-framework/metadata/schemas.ts:TestEvaluationsFileSchema.
+#
+# Two criteria genuinely require reading a specific test's own assertions/behavior rather than a
+# mechanical suite-wide fact -- assertion-strength-and-objective-traceability (quality) and
+# security-compliance-data-integrity (value) -- see DEC-021. Every other value/quality criterion is
+# computed fresh, mechanically, by playwright-framework/evaluation/evaluateTest.ts on every report
+# generation and is never stored here.
+#
+# A test with no entry in `evaluations` below is NOT scored generously by default: the evaluator
+# treats a missing entry as needsHumanReview: true for both of these criteria, the same as an
+# unconfirmed requirement. When quality/test-value-model.yaml's modelVersion changes, every entry
+# here becomes stale until re-authored against the new rubric (Section 8.6) -- the suite-review CLI
+# checks `modelVersion` below against the live model and flags a mismatch rather than silently
+# reusing a judgment made against a retired model version.
+
+schemaVersion: "1.0.0"
+modelVersion: "1.0.0"
+
+evaluations:
+  - testId: "guest-viewing.guest-list-shows-existing-guests"
+    evaluatedAt: "2026-09-10"
+    evaluatedBy: "AI (Claude, Stage 07 implementation) -- read e2e/tests/guest-viewing.spec.ts directly"
+    valueJudgments:
+      - criterionId: security-compliance-data-integrity
+        points: 5
+        confidence: medium
+        needsHumanReview: false
+        rationale: >
+          Reads a guest's name and RSVP status -- persisted, session-scoped personal data -- through
+          the app's normal authenticated fetch path, gated by the signed-in planner's own wedding ID
+          (managedWedding.id). This is low-to-moderate sensitivity data with easy recovery (nothing
+          destructive), and the test's own action is read-only. It does exercise session-scoped
+          access implicitly (the fetch is scoped to this planner's wedding) but does NOT explicitly
+          assert that a different account cannot read this same data -- no cross-account isolation
+          check is made. Scored between the "touches persisted data, low sensitivity" (25%) and
+          "touches access control for a moderately sensitive resource" (50%) anchors: 5/15 (~33%).
+    qualityJudgments:
+      - criterionId: assertion-strength-and-objective-traceability
+        points: 19
+        confidence: high
+        needsHumanReview: false
+        rationale: >
+          Assertions (row.expectVisible(), expect.poll(row.firstName())/lastName()/rsvpStatus())
+          directly verify every element of the stated expectedOutcome: the pre-seeded guest is
+          visible, with the exact first/last name split via poll (not a substring/text match --
+          see GuestRow's own doc comment on why toContainText silently matches nothing against an
+          editable input), and the correct default PENDING RSVP status. This precisely matches the
+          objective's claim ("see a guest that already exists... with the correct name and a
+          PENDING RSVP status"), not a loose approximation. One point held back: the objective also
+          claims the test itself makes no application change, but nothing in the test explicitly
+          re-verifies that (e.g. re-reading guest count/state afterward to confirm nothing else
+          changed) -- that guarantee currently rests entirely on the test's own written actions
+          being read-only, not on an assertion. 19/20 (95%).
+
+  - testId: "guest-management.add-guest-appears-in-list"
+    evaluatedAt: "2026-09-10"
+    evaluatedBy: "AI (Claude, Stage 07 implementation) -- read e2e/tests/guest-management.spec.ts directly"
+    valueJudgments:
+      - criterionId: security-compliance-data-integrity
+        points: 7
+        confidence: medium
+        needsHumanReview: false
+        rationale: >
+          A @mutating test: its own action creates a new persisted guest record under the signed-in
+          planner's wedding. Writing new persisted data (not merely reading it) under session-scoped
+          authorization is a real data-integrity-relevant action, closer to the "touches access
+          control or data integrity for a moderately sensitive resource" (50%) anchor than the
+          25% "touches persisted data, low sensitivity" one -- but it is a routine, easily-reversed
+          create (not an authentication boundary, an irreversible action, or cross-account access),
+          so scored below the 75% anchor. 7/15 (~47%).
+    qualityJudgments:
+      - criterionId: assertion-strength-and-objective-traceability
+        points: 18
+        confidence: high
+        needsHumanReview: false
+        rationale: >
+          Assertions directly verify the stated expectedOutcome: after submitting the add-guest
+          form, row.expectVisible() plus exact firstName()/lastName()/rsvpStatus() polling confirm
+          "a row for the new guest appears... showing their name" with the correct default status --
+          precise, not generic. Two points held back relative to a perfect score: the test verifies
+          the new guest only through the same UI that just wrote it (an immediate client-side read),
+          with no independent second read path (e.g. the API, or a page reload) confirming the guest
+          was durably persisted rather than only optimistically rendered. 18/20 (90%).

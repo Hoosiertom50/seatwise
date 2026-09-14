@@ -1,0 +1,21 @@
+# Stage 08 -- the outer boundary for what /pw-repair-test's playwright-repair subagent may ever
+# write to, regardless of which single test a repair session further narrows itself to (see
+# .claude/hooks/repair-write-guard.mjs and the ephemeral, per-session
+# artifacts/playwright/repair-scope.json it also requires). This file is committed and
+# human-owned: no skill, hook, or subagent in this framework ever writes to it. Expanding it is a
+# deliberate, human-initiated repository change (an ordinary commit made outside the assistant),
+# never something the assistant does on its own -- that is what Section 11.4's hook requirement #1
+# means by "unless the human explicitly expands scope."
+#
+# Deliberately excludes e2e/fixtures, e2e/data, e2e/support (shared test infrastructure used by
+# every test, not one identified test's own file), all of playwright-framework/ (the framework
+# itself), quality/*.yaml (the governance/scoring rules a repair should never get to rewrite in
+# its own favor), package.json, playwright.config.ts, and all application source under apps/ and
+# packages/ -- repairing one already-identified failing test should never require touching any of
+# those, and repair-write-guard.mjs refuses any write outside exactly the directories listed here.
+schemaVersion: "1.0.0"
+
+allowedDirs:
+  - e2e/tests
+  - e2e/pages
+  - e2e/components
