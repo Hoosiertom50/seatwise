@@ -165,3 +165,33 @@ requirements:
     sourceRefs: ["TS-21"]
     status: needs-human-review
     provenance: "seeded from README.md \"What's implemented\" section"
+
+  # --- Seeded from quality/acceptance-test-plan/ (status: needs-human-review) ----------------
+  # These two cover requirements that were always tracked as their own Jira story (TS-3, TS-15)
+  # and their own rows in the acceptance test workbook, but had no README.md "What's implemented"
+  # bullet of their own and so were missed when the rest of this file was first seeded.
+  - id: "REQ-CROSS-CUTTING-HARD-RULE-INVARIANT"
+    title: "Cross-Cutting Rule — Hard-Rule Invariant"
+    description: >
+      No action anywhere in the app -- automated generation, a manual drag, or an edit to a
+      guest's data -- may ever leave a hard rule (table capacity, Must-Sit-Together,
+      Must-Not-Sit-Together, a Restricted table's guest list, or an accessible-seating
+      requirement) violated. A directly-causing action is blocked outright with a plain-language
+      explanation; an indirectly-arising violation visibly flags the affected guest as needing
+      reassignment instead. No plan is ever saved, displayed, or exported while silently violating
+      a hard rule, and no override exists. (Soft rules -- Prefer-Near, Prefer-Avoid, Side-Mixing,
+      a Purpose table, household grouping -- warn visibly but never block.)
+    sourceRefs: ["TS-3", "FR-0.1", "FR-0.2"]
+    status: needs-human-review
+    provenance: "seeded from quality/acceptance-test-plan/Seatwise-Acceptance-Criteria.md (\"Definition of Done\") and Seatwise-Test-Cases-Final.xlsx (AC-001-AC-003)"
+
+  - id: "REQ-INTEGRATION-E2E-SCENARIOS"
+    title: "Integration / End-to-End Scenarios"
+    description: >
+      Full multi-step scenarios spanning several requirements at once, as a final smoke test once
+      the individual feature areas are working: a complete setup-to-approval walkthrough; making
+      pre-wedding changes to an already-approved plan; day-of execution using Day-of mode and
+      printed backups; and full-lifecycle data isolation between two of a planner's weddings.
+    sourceRefs: ["TS-15"]
+    status: needs-human-review
+    provenance: "seeded from quality/acceptance-test-plan/Seatwise-Acceptance-Criteria.md (\"Integration / End-to-End Acceptance Criteria\") and Seatwise-Test-Cases-Final.xlsx (AC-081-AC-084)"
