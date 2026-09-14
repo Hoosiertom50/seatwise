@@ -10,11 +10,16 @@
 # separation from the PR gate becomes meaningful on its own terms rather than duplicating it.
 name: Nightly regression
 
+# Schedule trigger PAUSED during TS-35 (writing the real automated test suite): with only a
+# couple of real application tests in place so far, this was failing nightly and paging Tom's
+# inbox with no actionable signal. workflow_dispatch is left in place so it can still be run
+# manually on demand. Re-enable the `schedule:` block below once TS-35's suite is far enough
+# along that a nightly run means something.
 on:
-  schedule:
-    # 09:00 UTC daily -- an arbitrary but fixed off-peak time; adjust to the team's own timezone
-    # preference in a follow-up PR rather than guessing one here.
-    - cron: "0 9 * * *"
+  # schedule:
+  #   # 09:00 UTC daily -- an arbitrary but fixed off-peak time; adjust to the team's own timezone
+  #   # preference in a follow-up PR rather than guessing one here.
+  #   - cron: "0 9 * * *"
   workflow_dispatch: {}
 
 env:
