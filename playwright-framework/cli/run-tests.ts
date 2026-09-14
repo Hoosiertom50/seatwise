@@ -34,7 +34,10 @@
  *   6. The environment/production preflight: is APP_URL a configured production host, and does the
  *      selection include any @mutating test? A mutating selection against production is refused
  *      outright, unconditionally. A read-only selection against production additionally requires
- *      this invocation to have passed --allow-production explicitly.
+ *      BOTH this invocation to have passed --allow-production explicitly AND
+ *      PLAYWRIGHT_ALLOW_PRODUCTION=1 to be set in the environment (Stage 11 final-audit Finding M1,
+ *      2026-09-11 / DEC-033, 2026-09-14: the code previously checked only the flag, in drift from
+ *      what PLAYWRIGHT_TESTING.md and this file's own messages always documented).
  *   7. Only then: compile the expression to a `--grep` pattern and spawn the real `playwright test`
  *      CLI via execFileSync with an argv array (never a shell string), and write a run manifest.
  */
@@ -259,16 +262,29 @@ function main(): void {
   const env = getEnv();
   const isProduction = resolveIsProduction(env.APP_URL, env.PRODUCTION_HOSTNAMES);
 
+  // Stage 11 final-audit Finding M1 (2026-09-11) / DEC-033 (2026-09-14): a production read-only run
+  // requires BOTH factors -- this invocation's own explicit --allow-production flag AND the ambient
+  // PLAYWRIGHT_ALLOW_PRODUCTION=1 environment variable -- not the flag alone. This supersedes DEC-017,
+  // which deliberately made the flag the only signal; Tom reviewed Finding M1 (the docs/error messages
+  // already described a two-factor gate that the code never actually enforced) and chose to make the
+  // code match the documented, stricter design rather than relax the documentation. A shell that
+  // merely has PLAYWRIGHT_ALLOW_PRODUCTION=1 left set from an earlier session still cannot run
+  // anything against production without ALSO passing --allow-production on this specific invocation,
+  // and vice versa -- both are required, matching PLAYWRIGHT_TESTING.md exactly. Computed before
+  // preview mode's early return too, same as isProduction above, so preview never misrepresents
+  // whether a real run would actually be allowed.
+  const productionReadAllowed = args.allowProduction && env.PLAYWRIGHT_ALLOW_PRODUCTION;
+
   // --- Preview mode: print and stop, run nothing -------------------------------------------------
   if (args.preview) {
-    printPreview(normalizedExpression, matched, hasMutatingSelection, isProduction, env.APP_URL, args.allowProduction);
+    printPreview(normalizedExpression, matched, hasMutatingSelection, isProduction, env.APP_URL, productionReadAllowed);
     return;
   }
 
-  if (isProduction && !args.allowProduction) {
-    // Read-only-but-still-needs-an-explicit-flag case, and the always-refused mutating case, both
-    // get a friendly, specific message here before assertMutationAllowed's own (correct, but more
-    // terse) error would otherwise fire deeper in globalSetup.
+  if (isProduction && !productionReadAllowed) {
+    // Read-only-but-still-missing-a-factor case, and the always-refused mutating case, both get a
+    // friendly, specific message here before assertMutationAllowed's own (correct, but more terse)
+    // error would otherwise fire deeper in globalSetup.
     if (hasMutatingSelection) {
       fail(
         `"${env.APP_URL}" is a configured production host and this selection includes at least ` +
@@ -277,23 +293,25 @@ function main(): void {
           `non-production environment.`,
       );
     }
+    const missing: string[] = [];
+    if (!args.allowProduction) missing.push("the --allow-production flag on this invocation");
+    if (!env.PLAYWRIGHT_ALLOW_PRODUCTION) missing.push("PLAYWRIGHT_ALLOW_PRODUCTION=1 in the environment");
     fail(
       `"${env.APP_URL}" is a configured production host. Even a fully read-only selection needs ` +
-        `this invocation to explicitly pass --allow-production (in addition to the ` +
-        `PLAYWRIGHT_ALLOW_PRODUCTION=1 environment variable) -- re-run with --allow-production ` +
-        `if you really mean to read from production.`,
+        `BOTH --allow-production on this invocation AND PLAYWRIGHT_ALLOW_PRODUCTION=1 set in the ` +
+        `environment -- missing: ${missing.join(" and ")}. Set/pass both if you really mean to ` +
+        `read from production.`,
     );
   }
 
   // Defense in depth: re-check with the same guard globalSetup uses, in case this preflight and
-  // that one ever drift. allowProduction is deliberately NOT taken from the ambient
-  // PLAYWRIGHT_ALLOW_PRODUCTION env var here -- only from this invocation's own explicit flag (see
-  // the Decision Log entry on why an ambient env var alone is not "explicit confirmation").
+  // that one ever drift. Recomputes the same two-factor condition explicitly rather than assuming
+  // the preflight above already enforced it, so the two checks can never silently diverge.
   try {
     assertMutationAllowed({
       baseURL: env.APP_URL,
       hasMutatingSelection,
-      env: { ...env, PLAYWRIGHT_ALLOW_PRODUCTION: isProduction && args.allowProduction },
+      env: { ...env, PLAYWRIGHT_ALLOW_PRODUCTION: isProduction && productionReadAllowed },
     });
   } catch (err) {
     if (err instanceof ProductionMutationBlockedError || err instanceof Error) {
@@ -325,7 +343,7 @@ function main(): void {
     // Replaces Stage 01's temporary PW_SIMULATE_MUTATING_SELECTION (see DEC-007's tracked
     // follow-up and the Stage 05 Decision Log entry) with this run's own real, computed answer.
     PW_RUN_HAS_MUTATING_SELECTION: hasMutatingSelection ? "1" : "0",
-    PLAYWRIGHT_ALLOW_PRODUCTION: isProduction && args.allowProduction ? "1" : "0",
+    PLAYWRIGHT_ALLOW_PRODUCTION: isProduction && productionReadAllowed ? "1" : "0",
     PW_RUN_ID: runId,
     PW_RUN_TAG_EXPRESSION: normalizedExpression,
     PW_RUN_INITIATOR: process.env.PW_RUN_INITIATOR || "pw:run CLI",
@@ -381,7 +399,7 @@ function printPreview(
   hasMutatingSelection: boolean,
   isProduction: boolean,
   appUrl: string,
-  allowProductionPassed: boolean,
+  productionReadAllowed: boolean,
 ): void {
   // eslint-disable-next-line no-console
   console.log(`\n"${expression}" matches ${matched.length} test(s):\n`);
@@ -411,17 +429,19 @@ function printPreview(
           `would be REFUSED unconditionally -- it includes at least one @mutating test, and ` +
           `mutating tests may never run against production.`,
       );
-    } else if (!allowProductionPassed) {
+    } else if (!productionReadAllowed) {
       // eslint-disable-next-line no-console
       console.log(
         `\nNote: "${appUrl}" is a configured production host. This selection is read-only, but ` +
-          `running it for real would still require --allow-production on that invocation.`,
+          `running it for real would still require BOTH --allow-production on that invocation AND ` +
+          `PLAYWRIGHT_ALLOW_PRODUCTION=1 set in the environment.`,
       );
     } else {
       // eslint-disable-next-line no-console
       console.log(
         `\nNote: "${appUrl}" is a configured production host. This selection is read-only and ` +
-          `--allow-production was passed, so running it for real would be allowed.`,
+          `both --allow-production and PLAYWRIGHT_ALLOW_PRODUCTION=1 are set, so running it for ` +
+          `real would be allowed.`,
       );
     }
   }
