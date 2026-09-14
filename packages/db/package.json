@@ -8,17 +8,25 @@
     "generate": "prisma generate",
     "migrate": "prisma migrate dev",
     "migrate:deploy": "prisma migrate deploy",
-    "studio": "prisma studio"
+    "studio": "prisma studio",
+    "seed": "tsx prisma/seed.ts"
+  },
+  "prisma": {
+    "seed": "tsx prisma/seed.ts"
   },
   "dependencies": {
     "@prisma/adapter-pg": "^7.10.0",
     "@prisma/client": "^6.9.0",
     "@seatwise/shared": "workspace:*",
+    "bcryptjs": "^2.4.3",
+    "dotenv": "^16.6.1",
     "pg": "^8.23.0",
     "resend": "^6.26.0"
   },
   "devDependencies": {
+    "@types/bcryptjs": "^2.4.6",
     "@types/pg": "^8.23.1",
-    "prisma": "^6.9.0"
+    "prisma": "^6.9.0",
+    "tsx": "^4.23.13"
   }
 }

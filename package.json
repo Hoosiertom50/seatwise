@@ -7,6 +7,7 @@
     "build": "pnpm --filter @seatwise/web build",
     "db:generate": "pnpm --filter @seatwise/db generate",
     "db:migrate": "pnpm --filter @seatwise/db migrate",
+    "db:seed": "pnpm --filter @seatwise/db seed",
     "pw:install": "playwright install chromium",
     "pw:list": "playwright test --project=chromium --project=framework-unit --list",
     "pw:test": "playwright test --project=chromium --project=framework-unit",
