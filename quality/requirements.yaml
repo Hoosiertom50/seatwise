@@ -33,12 +33,12 @@ requirements:
     status: placeholder
     provenance: "example placeholder authored directly in this file for Stage 02"
 
-  # --- Seeded from README.md "What's implemented" (status: needs-human-review) --------------
+  # --- Seeded from README.md "What's implemented" (status: confirmed) --------------
   - id: "REQ-ACCOUNT-WEDDING-MANAGEMENT"
     title: "Account & Wedding Management"
     description: "Email/password signup and login, and per-owner wedding creation/management."
     sourceRefs: ["TS-4"]
-    status: needs-human-review
+    status: confirmed
     provenance: "seeded from README.md \"What's implemented\" section"
 
   - id: "REQ-GUEST-LIST-MANAGEMENT"
@@ -47,7 +47,7 @@ requirements:
       Add/list/update (RSVP status)/remove guests within a wedding, with tier and
       party/household grouping; bulk guest import and export.
     sourceRefs: ["TS-5", "FR-2.4", "FR-2.4a", "FR-2.9"]
-    status: needs-human-review
+    status: confirmed
     provenance: "seeded from README.md \"What's implemented\" section"
 
   - id: "REQ-RELATIONSHIPS-SEATING-RULES"
@@ -56,63 +56,63 @@ requirements:
       Seating rules between guests: must sit together / must not sit together / prefer near /
       avoid.
     sourceRefs: ["TS-6", "FR-3.4", "FR-3.7a"]
-    status: needs-human-review
+    status: confirmed
     provenance: "seeded from README.md \"What's implemented\" section"
 
   - id: "REQ-TABLE-VENUE-LAYOUT"
     title: "Table & Venue Layout"
     description: "Create/update/delete tables for a wedding with a venue layout."
     sourceRefs: ["TS-7"]
-    status: needs-human-review
+    status: confirmed
     provenance: "seeded from README.md \"What's implemented\" section"
 
   - id: "REQ-AUTOMATED-SEAT-ASSIGNMENT"
     title: "Automated seat assignment engine"
     description: "\"Generate new plan\" seat assignment engine on a wedding's seating plan."
     sourceRefs: ["TS-8"]
-    status: needs-human-review
+    status: confirmed
     provenance: "seeded from README.md \"What's implemented\" section"
 
   - id: "REQ-PLAN-REVIEW-STATUS"
     title: "Plan review status"
     description: "Draft/In Review/Approved status workflow for the Current Plan Version."
     sourceRefs: ["TS-9"]
-    status: needs-human-review
+    status: confirmed
     provenance: "seeded from README.md \"What's implemented\" section"
 
   - id: "REQ-MANUAL-ADJUSTMENT"
     title: "Manual adjustment"
     description: "Manual seat adjustment on the Seating plan tab for seated and unseated guests."
     sourceRefs: ["TS-10"]
-    status: needs-human-review
+    status: confirmed
     provenance: "seeded from README.md \"What's implemented\" section"
 
   - id: "REQ-DAY-OF-EMERGENCY-MODE"
     title: "Day-of / Emergency Mode"
     description: "Dedicated Day-of mode tab for wedding-day use."
     sourceRefs: ["TS-11", "FR-8.1", "FR-8.2", "FR-8.3", "FR-8.4"]
-    status: needs-human-review
+    status: confirmed
     provenance: "seeded from README.md \"What's implemented\" section"
 
   - id: "REQ-EXPORT-PRINT-RESTORE"
     title: "Export & Print, and version restore"
     description: "Export/print a plan version, and restore an earlier plan version."
     sourceRefs: ["TS-12", "FR-9.1", "FR-9.2", "FR-9.3", "FR-9.4"]
-    status: needs-human-review
+    status: confirmed
     provenance: "seeded from README.md \"What's implemented\" section"
 
   - id: "REQ-COLLABORATION-NOTIFICATIONS"
     title: "Collaboration & Notifications"
     description: "Multi-user model with notifications, including RSVP-link email delivery."
     sourceRefs: ["TS-13", "FR-10.1", "FR-10.2", "FR-10.3"]
-    status: needs-human-review
+    status: confirmed
     provenance: "seeded from README.md \"What's implemented\" section"
 
   - id: "REQ-NON-FUNCTIONAL"
     title: "Non-Functional Requirements"
     description: "Performance, security, availability, and accessibility requirements."
     sourceRefs: ["TS-14"]
-    status: needs-human-review
+    status: confirmed
     provenance: "seeded from README.md \"What's implemented\" section"
 
   - id: "REQ-ACCESS-CONTROL"
@@ -121,52 +121,52 @@ requirements:
       Every list/detail endpoint enforces access -- a user cannot read or modify a wedding,
       guests, rules, or plan they do not own.
     sourceRefs: []
-    status: needs-human-review
+    status: confirmed
     provenance: "seeded from README.md \"What's implemented\" section"
 
   - id: "REQ-PLANNER-PORTFOLIO"
     title: "Planner Portfolio & Multi-Client Account Model"
     description: "A planner manages multiple client weddings under one account."
     sourceRefs: ["TS-16", "FR-11.1"]
-    status: needs-human-review
+    status: confirmed
     provenance: "seeded from README.md \"What's implemented\" section"
 
   - id: "REQ-CLIENT-RSVP-COLLECTION"
     title: "Client-Facing RSVP Collection"
     description: "A guest can submit their own RSVP through a generated RSVP link."
     sourceRefs: ["TS-17"]
-    status: needs-human-review
+    status: confirmed
     provenance: "seeded from README.md \"What's implemented\" section"
 
   - id: "REQ-DAY-OF-TIMELINE"
     title: "Day-Of Timeline / Run-of-Show"
     description: "A per-wedding, chronological schedule of day-of events."
     sourceRefs: ["TS-18"]
-    status: needs-human-review
+    status: confirmed
     provenance: "seeded from README.md \"What's implemented\" section"
 
   - id: "REQ-REUSABLE-TEMPLATES"
     title: "Reusable Templates"
     description: "A planner can save a wedding's table layout and rules as a reusable template."
     sourceRefs: ["TS-19"]
-    status: needs-human-review
+    status: confirmed
     provenance: "seeded from README.md \"What's implemented\" section"
 
   - id: "REQ-BUDGET-VENDOR-TRACKING"
     title: "Budget & Vendor Tracking"
     description: "A planner records vendors per wedding, with budget tracking."
     sourceRefs: ["TS-20"]
-    status: needs-human-review
+    status: confirmed
     provenance: "seeded from README.md \"What's implemented\" section"
 
   - id: "REQ-MOBILE-DAY-OF-FLOOR-PLAN"
     title: "iOS/Android: On-Site Day-Of Floor Plan"
     description: "React Native/Expo mobile app for on-site, day-of floor plan viewing and use."
     sourceRefs: ["TS-21"]
-    status: needs-human-review
+    status: confirmed
     provenance: "seeded from README.md \"What's implemented\" section"
 
-  # --- Seeded from quality/acceptance-test-plan/ (status: needs-human-review) ----------------
+  # --- Seeded from quality/acceptance-test-plan/ (status: confirmed) ----------------
   # These two cover requirements that were always tracked as their own Jira story (TS-3, TS-15)
   # and their own rows in the acceptance test workbook, but had no README.md "What's implemented"
   # bullet of their own and so were missed when the rest of this file was first seeded.
@@ -182,7 +182,7 @@ requirements:
       a hard rule, and no override exists. (Soft rules -- Prefer-Near, Prefer-Avoid, Side-Mixing,
       a Purpose table, household grouping -- warn visibly but never block.)
     sourceRefs: ["TS-3", "FR-0.1", "FR-0.2"]
-    status: needs-human-review
+    status: confirmed
     provenance: "seeded from quality/acceptance-test-plan/Seatwise-Acceptance-Criteria.md (\"Definition of Done\") and Seatwise-Test-Cases-Final.xlsx (AC-001-AC-003)"
 
   - id: "REQ-INTEGRATION-E2E-SCENARIOS"
@@ -193,5 +193,5 @@ requirements:
       pre-wedding changes to an already-approved plan; day-of execution using Day-of mode and
       printed backups; and full-lifecycle data isolation between two of a planner's weddings.
     sourceRefs: ["TS-15"]
-    status: needs-human-review
+    status: confirmed
     provenance: "seeded from quality/acceptance-test-plan/Seatwise-Acceptance-Criteria.md (\"Integration / End-to-End Acceptance Criteria\") and Seatwise-Test-Cases-Final.xlsx (AC-081-AC-084)"
