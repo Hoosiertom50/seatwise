@@ -137,6 +137,37 @@ export interface PlanVersionDetail {
   unassignedGuestIds: string[];
   warnings: string[];
   modifiedSinceApproval: ModifiedSinceApproval;
+  // TS-47 (FR-9.4): set only on a version created by restoring an earlier one.
+  restoredFromVersionNumber: number | null;
+}
+
+// TS-47 (Export & Print / Version Restore, FR-9.4): one row of GET .../plan-versions -- the
+// wedding's whole version history, newest first, without any one version's own assignment detail.
+export interface PlanVersionRow {
+  id: string;
+  weddingId: string;
+  versionNumber: number;
+  label: string | null;
+  status: PlanVersionStatus;
+  isComplete: boolean;
+  approvedAt: string | null;
+  createdAt: string;
+  revision: number;
+  isCurrent: boolean;
+  assignedGuestCount: number;
+  unassignedGuestCount: number;
+  restoredFromVersionNumber: number | null;
+}
+
+// TS-47 (FR-9.4): the dry-run result GET .../restore-preview returns -- exactly what restoring
+// this version would produce against *current* guests/tables/rules, without writing anything.
+export interface RestorePreview {
+  sourceVersionNumber: number;
+  keptCount: number;
+  droppedGuests: { guestId: string; guestName: string; reason: string }[];
+  unassignedGuestIds: string[];
+  isComplete: boolean;
+  warnings: string[];
 }
 
 // TS-42/TS-43: the two collaborator-model enums (FR-1.4) -- permission level (what a
@@ -171,6 +202,35 @@ export interface CreatedComment {
   authorName: string;
   parentCommentId: string | null;
   resolvedAt: string | null;
+}
+
+// TS-44 (FR-10.1): one row of the wedding-wide activity/change-history log
+// (GET .../activity) -- read directly from packages/db/src/queries/activity.ts's
+// `listActivityForWedding`, which joins change_history_entries to plan_versions (for
+// versionNumber) and to users (for actorName, left-joined since an actor could in principle be
+// gone). `action` is a free-form string column; TS-44 only ever needs to check for
+// `"MANUAL_MOVE"`.
+export interface ActivityEntry {
+  id: string;
+  planVersionId: string;
+  versionNumber: number;
+  action: string;
+  description: string;
+  actorUserId: string;
+  actorName: string | null;
+  createdAt: string;
+}
+
+// TS-46 (Day-Of Timeline / Run-of-Show, FR-13.1/FR-13.2): a per-wedding, chronological schedule of
+// day-of events -- its own record, entirely independent of guests/tables/rules/plan versions.
+export interface TimelineEntryDetail {
+  id: string;
+  weddingId: string;
+  time: string;
+  description: string;
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
 }
 
 async function assertOk(res: { ok(): boolean; status(): number; text(): Promise<string> }, action: string) {
@@ -357,6 +417,143 @@ export class WeddingDataSetup {
     commentId: string,
   ): Promise<{ status: number; body: { comment?: CreatedComment; error?: string } }> {
     const res = await this.request.post(`/api/v1/weddings/${weddingId}/comments/${commentId}/resolve`);
+    return { status: res.status(), body: await res.json() };
+  }
+
+  /** TS-45 (Day-Of Mode, FR-8.1): flips a guest's same-day attendance signal
+   * (POST .../guests/:guestId/attendance) -- acts on whichever plan version is Current, not a
+   * specific one, and frees/leaves-unassigned a seat without any regeneration. Returns the raw
+   * response (not asserting success) since a couple of TS-45 tests read the `planVersion` field
+   * directly off a 200 rather than needing a separate detail fetch. */
+  async setAttendance(
+    weddingId: string,
+    guestId: string,
+    attendance: "ATTENDING" | "NOT_ATTENDING",
+  ): Promise<{ status: number; body: { planVersion?: PlanVersionDetail | null; error?: string } }> {
+    const res = await this.request.post(`/api/v1/weddings/${weddingId}/guests/${guestId}/attendance`, {
+      data: { attendance },
+    });
+    return { status: res.status(), body: await res.json() };
+  }
+
+  /** TS-45 (Day-Of Mode, FR-8.1): swaps two already-seated guests' (or their forced-together
+   * units') tables in one atomic move (POST .../plan-versions/:id/assignments/swap). Same raw
+   * {status, body} shape as moveGuestAssignment, for the same reason -- several TS-45 tests need
+   * to inspect a specific 409 rather than treat it as a setup failure. */
+  async swapGuestAssignments(
+    weddingId: string,
+    planVersionId: string,
+    guestAId: string,
+    guestBId: string,
+    expectedRevision?: number,
+  ): Promise<{ status: number; body: { planVersion?: PlanVersionDetail; warnings?: string[]; error?: string } }> {
+    const res = await this.request.post(
+      `/api/v1/weddings/${weddingId}/plan-versions/${planVersionId}/assignments/swap`,
+      { data: { guestAId, guestBId, expectedRevision } },
+    );
+    return { status: res.status(), body: await res.json() };
+  }
+
+  /** TS-44 (FR-10.1): reads the wedding's whole chronological change-history/activity log
+   * (GET .../activity) -- used to confirm a manual move recorded a MANUAL_MOVE entry naming who
+   * made it and when, without needing any UI (there's no dedicated Activity-tab page object; the
+   * feed itself is the only thing under test here). */
+  async getActivity(weddingId: string): Promise<ActivityEntry[]> {
+    const res = await this.request.get(`/api/v1/weddings/${weddingId}/activity`);
+    await assertOk(res, `getActivity(${weddingId})`);
+    const body = (await res.json()) as { entries: ActivityEntry[] };
+    return body.entries;
+  }
+
+  /** TS-46 (Day-Of Timeline, FR-13.1): creates one run-of-show entry
+   * (POST .../timeline-entries). Returns the raw {status, body} rather than asserting success,
+   * since a schema-invalid `time` string (rejected 422) is itself one of this story's own test
+   * cases, not a setup failure. */
+  async createTimelineEntry(
+    weddingId: string,
+    input: { time: string; description: string },
+  ): Promise<{ status: number; body: { entry?: TimelineEntryDetail; error?: string } }> {
+    const res = await this.request.post(`/api/v1/weddings/${weddingId}/timeline-entries`, { data: input });
+    return { status: res.status(), body: await res.json() };
+  }
+
+  /** TS-46: reads the wedding's full run-of-show (GET .../timeline-entries), already ordered
+   * (time, sortOrder) exactly as the Timeline tab's own UI lists it -- confirmed directly in
+   * packages/db/src/queries/timeline.ts's `listTimelineEntriesForWedding`. */
+  async getTimelineEntries(weddingId: string): Promise<TimelineEntryDetail[]> {
+    const res = await this.request.get(`/api/v1/weddings/${weddingId}/timeline-entries`);
+    await assertOk(res, `getTimelineEntries(${weddingId})`);
+    const body = (await res.json()) as { entries: TimelineEntryDetail[] };
+    return body.entries;
+  }
+
+  /** TS-46: edits an entry's time and/or description (PATCH .../timeline-entries/:entryId). Raw
+   * {status, body} for the same reason as createTimelineEntry. */
+  async updateTimelineEntry(
+    weddingId: string,
+    entryId: string,
+    input: Partial<{ time: string; description: string }>,
+  ): Promise<{ status: number; body: { entry?: TimelineEntryDetail; error?: string } }> {
+    const res = await this.request.patch(`/api/v1/weddings/${weddingId}/timeline-entries/${entryId}`, {
+      data: input,
+    });
+    return { status: res.status(), body: await res.json() };
+  }
+
+  /** TS-46 (FR-13.2): moves one entry earlier/later among any others sharing its exact same
+   * `time` (POST .../timeline-entries/:entryId/reorder). Raw {status, body} since a
+   * no-eligible-neighbor no-op (still 200, entry unchanged) is itself one of this story's own
+   * assertions, not a setup failure. */
+  async reorderTimelineEntry(
+    weddingId: string,
+    entryId: string,
+    direction: "UP" | "DOWN",
+  ): Promise<{ status: number; body: { entry?: TimelineEntryDetail; error?: string } }> {
+    const res = await this.request.post(`/api/v1/weddings/${weddingId}/timeline-entries/${entryId}/reorder`, {
+      data: { direction },
+    });
+    return { status: res.status(), body: await res.json() };
+  }
+
+  /** TS-46: removes one entry (DELETE .../timeline-entries/:entryId). Raw {status, body} so a
+   * delete-of-an-already-gone entry (404) can be asserted rather than treated as a failure. */
+  async deleteTimelineEntry(weddingId: string, entryId: string): Promise<{ status: number; body: unknown }> {
+    const res = await this.request.delete(`/api/v1/weddings/${weddingId}/timeline-entries/${entryId}`);
+    return { status: res.status(), body: await res.json().catch(() => null) };
+  }
+
+  /** TS-47 (Export & Print / Version Restore, FR-9.4): lists every plan version for the wedding,
+   * newest first (GET .../plan-versions) -- each row carries its own `restoredFromVersionNumber`
+   * (set only on a version created by restoring an earlier one) and `revision`, which a restore
+   * test uses to confirm untouched versions are byte-for-byte unchanged afterward. */
+  async listPlanVersions(weddingId: string): Promise<PlanVersionRow[]> {
+    const res = await this.request.get(`/api/v1/weddings/${weddingId}/plan-versions`);
+    await assertOk(res, `listPlanVersions(${weddingId})`);
+    const body = (await res.json()) as { planVersions: PlanVersionRow[] };
+    return body.planVersions;
+  }
+
+  /** TS-47 (FR-9.4): a read-only dry run of restoring `planVersionId` (GET .../restore-preview) --
+   * computes kept-vs-dropped-vs-warned against *current* guests/tables/rules without writing
+   * anything. Raw {status, body} since View-vs-denied access is itself one of this story's own
+   * test cases. */
+  async previewRestore(
+    weddingId: string,
+    planVersionId: string,
+  ): Promise<{ status: number; body: { preview?: RestorePreview; error?: string } }> {
+    const res = await this.request.get(`/api/v1/weddings/${weddingId}/plan-versions/${planVersionId}/restore-preview`);
+    return { status: res.status(), body: await res.json() };
+  }
+
+  /** TS-47 (FR-9.4): commits a restore (POST .../restore) -- copies `planVersionId`'s own
+   * assignments into a brand-new version (re-validated against current data) that becomes
+   * Current; the source version and everything else in the history are left untouched. Raw
+   * {status, body} for the same reason as previewRestore. */
+  async restoreVersion(
+    weddingId: string,
+    planVersionId: string,
+  ): Promise<{ status: number; body: { planVersion?: PlanVersionDetail; warnings?: string[]; error?: string } }> {
+    const res = await this.request.post(`/api/v1/weddings/${weddingId}/plan-versions/${planVersionId}/restore`);
     return { status: res.status(), body: await res.json() };
   }
 

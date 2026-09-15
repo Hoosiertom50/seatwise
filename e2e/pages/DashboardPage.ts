@@ -46,6 +46,18 @@ export class DashboardPage extends BasePage {
     return this.page.getByRole("button", { name: "Log out" });
   }
 
+  // TS-49 (REQ-PLANNER-PORTFOLIO, FR-11.1): search/filter/sort controls, each with its own
+  // `aria-label` (there's no accompanying visible <label> element for any of the three).
+  private searchInput() {
+    return this.page.getByLabel("Search weddings", { exact: true });
+  }
+  private planStatusFilterSelect() {
+    return this.page.getByLabel("Filter by plan status", { exact: true });
+  }
+  private sortSelect() {
+    return this.page.getByLabel("Sort weddings", { exact: true });
+  }
+
   async goto(): Promise<void> {
     await this.page.goto("/dashboard");
   }
@@ -57,6 +69,46 @@ export class DashboardPage extends BasePage {
    * visible wedding's name. */
   weddingLink(nameContains: string) {
     return this.page.locator("li a").filter({ hasText: nameContains });
+  }
+
+  /** TS-49: every currently-visible wedding row's own link, in the exact DOM order the app
+   * rendered them — a test asserting sort order finds each expected name's position in
+   * `await weddingLinks().allTextContents()` rather than this page object guessing at a "name"
+   * substring out of the same blob of text `weddingLink` itself warns about. Template list items
+   * (inside the "Your templates" `<details>`) are never `<a>` elements -- only a `Delete`
+   * `<button>` -- so this selector can never accidentally pick one up. */
+  weddingLinks() {
+    return this.page.locator("li a");
+  }
+
+  /** TS-49 (FR-11.1): fills the search box. Left empty (`""`) clears it back to showing everyone. */
+  async search(term: string): Promise<void> {
+    await this.searchInput().fill(term);
+  }
+
+  /** TS-49 (FR-11.1): the plan-status filter dropdown's underlying value
+   * (`"ALL"|"NONE"|"DRAFT"|"IN_REVIEW"|"APPROVED"`), not its visible label text. */
+  async filterByPlanStatus(value: "ALL" | "NONE" | "DRAFT" | "IN_REVIEW" | "APPROVED"): Promise<void> {
+    await this.planStatusFilterSelect().selectOption(value);
+  }
+
+  /** TS-49 (FR-11.1/FR-11.3): the sort dropdown's underlying value -- `"urgency"` is the app's own
+   * default on every page load, never persisted, so a test that changes it and wants the default
+   * back must select `"urgency"` again explicitly rather than assuming a reload restores it. */
+  async sortBy(value: "urgency" | "name" | "eventDate" | "guestCount" | "issues"): Promise<void> {
+    await this.sortSelect().selectOption(value);
+  }
+
+  /** The "Showing {n} of {m} weddings." summary line, only rendered while a search term or a
+   * non-"ALL" plan-status filter is active. */
+  resultsSummary() {
+    return this.page.getByText(/^Showing \d+ of \d+ weddings\.$/);
+  }
+
+  /** The empty-state message shown when a search/filter combination matches nothing (distinct from
+   * the separate "No weddings yet" message shown when the account has no weddings at all). */
+  noMatchesMessage() {
+    return this.page.getByText("No weddings match your search/filter.", { exact: true });
   }
 
   /** Business-readable operation: fill and submit the inline create-wedding form. Waits for the

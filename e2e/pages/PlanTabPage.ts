@@ -107,6 +107,90 @@ export class PlanTabPage extends BasePage {
     await this.moveBackToDraftButton().waitFor();
   }
 
+  // TS-44 (AC-053/AC-054/AC-055/AC-056): the Floor plan view's guest chips and table boxes --
+  // confirmed directly in PlanTab.tsx's PlanFloorPlan component to be genuine native HTML5
+  // drag-and-drop (onDragStart sets dataTransfer with "text/plain" = guestId; onDrop reads it
+  // back and calls the same onMoveGuest the list view's dropdowns use). No data-testid exists on
+  // either element, so selection is by the raw data attribute the component itself renders.
+  private guestChip(guestId: string) {
+    return this.page.locator(`[data-guest-id="${guestId}"]`);
+  }
+  private tableBox(tableId: string) {
+    return this.page.locator(`[data-table-id="${tableId}"]`);
+  }
+
+  /** The plain red error paragraph PlanTab.tsx renders for a blocked/failed move (no
+   * data-testid or role -- just `{error && <p>...}`); a test matches specific wording against
+   * this rather than a generic "did something turn red" check. */
+  moveErrorText() {
+    return this.page.locator("p.text-red-600, p.text-red-400");
+  }
+
+  /** The "That move was made, but note:" banner PlanTab.tsx shows for a move that succeeded but
+   * triggered a soft-rule (AVOID) warning -- distinct from `detail.warnings` (the plan-wide notes
+   * shown right after generation), which uses the same styling but a different heading. */
+  moveWarningsBanner() {
+    return this.page.getByText("That move was made, but note:", { exact: true }).locator("..");
+  }
+
+  private undoButton() {
+    return this.page.getByTestId("undo-button");
+  }
+  private redoButton() {
+    return this.page.getByTestId("redo-button");
+  }
+
+  /** True once at least one manual move has been made this session (mirrors the UI's own
+   * `undoStack.length > 0 || redoStack.length > 0` gate on rendering the Undo/Redo row at all). */
+  async undoRedoRowVisible(): Promise<boolean> {
+    return (await this.undoButton().count()) > 0;
+  }
+
+  /**
+   * Drags a guest chip onto a table box via a real native HTML5 DnD event sequence sharing one
+   * `DataTransfer` handle across dragstart/dragenter/dragover/drop/dragend -- deliberately not
+   * Playwright's `locator.dragTo()` (which synthesizes mouse-only movement and never fires real
+   * `dragstart`/`drop` DragEvents with a populated `dataTransfer`), since `onGuestDragStart` and
+   * `onTableDrop` both read `event.dataTransfer` directly. This mirrors the deterministic-over-
+   * flaky-gesture preference this framework already established for hard-rule testing (see
+   * cross-cutting-invariant.hard-rules-block-every-direct-manual-move.spec.ts's own header
+   * comment on exercising the underlying endpoint directly rather than a UI gesture wherever the
+   * gesture itself isn't what's under test) -- here the gesture *is* what's under test, so the
+   * sequence is made real and reliable rather than skipped.
+   */
+  async dragGuestToTable(guestId: string, tableId: string): Promise<void> {
+    const chip = this.guestChip(guestId);
+    const table = this.tableBox(tableId);
+    await chip.scrollIntoViewIfNeeded();
+    await table.scrollIntoViewIfNeeded();
+    // `bubbles`/`cancelable` must be passed explicitly -- confirmed empirically that Playwright's
+    // dispatchEvent does not default a "dragstart"/"dragover"/"drop" DragEvent to bubble the way a
+    // real OS-driven drag does, and this app's handlers are attached above these elements via
+    // React's own root-level event delegation, so a non-bubbling synthetic event never reaches
+    // them at all (the drop silently no-ops with no error).
+    const dataTransfer = await this.page.evaluateHandle(() => new DataTransfer());
+    const init = { dataTransfer, bubbles: true, cancelable: true };
+    await chip.dispatchEvent("dragstart", init);
+    await table.dispatchEvent("dragenter", init);
+    await table.dispatchEvent("dragover", init);
+    // The drop fires `onMoveGuest`, an async call to `POST .../assignments` -- waiting for that
+    // response (rather than returning as soon as the synthetic DOM event is dispatched) is what
+    // makes this method safe to immediately follow with either a UI or an API assertion.
+    await Promise.all([
+      this.page.waitForResponse((res) => res.url().includes("/assignments") && res.request().method() === "POST"),
+      table.dispatchEvent("drop", init),
+    ]);
+    await chip.dispatchEvent("dragend", init);
+  }
+
+  async undo(): Promise<void> {
+    await this.undoButton().click();
+  }
+
+  async redo(): Promise<void> {
+    await this.redoButton().click();
+  }
+
   /** Runs one generation. `saveAsDraft` mirrors the real "Save as comparison draft" checkbox
    * (unchecked -- the default -- makes the new version Current); waits for the button to return
    * to its ready label, which only happens after the request settles either way (success or a
