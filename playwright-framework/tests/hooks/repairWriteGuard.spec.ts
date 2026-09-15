@@ -48,6 +48,8 @@ function writeMaintenanceReport(testSourceRelPath: string, repairAllowed: boolea
       reportId: "report-1",
       generatedAt: "2026-09-10T12:00:00.000Z",
       frameworkVersion: "0.9.0",
+      gitCommit: "abc1234def5678900000000000000000000abcd",
+      workingTreeClean: true,
       sourceRunId: "run-1",
       findings: [
         {

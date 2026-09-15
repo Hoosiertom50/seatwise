@@ -47,14 +47,17 @@ function finding(overrides: Partial<MaintenanceFinding> & { testId: string; clas
   };
 }
 
-function report(findings: MaintenanceFinding[]): MaintenanceReport {
+function report(findings: MaintenanceFinding[], overrides: Partial<MaintenanceReport> = {}): MaintenanceReport {
   return {
     schemaVersion: "1.0.0",
     reportId: "report-synthetic-1",
     generatedAt: "2026-09-10T12:00:00.000Z",
     frameworkVersion: "0.9.0",
+    gitCommit: "abc1234def5678900000000000000000000abcd",
+    workingTreeClean: true,
     sourceRunId: "run-1",
     findings,
+    ...overrides,
   };
 }
 
@@ -62,6 +65,17 @@ test("a report with zero findings renders a clean-run message, no finding detail
   await page.setContent(renderMaintenanceReportHtml(report([])));
   await expect(page.getByText("No real failures were found in this run to triage.")).toBeVisible();
   await expect(page.locator("details.finding")).toHaveCount(0);
+});
+
+test("TS-57: renders the Git commit, silently, with no caveat when the working tree was clean", async () => {
+  await page.setContent(renderMaintenanceReportHtml(report([], { gitCommit: "deadbeef1234567890000000000000000000abcd", workingTreeClean: true })));
+  await expect(page.getByText("deadbeef1234567890000000000000000000abcd")).toBeVisible();
+  await expect(page.getByText("working tree had uncommitted changes")).toHaveCount(0);
+});
+
+test("TS-57: flags an uncommitted working tree at report-generation time, the same way run/suite reports do", async () => {
+  await page.setContent(renderMaintenanceReportHtml(report([], { gitCommit: "deadbeef1234567890000000000000000000abcd", workingTreeClean: false })));
+  await expect(page.getByText("working tree had uncommitted changes at report-generation time")).toBeVisible();
 });
 
 test("each finding renders its classification, confidence, review/repair badges, and test ID", async () => {

@@ -135,6 +135,7 @@ export function renderMaintenanceReportHtml(report: MaintenanceReport): string {
   <p>
     Report <code>${esc(report.reportId)}</code> &middot; generated ${esc(report.generatedAt)} &middot;
     framework version ${esc(report.frameworkVersion)} &middot; source run <code>${esc(report.sourceRunId)}</code>
+    &middot; Git commit <code>${esc(report.gitCommit)}</code>${report.workingTreeClean ? "" : " (working tree had uncommitted changes at report-generation time)"}
   </p>
 
   <h2>Summary</h2>

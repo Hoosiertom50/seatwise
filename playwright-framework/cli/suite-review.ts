@@ -35,7 +35,6 @@
  *   9. Write JSON + HTML to artifacts/playwright/runs/suite-reviews/<reviewId>.{json,html}.
  */
 
-import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { relative, resolve } from "node:path";
@@ -67,6 +66,7 @@ import { buildReviewQueue } from "../coverage/buildReviewQueue.js";
 import { diffSuiteReviews, findMostRecentSuiteReviewPath } from "../coverage/diffSuiteReviews.js";
 import { renderSuiteReviewHtml } from "../reporting/renderSuiteReviewHtml.js";
 import { FRAMEWORK_VERSION } from "../version.js";
+import { gitInfo } from "../gitInfo.js";
 
 const ROOT = process.cwd();
 const E2E_TESTS_DIR = resolve(ROOT, "e2e/tests");
@@ -93,23 +93,6 @@ function parseArgs(argv: string[]): { freshnessWindowDays: number } {
     }
   }
   return { freshnessWindowDays };
-}
-
-function gitInfo(): { gitCommit: string; workingTreeClean: boolean } {
-  let gitCommit = "unknown";
-  try {
-    gitCommit = execFileSync("git", ["rev-parse", "HEAD"], { cwd: ROOT }).toString().trim();
-  } catch {
-    // no git available -- recorded as "unknown", never fabricated (mirrors normalizedReporter.ts)
-  }
-  let workingTreeClean = true;
-  try {
-    workingTreeClean =
-      execFileSync("git", ["status", "--porcelain"], { cwd: ROOT }).toString().trim().length === 0;
-  } catch {
-    workingTreeClean = true; // unknown treated as clean rather than falsely flagging dirty
-  }
-  return { gitCommit, workingTreeClean };
 }
 
 function distributionOf(totals: number[], bandEdges: { label: string; min: number; max: number }[]): Record<string, number> {

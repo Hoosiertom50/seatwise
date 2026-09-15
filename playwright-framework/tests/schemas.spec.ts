@@ -197,10 +197,40 @@ test.describe("MaintenanceReportSchema", () => {
       reportId: "report-1",
       generatedAt: "2026-09-10T12:00:00.000Z",
       frameworkVersion: "0.9.0",
+      gitCommit: "abc1234def5678900000000000000000000abcd",
+      workingTreeClean: true,
       sourceRunId: "run-1",
       findings: [],
     });
     expect(result.success).toBe(true);
+  });
+
+  // TS-57: parity with RunReportSchema/SuiteReviewSchema -- both already require gitCommit/
+  // workingTreeClean (see this describe block's neighbors above), and MaintenanceReportSchema was
+  // the one report type missing them (disclosed as a Medium finding in
+  // quality/audits/stage-09-audit.md). Locking test: a report missing either field is rejected.
+  test("rejects a report missing gitCommit or workingTreeClean, matching RunReportSchema/SuiteReviewSchema", () => {
+    const missingGitCommit = MaintenanceReportSchema.safeParse({
+      schemaVersion: "1.0.0",
+      reportId: "report-1",
+      generatedAt: "2026-09-10T12:00:00.000Z",
+      frameworkVersion: "0.9.0",
+      workingTreeClean: true,
+      sourceRunId: "run-1",
+      findings: [],
+    });
+    expect(missingGitCommit.success).toBe(false);
+
+    const missingWorkingTreeClean = MaintenanceReportSchema.safeParse({
+      schemaVersion: "1.0.0",
+      reportId: "report-1",
+      generatedAt: "2026-09-10T12:00:00.000Z",
+      frameworkVersion: "0.9.0",
+      gitCommit: "abc1234def5678900000000000000000000abcd",
+      sourceRunId: "run-1",
+      findings: [],
+    });
+    expect(missingWorkingTreeClean.success).toBe(false);
   });
 });
 

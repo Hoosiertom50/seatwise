@@ -761,6 +761,12 @@ export const MaintenanceReportSchema = z.object({
   reportId: NonEmptyStringSchema,
   generatedAt: z.string(),
   frameworkVersion: NonEmptyStringSchema,
+  /** TS-57: parity with RunReportSchema/SuiteReviewSchema -- Section 10.1 requires every generated
+   * report to include repository Git commit and working-tree state, and this report type was
+   * missing both (disclosed as a Medium finding in quality/audits/stage-09-audit.md). Populated by
+   * the same gitInfo() helper suite-review.ts already used, now shared rather than duplicated. */
+  gitCommit: NonEmptyStringSchema,
+  workingTreeClean: z.boolean(),
   /** The Stage 06 run report this triage was generated from -- Stage 09's own task requires
    * "artifact collection by run ID without rerunning first", so a maintenance report is always
    * anchored to one specific, already-completed run's own report file. */

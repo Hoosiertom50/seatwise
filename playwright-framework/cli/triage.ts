@@ -26,6 +26,7 @@ import { findMostRecentSuiteReviewPath } from "../coverage/diffSuiteReviews.js";
 import { classifyFailure } from "../triage/classifyFailure.js";
 import { renderMaintenanceReportHtml } from "../reporting/renderMaintenanceReportHtml.js";
 import { FRAMEWORK_VERSION } from "../version.js";
+import { gitInfo } from "../gitInfo.js";
 
 const ROOT = process.cwd();
 const RUN_REPORTS_DIR = resolve(ROOT, "artifacts/playwright/runs/run-reports");
@@ -105,11 +106,14 @@ function main(): void {
   );
 
   const reportId = randomUUID();
+  const { gitCommit, workingTreeClean } = gitInfo();
   const report = {
     schemaVersion: "1.0.0" as const,
     reportId,
     generatedAt: new Date().toISOString(),
     frameworkVersion: FRAMEWORK_VERSION,
+    gitCommit,
+    workingTreeClean,
     sourceRunId: targetReport.runId,
     findings,
   };
