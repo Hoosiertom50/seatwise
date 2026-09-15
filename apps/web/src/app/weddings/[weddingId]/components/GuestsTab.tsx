@@ -725,6 +725,11 @@ export function GuestsTab({
           accept=".csv,text/csv"
           onChange={onFileSelected}
           className="mb-3 block text-sm"
+          // TS-53 (AC-079): no visible <label> wraps this input (the paragraph/button above it are
+          // instructions and a download link, not a label element) -- axe-core's WCAG 2.1 AA "label"
+          // rule flagged it as critical (no accessible name at all). Same sr-only-name fix shape as
+          // the Day-of walk-in fields' own aria-label, per README.md's NFR-9.5 pass.
+          aria-label="Upload a CSV file of guests to import"
         />
 
         {csvHeaders.length > 0 && (
@@ -919,7 +924,13 @@ export function GuestsTab({
                       planner edit -- so this badge means exactly "responded via their link". */}
                   <span
                     className={`ml-2 rounded px-1.5 py-0.5 text-xs ${
-                      g.rsvpRespondedAt ? "bg-green-50 dark:bg-green-950 text-green-700 dark:text-green-400" : "bg-neutral-100 dark:bg-neutral-800 text-neutral-500 dark:text-neutral-400"
+                      g.rsvpRespondedAt
+                        ? "bg-green-50 dark:bg-green-950 text-green-700 dark:text-green-400"
+                        : // TS-53 (AC-079): text-neutral-500 on bg-neutral-100 measured 4.34:1 under
+                          // axe-core's WCAG 2.1 AA color-contrast check (needs 4.5:1 for 12px text) --
+                          // bumped one step darker to neutral-600 (~6.4:1), same fix shape README.md's
+                          // own prior NFR-9.5 pass already used elsewhere (neutral-400 -> neutral-500).
+                          "bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-400"
                     }`}
                     title={
                       g.rsvpRespondedAt

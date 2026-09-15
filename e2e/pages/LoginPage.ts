@@ -41,6 +41,21 @@ export class LoginPage extends BasePage {
     await this.submitButton().click();
   }
 
+  /** TS-53 (AC-079, "keyboard-only operation"): the same operation as `login`, but driven entirely
+   * by real keyboard input -- `.focus()` + `page.keyboard.type`/`.press("Tab"/"Enter")` -- rather
+   * than `.fill()`/`.click()`, which bypass real key events and so would prove nothing about
+   * keyboard operability. Confirms email -> password -> submit is reachable by Tab alone (in that
+   * order, with no unreachable field in between) and that Enter on the password field submits the
+   * form exactly as clicking Log in would -- the form has no other submit control to fall back on. */
+  async loginWithKeyboardOnly(email: string, password: string): Promise<void> {
+    await this.emailInput().focus();
+    await this.page.keyboard.type(email);
+    await this.page.keyboard.press("Tab");
+    await expect(this.passwordInput()).toBeFocused();
+    await this.page.keyboard.type(password);
+    await this.page.keyboard.press("Enter");
+  }
+
   async expectError(messageSubstring?: string): Promise<void> {
     const error = this.errorMessage();
     await error.waitFor({ state: "visible" });

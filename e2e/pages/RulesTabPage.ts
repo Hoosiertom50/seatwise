@@ -39,12 +39,24 @@ export class RulesTabPage extends BasePage {
   }
 
   /** Fills and submits the add-rule form by each guest's full name (matching the option text the
-   * app renders: `{firstName} {lastName}`) and the rule type. */
+   * app renders: `{firstName} {lastName}`) and the rule type. Waits for the POST to resolve before
+   * returning -- TS-55 real finding: RulesTab.tsx resets both guest `<select>`s back to their
+   * placeholder option on a successful submit (`setGuestAId("")`/`setGuestBId("")`), and without
+   * this wait, calling `addRule` a second time races that reset -- the second call's own
+   * `selectOption`s can land, then get silently wiped by the first submission's still-in-flight
+   * response resolving a moment later, leaving the form on its placeholder options when "Add rule"
+   * is clicked (a real, empirically-observed failure: this method had never been called twice in
+   * one test before this story). */
   async addRule(guestAFullName: string, guestBFullName: string, type: RuleType): Promise<void> {
     await this.guestASelect().selectOption({ label: guestAFullName });
     await this.guestBSelect().selectOption({ label: guestBFullName });
     await this.ruleTypeSelect().selectOption(type);
-    await this.addRuleButton().click();
+    await Promise.all([
+      this.page.waitForResponse(
+        (res) => res.request().method() === "POST" && /\/relationships$/.test(new URL(res.url()).pathname),
+      ),
+      this.addRuleButton().click(),
+    ]);
   }
 
   /** The "Rules (N)" list heading, whose count updates live as rules are added/removed. */

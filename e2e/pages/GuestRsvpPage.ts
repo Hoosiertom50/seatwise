@@ -83,7 +83,7 @@ export class GuestRsvpPage extends BasePage {
   }
 
   /**
-   * Real finding, empirically confirmed (a standalone Playwright script hitting the live dev
+   * Real finding #1, empirically confirmed (a standalone Playwright script hitting the live dev
    * server directly): clicking either attending/declining toggle button occasionally has no effect
    * at all -- the button itself receives the click (Playwright never reports an actionability
    * failure) but the resulting `setAttending(...)` re-render never happens, and simply waiting
@@ -93,26 +93,57 @@ export class GuestRsvpPage extends BasePage {
    * with a brief window where the DOM has painted but the page isn't fully interactive yet -- and
    * how long that window lasts scales with how busy the machine is: isolated runs recovered within
    * 1-2 retries (a few hundred ms), but the same race under a full, CPU-contended regression-suite
-   * run needed several seconds. A click-and-verify retry bounded by a wall-clock deadline (not a
-   * fixed attempt count) is the correct fix -- not a longer fixed wait, since a genuinely swallowed
-   * click never becomes un-swallowed by waiting on its own, and not a raised *test* timeout, since
-   * this stays a small fraction of the per-test budget even in the slow case.
+   * run needed several seconds.
+   *
+   * Real finding #2, also empirically confirmed (a second standalone script, this one logging
+   * every request/response for `/api/v1/rsvp/:token`): this page's own `useEffect(() => { load()
+   * }, [token])` fires its GET twice on every mount (React Strict Mode double-invokes effects in
+   * dev -- `next dev` never opts out of Strict Mode), and `load()`'s `.then` unconditionally calls
+   * `setAttending(res.rsvp.rsvpStatus === "DECLINED" ? "DECLINED" : "CONFIRMED")` with whatever was
+   * on the server, with no guard against a click that has already happened in the meantime. On a
+   * *revisit* to an already-CONFIRMED link (never on a fresh guest's first visit -- there the
+   * fetched value already matches the CONFIRMED default, so a stale second response has nothing to
+   * clobber), clicking "Regretfully declining" in between the two GETs' responses -- or even just
+   * before the slower of the two lands -- gets silently reverted back to CONFIRMED moments later
+   * when that second, stale response's `setAttending("CONFIRMED")` runs. Confirmed directly: the
+   * decline click can register *instantly* (`headcountInput` gone right after the click) and still
+   * revert within a few hundred ms with no further interaction from the test at all. This is
+   * consistent with the double-fetch being a `next dev`/Strict-Mode-only artifact (effects run
+   * once in a production build), but this whole framework only ever runs against `next dev`, so
+   * it's a real, reproducible race in the actual environment under test, not a theoretical one.
+   *
+   * Both races share the same fix shape -- a click-and-verify retry bounded by a wall-clock
+   * deadline, not a fixed attempt count or a longer fixed wait (a genuinely swallowed click never
+   * un-swallows itself by waiting, and a raised *test* timeout would still stay a small fraction of
+   * the per-test budget even in the slow case) -- but finding #2 means a single instantaneous match
+   * right after the click is not trustworthy on its own: the match itself has to be re-confirmed
+   * after a short settle window before this method trusts it, or the very race this method exists
+   * to defeat would silently slip back in right as it returns.
    */
   private async setAttending(attending: "CONFIRMED" | "DECLINED"): Promise<void> {
     const button = attending === "CONFIRMED" ? this.attendingButton() : this.decliningButton();
     const confirmedFieldsExpected = attending === "CONFIRMED";
     const deadline = Date.now() + 15_000;
+    const matchesExpected = async () => (await this.headcountInput().count()) > 0 === confirmedFieldsExpected;
     let lastConfirmedFieldsPresent: boolean | undefined;
     while (Date.now() < deadline) {
       await button.click();
       lastConfirmedFieldsPresent = (await this.headcountInput().count()) > 0;
       if (lastConfirmedFieldsPresent === confirmedFieldsExpected) {
-        return;
+        // Finding #2: don't trust an instantaneous match -- a stale double-fetch response can
+        // still be in flight and clobber it moments later. Re-check after a settle window (well
+        // past the ~100ms the diagnostic script observed the revert land in) before returning; if
+        // it reverted, loop back around and click again, still bounded by the same deadline.
+        await this.page.waitForTimeout(500);
+        if (await matchesExpected()) {
+          return;
+        }
+        continue;
       }
       await this.page.waitForTimeout(200);
     }
     throw new Error(
-      `GuestRsvpPage: clicking the ${attending} toggle never took effect within 15s ` +
+      `GuestRsvpPage: clicking the ${attending} toggle never took effect (and held) within 15s ` +
         `(last observed confirmedFieldsPresent=${lastConfirmedFieldsPresent}).`,
     );
   }

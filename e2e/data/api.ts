@@ -22,6 +22,60 @@ export interface CreatedWedding {
   name: string;
 }
 
+export type SideMixing = "KEEP_SEPARATE" | "BALANCED_MIX" | "FULLY_MIXED";
+
+// TS-51 (REQ-REUSABLE-TEMPLATES, FR-14.4): the optional template-seeding fields createWeddingSchema
+// accepts alongside the base wedding fields, plus sideMixing itself (settable at creation, distinct
+// from applyTemplateRules overriding it afterward).
+export interface CreateWeddingOptions {
+  sideMixing?: SideMixing;
+  templateId?: string;
+  applyTemplateTables?: boolean;
+  applyTemplateRules?: boolean;
+}
+
+// TS-51: the full wedding row (GET .../weddings/:id), as opposed to CreatedWedding's bare
+// id/name -- needed to assert guestCount and sideMixing on a template-seeded wedding.
+export interface WeddingDetail {
+  id: string;
+  name: string;
+  sideMixing: SideMixing;
+  guestCount: number;
+}
+
+// TS-51: a template row as returned by the list endpoint (GET /api/v1/templates) -- no `tables`
+// array (that's only on the single-template detail read).
+export interface SeatingTemplateSummary {
+  id: string;
+  ownerId: string;
+  name: string;
+  sourceWeddingId: string | null;
+  sourceWeddingName: string | null;
+  sideMixing: SideMixing;
+  tableCount: number;
+}
+
+export interface SeatingTemplateTable {
+  id: string;
+  label: string;
+  capacity: number;
+  isRestricted: boolean;
+  isAccessible: boolean;
+  isLocked: boolean;
+  purpose: string | null;
+  purposeCriterionType: "SIDE" | "TIER" | "AGE_CATEGORY" | null;
+  purposeCriterionValue: string | null;
+  singleSideOnly: boolean;
+  shape: "ROUND" | "RECTANGULAR" | "SQUARE" | "OVAL" | "OTHER";
+  positionX: number | null;
+  positionY: number | null;
+  sortOrder: number;
+}
+
+export interface SeatingTemplateDetail extends SeatingTemplateSummary {
+  tables: SeatingTemplateTable[];
+}
+
 export interface CreatedGuest {
   id: string;
   firstName: string;
@@ -87,6 +141,8 @@ export interface CreatedTableDetail extends CreatedTable {
   purposeCriterionType: "SIDE" | "TIER" | "AGE_CATEGORY" | null;
   purposeCriterionValue: string | null;
   singleSideOnly: boolean;
+  // TS-51: needed to assert a template-cloned table's shape matches the source table's.
+  shape: "ROUND" | "RECTANGULAR" | "SQUARE" | "OVAL" | "OTHER";
   requiredGuestIds: string[];
   revision: number;
 }
@@ -242,11 +298,75 @@ async function assertOk(res: { ok(): boolean; status(): number; text(): Promise<
 export class WeddingDataSetup {
   constructor(private readonly request: APIRequestContext) {}
 
-  async createWedding(name: string): Promise<CreatedWedding> {
-    const res = await this.request.post("/api/v1/weddings", { data: { name } });
+  // TS-51: extended with an optional second argument so template-seeding scenarios can pass
+  // templateId/applyTemplateTables/applyTemplateRules/sideMixing without disturbing any existing
+  // caller (every prior call site passes only a bare name).
+  async createWedding(name: string, options?: CreateWeddingOptions): Promise<CreatedWedding> {
+    const res = await this.request.post("/api/v1/weddings", { data: { name, ...options } });
     await assertOk(res, `createWedding("${name}")`);
     const body = (await res.json()) as { wedding: { id: string; name: string } };
     return { id: body.wedding.id, name: body.wedding.name };
+  }
+
+  /** TS-51: the raw POST .../weddings response (status + body), for validation-error scenarios --
+   * e.g. a templateId with neither apply flag checked, which createWeddingSchema's own superRefine
+   * rejects with a 422 -- where the caller wants to inspect that directly rather than have
+   * createWedding's assertOk throw on it. */
+  async createWeddingRaw(
+    input: { name: string } & CreateWeddingOptions,
+  ): Promise<{ status: number; body: { wedding?: { id: string; name: string }; error?: string; fieldErrors?: Record<string, string[]> } }> {
+    const res = await this.request.post("/api/v1/weddings", { data: input });
+    return { status: res.status(), body: await res.json() };
+  }
+
+  /** TS-51: the full wedding row (GET .../weddings/:id) -- CreatedWedding only carries id/name. */
+  async getWedding(weddingId: string): Promise<WeddingDetail> {
+    const res = await this.request.get(`/api/v1/weddings/${weddingId}`);
+    await assertOk(res, `getWedding(${weddingId})`);
+    const body = (await res.json()) as { wedding: WeddingDetail };
+    return body.wedding;
+  }
+
+  /** TS-51: GET .../weddings/:id/tables -- the wedding's current table list, in the order the API
+   * returns them (insertion order; template-seeded tables have no sortOrder of their own once
+   * cloned into real seating_tables rows). */
+  async listTables(weddingId: string): Promise<CreatedTableDetail[]> {
+    const res = await this.request.get(`/api/v1/weddings/${weddingId}/tables`);
+    await assertOk(res, `listTables(${weddingId})`);
+    const body = (await res.json()) as { tables: CreatedTableDetail[] };
+    return body.tables;
+  }
+
+  /** TS-51 (FR-14.1/FR-14.2): POST .../weddings/:id/save-as-template -- snapshots this wedding's
+   * current table layout + sideMixing into a brand-new template owned by the caller. */
+  async saveWeddingAsTemplate(weddingId: string, name: string): Promise<SeatingTemplateDetail> {
+    const res = await this.request.post(`/api/v1/weddings/${weddingId}/save-as-template`, { data: { name } });
+    await assertOk(res, `saveWeddingAsTemplate(${weddingId}, "${name}")`);
+    const body = (await res.json()) as { template: SeatingTemplateDetail };
+    return body.template;
+  }
+
+  /** TS-51: GET /api/v1/templates -- every template owned by the caller (never another user's). */
+  async listTemplates(): Promise<SeatingTemplateSummary[]> {
+    const res = await this.request.get("/api/v1/templates");
+    await assertOk(res, "listTemplates()");
+    const body = (await res.json()) as { templates: SeatingTemplateSummary[] };
+    return body.templates;
+  }
+
+  /** TS-51: the raw GET /api/v1/templates/:id response (status + body) -- used both for the happy
+   * path (full detail read) and the ownership-scoping edge case (a 404 for someone else's
+   * template), so callers that expect a non-200 don't have to catch assertOk's throw. */
+  async getTemplateRaw(templateId: string): Promise<{ status: number; body: { template?: SeatingTemplateDetail; error?: string } }> {
+    const res = await this.request.get(`/api/v1/templates/${templateId}`);
+    return { status: res.status(), body: await res.json() };
+  }
+
+  /** TS-51: the raw DELETE /api/v1/templates/:id response (status + body) -- same rationale as
+   * getTemplateRaw (a non-owner's delete attempt is a 404, not a thrown assertion failure). */
+  async deleteTemplateRaw(templateId: string): Promise<{ status: number; body: { ok?: boolean; error?: string } }> {
+    const res = await this.request.delete(`/api/v1/templates/${templateId}`);
+    return { status: res.status(), body: await res.json() };
   }
 
   async createGuest(weddingId: string, input: CreateGuestInput): Promise<CreatedGuest> {
@@ -568,7 +688,9 @@ export class WeddingDataSetup {
   }
 
   /** Deletes a wedding and (per the app's own cascade) everything created under it — tables,
-   * guests, rules, plan versions. A 404 is treated as already-clean, not a failure. */
+   * guests, rules, plan versions. A 404 is treated as already-clean, not a failure. TS-51 also
+   * reuses this directly to prove a template outlives its source wedding (the FK is
+   * ON DELETE SET NULL, not a cascade, onto the template itself). */
   async deleteWedding(weddingId: string): Promise<void> {
     const res = await this.request.delete(`/api/v1/weddings/${weddingId}`);
     if (!res.ok() && res.status() !== 404) {
