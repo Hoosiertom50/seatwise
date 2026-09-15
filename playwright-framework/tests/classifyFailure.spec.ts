@@ -227,7 +227,51 @@ test.describe("hand-authored tier", () => {
     expect(finding.classification).toBe("probable-application-defect");
     expect(finding.source).toBe("hand-authored");
     expect(finding.repairAllowed).toBe(false); // clamped, despite the override file saying true
+    expect(finding.needsHumanReview).toBe(true); // TS-58: clamped, despite the override file saying false
     expect(finding.suggestedDefectDescription).toBe("Guest RSVP status renders stale after a concurrent update.");
+  });
+
+  test("TS-58: needsHumanReview is clamped true for insufficient-evidence too, the same way repairAllowed already is", () => {
+    // Same adversarial shape as the probable-application-defect case above, for the other
+    // forced-no-repair category -- confirms the clamp in classifyFailure.ts's hand-authored tier
+    // covers both members of `forcedNoRepair`, not just the first one a test happens to exercise.
+    const failing = baseTest({ testId: "suite.unclear-cause", status: "consistent-failure" });
+    const classifications: FailureClassificationsFile = {
+      schemaVersion: "1.0.0",
+      classifications: [
+        {
+          testId: "suite.unclear-cause",
+          evaluatedAt: "2026-09-15",
+          evaluatedBy: "AI (Claude, TS-58 test fixture)",
+          classification: "insufficient-evidence",
+          confidence: "low",
+          // Deliberately set false here to confirm classifyFailure.ts clamps it back to true --
+          // before TS-58's fix this was passed straight through, letting an insufficient-evidence
+          // finding (which could hide a real application defect) render as "no further review
+          // flagged" in the maintenance report.
+          needsHumanReview: false,
+          rationale: "Root cause not yet determined by a human.",
+          evidenceForApplicationDefect: [],
+          evidenceAgainstApplicationDefect: [],
+          evidenceForTestDefect: [],
+          evidenceAgainstTestDefect: [],
+          recommendedNextAction: "Investigate further before deciding whether this is a real defect.",
+          repairAllowed: false,
+          repairAllowedFiles: [],
+        },
+      ],
+    };
+    const finding = classifyFailure({
+      failingTest: failing,
+      runId: "run-1",
+      runReportHistory: history([baseReport("run-1", [failing])]),
+      suiteReview: undefined,
+      failureClassifications: classifications,
+    });
+    expect(finding.classification).toBe("insufficient-evidence");
+    expect(finding.source).toBe("hand-authored");
+    expect(finding.repairAllowed).toBe(false);
+    expect(finding.needsHumanReview).toBe(true); // clamped, despite the override file saying false
   });
 
   test("errorFingerprint scoping: an entry only matches a failure whose errorMessage contains it", () => {

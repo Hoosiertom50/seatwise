@@ -247,6 +247,14 @@ export function classifyFailure(input: ClassifyFailureInput): MaintenanceFinding
   if (override) {
     const forcedNoRepair: FailureClassification[] = ["probable-application-defect", "insufficient-evidence"];
     const repairAllowed = forcedNoRepair.includes(override.classification) ? false : override.repairAllowed;
+    // TS-58: the same two categories that force repairAllowed: false must also force
+    // needsHumanReview: true -- otherwise a hand-authored quality/failure-classifications.yaml entry
+    // could set needsHumanReview: false on a probable-application-defect/insufficient-evidence
+    // finding, letting it render as "no further review flagged" in the maintenance report even
+    // though it's exactly the kind of finding a human is meant to be alerted to. This doesn't change
+    // repairAllowed (already unconditionally clamped above), so it's a review-visibility fix, not a
+    // write-scope change.
+    const needsHumanReview = forcedNoRepair.includes(override.classification) ? true : override.needsHumanReview;
     return {
       testId: test.testId,
       runId,
@@ -265,7 +273,7 @@ export function classifyFailure(input: ClassifyFailureInput): MaintenanceFinding
       repairAllowed,
       repairAllowedFiles: repairAllowed ? (override.repairAllowedFiles.length > 0 ? override.repairAllowedFiles : [test.filePath]) : [],
       suggestedDefectDescription: override.suggestedDefectDescription,
-      needsHumanReview: override.needsHumanReview,
+      needsHumanReview,
       source: "hand-authored",
     };
   }
