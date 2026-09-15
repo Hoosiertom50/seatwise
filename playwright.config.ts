@@ -39,7 +39,17 @@ export default defineConfig({
   // outright rather than running until the platform's own job-level timeout silently kills it with
   // no normalized report ever written. Local runs keep Playwright's un-ceilinged default so a
   // developer attached to a debugger is never cut off.
-  timeout: env.CI ? 45_000 : 30_000,
+  //
+  // TS-58 follow-up, found live while verifying pw:test:slow with real slowMo finally working: the
+  // suite's two most action-heavy tests (the responsive-layout a11y test's 3-viewport sweep, and the
+  // drag-a-guest-between-tables test's 4 full drag sequences) run 30+ discrete Playwright actions.
+  // With slowMoMs set, each of those actions now genuinely waits slowMoMs before proceeding, so those
+  // two tests alone can exceed the plain local 30s budget on their action count before any real page
+  // work even happens -- confirmed by direct reproduction ("Test timeout of 30000ms exceeded."), not
+  // guessed. This never mattered before because --slow-mo silently failed to apply at all (see the
+  // slowMoMs comment above). CI never sets PW_SLOW_MO, so env.CI's 45_000 is completely unaffected;
+  // this only widens the *local, opt-in, developer-driven* debugging path.
+  timeout: env.CI ? 45_000 : slowMoMs ? 120_000 : 30_000,
   expect: { timeout: env.CI ? 10_000 : 5_000 },
   globalTimeout: env.CI ? 10 * 60_000 : undefined,
 
