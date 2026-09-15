@@ -3,23 +3,22 @@
 # regression is caught even on a day nobody opens a PR (a flaky-looking failure that only reproduces
 # under certain timing, an environment drift, a dependency update via Dependabot landing quietly).
 #
-# Today this necessarily re-runs the same 2 real application tests the PR gate already runs on
-# every push -- disclosed here rather than silently presented as covering more than it does. Once
-# this framework has tests tagged @suite:smoke (a smaller, fast PR-gate subset) versus
-# @suite:regression (deeper, slower coverage intended for less-frequent runs), this workflow's
-# separation from the PR gate becomes meaningful on its own terms rather than duplicating it.
+# This now re-runs the full application regression suite authored under TS-35 (20 requirement
+# stories, 119 application tests as of TS-55) -- no longer the placeholder 2-test set this
+# comment originally disclosed. This workflow's separation from the PR gate becomes meaningful on
+# its own terms now that @suite:smoke / @suite:regression selections actually differ in size.
 name: Nightly regression
 
-# Schedule trigger PAUSED during TS-35 (writing the real automated test suite): with only a
-# couple of real application tests in place so far, this was failing nightly and paging Tom's
-# inbox with no actionable signal. workflow_dispatch is left in place so it can still be run
-# manually on demand. Re-enable the `schedule:` block below once TS-35's suite is far enough
-# along that a nightly run means something.
+# TS-56: schedule trigger RE-ENABLED. It was paused during TS-35 (writing the real automated test
+# suite) because, with only a couple of real application tests in place, this was failing nightly
+# and paging Tom's inbox with no actionable signal. TS-35 is now Done (20/20 requirement stories,
+# 473 tests total including the framework's own unit tests), so a nightly run is meaningful again.
+# workflow_dispatch is left in place so it can still be run manually on demand too.
 on:
-  # schedule:
-  #   # 09:00 UTC daily -- an arbitrary but fixed off-peak time; adjust to the team's own timezone
-  #   # preference in a follow-up PR rather than guessing one here.
-  #   - cron: "0 9 * * *"
+  schedule:
+    # 09:00 UTC daily -- an arbitrary but fixed off-peak time; adjust to the team's own timezone
+    # preference in a follow-up PR rather than guessing one here.
+    - cron: "0 9 * * *"
   workflow_dispatch: {}
 
 env:

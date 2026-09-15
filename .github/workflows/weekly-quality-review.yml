@@ -15,13 +15,14 @@
 # suite-review artifact periodically, not to be paged by this workflow.
 name: Weekly quality review
 
-# Schedule trigger PAUSED during TS-35 (writing the real automated test suite) -- same reason as
-# scheduled-regression.yml. workflow_dispatch is left in place so it can still be run manually on
-# demand. Re-enable the `schedule:` block below once TS-35's suite is far enough along.
+# TS-56: schedule trigger RE-ENABLED -- same reason/history as scheduled-regression.yml. It was
+# paused during TS-35 (writing the real automated test suite); TS-35 is now Done, so a weekly
+# coverage/flake review is meaningful again. workflow_dispatch is left in place so it can still be
+# run manually on demand too.
 on:
-  # schedule:
-  #   # 09:00 UTC every Monday -- an arbitrary but fixed off-peak time.
-  #   - cron: "0 9 * * 1"
+  schedule:
+    # 09:00 UTC every Monday -- an arbitrary but fixed off-peak time.
+    - cron: "0 9 * * 1"
   workflow_dispatch: {}
 
 env:
