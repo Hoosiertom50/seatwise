@@ -32,6 +32,18 @@
 #      scheduled-regression.yml or weekly-quality-review.yml -- a small, stable, dependency-free
 #      unit suite has no reason to newly fail between pushes the way a flaky browser-driven e2e test
 #      might).
+#   4. e2e-firefox -- TS-61: adds Firefox as a second browser in the real, blocking CI gate,
+#      following TS-60's throwaway spike (branch ts60-cross-browser-spike, draft PR #10, GitHub
+#      Actions run #18, plus 2 additional manual re-runs of just the firefox job) which showed 3
+#      consecutive clean passes of the full regression selection against Firefox on real
+#      ubuntu-latest runners (~4 minutes each, no failures, no flaky retries). WebKit, run in the
+#      same spike, showed a systemic tab-navigation timeout/detach pattern and is deliberately NOT
+#      added here -- see TS-62 for that investigation. This job mirrors the e2e (chromium) job's
+#      structure exactly (same Postgres service, same build+start+sharded-run steps) but targets
+#      --project=firefox; it is deliberately independent (no needs: on e2e, and nothing in e2e
+#      needs it) so it can never affect the existing chromium job's own status or required-check
+#      name. Partially supersedes DEC-003 (PLAYWRIGHT_QUALITY_FRAMEWORK_SPEC.md's Decision Log,
+#      see DEC-035) -- WebKit remains deferred per that same decision.
 #
 # Every command below is one this repo's own documented `pnpm pw:*` scripts already run locally --
 # nothing here invents a CI-only code path. `playwright-framework/cli/ci-summary.ts` is the one
@@ -223,10 +235,101 @@ jobs:
           retention-days: 14
           if-no-files-found: warn
 
+  e2e-firefox:
+    name: "Application E2E on Firefox (shard ${{ matrix.shard }}/2)"
+    runs-on: ubuntu-latest
+    needs: validate
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: seatwise_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright's Firefox (with OS deps)
+        run: pnpm exec playwright install --with-deps firefox
+
+      - name: Generate ephemeral, non-secret app config for this CI run only
+        run: |
+          echo "JWT_SECRET=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
+          echo "ENCRYPTION_KEY=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
+
+      - name: Apply database migrations
+        run: pnpm --filter @seatwise/db migrate:deploy
+
+      - name: Build the application
+        run: pnpm build
+
+      - name: Start the application and wait for it to be ready
+        run: |
+          pnpm --filter @seatwise/web start -p 3000 &
+          npx --yes wait-on http://localhost:3000 --timeout 60000
+
+      - name: Run the application E2E suite (this shard, regression selection minus quarantined)
+        # Same selection mechanism as the chromium e2e job -- see that job's own step comment for
+        # the full rationale on why this bypasses pw:run directly.
+        env:
+          CI: "true"
+        run: |
+          SELECTION_OUTPUT="$(pnpm exec tsx playwright-framework/cli/print-ci-selection.ts regression)"
+          PATTERN="$(echo "$SELECTION_OUTPUT" | sed -n '1p')"
+          FILES="$(echo "$SELECTION_OUTPUT" | sed -n '2p')"
+          pnpm exec playwright test --project=firefox --grep "$PATTERN" $FILES \
+            --shard=${{ matrix.shard }}/2 \
+            --reporter=blob,./playwright-framework/reporting/normalizedReporter.ts
+
+      - name: CI status gate -- fail on a zero-test shard, surface flaky/quarantined results
+        if: always()
+        run: pnpm exec tsx playwright-framework/cli/ci-summary.ts
+
+      - name: Upload blob report (for merging into one combined HTML report)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: blob-report-firefox-shard-${{ matrix.shard }}
+          path: blob-report
+          retention-days: 14
+          if-no-files-found: warn
+
+      - name: Upload normalized run report, traces, and screenshots for this shard
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: run-artifacts-firefox-shard-${{ matrix.shard }}
+          path: |
+            artifacts/playwright/runs/run-reports
+            artifacts/playwright/runs/test-results
+          retention-days: 14
+          if-no-files-found: warn
+
   merge-reports:
     name: Merge sharded HTML report
     if: always()
-    needs: [e2e]
+    needs: [e2e, e2e-firefox]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -245,6 +348,13 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           pattern: blob-report-shard-*
+          path: all-blob-reports
+          merge-multiple: true
+
+      - name: Download every shard's blob report (Firefox)
+        uses: actions/download-artifact@v4
+        with:
+          pattern: blob-report-firefox-shard-*
           path: all-blob-reports
           merge-multiple: true
 
