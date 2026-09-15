@@ -260,3 +260,88 @@ jobs:
           path: merged-html-report
           retention-days: 14
           if-no-files-found: warn
+
+  # ============================================================================================
+  # THROWAWAY SPIKE FOR TS-60 -- DO NOT MERGE THIS JOB.
+  #
+  # This job exists only to gather real pass/fail data on running the full regression suite
+  # against Firefox and WebKit, on GitHub's actual runners (the cloud sandbox used to prepare
+  # earlier TS-58/TS-59 work can't do this itself -- its network allowlist blocks the hosts
+  # Playwright downloads these browser binaries from). It is fully independent of validate/e2e/
+  # merge-reports above -- no shared `needs:`, nothing depends on it -- so it cannot affect the
+  # real CI gate. This whole branch is deleted once the data is collected; see TS-60 for the
+  # decision this data feeds.
+  # ============================================================================================
+  ts60-cross-browser-spike:
+    name: "TS-60 spike: regression suite on ${{ matrix.browser }}"
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [firefox, webkit]
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: seatwise_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright's ${{ matrix.browser }} (with OS deps)
+        run: pnpm exec playwright install --with-deps ${{ matrix.browser }}
+
+      - name: Generate ephemeral, non-secret app config for this CI run only
+        run: |
+          echo "JWT_SECRET=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
+          echo "ENCRYPTION_KEY=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
+
+      - name: Apply database migrations
+        run: pnpm --filter @seatwise/db migrate:deploy
+
+      - name: Build the application
+        run: pnpm build
+
+      - name: Start the application and wait for it to be ready
+        run: |
+          pnpm --filter @seatwise/web start -p 3000 &
+          npx --yes wait-on http://localhost:3000 --timeout 60000
+
+      - name: Run the full regression selection against ${{ matrix.browser }} (single run, no sharding -- this is a data-gathering spike, not the real gate)
+        env:
+          CI: "true"
+        run: |
+          SELECTION_OUTPUT="$(pnpm exec tsx playwright-framework/cli/print-ci-selection.ts regression)"
+          PATTERN="$(echo "$SELECTION_OUTPUT" | sed -n '1p')"
+          FILES="$(echo "$SELECTION_OUTPUT" | sed -n '2p')"
+          pnpm exec playwright test --project=${{ matrix.browser }} --grep "$PATTERN" $FILES \
+            --reporter=list,./playwright-framework/reporting/normalizedReporter.ts
+
+      - name: Upload run report, traces, and screenshots (for reviewing what failed, if anything)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ts60-spike-${{ matrix.browser }}-report
+          path: |
+            artifacts/playwright/runs/run-reports
+            artifacts/playwright/runs/test-results
+          retention-days: 7
+          if-no-files-found: warn
