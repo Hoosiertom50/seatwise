@@ -14,6 +14,15 @@ const env = getEnv();
 // there, and Playwright falls back to its own default resolution exactly as documented upstream.
 const chromiumExecutablePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || undefined;
 
+// TS-58 follow-up (found live while verifying pw:test:slow): `playwright test` has no `--slow-mo`
+// CLI flag at all -- that flag only exists on `playwright open`/`codegen`, and passing it to `test`
+// fails immediately with "error: unknown option '--slow-mo=800'" before a single test runs. The only
+// way to get slow-motion into a `playwright test` run is through config, via
+// `use.launchOptions.slowMo`. PW_SLOW_MO is read here so `pnpm pw:test:slow` can opt into it without
+// a second config file; unset (the normal case for every other script), this is `undefined` and
+// launchOptions carries no slowMo key at all, identical to today's behavior.
+const slowMoMs = process.env.PW_SLOW_MO ? Number(process.env.PW_SLOW_MO) : undefined;
+
 export default defineConfig({
   // Fails the run (rather than silently passing) if a `.only` was left in by accident.
   forbidOnly: !!env.CI,
@@ -69,7 +78,10 @@ export default defineConfig({
       testDir: "./e2e/tests",
       use: {
         ...devices["Desktop Chrome"],
-        launchOptions: chromiumExecutablePath ? { executablePath: chromiumExecutablePath } : {},
+        launchOptions: {
+          ...(chromiumExecutablePath ? { executablePath: chromiumExecutablePath } : {}),
+          ...(slowMoMs ? { slowMo: slowMoMs } : {}),
+        },
       },
     },
 

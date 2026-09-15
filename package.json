@@ -12,7 +12,7 @@
     "pw:list": "playwright test --project=chromium --project=framework-unit --list",
     "pw:test": "playwright test --project=chromium --project=framework-unit",
     "pw:test:headed": "playwright test --project=chromium --headed",
-    "pw:test:slow": "playwright test --project=chromium --headed --slow-mo=800",
+    "pw:test:slow": "PW_SLOW_MO=800 playwright test --project=chromium --headed",
     "pw:test:debug": "playwright test --project=chromium --debug",
     "pw:test:ui": "playwright test --ui",
     "pw:report": "playwright show-report artifacts/playwright/runs/html-report",
