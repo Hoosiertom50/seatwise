@@ -1,6 +1,6 @@
 # Stage 10 -- Playwright Quality Engineering Framework CI gate.
 #
-# Two jobs, deliberately separated so a typecheck/lint/metadata problem fails fast without ever
+# Jobs, deliberately separated so a typecheck/lint/metadata problem fails fast without ever
 # spinning up Postgres or a browser:
 #   1. validate  -- typecheck, metadata validation, lint, and the framework's own unit tests
 #      (playwright-framework/tests/**), run through `playwright test --project=framework-unit` (see
@@ -19,6 +19,19 @@
 #      mechanism this stage adds (see PLAYWRIGHT_TESTING.md's "CI, sharding, and report merging"
 #      section for why 2 shards is a deliberately modest default given the current 2-test suite,
 #      and how to raise it as the suite grows).
+#   3. mobile-unit-tests -- TS-59: apps/mobile's own Jest suite (src/planMerge.ts and
+#      src/offline/queue.ts coverage -- 15 plain-TypeScript tests, no React Native/device
+#      dependency) had a real, verified gap where nothing in CI ever ran it: playwright.config.ts
+#      deliberately excludes apps/mobile/__tests__ (it's Jest, not Playwright), and no other
+#      workflow or script called into it either, so these two files could regress silently. This
+#      job closes that gap. Deliberately independent of validate/e2e (no `needs:`, nothing needs
+#      it) since it shares no dependency with either -- it runs in parallel for fast feedback, no
+#      Postgres or browser required. Per TS-59's own recorded decisions: blocking (this job's status
+#      must pass, same expectation as validate/e2e -- add it to the repo's required-status-checks
+#      branch protection rule if that isn't automatic), PR/push gate only (not added to
+#      scheduled-regression.yml or weekly-quality-review.yml -- a small, stable, dependency-free
+#      unit suite has no reason to newly fail between pushes the way a flaky browser-driven e2e test
+#      might).
 #
 # Every command below is one this repo's own documented `pnpm pw:*` scripts already run locally --
 # nothing here invents a CI-only code path. `playwright-framework/cli/ci-summary.ts` is the one
@@ -81,6 +94,25 @@ jobs:
 
       - name: Run framework unit tests (schemas, scoring, hooks, CLIs, and a few real-browser HTML-report render checks)
         run: pnpm exec playwright test --project=framework-unit
+
+  mobile-unit-tests:
+    name: Mobile app unit tests (apps/mobile)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run apps/mobile's Jest suite (planMerge, offline queue -- no simulator/device needed)
+        run: pnpm --filter @seatwise/mobile test
 
   e2e:
     name: "Application E2E (shard ${{ matrix.shard }}/2)"
