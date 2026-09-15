@@ -1037,10 +1037,11 @@ directly in each workflow file; nothing else depends on the current numbers.
 Three workflows live under `.github/workflows/`:
 
 - **`ci.yml`** — runs on every push/PR to `main`. A `validate` job (typecheck, metadata validation,
-  lint, framework unit tests — no browser, no database) gates a separate `e2e` job (the real
-  application suite, sharded across 2 shards against a real Postgres service container and a real
-  built-and-started Next.js app), followed by a `merge-reports` job that combines both shards' blob
-  reports into one native HTML report.
+  lint, framework unit tests — no database, and almost no browser, but a handful of framework-unit
+  specs render HTML reports against a real Chromium DOM and need one installed; see TS-56) gates a
+  separate `e2e` job (the real application suite, sharded across 2 shards against a real Postgres
+  service container and a real built-and-started Next.js app), followed by a `merge-reports` job
+  that combines both shards' blob reports into one native HTML report.
 - **`scheduled-regression.yml`** — the same regression selection, nightly, independent of push/PR
   activity (catches drift on a quiet day — an environment change, a dependency update).
 - **`weekly-quality-review.yml`** — optional/best-effort: re-runs the regression selection with
