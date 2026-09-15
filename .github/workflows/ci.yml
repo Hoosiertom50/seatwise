@@ -3,8 +3,16 @@
 # Two jobs, deliberately separated so a typecheck/lint/metadata problem fails fast without ever
 # spinning up Postgres or a browser:
 #   1. validate  -- typecheck, metadata validation, lint, and the framework's own unit tests
-#      (playwright-framework/tests/**). No browser, no database: these are plain TypeScript/Node
-#      checks run through `playwright test --project=framework-unit` (see playwright.config.ts).
+#      (playwright-framework/tests/**), run through `playwright test --project=framework-unit` (see
+#      playwright.config.ts). No database here. Almost no browser either: nearly all of these are
+#      plain TypeScript/Node checks, but a handful (maintenanceReportHtml.spec.ts,
+#      suiteReviewHtml.spec.ts, runReportHtml.spec.ts) launch a real Chromium directly via
+#      `chromium.launch()` in `test.beforeAll` to verify generated HTML reports render against a
+#      real DOM with no runtime errors -- this project's "verify with real checks" standard applied
+#      to its own tooling output. TS-56 found this job failing on every run because of it (this
+#      comment previously claimed "no browser" outright): a bare `ubuntu-latest` runner has no
+#      Chromium cached, so `chromium.launch()` threw `Executable doesn't exist`. Fixed by installing
+#      Chromium here too, same as the e2e job below.
 #   2. e2e        -- the real application end-to-end suite (e2e/tests/**) against a real Postgres
 #      service container and a real built-and-started Next.js app, sharded across 2 shards to
 #      exercise Playwright.config.ts's CI-only retries/workers/timeout settings and the sharding
@@ -65,7 +73,13 @@ jobs:
       - name: Lint tests (authoring-standards static checks)
         run: pnpm pw:lint-tests
 
-      - name: Run framework unit tests (no browser -- schemas, scoring, hooks, CLIs)
+      - name: Install Playwright's Chromium (with OS deps)
+        # TS-56: added. A few framework-unit tests (the HTML-report renderers) launch a real
+        # browser directly -- see this job's own top-of-file comment -- so this step is required
+        # even though this job never touches Postgres or the built app.
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Run framework unit tests (schemas, scoring, hooks, CLIs, and a few real-browser HTML-report render checks)
         run: pnpm exec playwright test --project=framework-unit
 
   e2e:
