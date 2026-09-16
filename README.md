@@ -1144,11 +1144,11 @@ start there if you're writing or reviewing a test. The basics, as of Stage 10:
 
 - **Install:** `pnpm install` (top-level, same as the rest of the repo) gets `@playwright/test`
   itself; then `pnpm pw:install` downloads the Chromium browser binary Playwright needs for local
-  use (WebKit stays uninstalled/unused locally and in CI for now — see the spec's Decision Log,
-  DEC-003 and DEC-035. Firefox is a separate story: CI's `e2e-firefox` job installs and runs it
-  independently as of TS-61 — see `.github/workflows/ci.yml`'s own header comment — but `pw:install`
-  and the local `pw:test*` scripts remain Chromium-only; run `pnpm exec playwright install firefox`
-  yourself if you need to reproduce a Firefox CI run locally).
+  use. Firefox and WebKit are a separate story: CI's `e2e-firefox` (TS-61) and `e2e-webkit` (TS-62)
+  jobs install and run them independently — see `.github/workflows/ci.yml`'s own header comment and
+  the spec's Decision Log, DEC-003/DEC-035/DEC-036 — but `pw:install` and the local `pw:test*`
+  scripts remain Chromium-only; run `pnpm exec playwright install firefox` (or `webkit`) yourself if
+  you need to reproduce a Firefox or WebKit CI run locally.
 - **Run:** `pnpm pw:test` runs the Chromium E2E project plus the framework's own unit tests.
   `pnpm pw:test:headed` / `pnpm pw:test:debug` / `pnpm pw:test:ui` are the usual Playwright
   debugging modes. `pnpm pw:validate` type-checks the framework, validates all governance/metadata
