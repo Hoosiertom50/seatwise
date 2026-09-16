@@ -95,8 +95,20 @@ export class DayOfTabPage extends BasePage {
     await this.searchInput().fill(query);
   }
 
+  /** TS-66: waits for the guest's attendance button to settle on its new resting label before
+   * returning -- previously this just clicked and returned, which let a caller's very next
+   * assertion (real-UI or, worse, a direct API read) race the click against the attendance
+   * mutation + re-render still in flight. This raced intermittently in Firefox. Mirrors the same
+   * "wait for the button's resting state" pattern this page object's own addWalkIn()/swap()
+   * already use for their submit buttons. */
   async toggleAttendance(guestName: string): Promise<void> {
-    await this.attendanceButton(guestName).click();
+    const button = this.attendanceButton(guestName);
+    // The button's label names the action it offers, i.e. the *opposite* of the guest's current
+    // state -- "Mark not attending" means the guest is currently attending, and vice versa.
+    const guestCurrentlyAttending = /not attending/i.test((await button.textContent()) ?? "");
+    await button.click();
+    const newLabel = guestCurrentlyAttending ? /^mark attending$/i : /^mark not attending$/i;
+    await this.guestRow(guestName).getByRole("button", { name: newLabel }).waitFor();
   }
 
   async seatGuestAt(guestName: string, tableLabel: string): Promise<void> {
