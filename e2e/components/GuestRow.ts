@@ -54,9 +54,17 @@ export class GuestRow {
     );
   }
 
-  /** Clicks the Lock/Unlock toggle, whichever state it's currently in. */
+  /** Clicks the Lock/Unlock toggle, whichever state it's currently in, and waits for the button
+   * to settle on its new label before returning -- without this, a caller that reads `isLocked()`
+   * immediately after can race the click against the lock-status mutation + re-render (TS-66:
+   * this raced intermittently in Firefox). Mirrors the same "wait for the button's resting state"
+   * pattern DayOfTabPage.addWalkIn()/swap() already use for their own submit buttons. */
   async toggleLock(): Promise<void> {
-    await this.lockButton().click();
+    const button = this.lockButton();
+    const wasLocked = (await button.textContent())?.trim() === "Unlock";
+    await button.click();
+    const newLabel = wasLocked ? "Lock" : "Unlock";
+    await this.root.getByRole("button", { name: newLabel, exact: true }).waitFor();
   }
 
   async isLocked(): Promise<boolean> {
