@@ -111,5 +111,18 @@ export default defineConfig({
       testDir: "./e2e/tests",
       use: { ...devices["Desktop Safari"] },
     },
+
+    // TS-63 SPIKE (DO NOT MERGE): Edge isn't a separate rendering engine the way Firefox/WebKit are
+    // -- Playwright runs it via a "channel" on top of the same Chromium engine the chromium project
+    // above already uses (still chromium.launch() under the hood). `devices["Desktop Edge"]` alone
+    // only sets an Edge-flavored user agent/viewport; `channel: "msedge"` is what actually launches
+    // real Microsoft Edge instead of chromium pretending to be it -- Playwright's own documented
+    // pattern for this. GitHub's ubuntu-latest runners ship Edge preinstalled, so this needs no new
+    // browser-binary download the way Firefox/WebKit did (see TS-63's own Jira ticket).
+    {
+      name: "edge",
+      testDir: "./e2e/tests",
+      use: { ...devices["Desktop Edge"], channel: "msedge" },
+    },
   ],
 });
