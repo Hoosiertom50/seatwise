@@ -95,12 +95,13 @@ export default defineConfig({
       },
     },
 
-    // Firefox (TS-61) and WebKit (TS-62) both now run independently in the real, blocking CI gate
-    // (the e2e-firefox and e2e-webkit jobs in .github/workflows/ci.yml), superseding DEC-003's
-    // original "no known cross-browser requirement yet" -- see DEC-035/DEC-036 in
-    // PLAYWRIGHT_QUALITY_FRAMEWORK_SPEC.md's Decision Log. `pnpm pw:test` itself is unchanged and
-    // still only runs the chromium + framework-unit projects locally; run either of these directly
-    // with `pnpm exec playwright test --project=firefox` (or webkit) for a local cross-browser check.
+    // Firefox (TS-61), WebKit (TS-62), and Edge (TS-64) all now run independently in the real,
+    // blocking CI gate (the e2e-firefox/e2e-webkit/e2e-edge jobs in .github/workflows/ci.yml),
+    // superseding DEC-003's original "no known cross-browser requirement yet" -- see
+    // DEC-035/DEC-036/DEC-037 in PLAYWRIGHT_QUALITY_FRAMEWORK_SPEC.md's Decision Log. `pnpm pw:test`
+    // itself is unchanged and still only runs the chromium + framework-unit projects locally; run
+    // any of these directly with `pnpm exec playwright test --project=firefox` (or webkit/edge) for
+    // a local cross-browser check.
     {
       name: "firefox",
       testDir: "./e2e/tests",
@@ -110,6 +111,21 @@ export default defineConfig({
       name: "webkit",
       testDir: "./e2e/tests",
       use: { ...devices["Desktop Safari"] },
+    },
+
+    // TS-64: Edge isn't a separate rendering engine the way Firefox/WebKit are -- Playwright runs
+    // it via a "channel" on top of the same Chromium engine the chromium project above already has
+    // months of clean CI history on (still chromium.launch() under the hood). devices["Desktop
+    // Edge"] alone only sets an Edge-flavored user agent/viewport; channel: "msedge" is what
+    // actually launches real Microsoft Edge instead of chromium pretending to be it -- Playwright's
+    // own documented pattern for this. Validated clean on a throwaway spike (TS-63,
+    // ts63-edge-validation-spike, PR #14): one unsharded full-regression run against real Edge,
+    // alongside clean e2e/e2e-firefox/e2e-webkit runs on the same commit -- no Firefox-style
+    // multi-run soak test was called for, since this is the same engine already proven out there.
+    {
+      name: "edge",
+      testDir: "./e2e/tests",
+      use: { ...devices["Desktop Edge"], channel: "msedge" },
     },
   ],
 });
