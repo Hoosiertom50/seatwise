@@ -44,23 +44,26 @@
 #      needs it) so it can never affect the existing chromium job's own status or required-check
 #      name. Partially supersedes DEC-003 (PLAYWRIGHT_QUALITY_FRAMEWORK_SPEC.md's Decision Log,
 #      see DEC-035) -- WebKit remains deferred per that same decision.
-#   5. e2e-webkit-ts62-spike -- TS-62 SPIKE, DO NOT MERGE. Iteration 2. Iteration 1 on this same
-#      branch (a settle wait before the first click after a fresh page load/tab switch) ran in GH
-#      Actions run #21 and did NOT fix it -- 14 of these same specs still failed, which is evidence
-#      against that hypothesis, not for it (removed from this branch entirely, not just disabled).
-#      Run #21's own console output showed repeated 401s starting right after login, which pointed
-#      at a different, more specific cause: the auth cookie's `secure` flag was tied to
+#   5. e2e-webkit-ts62-spike -- TS-62 SPIKE, DO NOT MERGE. Iteration 3 (soak test). Iteration 1 (a
+#      settle wait before the first click) ran in GH Actions run #21 and did NOT fix it -- removed
+#      entirely, not just disabled. Iteration 2 (this file's history has the full story) found and
+#      fixed the real cause instead: the auth cookie's `secure` flag was tied to
 #      `NODE_ENV==="production"` (true for this job's own `next build && next start`) while the app
 #      is served over plain http://localhost:3000 in CI -- a Secure cookie over HTTP that Chromium/
 #      Firefox both silently tolerate on localhost but that WebKit does not, dropping the cookie and
-#      401ing every request after it (see lib/auth.ts's own isSecureCookieContext doc comment for
-#      the full mechanism). This iteration replaces that fix and re-runs the same 15 specs (every
-#      spec touching WeddingDetailPage/DashboardPage/BudgetTabPage/DayOfTabPage/WeddingGuestsPage --
-#      a small superset of TS-60's original ~11-13 failures) against --project=webkit, unsharded,
-#      for a fast, clear signal on this new hypothesis specifically. Entirely independent of every
-#      other job here (no needs:, nothing needs it, no merge-reports involvement) -- it cannot
-#      affect any other job's status or become a required check by accident. This whole job, and
-#      the branch it lives on, gets deleted once this spike's data is collected, same as TS-60's.
+#      401ing every request after it (see lib/auth.ts's own isSecureCookieContext doc comment). Run
+#      #22 confirmed the fix against the 15 specs implicated in the original failure, alongside a
+#      clean e2e (chromium) and e2e-firefox on the same commit.
+#      Iteration 3 raises the bar to match how Firefox itself was validated in TS-61 before joining
+#      the real gate: this job now runs the SAME full regression selection e2e/e2e-firefox run (via
+#      print-ci-selection.ts, not the 15-spec subset) against --project=webkit, sharded 2 ways like
+#      those two jobs, so a manual re-run of just this job (same soak-test mechanism used for
+#      Firefox) can build the same multi-run confidence before WebKit is promoted to a real,
+#      permanent e2e-webkit job. Still entirely independent of every other job here (no needs: on
+#      it beyond validate, nothing needs it, no merge-reports involvement) -- it cannot affect any
+#      other job's status or become a required check while it remains a spike. This whole job (in
+#      its current spike form), and the branch it lives on, gets deleted once WebKit is promoted to
+#      a real job or the spike is abandoned -- same lifecycle as TS-60's own throwaway spike.
 #
 # Every command below is one this repo's own documented `pnpm pw:*` scripts already run locally --
 # nothing here invents a CI-only code path. `playwright-framework/cli/ci-summary.ts` is the one
@@ -344,12 +347,18 @@ jobs:
           if-no-files-found: warn
 
   e2e-webkit-ts62-spike:
-    # TS-62 SPIKE -- DO NOT MERGE. See this file's own header comment (item 5) and
-    # BasePage.waitForSettled's doc comment for the full rationale. Delete this job, and the branch
-    # it lives on, once its data has been collected.
-    name: "[SPIKE, DO NOT MERGE] TS-62 WebKit settle-wait candidate fix"
+    # TS-62 SPIKE -- DO NOT MERGE. Iteration 3 (soak test) -- see this file's own header comment
+    # (item 5) for the full rationale. Structurally identical to e2e-firefox on purpose: promoting
+    # this to a real e2e-webkit job later is then just a rename plus adding it to merge-reports'
+    # needs:, not a rewrite. Delete this job, and the branch it lives on, once WebKit is promoted or
+    # the spike is abandoned.
+    name: "[SPIKE, DO NOT MERGE] TS-62 WebKit full regression soak test (shard ${{ matrix.shard }}/2)"
     runs-on: ubuntu-latest
     needs: validate
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
     services:
       postgres:
         image: postgres:16
@@ -396,14 +405,44 @@ jobs:
           pnpm --filter @seatwise/web start -p 3000 &
           npx --yes wait-on http://localhost:3000 --timeout 60000
 
-      - name: Run only the specs implicated in TS-60's original WebKit spike failures
-        # Deliberately NOT print-ci-selection.ts's regression selection -- this spike targets just
-        # the specs that touch the five page objects TS-60 implicated, unsharded, for a faster and
-        # clearer pass/fail signal on the one candidate fix under test.
+      - name: Run the application E2E suite (this shard, regression selection minus quarantined)
+        # Same selection mechanism as the chromium/firefox e2e jobs -- see e2e's own step comment
+        # for the full rationale. Deliberately the full regression selection now, not the 15-spec
+        # subset iterations 1-2 used, to build the same soak-test confidence Firefox got in TS-61
+        # before this becomes a real, permanent job.
+        env:
+          CI: "true"
         run: |
-          pnpm exec playwright test --project=webkit \
-            e2e/tests/accessibility.automated-axe-scans-find-zero-wcag-aa-violations-on-key-pages.spec.ts e2e/tests/accessibility.keyboard-only-operation-and-responsive-layout-on-key-pages.spec.ts e2e/tests/account-management.create-wedding-with-basic-details.spec.ts e2e/tests/account-management.multiple-weddings-are-independent.spec.ts e2e/tests/auth.signup-login-logout.spec.ts e2e/tests/budget.vendor-crud-and-rollup-math-through-the-real-ui.spec.ts e2e/tests/day-of-mode.add-and-seat-a-walk-in-without-regenerating.spec.ts e2e/tests/day-of-mode.marking-not-attending-frees-the-seat-without-regenerating.spec.ts e2e/tests/day-of-mode.swap-two-guests-tables-in-one-action.spec.ts e2e/tests/day-of-mode.touch-targets-meet-minimum-size-on-a-phone-viewport.spec.ts e2e/tests/integration.full-setup-to-approval-walkthrough.spec.ts e2e/tests/integration.pre-wedding-changes-and-day-of-execution.spec.ts e2e/tests/portfolio.save-as-template-then-apply-both-pieces-omits-guests-and-relationships.spec.ts e2e/tests/portfolio.search-filter-and-urgency-sort-reflect-real-plan-and-guest-state.spec.ts e2e/tests/portfolio.shared-with-you-badge-distinguishes-owned-from-collaborated-weddings.spec.ts \
-            --reporter=list
+          SELECTION_OUTPUT="$(pnpm exec tsx playwright-framework/cli/print-ci-selection.ts regression)"
+          PATTERN="$(echo "$SELECTION_OUTPUT" | sed -n '1p')"
+          FILES="$(echo "$SELECTION_OUTPUT" | sed -n '2p')"
+          pnpm exec playwright test --project=webkit --grep "$PATTERN" $FILES \
+            --shard=${{ matrix.shard }}/2 \
+            --reporter=blob,./playwright-framework/reporting/normalizedReporter.ts
+
+      - name: CI status gate -- fail on a zero-test shard, surface flaky/quarantined results
+        if: always()
+        run: pnpm exec tsx playwright-framework/cli/ci-summary.ts
+
+      - name: Upload blob report (for merging into one combined HTML report)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: blob-report-webkit-shard-${{ matrix.shard }}
+          path: blob-report
+          retention-days: 14
+          if-no-files-found: warn
+
+      - name: Upload normalized run report, traces, and screenshots for this shard
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: run-artifacts-webkit-shard-${{ matrix.shard }}
+          path: |
+            artifacts/playwright/runs/run-reports
+            artifacts/playwright/runs/test-results
+          retention-days: 14
+          if-no-files-found: warn
 
   merge-reports:
     name: Merge sharded HTML report
