@@ -16,6 +16,31 @@ function getSecretKey() {
 // `Authorization: Bearer <token>` — see getAuthUser() below, which accepts either.
 export const AUTH_COOKIE_NAME = "seatwise_token";
 
+// TS-62: the auth cookie's `secure` flag used to be `process.env.NODE_ENV === "production"`. That
+// conflates "this is a production *build*" with "this app is being served over HTTPS right now" --
+// `next build && next start` (what every CI e2e job here does, and what a real production deploy
+// does too) sets NODE_ENV=production even when the app is served over plain HTTP, so the cookie
+// ended up marked `Secure` in CI, where the app runs at plain http://localhost:3000. A `Secure`
+// cookie set over plain HTTP is spec-invalid; Chromium and Firefox both silently tolerate this on
+// localhost, but WebKit does not extend the same exception and drops the cookie -- every request
+// after that 401s. That was the real root cause behind TS-62's WebKit CI failures (TS-60's original
+// spike, and this cookie's own behavior confirmed by direct code inspection plus a live CI
+// reproduction showing 401s immediately after a successful login): not a hydration/click-timing
+// issue (a settle-wait candidate fix was tried and disproved first -- see the TS-62 spike branch's
+// own commit history for that ruled-out iteration).
+//
+// Derived from APP_URL instead -- the same env var and fallback the rsvp-link and invites routes
+// already use for this app's own canonical URL (apps/web/src/app/api/v1/weddings/[weddingId]/
+// guests/[guestId]/rsvp-link/route.ts, .../invites/route.ts) -- so this reflects the scheme the app
+// is actually being served over rather than guessing from the build mode. Unset in CI (defaults to
+// the same "http://localhost:3000" those two routes fall back to), so this resolves to `false`
+// there; a real deployment already sets APP_URL to its own https:// origin for those two routes, so
+// this resolves to `true` there with no new config needed.
+export function isSecureCookieContext(): boolean {
+  const appUrl = process.env.APP_URL || "http://localhost:3000";
+  return appUrl.startsWith("https://");
+}
+
 export interface TokenPayload {
   sub: string;
   email: string;

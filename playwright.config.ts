@@ -95,9 +95,12 @@ export default defineConfig({
       },
     },
 
-    // Firefox/WebKit stay defined-but-unused for now (DEC-003): no known cross-browser requirement
-    // or defect history yet. Run explicitly with `pnpm exec playwright test --project=firefox` (or
-    // webkit) when that changes -- `pnpm pw:test` only runs the chromium + framework-unit projects.
+    // Firefox (TS-61) and WebKit (TS-62) both now run independently in the real, blocking CI gate
+    // (the e2e-firefox and e2e-webkit jobs in .github/workflows/ci.yml), superseding DEC-003's
+    // original "no known cross-browser requirement yet" -- see DEC-035/DEC-036 in
+    // PLAYWRIGHT_QUALITY_FRAMEWORK_SPEC.md's Decision Log. `pnpm pw:test` itself is unchanged and
+    // still only runs the chromium + framework-unit projects locally; run either of these directly
+    // with `pnpm exec playwright test --project=firefox` (or webkit) for a local cross-browser check.
     {
       name: "firefox",
       testDir: "./e2e/tests",
