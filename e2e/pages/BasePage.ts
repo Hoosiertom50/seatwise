@@ -31,17 +31,4 @@ export abstract class BasePage {
   textLocator(text: string | RegExp, exact = false): Locator {
     return typeof text === "string" ? this.page.getByText(text, { exact }) : this.page.getByText(text);
   }
-
-  // TS-62 SPIKE (DO NOT MERGE): candidate fix for the WebKit-only failure pattern found in TS-60's
-  // spike (13 failures, every one on the very first interaction after a fresh page load or tab
-  // switch). Working hypothesis (see the TS-62 Jira comment): WebKit's paint/hydration timing
-  // differs enough from Chromium/Firefox that a click can land before React has finished binding
-  // its event handlers -- the same shape as the open, unresolved microsoft/playwright#27759.
-  // `networkidle` is used here as a proxy for "hydration has had a chance to complete", not because
-  // network activity itself is the thing being waited on. This method and every call to it below
-  // are throwaway for this spike -- if WebKit still fails with it in place, that's evidence against
-  // the hypothesis, not a permanent addition to keep.
-  async waitForSettled(): Promise<void> {
-    await this.page.waitForLoadState("networkidle");
-  }
 }

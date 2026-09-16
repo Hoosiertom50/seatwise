@@ -43,8 +43,6 @@ export class BudgetTabPage extends BasePage {
 
   async goto(weddingId: string): Promise<void> {
     await this.page.goto(`/weddings/${weddingId}`);
-    // TS-62 SPIKE (DO NOT MERGE): see BasePage.waitForSettled.
-    await this.waitForSettled();
     await this.budgetTabButton().click();
     await this.page.waitForLoadState("networkidle");
   }

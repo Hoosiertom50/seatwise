@@ -33,8 +33,6 @@ export class WeddingDetailPage extends BasePage {
   /** Clicks the named tab button (its exact visible label, e.g. "Seating rules", "Day-of mode")
    * and waits for its own data fetch(es) to settle. */
   async openTab(label: string): Promise<void> {
-    // TS-62 SPIKE (DO NOT MERGE): see BasePage.waitForSettled.
-    await this.waitForSettled();
     await this.page.getByRole("button", { name: label, exact: true }).click();
     await this.page.waitForLoadState("networkidle");
   }

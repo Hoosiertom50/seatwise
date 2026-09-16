@@ -44,18 +44,23 @@
 #      needs it) so it can never affect the existing chromium job's own status or required-check
 #      name. Partially supersedes DEC-003 (PLAYWRIGHT_QUALITY_FRAMEWORK_SPEC.md's Decision Log,
 #      see DEC-035) -- WebKit remains deferred per that same decision.
-#   5. e2e-webkit-ts62-spike -- TS-62 SPIKE, DO NOT MERGE. Tests one specific candidate fix
-#      (page-object changes on this same branch adding a settle wait before the *first* click after
-#      a fresh page load/tab switch -- see BasePage.waitForSettled's own doc comment) against the
-#      exact 11-13 spec files implicated in TS-60's original spike failures (every spec touching
-#      WeddingDetailPage/DashboardPage/BudgetTabPage/DayOfTabPage/WeddingGuestsPage -- a small
-#      superset of the original failure list, chosen over guessing at the exact file names, since
-#      every one of these still exercises the same first-interaction-after-load pattern). Runs
-#      unsharded (one job, not two) and only these specs, not the full regression selection, for a
-#      faster and clearer signal than a full re-run. Entirely independent of every other job here
-#      (no needs:, nothing needs it, no merge-reports involvement) -- it cannot affect any other
-#      job's status or become a required check by accident. This whole job, and the branch it lives
-#      on, gets deleted once this spike's data is collected, same as TS-60's own throwaway spike.
+#   5. e2e-webkit-ts62-spike -- TS-62 SPIKE, DO NOT MERGE. Iteration 2. Iteration 1 on this same
+#      branch (a settle wait before the first click after a fresh page load/tab switch) ran in GH
+#      Actions run #21 and did NOT fix it -- 14 of these same specs still failed, which is evidence
+#      against that hypothesis, not for it (removed from this branch entirely, not just disabled).
+#      Run #21's own console output showed repeated 401s starting right after login, which pointed
+#      at a different, more specific cause: the auth cookie's `secure` flag was tied to
+#      `NODE_ENV==="production"` (true for this job's own `next build && next start`) while the app
+#      is served over plain http://localhost:3000 in CI -- a Secure cookie over HTTP that Chromium/
+#      Firefox both silently tolerate on localhost but that WebKit does not, dropping the cookie and
+#      401ing every request after it (see lib/auth.ts's own isSecureCookieContext doc comment for
+#      the full mechanism). This iteration replaces that fix and re-runs the same 15 specs (every
+#      spec touching WeddingDetailPage/DashboardPage/BudgetTabPage/DayOfTabPage/WeddingGuestsPage --
+#      a small superset of TS-60's original ~11-13 failures) against --project=webkit, unsharded,
+#      for a fast, clear signal on this new hypothesis specifically. Entirely independent of every
+#      other job here (no needs:, nothing needs it, no merge-reports involvement) -- it cannot
+#      affect any other job's status or become a required check by accident. This whole job, and
+#      the branch it lives on, gets deleted once this spike's data is collected, same as TS-60's.
 #
 # Every command below is one this repo's own documented `pnpm pw:*` scripts already run locally --
 # nothing here invents a CI-only code path. `playwright-framework/cli/ci-summary.ts` is the one

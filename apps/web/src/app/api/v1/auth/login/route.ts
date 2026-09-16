@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { loginSchema } from "@seatwise/shared";
 import { findUserByEmail } from "@seatwise/db";
-import { verifyPassword, signToken, AUTH_COOKIE_NAME } from "@/lib/auth";
+import { verifyPassword, signToken, AUTH_COOKIE_NAME, isSecureCookieContext } from "@/lib/auth";
 import { errorResponse, zodErrorResponse } from "@/lib/api-response";
 
 export async function POST(req: NextRequest) {
@@ -23,7 +23,8 @@ export async function POST(req: NextRequest) {
   });
   response.cookies.set(AUTH_COOKIE_NAME, token, {
     httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
+    // TS-62 SPIKE (DO NOT MERGE): see isSecureCookieContext's own doc comment in lib/auth.ts.
+    secure: isSecureCookieContext(),
     sameSite: "lax",
     path: "/",
     maxAge: 60 * 60 * 24 * 30,
