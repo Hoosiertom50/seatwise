@@ -45,6 +45,8 @@ export class WeddingGuestsPage extends BasePage {
   }
 
   async openGuestsTab(): Promise<void> {
+    // TS-62 SPIKE (DO NOT MERGE): see BasePage.waitForSettled.
+    await this.waitForSettled();
     await this.guestsTabButton().click();
   }
 

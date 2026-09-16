@@ -216,6 +216,8 @@ export class DashboardPage extends BasePage {
   }
 
   async logout(): Promise<void> {
+    // TS-62 SPIKE (DO NOT MERGE): see BasePage.waitForSettled.
+    await this.waitForSettled();
     await this.logoutButton().click();
   }
 }
