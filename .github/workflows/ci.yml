@@ -59,6 +59,20 @@
 #      flaky retries (see DEC-036). This job mirrors e2e-firefox's structure exactly but targets
 #      --project=webkit; unlike the spike it lived on, it DOES feed merge-reports (see that job's
 #      updated needs: below), the same as e2e and e2e-firefox.
+#   6. e2e-edge -- TS-64: adds Microsoft Edge as a fourth browser in the real, blocking CI gate.
+#      Unlike Firefox/WebKit, Edge is not a separate rendering engine -- Playwright runs it via a
+#      "channel" on top of the same Chromium engine the e2e (chromium) job already has months of
+#      clean CI history on (see the "edge" project in playwright.config.ts, channel: "msedge").
+#      ubuntu-latest ships Edge preinstalled, so this needs no new browser-binary download the way
+#      Firefox/WebKit did -- just registering the channel with Playwright. Validated on a throwaway
+#      spike (TS-63, branch ts63-edge-validation-spike, PR #14): one unsharded full-regression run
+#      against real Edge, clean, alongside clean e2e/e2e-firefox/e2e-webkit runs on the same commit.
+#      No Firefox-style multi-run soak test was needed here -- same engine already proven out in the
+#      real gate, and TS-63's own scope deliberately didn't call for that rigor. This job mirrors
+#      e2e-firefox's structure exactly but targets --project=edge; it DOES feed merge-reports (see
+#      that job's updated needs: below), the same as e2e/e2e-firefox/e2e-webkit. Fully supersedes
+#      DEC-003 for Edge (see DEC-037) -- all four browsers (chromium, firefox, webkit, edge) are now
+#      in the real, required gate.
 #
 # Every command below is one this repo's own documented `pnpm pw:*` scripts already run locally --
 # nothing here invents a CI-only code path. `playwright-framework/cli/ci-summary.ts` is the one
@@ -432,10 +446,104 @@ jobs:
           retention-days: 14
           if-no-files-found: warn
 
+  e2e-edge:
+    name: "Application E2E on Edge (shard ${{ matrix.shard }}/2)"
+    runs-on: ubuntu-latest
+    needs: validate
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: seatwise_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright's Edge channel (with OS deps)
+        # ubuntu-latest ships Edge preinstalled; this registers the channel with Playwright and
+        # satisfies any OS deps rather than downloading a new browser binary, so it's noticeably
+        # faster than the Firefox/WebKit equivalents (see TS-63's own spike findings).
+        run: pnpm exec playwright install --with-deps msedge
+
+      - name: Generate ephemeral, non-secret app config for this CI run only
+        run: |
+          echo "JWT_SECRET=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
+          echo "ENCRYPTION_KEY=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
+
+      - name: Apply database migrations
+        run: pnpm --filter @seatwise/db migrate:deploy
+
+      - name: Build the application
+        run: pnpm build
+
+      - name: Start the application and wait for it to be ready
+        run: |
+          pnpm --filter @seatwise/web start -p 3000 &
+          npx --yes wait-on http://localhost:3000 --timeout 60000
+
+      - name: Run the application E2E suite (this shard, regression selection minus quarantined)
+        # Same selection mechanism as the other e2e jobs -- see e2e's own step comment for the full
+        # rationale.
+        env:
+          CI: "true"
+        run: |
+          SELECTION_OUTPUT="$(pnpm exec tsx playwright-framework/cli/print-ci-selection.ts regression)"
+          PATTERN="$(echo "$SELECTION_OUTPUT" | sed -n '1p')"
+          FILES="$(echo "$SELECTION_OUTPUT" | sed -n '2p')"
+          pnpm exec playwright test --project=edge --grep "$PATTERN" $FILES \
+            --shard=${{ matrix.shard }}/2 \
+            --reporter=blob,./playwright-framework/reporting/normalizedReporter.ts
+
+      - name: CI status gate -- fail on a zero-test shard, surface flaky/quarantined results
+        if: always()
+        run: pnpm exec tsx playwright-framework/cli/ci-summary.ts
+
+      - name: Upload blob report (for merging into one combined HTML report)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: blob-report-edge-shard-${{ matrix.shard }}
+          path: blob-report
+          retention-days: 14
+          if-no-files-found: warn
+
+      - name: Upload normalized run report, traces, and screenshots for this shard
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: run-artifacts-edge-shard-${{ matrix.shard }}
+          path: |
+            artifacts/playwright/runs/run-reports
+            artifacts/playwright/runs/test-results
+          retention-days: 14
+          if-no-files-found: warn
+
   merge-reports:
     name: Merge sharded HTML report
     if: always()
-    needs: [e2e, e2e-firefox, e2e-webkit]
+    needs: [e2e, e2e-firefox, e2e-webkit, e2e-edge]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -468,6 +576,13 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           pattern: blob-report-webkit-shard-*
+          path: all-blob-reports
+          merge-multiple: true
+
+      - name: Download every shard's blob report (Edge)
+        uses: actions/download-artifact@v4
+        with:
+          pattern: blob-report-edge-shard-*
           path: all-blob-reports
           merge-multiple: true
 

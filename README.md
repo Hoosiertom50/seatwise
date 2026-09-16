@@ -1144,11 +1144,14 @@ start there if you're writing or reviewing a test. The basics, as of Stage 10:
 
 - **Install:** `pnpm install` (top-level, same as the rest of the repo) gets `@playwright/test`
   itself; then `pnpm pw:install` downloads the Chromium browser binary Playwright needs for local
-  use. Firefox and WebKit are a separate story: CI's `e2e-firefox` (TS-61) and `e2e-webkit` (TS-62)
-  jobs install and run them independently — see `.github/workflows/ci.yml`'s own header comment and
-  the spec's Decision Log, DEC-003/DEC-035/DEC-036 — but `pw:install` and the local `pw:test*`
-  scripts remain Chromium-only; run `pnpm exec playwright install firefox` (or `webkit`) yourself if
-  you need to reproduce a Firefox or WebKit CI run locally.
+  use. Firefox, WebKit, and Edge are a separate story: CI's `e2e-firefox` (TS-61), `e2e-webkit`
+  (TS-62), and `e2e-edge` (TS-64) jobs install and run them independently — see
+  `.github/workflows/ci.yml`'s own header comment and the spec's Decision Log,
+  DEC-003/DEC-035/DEC-036/DEC-037 — but `pw:install` and the local `pw:test*` scripts remain
+  Chromium-only; run `pnpm exec playwright install firefox` (or `webkit`, or `msedge`) yourself if
+  you need to reproduce a Firefox, WebKit, or Edge CI run locally. Edge isn't a separate rendering
+  engine the way Firefox/WebKit are — Playwright drives it via a `channel: "msedge"` setting on top
+  of the same Chromium engine (see the `edge` project in `playwright.config.ts`).
 - **Run:** `pnpm pw:test` runs the Chromium E2E project plus the framework's own unit tests.
   `pnpm pw:test:headed` / `pnpm pw:test:debug` / `pnpm pw:test:ui` are the usual Playwright
   debugging modes. `pnpm pw:validate` type-checks the framework, validates all governance/metadata
