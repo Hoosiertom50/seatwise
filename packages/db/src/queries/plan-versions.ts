@@ -1,7 +1,7 @@
 import { randomUUID } from "crypto";
 import { pool } from "../pool";
 import { notifyWeddingCollaborators } from "./notifications";
-import { RULE_WEIGHT_CONFIG, RULE_WEIGHT_CONFIG_VERSION } from "@seatwise/shared";
+import { RULE_WEIGHT_CONFIG, RULE_WEIGHT_CONFIG_VERSION, compareTableLabels } from "@seatwise/shared";
 
 // TS-3 (FR-0.2 AC2): a soft-rule warning must name "the applied weighting-configuration version"
 // -- this plan version's own recorded one if it has one (set at generation time), or the current
@@ -451,6 +451,11 @@ export async function getPlanVersionDetail(
     }
   }
 
+  // ORDER BY here is just a stable baseline -- sorting on t.label in SQL would group "Table 10"'s
+  // guests ahead of "Table 2"'s (lexicographic, not numeric). The real table ordering is applied
+  // below with the same numeric-aware comparator used everywhere else tables are listed, so a
+  // plan's list view (which groups these assignments table by table) reads in the order a person
+  // actually expects.
   const { rows: assignments } = await pool.query(
     `SELECT sa.id, sa."guestId", (g."firstName" || ' ' || g."lastName") AS "guestName",
             sa."seatingTableId" AS "tableId", t.label AS "tableLabel", sa."needsReassignment"
@@ -458,9 +463,10 @@ export async function getPlanVersionDetail(
      JOIN "guests" g ON g.id = sa."guestId"
      JOIN "seating_tables" t ON t.id = sa."seatingTableId"
      WHERE sa."planVersionId" = $1
-     ORDER BY t.label, g."lastName", g."firstName"`,
+     ORDER BY t."createdAt", g."lastName", g."firstName"`,
     [id]
   );
+  assignments.sort((a, b) => compareTableLabels(a.tableLabel, b.tableLabel));
 
   // FR-8.1: a guest marked Not Attending doesn't occupy a seat and isn't counted as
   // "unassigned" — they've been excluded from the plan entirely, not left pending.

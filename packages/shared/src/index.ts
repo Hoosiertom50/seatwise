@@ -13,6 +13,7 @@ export * from "./schemas/vendor";
 export * from "./seating-engine";
 export * from "./csv";
 export * from "./validation";
+export * from "./table-sort";
 
 export interface ApiErrorResponse {
   error: string;

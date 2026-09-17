@@ -1,5 +1,6 @@
 import { randomUUID } from "crypto";
 import { pool } from "../pool";
+import { compareTableLabels } from "@seatwise/shared";
 
 export interface SeatingTableRow {
   id: string;
@@ -161,11 +162,16 @@ export async function quickCreateSeatingTables(
 }
 
 export async function listSeatingTablesForWedding(weddingId: string): Promise<SeatingTableRow[]> {
+  // ORDER BY here is just a stable baseline (creation order) for ties -- a plain SQL sort on
+  // `label` would put "Table 10"/"Table 11" ahead of "Table 2" because it compares character by
+  // character rather than by numeric value. The real ordering is applied below with a
+  // numeric-aware comparator so tables read back in the order a person actually expects
+  // ("Table 1, Table 2, ... Table 10, Table 11").
   const { rows } = await pool.query(
-    `${SELECT_WITH_REQUIRED} WHERE t."weddingId" = $1 ORDER BY t.label`,
+    `${SELECT_WITH_REQUIRED} WHERE t."weddingId" = $1 ORDER BY t."createdAt"`,
     [weddingId]
   );
-  return rows;
+  return rows.sort((a, b) => compareTableLabels(a.label, b.label));
 }
 
 export async function getSeatingTableForWedding(id: string, weddingId: string): Promise<SeatingTableRow | null> {

@@ -9,7 +9,9 @@
     "migrate": "prisma migrate dev",
     "migrate:deploy": "prisma migrate deploy",
     "studio": "prisma studio",
-    "seed": "tsx prisma/seed.ts"
+    "seed": "tsx prisma/seed.ts",
+    "fill-existing": "tsx prisma/fill-existing-weddings.ts",
+    "cleanup-test-weddings": "tsx prisma/cleanup-test-weddings.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"

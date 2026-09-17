@@ -30,7 +30,9 @@
     "pw:review": "tsx playwright-framework/cli/suite-review.ts",
     "pw:review:serve": "tsx playwright-framework/cli/serve-suite-review.ts",
     "pw:triage": "tsx playwright-framework/cli/triage.ts",
-    "pw:triage:serve": "tsx playwright-framework/cli/serve-maintenance-report.ts"
+    "pw:triage:serve": "tsx playwright-framework/cli/serve-maintenance-report.ts",
+    "db:fill-existing": "pnpm --filter @seatwise/db fill-existing",
+    "db:cleanup-test-weddings": "pnpm --filter @seatwise/db cleanup-test-weddings"
   },
   "workspaces": [
     "apps/*",
