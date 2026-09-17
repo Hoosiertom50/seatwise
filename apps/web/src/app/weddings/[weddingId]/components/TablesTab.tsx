@@ -12,6 +12,7 @@ import type {
   TablePurposeCriterionType,
   WeddingDTO,
 } from "@seatwise/shared";
+import { compareTableLabels } from "@seatwise/shared";
 
 const SHAPES: TableShape[] = ["ROUND", "RECTANGULAR", "SQUARE", "OVAL", "OTHER"];
 
@@ -161,7 +162,7 @@ export function TablesTab({
           shape,
         }
       );
-      setTables([...tables, table].sort((a, b) => a.label.localeCompare(b.label)));
+      setTables([...tables, table].sort((a, b) => compareTableLabels(a.label, b.label)));
       setLabel("");
       setCapacity(8);
       setPurpose("");
@@ -187,7 +188,7 @@ export function TablesTab({
         `/api/v1/weddings/${weddingId}/tables/quick-create`,
         { count: qcCount, capacity: qcCapacity, shape: qcShape, labelPrefix: qcPrefix }
       );
-      setTables([...tables, ...created].sort((a, b) => a.label.localeCompare(b.label)));
+      setTables([...tables, ...created].sort((a, b) => compareTableLabels(a.label, b.label)));
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't create those tables.");
     } finally {

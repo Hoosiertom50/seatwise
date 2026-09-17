@@ -44,6 +44,12 @@ const PLAN_BOX_WIDTH = 224;
 // max-h-36 (144px) scroll region, with a little padding room.
 const PLAN_BOX_HEIGHT = 200;
 
+// What a single onMoveGuest call resolved to -- empty means a clean move with nothing to report.
+interface MoveGuestResult {
+  error?: string;
+  warnings?: string[];
+}
+
 // FR-7.5: one manual-move action, as recorded for undo/redo. `toTableId` is the table the guest's
 // own unit ended up at; `priorTableId` is where *this specific guest* was seated before (null if
 // they were unassigned). Undoing/redoing replays a single move-or-unassign call for `guestId` --
@@ -250,8 +256,11 @@ export function PlanTab({
     setDetail(d.planVersion);
   }
 
-  async function onMoveGuest(guestId: string, tableId: string) {
-    if (!detail || !tableId) return;
+  // Returns what happened (error, or warnings) so a caller that wants to show feedback right at
+  // the point of interaction -- the floor plan's drag-and-drop, see PlanFloorPlan below -- can do
+  // so without forcing the user back up to the top-of-tab banner this also still populates.
+  async function onMoveGuest(guestId: string, tableId: string): Promise<MoveGuestResult> {
+    if (!detail || !tableId) return {};
     setError(null);
     setMoveWarnings([]);
     setMovingGuestId(guestId);
@@ -276,6 +285,7 @@ export function PlanTab({
         ]);
         setRedoStack([]);
       }
+      return { warnings: res.warnings };
     } catch (err) {
       // FR-7.7: this plan changed under us -- show the fresh state instead of leaving the view
       // stale, and don't record an undo entry for a move that never actually applied.
@@ -284,7 +294,9 @@ export function PlanTab({
         setDetail(fresh);
         setVersions((vs) => vs.map((v) => (v.id === fresh.id ? fresh : v)));
       }
-      setError(err instanceof ApiError ? err.message : "Couldn't move that guest.");
+      const message = err instanceof ApiError ? err.message : "Couldn't move that guest.";
+      setError(message);
+      return { error: message };
     } finally {
       setMovingGuestId(null);
     }
@@ -1156,11 +1168,23 @@ function PlanFloorPlan({
   unassignedGuestIds: string[];
   needsReassignmentGuests: { guestId: string; guestName: string; tableId: string; tableLabel: string }[];
   guestName: (id: string) => string;
-  onMoveGuest: (guestId: string, tableId: string) => void;
+  onMoveGuest: (guestId: string, tableId: string) => Promise<MoveGuestResult>;
   canEditThisVersion: boolean;
   movingGuestId: string | null;
 }) {
   const [dragOverTableId, setDragOverTableId] = useState<string | null>(null);
+  // Feedback for the table that was just dropped onto, shown right there on the canvas instead of
+  // only in the banner at the top of the tab -- so a rule violation is visible without scrolling
+  // back up, especially on a plan with many tables. Auto-dismisses; a fresh drop replaces it.
+  const [dropFeedback, setDropFeedback] = useState<{ tableId: string; kind: "error" | "warning"; message: string } | null>(
+    null
+  );
+
+  useEffect(() => {
+    if (!dropFeedback) return;
+    const timer = setTimeout(() => setDropFeedback(null), 7000);
+    return () => clearTimeout(timer);
+  }, [dropFeedback]);
 
   function onGuestDragStart(e: React.DragEvent<HTMLSpanElement>, guestId: string) {
     if (!canEditThisVersion) return;
@@ -1168,12 +1192,20 @@ function PlanFloorPlan({
     e.dataTransfer.effectAllowed = "move";
   }
 
-  function onTableDrop(e: React.DragEvent<HTMLDivElement>, tableId: string) {
+  async function onTableDrop(e: React.DragEvent<HTMLDivElement>, tableId: string) {
     e.preventDefault();
     setDragOverTableId(null);
     if (!canEditThisVersion) return;
     const guestId = e.dataTransfer.getData("text/plain");
-    if (guestId) onMoveGuest(guestId, tableId);
+    if (!guestId) return;
+    const result = await onMoveGuest(guestId, tableId);
+    if (result.error) {
+      setDropFeedback({ tableId, kind: "error", message: result.error });
+    } else if (result.warnings && result.warnings.length > 0) {
+      setDropFeedback({ tableId, kind: "warning", message: result.warnings.join(" ") });
+    } else {
+      setDropFeedback((cur) => (cur?.tableId === tableId ? null : cur));
+    }
   }
 
   const width = Math.max(760, ...tables.map((t) => (t.positionX ?? 40) + PLAN_BOX_WIDTH + 40));
@@ -1282,6 +1314,41 @@ function PlanFloorPlan({
             </div>
           );
         })}
+        {dropFeedback &&
+          (() => {
+            const droppedTable = tables.find((t) => t.id === dropFeedback.tableId);
+            if (!droppedTable) return null;
+            // Rendered as a sibling of the table boxes (not nested inside one) so it isn't
+            // clipped by a table box's own `overflow-hidden` -- positioned just below the table
+            // that was dropped onto, right where the user was already looking.
+            return (
+              <div
+                role="alert"
+                style={{
+                  left: droppedTable.positionX ?? 40,
+                  top: (droppedTable.positionY ?? 40) + PLAN_BOX_HEIGHT + 4,
+                  width: PLAN_BOX_WIDTH,
+                }}
+                className={`absolute z-10 rounded-md border p-2 text-xs shadow-lg ${
+                  dropFeedback.kind === "error"
+                    ? "border-red-300 bg-red-50 text-red-800 dark:border-red-700 dark:bg-red-950 dark:text-red-300"
+                    : "border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-300"
+                }`}
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <span>{dropFeedback.message}</span>
+                  <button
+                    type="button"
+                    aria-label="Dismiss"
+                    onClick={() => setDropFeedback(null)}
+                    className="shrink-0 leading-none opacity-60 hover:opacity-100"
+                  >
+                    ×
+                  </button>
+                </div>
+              </div>
+            );
+          })()}
       </div>
     </div>
   );
