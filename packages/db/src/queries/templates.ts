@@ -1,5 +1,6 @@
 import { randomUUID } from "crypto";
 import { pool } from "../pool";
+import { compareTableLabels } from "@seatwise/shared";
 
 // TS-19 (FR-14.1/FR-14.2): a template is a reusable snapshot of a wedding's table layout plus its
 // "rule-shape" (the wedding's Side-Mixing setting). It deliberately never stores anything
@@ -86,13 +87,18 @@ export async function createTemplateFromWedding(
       [templateId, ownerId, name, weddingId, wedding.sideMixing]
     );
 
+    // ORDER BY here is just a stable baseline -- sorting on `label` in SQL is lexicographic
+    // ("Table 10" ahead of "Table 2"), and that wrong order would get baked permanently into
+    // each row's `sortOrder` below. The real ordering is applied in JS with the same
+    // numeric-aware comparator used everywhere else tables are listed.
     const { rows: tableRows } = await client.query(
       `SELECT label, capacity, "isRestricted", "isAccessible", "isLocked", purpose,
               "purposeCriterionType", "purposeCriterionValue", "singleSideOnly", shape,
               "positionX", "positionY"
-       FROM "seating_tables" WHERE "weddingId" = $1 ORDER BY label`,
+       FROM "seating_tables" WHERE "weddingId" = $1 ORDER BY "createdAt"`,
       [weddingId]
     );
+    tableRows.sort((a, b) => compareTableLabels(a.label, b.label));
     let sortOrder = 0;
     for (const t of tableRows) {
       await client.query(

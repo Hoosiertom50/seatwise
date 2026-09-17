@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { api, ApiError } from "@/lib/api-client";
-import { RULE_WEIGHT_CONFIG } from "@seatwise/shared";
+import { RULE_WEIGHT_CONFIG, compareTableLabels } from "@seatwise/shared";
 import type {
   GuestDTO,
   PlanVersionComparisonDTO,
@@ -1108,7 +1108,12 @@ export function PlanTab({
             />
           ) : (
             <div className="flex flex-col gap-3">
-              {[...grouped.entries()].map(([tableId, t]) => (
+              {/* `grouped`'s insertion order already follows the assignments the API returns
+                  (now table-ordered numerically at the source), but this list is re-sorted
+                  explicitly too rather than depending on that indirectly. */}
+              {[...grouped.entries()]
+                .sort((a, b) => compareTableLabels(a[1].tableLabel, b[1].tableLabel))
+                .map(([tableId, t]) => (
                 <div key={tableId} className="rounded-lg border border-neutral-200 dark:border-neutral-700 px-4 py-3">
                   <p className="mb-2 font-medium">{t.tableLabel}</p>
                   <ul className="flex flex-col gap-1.5">
