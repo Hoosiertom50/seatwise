@@ -12,6 +12,8 @@
     "seed": "tsx prisma/seed.ts",
     "fill-existing": "tsx prisma/fill-existing-weddings.ts",
     "cleanup-test-weddings": "tsx prisma/cleanup-test-weddings.ts",
+    "cleanup-test-templates": "tsx prisma/cleanup-test-templates.ts",
+    "cleanup-test-users": "tsx prisma/cleanup-test-users.ts",
     "fill-wedding-details": "tsx prisma/fill-wedding-details.ts",
     "backup-real-weddings": "tsx prisma/backup-real-weddings.ts"
   },

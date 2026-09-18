@@ -439,6 +439,44 @@ export class WeddingDataSetup {
     return body.template;
   }
 
+  /**
+   * TS-104: deletes every seating template still visible to this test's account.
+   *
+   * Templates need their own cleanup pass because they are deliberately exempt from the
+   * wedding-deletion cascade: per `SeatingTemplate` in schema.prisma, a template is a standalone
+   * reusable asset, so deleting its source wedding sets `sourceWeddingId` to null and leaves the
+   * template standing. TS-102's sweep works by deleting wedding rows and letting the cascade do
+   * the rest, so it never reaches these -- the dev database held 208 orphaned templates with the
+   * wedding count already sitting at its pre-run baseline.
+   *
+   * Same disposable-account reasoning as `cleanupOwnedWeddings`: `GET /api/v1/templates` is scoped
+   * to the caller, and the caller is a per-test throwaway account, so everything it returns was
+   * created during this test. A non-owner delete answers 404, which is treated as "not mine" here.
+   */
+  async cleanupOwnedTemplates(): Promise<Array<{ templateId: string; error: string }>> {
+    const failures: Array<{ templateId: string; error: string }> = [];
+
+    let templates: SeatingTemplateSummary[];
+    try {
+      templates = await this.listTemplates();
+    } catch {
+      return failures; // Session already gone, or the app is down -- nothing to clean up.
+    }
+
+    for (const template of templates) {
+      try {
+        const res = await this.deleteTemplateRaw(template.id);
+        // 404: someone else's, or already deleted. Anything else is a real failure.
+        if (res.status !== 200 && res.status !== 204 && res.status !== 404) {
+          failures.push({ templateId: template.id, error: `HTTP ${res.status} deleting "${template.name}"` });
+        }
+      } catch (err) {
+        failures.push({ templateId: template.id, error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+    return failures;
+  }
+
   /** TS-51: GET /api/v1/templates -- every template owned by the caller (never another user's). */
   async listTemplates(): Promise<SeatingTemplateSummary[]> {
     const res = await this.request.get("/api/v1/templates");
@@ -795,18 +833,28 @@ export class WeddingDataSetup {
   }
 
   /**
-   * Explicit unsupported state (spec Stage 03 task, verbatim): the app exposes no endpoint to
-   * delete a user account (checked directly against the API route tree — there is no
-   * `/api/v1/users` or account-deletion route of any kind as of Stage 03). Every account this
-   * framework's auth fixture signs up therefore persists in the target database indefinitely;
-   * this method exists so that fact is a loud, documented limitation instead of a silent no-op a
-   * future maintainer has to rediscover by noticing the user table keeps growing.
+   * Still an explicit unsupported state, but no longer an unbounded leak.
+   *
+   * The application exposes no account-deletion endpoint (there is no `/api/v1/users` or
+   * account-deletion route of any kind), so a test cannot delete its own account through the API
+   * while it runs — that part of DEC-012 is unchanged, and this method still throws rather than
+   * pretending otherwise.
+   *
+   * TS-103 closed the accumulation without adding one: `globalTeardown` purges every account in
+   * the reserved `@example.invalid` domain directly at the end of a run, and
+   * `pnpm db:cleanup-test-users` does the same on demand. So accounts now live for the duration of
+   * a run rather than forever.
+   *
+   * The remaining gap is deliberate and recorded on TS-103: a real, user-facing account-deletion
+   * endpoint is a product decision (what happens to a planner's weddings and to their
+   * collaborators on delete — `Wedding.ownerId` is `onDelete: Cascade` today), not something the
+   * test framework should invent. If that endpoint is ever built, this method should call it.
    */
   async deleteUserAccount(): Promise<never> {
     throw new UnsupportedCleanupError(
-      "The application has no account-deletion endpoint. Test-created user accounts are not " +
-        "cleaned up and will accumulate in the target database — see DEC-012 in " +
-        "PLAYWRIGHT_QUALITY_FRAMEWORK_SPEC.md.",
+      "The application has no account-deletion endpoint, so an account cannot be deleted mid-test. " +
+        "Test accounts are purged at the end of the run by e2e/support/globalTeardown.ts, and on " +
+        "demand by `pnpm db:cleanup-test-users` — see DEC-012 and TS-103.",
     );
   }
 }

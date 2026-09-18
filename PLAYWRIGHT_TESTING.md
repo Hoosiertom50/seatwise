@@ -157,11 +157,14 @@ exists so you know what you can rely on, and what to do in the one case you can'
 **1. `managedWedding` — the one wedding your test is handed.** Created before your test, deleted
 after it. Nothing to do.
 
-**2. The `weddingData` fixture — every other wedding your test creates.** On teardown it deletes
-every wedding created through `weddingData.createWedding(...)`, *and* sweeps anything else still
-visible to your test's account. That catch-all is what covers weddings made through the UI
-(`dashboardPage.createWedding(...)`) or a raw `context.request.post("/api/v1/weddings", ...)`,
-neither of which passes through the helper.
+**2. The `weddingData` fixture — every other wedding your test creates, and every template.** On
+teardown it deletes every wedding created through `weddingData.createWedding(...)`, *and* sweeps
+anything else still visible to your test's account. That catch-all is what covers weddings made
+through the UI (`dashboardPage.createWedding(...)`) or a raw
+`context.request.post("/api/v1/weddings", ...)`, neither of which passes through the helper.
+
+Seating templates are cleaned up here too, as a **separate pass** rather than via the wedding
+cascade — see "Templates are not cascade-deleted" below for why that distinction matters.
 
 This is safe because the `account` fixture signs up a brand-new account per test, so every wedding
 that account can see was created during that test. A wedding your test was only *invited* to (owned
@@ -172,8 +175,15 @@ by another disposable account) returns 403 on delete and is left alone.
 > fine too — `deleteWedding` untracks it, and a second delete is a tolerated 404.
 
 **3. `globalTeardown` — the run-level backstop.** After the whole suite, `e2e/support/globalTeardown.ts`
-removes any marker-tagged wedding still in the database. This catches what layers 1 and 2
-structurally can't: a worker that crashed before teardown ran.
+removes any marker-tagged wedding or template still in the database, then purges every account this
+run signed up. This catches what layers 1 and 2 structurally can't: a worker that crashed before
+teardown ran, and — for accounts — the fact that **a test cannot delete its own account at all**.
+
+That last point is worth knowing (TS-103): the app exposes no account-deletion endpoint, so
+`deleteUserAccount()` throws by design and there is no per-test layer for accounts. They are removed
+only here, by matching the reserved `@example.invalid` domain every test signup uses. Because
+`Wedding.ownerId` and `SeatingTemplate.ownerId` both cascade from `User`, this pass also removes
+anything owned by a test account that the two marker sweeps missed.
 
 This runs **automatically** — nothing to opt into. To inspect what it would remove without
 removing anything:
@@ -208,6 +218,46 @@ relative alphabetical ordering between names is unchanged.
 Untagged names still get cleaned up by layers 1 and 2 — the marker only matters for layer 3, which
 is exactly the case where the other two failed. An untagged wedding left behind by a crashed worker
 stays in the database forever.
+
+### Templates are not cascade-deleted (TS-104)
+
+Everything else a test creates hangs off its wedding and disappears with it: guests, tables, plan
+versions, seat assignments, comments, timeline entries, vendors. **Seating templates do not.**
+
+That is deliberate product behaviour, not an oversight. Per the `SeatingTemplate` comment in
+`packages/db/prisma/schema.prisma`, a template is a standalone reusable asset — deleting the wedding
+it was saved from sets `sourceWeddingId` to null and the template survives, so a planner keeps a
+layout they captured even after the event is gone.
+
+Two consequences for tests:
+
+- **Cleanup deletes templates explicitly**, in its own pass, before the weddings. Deleting the
+  weddings first would only null out `sourceWeddingId` and leave the templates standing. This is
+  why the dev database once held 176 orphaned templates while the wedding count sat at its baseline.
+- **The sweep never keys on `sourceWeddingId IS NULL`.** An orphaned template is a legitimate
+  product state, so orphanhood can never imply deletability — only the marker may. A unit test in
+  `e2e/tests/unit/ids.spec.ts` locks that: planner-style template names must never match.
+
+Template names come from `uniqueTitle`, so they carry the marker automatically. If you build one by
+hand, wrap it in `tagTestName` exactly as you would a wedding name.
+
+### Cleaning up historical residue
+
+The per-test and run-level layers only cover rows created *since* the marker existed. For anything
+older, two dry-run-by-default scripts sweep by generated-name signature:
+
+```bash
+pnpm db:cleanup-test-weddings    # add --confirm to delete
+pnpm db:cleanup-test-templates   # add --confirm to delete
+pnpm db:cleanup-test-users       # add --confirm to delete
+```
+
+None touches a row lacking a generated signature; the weddings one keeps an explicit allowlist of
+the real weddings, and the users one matches only the reserved `@example.invalid` domain and refuses
+outright if it would leave zero accounts standing.
+
+`cleanup-test-users` is the broadest of the three — `User` is the root of the cascade, so it removes
+those accounts' weddings and templates too. It is correspondingly the one to be most careful with.
 
 ## Evidence (spec Section 7.4, built in Stage 03)
 
