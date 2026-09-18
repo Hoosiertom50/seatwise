@@ -36,8 +36,19 @@ import {
   type TableViewModel,
 } from "../planMerge";
 
-// FR-7.1's own fixed box footprint, matched here so a planner who's used the web app's floor plan
-// view recognizes the same picture, not a redesign (see PlanTab.tsx).
+// FR-7.1's own fixed box footprint, sized to hold a table's label, capacity and scrollable guest
+// list on a phone. This is a content card, not a scale drawing of the table.
+//
+// It is deliberately NOT shape-aware, unlike the Tables-tab floor plan on web (TS-106), which now
+// draws each shape's real proportions. Applying shape here would mean shrinking the box's height
+// for oval/rectangular tables and clipping the guest list -- the thing a planner is on this screen
+// to read. Tom's call on 2026-09-18: leave mobile as-is and revisit when the mobile floor plan is
+// properly built out under TS-95, with the app in hand on a real device.
+//
+// Note this footprint does NOT reproduce web's layout: web's Tables-tab boxes are 96x96 (132x84
+// for oval/rectangular) against 168x160 here, so positionX/positionY laid out on web do not
+// translate to identical spacing on mobile. An earlier version of this comment claimed the two
+// were matched; they never were.
 const BOX_WIDTH = 168;
 const BOX_HEIGHT = 160;
 const FALLBACK_COLUMNS = 3;
