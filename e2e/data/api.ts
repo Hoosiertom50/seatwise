@@ -296,7 +296,95 @@ async function assertOk(res: { ok(): boolean; status(): number; text(): Promise<
 }
 
 export class WeddingDataSetup {
+  /**
+   * TS-102: every wedding created through this helper, so the `weddingData` fixture can delete
+   * them all on teardown without each test having to remember a `try/finally`.
+   *
+   * The `managedWedding` fixture only ever covers the one wedding it creates; tests that need a
+   * second wedding (isolation, portfolio, cross-contamination scenarios) previously had no
+   * cleanup at all, which is how the dev database accumulated hundreds of stale rows. Tracking
+   * here makes cleanup structural -- a test gets it by using the helper, not by remembering to.
+   *
+   * The globalTeardown sweep remains the backstop for anything this misses (a crashed worker, a
+   * wedding created outside this helper entirely); this keeps the database from growing *during*
+   * a run rather than only after it.
+   */
+  private readonly trackedWeddingIds = new Set<string>();
+
   constructor(private readonly request: APIRequestContext) {}
+
+  /**
+   * Register a wedding this helper did not itself create -- one made through the UI (a
+   * dashboard-page create, where creating via the UI is the thing under test) or through a raw
+   * POST the test needs the response of -- so it is cleaned up on the same teardown path.
+   */
+  trackWedding(weddingId: string): void {
+    this.trackedWeddingIds.add(weddingId);
+  }
+
+  /** Wedding ids currently awaiting cleanup. Exposed for assertions/diagnostics. */
+  get trackedWeddings(): readonly string[] {
+    return [...this.trackedWeddingIds];
+  }
+
+  /**
+   * Deletes every tracked wedding. Never throws: returns whatever failed so the caller (the
+   * fixture) can surface it as a warning rather than replacing the test's own result with a
+   * teardown error -- same reasoning as the `managedWedding` cleanup-warning attachment.
+   */
+  async cleanupTrackedWeddings(): Promise<Array<{ weddingId: string; error: string }>> {
+    const failures: Array<{ weddingId: string; error: string }> = [];
+    for (const weddingId of [...this.trackedWeddingIds]) {
+      try {
+        await this.deleteWedding(weddingId);
+      } catch (err) {
+        failures.push({ weddingId, error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+    return failures;
+  }
+
+  /**
+   * TS-102: the catch-all half of per-test cleanup -- deletes every wedding still visible to this
+   * test's account, whether or not it was created through this helper.
+   *
+   * This is what covers weddings created through the UI (a dashboard-page create, where creating
+   * via the UI is the behaviour under test) and through raw `context.request.post` calls, neither
+   * of which passes through `createWedding` and so neither of which can be tracked.
+   *
+   * Safe because the account is disposable: `signUpFreshAccount` makes a brand-new account per
+   * test, and a brand-new account owns no weddings, so anything this endpoint returns was created
+   * during this test. The one exception is a wedding the test was invited to collaborate on --
+   * owned by a different (also disposable) account -- and the API refuses that delete with a 403,
+   * which is treated as "not mine, leave it alone" rather than a failure.
+   */
+  async cleanupOwnedWeddings(): Promise<Array<{ weddingId: string; error: string }>> {
+    const failures: Array<{ weddingId: string; error: string }> = [];
+
+    let weddings: Array<{ id: string; name: string }>;
+    try {
+      const res = await this.request.get("/api/v1/weddings");
+      if (!res.ok()) return failures; // Session already gone, or the app is down -- nothing to do.
+      weddings = ((await res.json()) as { weddings: Array<{ id: string; name: string }> }).weddings;
+    } catch {
+      return failures;
+    }
+
+    for (const wedding of weddings) {
+      try {
+        const res = await this.request.delete(`/api/v1/weddings/${wedding.id}`);
+        // 403: owned by another account (a collaboration) -- not this test's to delete.
+        // 404: already gone.
+        if (!res.ok() && res.status() !== 403 && res.status() !== 404) {
+          failures.push({ weddingId: wedding.id, error: `HTTP ${res.status()} deleting "${wedding.name}"` });
+        }
+        this.trackedWeddingIds.delete(wedding.id);
+      } catch (err) {
+        failures.push({ weddingId: wedding.id, error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+    return failures;
+  }
 
   // TS-51: extended with an optional second argument so template-seeding scenarios can pass
   // templateId/applyTemplateTables/applyTemplateRules/sideMixing without disturbing any existing
@@ -305,6 +393,7 @@ export class WeddingDataSetup {
     const res = await this.request.post("/api/v1/weddings", { data: { name, ...options } });
     await assertOk(res, `createWedding("${name}")`);
     const body = (await res.json()) as { wedding: { id: string; name: string } };
+    this.trackWedding(body.wedding.id);
     return { id: body.wedding.id, name: body.wedding.name };
   }
 
@@ -316,7 +405,11 @@ export class WeddingDataSetup {
     input: { name: string } & CreateWeddingOptions,
   ): Promise<{ status: number; body: { wedding?: { id: string; name: string }; error?: string; fieldErrors?: Record<string, string[]> } }> {
     const res = await this.request.post("/api/v1/weddings", { data: input });
-    return { status: res.status(), body: await res.json() };
+    const body = (await res.json()) as { wedding?: { id: string; name: string }; error?: string; fieldErrors?: Record<string, string[]> };
+    // TS-102: these calls exist to inspect validation failures, but the ones that *do* succeed
+    // create a real wedding that would otherwise leak exactly like any other.
+    if (body.wedding?.id) this.trackWedding(body.wedding.id);
+    return { status: res.status(), body };
   }
 
   /** TS-51: the full wedding row (GET .../weddings/:id) -- CreatedWedding only carries id/name. */
@@ -696,6 +789,9 @@ export class WeddingDataSetup {
     if (!res.ok() && res.status() !== 404) {
       await assertOk(res, `deleteWedding(${weddingId})`);
     }
+    // TS-102: a wedding the test deleted itself no longer needs cleaning up on teardown. A 404 is
+    // treated the same way -- it is already gone.
+    this.trackedWeddingIds.delete(weddingId);
   }
 
   /**

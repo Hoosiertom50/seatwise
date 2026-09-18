@@ -42,6 +42,8 @@ interface QualityFixtures {
   weddingData: WeddingDataSetup;
   managedWedding: CreatedWedding;
   evidence: EvidenceHelper;
+  /** TS-102: auto-fixture, never requested by a test directly -- see its definition below. */
+  weddingCleanup: void;
   diagnostics: void;
 }
 
@@ -63,11 +65,33 @@ export const test = base.extend<QualityFixtures>({
     await use(new WeddingGuestsPage(page));
   },
 
-  weddingData: async ({ context, account }, use) => {
+  weddingData: async ({ context, account }, use, testInfo: TestInfo) => {
     // Depending on `account` (even though it isn't read directly) guarantees the context is
     // already authenticated before any test-data API call is made through it.
     void account;
-    await use(new WeddingDataSetup(context.request));
+    const weddingData = new WeddingDataSetup(context.request);
+    await use(weddingData);
+
+    // TS-102: delete every wedding this test created through the helper -- not just the one
+    // `managedWedding` owns. Runs after `managedWedding`'s own teardown (Playwright tears fixtures
+    // down in reverse dependency order, and managedWedding depends on this one), so the managed
+    // wedding is already deleted and untracked by the time this runs; anything left here is an
+    // extra wedding the test created for itself.
+    //
+    // This is the precise pass. It only runs for tests that actually requested `weddingData`;
+    // `weddingCleanup` below is the unconditional catch-all that does not depend on that.
+    const failures = await weddingData.cleanupTrackedWeddings();
+    if (failures.length > 0) {
+      // Never thrown, for the same reason as managedWedding's cleanup warning: a teardown throw
+      // replaces whatever the test itself reported. The globalTeardown sweep is the backstop for
+      // anything left behind here.
+      await testInfo.attach("cleanup-warning: weddingData", {
+        body:
+          `Failed to delete ${failures.length} test-created wedding(s) during teardown:\n` +
+          failures.map((f) => `  ${f.weddingId}: ${f.error}`).join("\n"),
+        contentType: "text/plain",
+      });
+    }
   },
 
   managedWedding: async ({ weddingData }, use, testInfo: TestInfo) => {
@@ -94,6 +118,43 @@ export const test = base.extend<QualityFixtures>({
         captureSuccessCheckpoint(page, testInfo, name, validationDescription),
     });
   },
+
+  /**
+   * TS-102: the unconditional per-test cleanup catch-all.
+   *
+   * Why this is an auto-fixture and not part of `weddingData`: Playwright only creates a fixture a
+   * test actually asks for, so cleanup hung off `weddingData` silently does nothing for a test
+   * that never requested it -- which is most of the tests that create weddings through the UI
+   * (e.g. account-management.multiple-weddings-are-independent requests only
+   * `{ account, page, evidence }`). That is the same "works only if the author remembered"
+   * fragility this ticket exists to remove, so cleanup must not depend on what the test asked for.
+   *
+   * Why it depends only on `context` and never on `account`: depending on `account` would force a
+   * fresh signup for *every* test, including the signup/login specs whose whole subject is
+   * authentication and which deliberately control their own account state. `context` is a
+   * Playwright built-in that is always present and has no side effects of its own. If the test
+   * never authenticated, the wedding list returns 401 and this is a no-op.
+   *
+   * Being auto, it is set up before the test and therefore torn down *after* the other fixtures --
+   * so `managedWedding` and `weddingData` have already done their precise cleanup, and whatever
+   * reaches here is genuinely what they could not see.
+   */
+  weddingCleanup: [
+    async ({ context }, use, testInfo: TestInfo) => {
+      await use();
+
+      const failures = await new WeddingDataSetup(context.request).cleanupOwnedWeddings();
+      if (failures.length > 0) {
+        await testInfo.attach("cleanup-warning: weddingCleanup", {
+          body:
+            `Failed to delete ${failures.length} wedding(s) left visible to this test's account:\n` +
+            failures.map((f) => `  ${f.weddingId}: ${f.error}`).join("\n"),
+          contentType: "text/plain",
+        });
+      }
+    },
+    { auto: true },
+  ],
 
   diagnostics: [
     async ({ page }, use, testInfo: TestInfo) => {

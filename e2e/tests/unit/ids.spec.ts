@@ -6,13 +6,24 @@
  */
 
 import { test, expect } from "@playwright/test";
-import { numberToLetters, uniqueToken, uniquePersonName, uniqueTitle } from "../../data/ids.js";
+import {
+  numberToLetters,
+  uniqueToken,
+  uniquePersonName,
+  uniqueTitle,
+  tagTestName,
+  isTestDataName,
+  TEST_DATA_MARKER,
+} from "../../data/ids.js";
 
 // Mirrors packages/shared/src/validation.ts's PERSON_NAME_PATTERN. Not imported directly: this
 // project's tsconfig deliberately excludes packages/ (see tsconfig.json) and the root package.json
 // has no workspace dependency on @seatwise/shared, so e2e/ stays self-contained rather than
 // reaching into the app's own source tree. Keep this in sync if the app's pattern changes.
 const PERSON_NAME_PATTERN = /^[\p{L}\p{M}][\p{L}\p{M} '.-]*$/u;
+
+// Mirrors packages/shared/src/validation.ts's WEDDING_NAME_PATTERN, for the same reason as above.
+const WEDDING_NAME_PATTERN = /^[\p{L}\p{N}\p{M}][\p{L}\p{N}\p{M} '&,.!-]*$/u;
 
 test.describe("numberToLetters", () => {
   test("encodes the spreadsheet-column boundary cases", () => {
@@ -98,6 +109,49 @@ test.describe("uniqueTitle", () => {
       const title = uniqueTitle(0, "Wedding");
       expect(titles.has(title)).toBe(false);
       titles.add(title);
+    }
+  });
+});
+
+// TS-102: the marker is what run-level cleanup matches on to decide a row is test residue and may
+// be deleted. These tests guard both directions of that decision -- that every name this module
+// produces is recognisable, and that a realistic real wedding name never is.
+test.describe("TS-102 cleanup marker", () => {
+  test("uniqueTitle tags every name it produces", () => {
+    const title = uniqueTitle(1, "Wedding A");
+    expect(isTestDataName(title)).toBe(true);
+    expect(title).toContain(TEST_DATA_MARKER);
+  });
+
+  test("uniqueTitle still embeds the label and worker index ahead of the marker", () => {
+    // The marker is a suffix specifically so prefix-based assertions and search-by-label
+    // scenarios keep working.
+    expect(uniqueTitle(2, "Playwright Wedding").startsWith("Playwright Wedding 2-")).toBe(true);
+  });
+
+  test("a tagged name is still a valid wedding name the app will accept", () => {
+    expect(WEDDING_NAME_PATTERN.test(uniqueTitle(0, "Wedding A"))).toBe(true);
+    expect(WEDDING_NAME_PATTERN.test(tagTestName("Alpha abc"))).toBe(true);
+    expect(uniqueTitle(0, "Wedding A").length).toBeLessThanOrEqual(200);
+  });
+
+  test("tagTestName is idempotent -- re-tagging never doubles the marker", () => {
+    const once = tagTestName("Keyboard Wedding abc");
+    expect(tagTestName(once)).toBe(once);
+    expect(tagTestName(uniqueTitle(0, "Wedding"))).toContain(TEST_DATA_MARKER);
+  });
+
+  test("real wedding names are never treated as test data", () => {
+    // The two real weddings in the dev database, plus names in the same shape a planner writes.
+    for (const realName of [
+      "Jim and Melissa",
+      "Chris and Jill",
+      "Alex & Jordan's Wedding",
+      "The Smith-Patel Wedding, 2030",
+      "Wedding A",
+      "Playwright Wedding",
+    ]) {
+      expect(isTestDataName(realName)).toBe(false);
     }
   });
 });

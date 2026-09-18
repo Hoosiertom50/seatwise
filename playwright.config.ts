@@ -57,6 +57,11 @@ export default defineConfig({
   // for what it actually checks (the production/mutation guard).
   globalSetup: "./e2e/support/globalSetup.ts",
 
+  // TS-102: run-level cleanup backstop for test-created weddings the per-test cleanup missed.
+  // Dry-run unless PW_TEARDOWN_SWEEP=confirm, and it only ever matches names carrying
+  // TEST_DATA_MARKER -- see e2e/support/globalTeardown.ts for the full safety model.
+  globalTeardown: "./e2e/support/globalTeardown.ts",
+
   reporter: [
     ["list"],
     ["html", { outputFolder: "artifacts/playwright/runs/html-report", open: "never" }],
