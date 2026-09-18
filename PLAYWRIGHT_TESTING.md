@@ -129,6 +129,9 @@ as `test` itself (it's the same fixture-extended `test`, not a second import).
   a particular execution order. `pnpm pw:test`'s default is a single worker locally, but nothing
   about these tests assumes that: see "Verifying independence" below for how this is actually
   checked, not just assumed.
+- **Everything your test creates is cleaned up for you** — including extra weddings beyond the one
+  `managedWedding` provides. See "Test-data cleanup (TS-102)" below for what each layer covers, and
+  for the one thing you do have to do by hand: tagging a wedding name you construct yourself.
 - **Never catch and suppress an assertion or navigation failure.** A `catch` block must rethrow,
   attach evidence (`testInfo.attach(...)`), or itself assert — never just log and move on. This is
   enforced by `pnpm pw:lint-tests` (`swallowed-error`); see `managedWedding`'s own cleanup handling
@@ -145,6 +148,66 @@ as `test` itself (it's the same fixture-extended `test`, not a second import).
 - **`test.skip`/`.fixme`/`.fail` must carry a reason.** Playwright's own API already has a place
   for this — `test.skip(condition, "why")` — so pass one; an unreasoned skip is flagged
   (`unreasoned-skip`).
+
+## Test-data cleanup (TS-102)
+
+Test data is cleaned up in **three layers**. You normally get all three for free — this section
+exists so you know what you can rely on, and what to do in the one case you can't.
+
+**1. `managedWedding` — the one wedding your test is handed.** Created before your test, deleted
+after it. Nothing to do.
+
+**2. The `weddingData` fixture — every other wedding your test creates.** On teardown it deletes
+every wedding created through `weddingData.createWedding(...)`, *and* sweeps anything else still
+visible to your test's account. That catch-all is what covers weddings made through the UI
+(`dashboardPage.createWedding(...)`) or a raw `context.request.post("/api/v1/weddings", ...)`,
+neither of which passes through the helper.
+
+This is safe because the `account` fixture signs up a brand-new account per test, so every wedding
+that account can see was created during that test. A wedding your test was only *invited* to (owned
+by another disposable account) returns 403 on delete and is left alone.
+
+> **So: you do not need a `try/finally` around wedding creation.** If you create a wedding in any
+> of the three ways above, it is already cleaned up. If you delete one yourself mid-test, that's
+> fine too — `deleteWedding` untracks it, and a second delete is a tolerated 404.
+
+**3. `globalTeardown` — the run-level backstop.** After the whole suite, `e2e/support/globalTeardown.ts`
+removes any marker-tagged wedding still in the database. This catches what layers 1 and 2
+structurally can't: a worker that crashed before teardown ran.
+
+This runs **automatically** — nothing to opt into. To inspect what it would remove without
+removing anything:
+
+```bash
+PW_TEARDOWN_SWEEP=dry-run pnpm pw:run:regression
+```
+
+It deletes **only** rows carrying the marker, refuses outright if `APP_URL` resolves to a
+production hostname, and never fails the run — a sweep error is logged, not thrown, so it can't
+mask what the tests themselves reported.
+
+### The cleanup marker — why naming matters
+
+Every name `uniqueTitle(...)` produces carries `TEST_DATA_MARKER` (`pwqa-fixture`, see
+`e2e/data/ids.ts`), and the sweep deletes **only** rows carrying it. That is an allowlist of what
+may be deleted, not a denylist of what to keep — a real wedding cannot be matched by accident.
+
+**If you construct a wedding name yourself** rather than using `uniqueTitle` — usually because your
+test asserts on the name's own text, as the search and sort specs do — wrap it:
+
+```ts
+import { tagTestName, uniqueToken } from "../data/ids.js";
+
+const token = uniqueToken(testInfo.workerIndex);
+const nameAlpha = tagTestName(`Alpha ${token}`);   // ← not just `Alpha ${token}`
+```
+
+The marker is a **suffix**, so prefix assertions and search-by-label scenarios keep working, and
+relative alphabetical ordering between names is unchanged.
+
+Untagged names still get cleaned up by layers 1 and 2 — the marker only matters for layer 3, which
+is exactly the case where the other two failed. An untagged wedding left behind by a crashed worker
+stays in the database forever.
 
 ## Evidence (spec Section 7.4, built in Stage 03)
 

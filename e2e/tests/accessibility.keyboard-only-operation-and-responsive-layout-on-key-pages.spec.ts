@@ -27,7 +27,7 @@ import { expect, defineQualityTest, test } from "../fixtures/index.js";
 import { WeddingGuestsPage } from "../pages/WeddingGuestsPage.js";
 import { WeddingDetailPage } from "../pages/WeddingDetailPage.js";
 import { DashboardPage } from "../pages/DashboardPage.js";
-import { uniquePersonName, uniqueToken } from "../data/ids.js";
+import { tagTestName, uniquePersonName, uniqueToken } from "../data/ids.js";
 
 defineQualityTest(
   {
@@ -71,7 +71,7 @@ defineQualityTest(
     let weddingId = "";
     await test.step("Arrange: a wedding for this freshly-logged-in-by-keyboard session", async () => {
       const res = await context.request.post("/api/v1/weddings", {
-        data: { name: `Keyboard Wedding ${token}` },
+        data: { name: tagTestName(`Keyboard Wedding ${token}`) },
       });
       expect(res.status()).toBe(201);
       const body = (await res.json()) as { wedding: { id: string } };

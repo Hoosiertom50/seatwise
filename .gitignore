@@ -15,6 +15,10 @@ generated/
 artifacts/playwright/**
 !artifacts/playwright/**/
 !artifacts/playwright/**/.gitkeep
+# Local database dumps (packages/db/prisma/backup-real-weddings.ts). These contain real wedding
+# and guest rows -- names, party details, and free-text notes -- so they are never committed.
+artifacts/db-backups/
+
 /test-results/
 /playwright-report/
 /blob-report/

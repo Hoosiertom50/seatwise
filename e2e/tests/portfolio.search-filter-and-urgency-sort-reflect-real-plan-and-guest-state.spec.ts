@@ -22,7 +22,7 @@
 
 import { expect, defineQualityTest, test } from "../fixtures/index.js";
 import { DashboardPage } from "../pages/DashboardPage.js";
-import { uniqueToken } from "../data/ids.js";
+import { tagTestName, uniqueToken } from "../data/ids.js";
 
 function isoDateOffset(days: number): string {
   const d = new Date();
@@ -43,10 +43,10 @@ defineQualityTest(
   },
   async ({ context, weddingData, page }, testInfo) => {
     const token = uniqueToken(testInfo.workerIndex);
-    const nameAlpha = `Alpha ${token}`;
-    const nameBeta = `Beta ${token}`;
-    const nameGamma = `Gamma ${token}`;
-    const nameDelta = `Delta ${token}`;
+    const nameAlpha = tagTestName(`Alpha ${token}`);
+    const nameBeta = tagTestName(`Beta ${token}`);
+    const nameGamma = tagTestName(`Gamma ${token}`);
+    const nameDelta = tagTestName(`Delta ${token}`);
 
     await test.step("Arrange: Alpha -- no guests, no plan generated (No plan yet, no date, no issues)", async () => {
       const res = await context.request.post("/api/v1/weddings", { data: { name: nameAlpha } });
