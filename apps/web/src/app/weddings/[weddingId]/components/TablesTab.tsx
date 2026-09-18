@@ -43,15 +43,58 @@ function criterionValueLabel(
 }
 
 // FR-4.1: shape only ever affects this drawing -- never seating logic.
+//
+// TS-106: shape drives both the corner radius AND the footprint. Radius alone is not enough --
+// on a fixed square box, `rounded-full` renders an oval identically to a round table, and
+// `rounded-md` renders a rectangular one identically to a square, so two of the five options were
+// indistinguishable and the plan was a less accurate picture of the room than the data allowed.
+//
+// OVAL uses `rounded-[50%]` rather than `rounded-full`: on a non-square box `rounded-full`
+// (9999px) clamps to a stadium/pill, whereas a 50% radius gives a true ellipse.
 const SHAPE_STYLE: Record<TableShape, string> = {
   ROUND: "rounded-full",
-  OVAL: "rounded-full",
+  OVAL: "rounded-[50%]",
   SQUARE: "rounded-md",
   RECTANGULAR: "rounded-md",
-  OTHER: "rounded-sm border-dashed",
+  OTHER: "rounded-md border-dashed",
 };
 
-const BOX_SIZE = 96; // px -- the floor-plan table box's footprint, used for drag clamping
+const BOX_SIZE = 96; // px -- the square footprint, and the fallback for an unrecognized shape
+
+/**
+ * TS-106: each shape's drawn footprint.
+ *
+ * ROUND/SQUARE/OTHER stay square; OVAL/RECTANGULAR are wider than they are tall, which is what
+ * makes them tell apart from their square-footprint counterparts. Combined with SHAPE_STYLE all
+ * five options are now visually distinct:
+ *
+ *   ROUND        96x96   circle
+ *   SQUARE       96x96   rounded square
+ *   OTHER        96x96   rounded square, dashed border
+ *   OVAL        132x84   ellipse
+ *   RECTANGULAR 132x84   rounded rectangle
+ *
+ * OTHER is deliberately NOT given a distinctive footprint. `SeatingTable.shape` has no companion
+ * free-text field (unlike `Vendor.categoryOther`), so the app genuinely cannot know what shape
+ * "Other" means -- inventing proportions for it would make the floor plan *less* accurate, which
+ * is the opposite of this change's point. The dashed border is the honest signal that the drawing
+ * is indicative rather than literal, and the planner carries the real meaning in the table's own
+ * label (see e2e/tests/tables.every-shape-and-capacity-saves-without-affecting-seating.spec.ts,
+ * which names its Other table "Sweetheart Table").
+ */
+const SHAPE_SIZE: Record<TableShape, { width: number; height: number }> = {
+  ROUND: { width: BOX_SIZE, height: BOX_SIZE },
+  SQUARE: { width: BOX_SIZE, height: BOX_SIZE },
+  OTHER: { width: BOX_SIZE, height: BOX_SIZE },
+  OVAL: { width: 132, height: 84 },
+  RECTANGULAR: { width: 132, height: 84 },
+};
+
+/** A table's drawn footprint, falling back to the square default if the API ever returns a shape
+ * this build does not know about (a newer enum member against an older client). */
+function sizeForShape(shape: TableShape): { width: number; height: number } {
+  return SHAPE_SIZE[shape] ?? { width: BOX_SIZE, height: BOX_SIZE };
+}
 
 export function TablesTab({
   weddingId,
@@ -801,6 +844,10 @@ function FloorPlan({
   const containerRef = useRef<HTMLDivElement>(null);
   const dragId = useRef<string | null>(null);
   const dragOffset = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+  // TS-106: clamping has to know the dragged table's own footprint, not a single constant, now
+  // that shapes differ in size -- otherwise a wide table clamps as if it were square and its right
+  // edge runs past the canvas. Captured on pointer-down so the move handler stays cheap.
+  const dragSize = useRef<{ width: number; height: number }>({ width: BOX_SIZE, height: BOX_SIZE });
   const [localPositions, setLocalPositions] = useState<Record<string, { x: number; y: number }>>({});
 
   function positionFor(t: SeatingTableDTO): { x: number; y: number } {
@@ -813,6 +860,7 @@ function FloorPlan({
     el.setPointerCapture(e.pointerId);
     const rect = el.getBoundingClientRect();
     dragId.current = t.id;
+    dragSize.current = sizeForShape(t.shape);
     dragOffset.current = { x: e.clientX - rect.left, y: e.clientY - rect.top };
   }
 
@@ -821,8 +869,8 @@ function FloorPlan({
     const containerRect = containerRef.current.getBoundingClientRect();
     let x = e.clientX - containerRect.left - dragOffset.current.x;
     let y = e.clientY - containerRect.top - dragOffset.current.y;
-    x = Math.max(0, Math.min(x, containerRect.width - BOX_SIZE));
-    y = Math.max(0, Math.min(y, containerRect.height - BOX_SIZE));
+    x = Math.max(0, Math.min(x, containerRect.width - dragSize.current.width));
+    y = Math.max(0, Math.min(y, containerRect.height - dragSize.current.height));
     setLocalPositions((prev) => ({ ...prev, [dragId.current!]: { x, y } }));
   }
 
@@ -834,8 +882,8 @@ function FloorPlan({
     if (pos) onMove(id, Math.round(pos.x), Math.round(pos.y));
   }
 
-  const width = Math.max(760, ...tables.map((t) => positionFor(t).x + BOX_SIZE + 40));
-  const height = Math.max(520, ...tables.map((t) => positionFor(t).y + BOX_SIZE + 40));
+  const width = Math.max(760, ...tables.map((t) => positionFor(t).x + sizeForShape(t.shape).width + 40));
+  const height = Math.max(520, ...tables.map((t) => positionFor(t).y + sizeForShape(t.shape).height + 40));
 
   return (
     <div>
@@ -859,7 +907,7 @@ function FloorPlan({
             <div
               key={t.id}
               onPointerDown={(e) => onPointerDown(e, t)}
-              style={{ left: pos.x, top: pos.y, width: BOX_SIZE, height: BOX_SIZE }}
+              style={{ left: pos.x, top: pos.y, ...sizeForShape(t.shape) }}
               className={`absolute flex select-none flex-col items-center justify-center border-2 bg-white dark:bg-neutral-900 p-1 text-center text-xs shadow-sm ${
                 canEdit ? "cursor-grab active:cursor-grabbing" : "cursor-default"
               } ${SHAPE_STYLE[t.shape]} ${
