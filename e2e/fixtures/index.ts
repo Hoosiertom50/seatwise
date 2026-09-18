@@ -143,12 +143,21 @@ export const test = base.extend<QualityFixtures>({
     async ({ context }, use, testInfo: TestInfo) => {
       await use();
 
-      const failures = await new WeddingDataSetup(context.request).cleanupOwnedWeddings();
-      if (failures.length > 0) {
+      const setup = new WeddingDataSetup(context.request);
+
+      const weddingFailures = await setup.cleanupOwnedWeddings();
+      // TS-104: templates are exempt from the wedding cascade by design, so deleting the weddings
+      // above never removes them. Runs after the weddings so a template whose source wedding was
+      // just deleted is still caught.
+      const templateFailures = await setup.cleanupOwnedTemplates();
+
+      const lines = [
+        ...weddingFailures.map((f) => `  wedding ${f.weddingId}: ${f.error}`),
+        ...templateFailures.map((f) => `  template ${f.templateId}: ${f.error}`),
+      ];
+      if (lines.length > 0) {
         await testInfo.attach("cleanup-warning: weddingCleanup", {
-          body:
-            `Failed to delete ${failures.length} wedding(s) left visible to this test's account:\n` +
-            failures.map((f) => `  ${f.weddingId}: ${f.error}`).join("\n"),
+          body: `Failed to delete ${lines.length} item(s) left visible to this test's account:\n${lines.join("\n")}`,
           contentType: "text/plain",
         });
       }

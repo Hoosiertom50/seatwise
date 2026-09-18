@@ -6,6 +6,7 @@
  */
 
 import { test, expect } from "@playwright/test";
+import { isTestAccountEmail, TEST_ACCOUNT_EMAIL_DOMAIN } from "../../support/auth.js";
 import {
   numberToLetters,
   uniqueToken,
@@ -141,6 +142,24 @@ test.describe("TS-102 cleanup marker", () => {
     expect(tagTestName(uniqueTitle(0, "Wedding"))).toContain(TEST_DATA_MARKER);
   });
 
+  // TS-104 acceptance: "a template legitimately orphaned by a real user deleting its source
+  // wedding is never removed by the sweep". Orphanhood is a supported product state, so the sweep
+  // deliberately keys on the marker alone and never on sourceWeddingId IS NULL. This locks the
+  // predicate that decision rests on: a planner-authored template name must never match, whether
+  // or not its source wedding still exists.
+  test("real seating-template names are never treated as test data", () => {
+    for (const realTemplateName of [
+      "Standard Reception Layout",
+      "Barn Venue - 120 guests",
+      "Head Table + 12 Rounds",
+      "Jim and Melissa: ceremony",
+      "To Survive Source Deletion",
+      "Zero Table Template",
+    ]) {
+      expect(isTestDataName(realTemplateName)).toBe(false);
+    }
+  });
+
   test("real wedding names are never treated as test data", () => {
     // The two real weddings in the dev database, plus names in the same shape a planner writes.
     for (const realName of [
@@ -153,5 +172,34 @@ test.describe("TS-102 cleanup marker", () => {
     ]) {
       expect(isTestDataName(realName)).toBe(false);
     }
+  });
+});
+
+// TS-103: the predicate the account purge matches on. User is the root of the cascade -- deleting
+// one destroys their weddings, guests, plans and templates -- so this is the highest-consequence
+// predicate in the framework and gets its own direction-by-direction lock.
+test.describe("TS-103 test-account predicate", () => {
+  test("accounts this framework signs up are recognised", () => {
+    expect(isTestAccountEmail(`pw-tester-abc${TEST_ACCOUNT_EMAIL_DOMAIN}`)).toBe(true);
+    expect(isTestAccountEmail(`pw-tester-viewer-xyz${TEST_ACCOUNT_EMAIL_DOMAIN}`)).toBe(true);
+  });
+
+  test("real accounts are never recognised as test accounts", () => {
+    for (const realEmail of [
+      "tom.carter@e-gineering.com",
+      "demo@seatwise.test",
+      "planner@example.com",
+      "someone@invalid.com",
+      "a@example.invalid.co.uk",
+      "pw-tester-abc@example.com",
+    ]) {
+      expect(isTestAccountEmail(realEmail)).toBe(false);
+    }
+  });
+
+  test("the domain is the reserved one, matched only as a suffix", () => {
+    // RFC 2606 reserves .invalid so it can never resolve -- that is the whole safety property.
+    expect(TEST_ACCOUNT_EMAIL_DOMAIN).toBe("@example.invalid");
+    expect(isTestAccountEmail("@example.invalid@real.com")).toBe(false);
   });
 });

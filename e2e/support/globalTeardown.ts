@@ -37,9 +37,11 @@
 //      `managedWedding` fixture's cleanup-warning attachment. Every failure here is logged and
 //      swallowed.
 //
-// Templates are deliberately NOT swept here yet -- they survive wedding deletion by design
-// (`sourceWeddingId` goes null) so the cascade never reaches them, and a legitimately orphaned
-// template is a supported product state. That needs its own marker-scoped handling: see TS-104.
+// TS-104: seating templates are swept too, but as their own statement rather than via the wedding
+// cascade -- they survive wedding deletion by design (`sourceWeddingId` goes null), so deleting a
+// wedding never reaches them. Critically, they are matched on the marker ONLY, never on
+// `sourceWeddingId IS NULL`: a template legitimately orphaned by a real planner deleting its source
+// wedding is a supported product state, not test residue, and must never be swept.
 
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -47,6 +49,7 @@ import { Pool } from "pg";
 import { getEnv } from "./env";
 import { resolveIsProduction } from "./productionGuard";
 import { TEST_DATA_MARKER } from "../data/ids";
+import { TEST_ACCOUNT_EMAIL_DOMAIN } from "./auth";
 
 /** Set PW_TEARDOWN_SWEEP to exactly this to inspect without deleting. Any other value (including
  * unset) sweeps for real -- see guard 2 above for why this is opt-out rather than opt-in. */
@@ -103,37 +106,75 @@ export default async function globalTeardown(): Promise<void> {
 
     // Guard 1: marker match only. This predicate is the whole safety model -- it is the single
     // place that decides a row may be deleted, and it can only ever match names ids.ts produced.
-    const { rows } = await pool.query<SweepRow>(
+    // Note what is deliberately absent from the template query: any condition on
+    // `sourceWeddingId IS NULL`. An orphaned template is a supported product state (a planner
+    // deleted the wedding it was saved from), so orphanhood must never imply deletability.
+    const { rows: weddings } = await pool.query<SweepRow>(
       `SELECT id, name FROM "weddings" WHERE name LIKE '%' || $1 || '%' ORDER BY "createdAt"`,
       [TEST_DATA_MARKER],
     );
+    const { rows: templates } = await pool.query<SweepRow>(
+      `SELECT id, name FROM "seating_templates" WHERE name LIKE '%' || $1 || '%' ORDER BY "createdAt"`,
+      [TEST_DATA_MARKER],
+    );
 
-    if (rows.length === 0) {
-      console.log("[teardown-sweep] Nothing to sweep -- no marker-tagged weddings remain.");
+    // TS-103: accounts this framework signed up. Matched on the reserved .invalid domain (see
+    // TEST_ACCOUNT_EMAIL_DOMAIN in auth.ts), which a real account cannot hold because the domain
+    // cannot exist. This is the root of the cascade -- User -> Wedding -> everything, and User ->
+    // SeatingTemplate -- so it also removes any wedding or template the two sweeps above missed.
+    const { rows: users } = await pool.query<{ id: string; email: string }>(
+      `SELECT id, email FROM "users" WHERE email LIKE '%' || $1 ORDER BY "createdAt"`,
+      [TEST_ACCOUNT_EMAIL_DOMAIN],
+    );
+
+    if (weddings.length === 0 && templates.length === 0 && users.length === 0) {
+      console.log("[teardown-sweep] Nothing to sweep -- no test-created rows remain.");
       return;
     }
 
     // Guard 2: delete unless explicitly asked not to.
     if (dryRun) {
       console.log(
-        `[teardown-sweep] DRY RUN -- ${rows.length} marker-tagged wedding(s) would be deleted. ` +
-          `Unset PW_TEARDOWN_SWEEP to actually delete them.`,
+        `[teardown-sweep] DRY RUN -- ${weddings.length} wedding(s), ${templates.length} template(s) and ` +
+          `${users.length} test account(s) would be deleted. Unset PW_TEARDOWN_SWEEP to actually delete them.`,
       );
-      for (const row of rows.slice(0, 10)) console.log(`  would delete: "${row.name}" (${row.id})`);
-      if (rows.length > 10) console.log(`  ... and ${rows.length - 10} more`);
+      for (const row of weddings.slice(0, 5)) console.log(`  wedding:  "${row.name}" (${row.id})`);
+      if (weddings.length > 5) console.log(`  ... and ${weddings.length - 5} more weddings`);
+      for (const row of templates.slice(0, 5)) console.log(`  template: "${row.name}" (${row.id})`);
+      if (templates.length > 5) console.log(`  ... and ${templates.length - 5} more templates`);
+      for (const row of users.slice(0, 5)) console.log(`  account:  ${row.email} (${row.id})`);
+      if (users.length > 5) console.log(`  ... and ${users.length - 5} more accounts`);
       return;
     }
+
+    // Templates first: they are exempt from the wedding cascade, so deleting weddings first would
+    // simply null out their sourceWeddingId and leave them behind.
+    const { rowCount: templatesDeleted } = await pool.query(
+      `DELETE FROM "seating_templates" WHERE name LIKE '%' || $1 || '%'`,
+      [TEST_DATA_MARKER],
+    );
 
     // Everything under a wedding cascades (guests, tables, plan versions, seat assignments,
     // comments, timeline entries, vendors, collaborators, invites) -- see schema.prisma. Deleting
     // the wedding row is enough. The marker predicate is repeated here rather than deleting by
     // the ids collected above, so the delete itself is still marker-scoped even if this query is
     // ever refactored apart from the select.
-    const { rowCount } = await pool.query(
+    const { rowCount: weddingsDeleted } = await pool.query(
       `DELETE FROM "weddings" WHERE name LIKE '%' || $1 || '%'`,
       [TEST_DATA_MARKER],
     );
-    console.log(`[teardown-sweep] Deleted ${rowCount ?? 0} marker-tagged wedding(s).`);
+    // TS-103: accounts last. User is the root of the cascade, so this also catches any wedding or
+    // template belonging to a test account that the marker-scoped statements above did not match
+    // (e.g. a row created before the marker existed, or one named outside ids.ts entirely).
+    const { rowCount: usersDeleted } = await pool.query(
+      `DELETE FROM "users" WHERE email LIKE '%' || $1`,
+      [TEST_ACCOUNT_EMAIL_DOMAIN],
+    );
+
+    console.log(
+      `[teardown-sweep] Deleted ${weddingsDeleted ?? 0} marker-tagged wedding(s), ` +
+        `${templatesDeleted ?? 0} template(s) and ${usersDeleted ?? 0} test account(s).`,
+    );
   } catch (err) {
     // Guard 4: never fail the run over cleanup.
     console.warn(
