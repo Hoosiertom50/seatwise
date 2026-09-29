@@ -184,6 +184,9 @@ export default function DashboardPage() {
       setNewNote("");
       setShowNote(false);
       setSelectedTemplateId("");
+      // TS-112: go straight into the new wedding -- its Getting started steps (TS-96) are what a
+      // planner needs next, rather than hunting for it in the list they were just on.
+      router.push(`/weddings/${wedding.id}`);
     } catch (err) {
       setError(apiErrorMessage(err, ["name"], "Couldn't create the wedding."));
     } finally {
