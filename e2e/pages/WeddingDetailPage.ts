@@ -45,8 +45,17 @@ export class WeddingDetailPage extends BasePage {
     return this.page.getByRole("alert").filter({ hasText: "Your session has expired" });
   }
 
+  /** The notice's fallback link to the full /login page (with ?next= back here). */
   async clickSignInAgain(): Promise<void> {
-    await this.page.getByRole("link", { name: "Sign in again", exact: true }).click();
+    await this.page.getByRole("link", { name: "or use the sign-in page", exact: true }).click();
+  }
+
+  /** TS-94: signs back in from the notice itself, without leaving the page. */
+  async signInFromSessionNotice(email: string, password: string): Promise<void> {
+    const notice = this.sessionExpiredNotice();
+    await notice.getByLabel("Email", { exact: true }).fill(email);
+    await notice.getByLabel("Password", { exact: true }).fill(password);
+    await notice.getByRole("button", { name: "Sign in here", exact: true }).click();
   }
 
   /** FR-1.6's full-revocation message -- must only ever appear when access really was removed. */

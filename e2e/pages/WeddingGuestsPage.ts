@@ -48,9 +48,27 @@ export class WeddingGuestsPage extends BasePage {
     await this.guestsTabButton().click();
   }
 
-  /** Any message the tab shows the user (e.g. its red error banner), matched by its text. */
+  /** TS-94: types into the add-guest form's first-name field *without* submitting -- the
+   * "half-finished work" a session expiry must not throw away. */
+  async typeNewGuestFirstName(value: string): Promise<void> {
+    await this.firstNameInput().fill(value);
+  }
+
+  async newGuestFirstName(): Promise<string> {
+    return this.firstNameInput().inputValue();
+  }
+
+  /** Finishes the add-guest form started with `typeNewGuestFirstName` and submits it. */
+  async finishAddingGuest(lastName: string): Promise<void> {
+    await this.lastNameInput().fill(lastName);
+    await this.addGuestButton().click();
+  }
+
+  /** Any message the tab shows the user (e.g. its red error banner), matched by its text -- a
+   * string matches the whole element text exactly, so the same reason echoed inside the header's
+   * save status ("Not saved: <reason>", TS-93) isn't a second match. */
   message(text: string | RegExp) {
-    return this.page.getByText(text);
+    return typeof text === "string" ? this.page.getByText(text, { exact: true }) : this.page.getByText(text);
   }
 
   /** Business-readable operation: fill the add-guest form and submit it. */
