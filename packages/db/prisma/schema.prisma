@@ -88,6 +88,8 @@ model Wedding {
   // has been set yet -- FR-15.2 makes setting one optional, not a requirement of using vendor
   // tracking at all.
   budgetCents Int?
+  // TS-92: optimistic-concurrency counter for budgetCents alone (see the migration comment).
+  budgetRevision Int @default(0)
   createdAt DateTime      @default(now())
   updatedAt DateTime      @updatedAt
 
@@ -238,6 +240,8 @@ model TimelineEntry {
   time        String
   description String
   sortOrder   Int      @default(0)
+  // TS-92: optimistic-concurrency counter, bumped on every edit or reorder.
+  revision    Int      @default(0)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 

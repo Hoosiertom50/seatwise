@@ -27,6 +27,10 @@ export type GuestImportMapping = z.infer<typeof guestImportMappingSchema>;
 export const guestImportRequestSchema = z.object({
   csv: z.string().min(1, "The file appears to be empty."),
   mapping: guestImportMappingSchema,
+  // TS-92: on commit, the revision of every guest the preview showed as an "update" -- so a guest
+  // someone else edited between preview and confirm is refused rather than silently overwritten.
+  // Keyed by guest ID. Omitted on preview (and by older clients, which get the old behavior).
+  expectedRevisions: z.record(z.string(), z.number().int().nonnegative()).optional(),
 });
 export type GuestImportRequest = z.infer<typeof guestImportRequestSchema>;
 
@@ -51,6 +55,9 @@ export interface GuestImportRow {
   rowNumber: number;
   kind: GuestImportRowKind;
   guestId?: string;
+  // TS-92: an "update" row's guest revision as of this preview -- sent back on commit so the
+  // commit can refuse if that guest changed in between.
+  revision?: number;
   reason?: string;
   preview: GuestImportRowPreview;
 }

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { updateTimelineEntrySchema } from "@seatwise/shared";
-import { getTimelineEntryForWedding, updateTimelineEntry, deleteTimelineEntry } from "@seatwise/db";
+import { getTimelineEntryForWedding, updateTimelineEntry, deleteTimelineEntry, TimelineConflictError } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
 import { errorResponse, zodErrorResponse } from "@/lib/api-response";
 import { requireAccess } from "@/lib/access";
@@ -19,9 +19,18 @@ export async function PATCH(req: NextRequest, { params }: Params) {
   const parsed = updateTimelineEntrySchema.safeParse(body);
   if (!parsed.success) return zodErrorResponse(parsed.error);
 
-  const entry = await updateTimelineEntry(entryId, weddingId, parsed.data);
-  if (!entry) return errorResponse("Timeline entry not found", 404);
-  return NextResponse.json({ entry });
+  const { expectedRevision, ...changes } = parsed.data;
+  try {
+    const entry = await updateTimelineEntry(entryId, weddingId, changes, expectedRevision);
+    if (!entry) return errorResponse("Timeline entry not found", 404);
+    return NextResponse.json({ entry });
+  } catch (err) {
+    // TS-92: stale save -- refused, with the fresh entry so the UI can show the latest.
+    if (err instanceof TimelineConflictError) {
+      return NextResponse.json({ error: err.message, entry: err.entry }, { status: 409 });
+    }
+    throw err;
+  }
 }
 
 export async function DELETE(req: NextRequest, { params }: Params) {

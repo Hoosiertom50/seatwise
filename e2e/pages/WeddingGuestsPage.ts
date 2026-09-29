@@ -142,6 +142,15 @@ export class WeddingGuestsPage extends BasePage {
     await expect(this.importCompleteSummaryText()).toBeVisible();
   }
 
+  /** TS-92: confirms a preview the server is expected to refuse (e.g. a guest in it changed since
+   * the preview) -- waits for the commit response itself, since no success summary will appear. */
+  async confirmImportExpectingRefusal(): Promise<void> {
+    await Promise.all([
+      this.page.waitForResponse((res) => res.url().includes("/guests/import/commit") && res.request().method() === "POST"),
+      this.confirmImportButton().click(),
+    ]);
+  }
+
   /** Returns a GuestRow component object scoped to the row matching this full name. Does not
    * assert the row exists -- callers await `.expectVisible()` (or Playwright's own auto-waiting
    * assertions) to confirm it appeared, keeping this method a pure locator-builder.

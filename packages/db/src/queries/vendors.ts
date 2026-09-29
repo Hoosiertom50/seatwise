@@ -182,6 +182,14 @@ export interface BudgetSummaryRow {
   budgetCents: number | null;
   totalCostCents: number;
   remainingCents: number | null;
+  budgetRevision: number;
+}
+
+// TS-92: thrown instead of applying a budget change based on a stale budgetRevision.
+export class BudgetConflictError extends Error {
+  constructor() {
+    super("Someone else changed the budget figure after you opened it — showing the latest. Your change wasn't saved; enter it again if it's still needed.");
+  }
 }
 
 // FR-15.2: budgetCents lives on the wedding itself; totalCostCents sums every vendor's costCents
@@ -190,25 +198,39 @@ export interface BudgetSummaryRow {
 // the total against yet, so remainingCents comes back null too rather than a bare negative total.
 export async function getBudgetSummaryForWedding(weddingId: string): Promise<BudgetSummaryRow> {
   const { rows } = await pool.query(
-    `SELECT w."budgetCents",
+    `SELECT w."budgetCents", w."budgetRevision",
             COALESCE((SELECT SUM(COALESCE(v."costCents", 0)) FROM "vendors" v WHERE v."weddingId" = w.id), 0)::int
               AS "totalCostCents"
      FROM "weddings" w WHERE w.id = $1`,
     [weddingId]
   );
   const row = rows[0];
-  if (!row) return { budgetCents: null, totalCostCents: 0, remainingCents: null };
+  if (!row) return { budgetCents: null, totalCostCents: 0, remainingCents: null, budgetRevision: 0 };
   return {
+    budgetRevision: row.budgetRevision,
     budgetCents: row.budgetCents,
     totalCostCents: row.totalCostCents,
     remainingCents: row.budgetCents === null ? null : row.budgetCents - row.totalCostCents,
   };
 }
 
-export async function setBudgetForWedding(weddingId: string, budgetCents: number | null): Promise<boolean> {
+export async function setBudgetForWedding(
+  weddingId: string,
+  budgetCents: number | null,
+  expectedRevision?: number
+): Promise<boolean> {
+  // TS-92: a single conditional UPDATE is the whole check -- it only matches the row if the
+  // revision is still the one the caller saw, so nothing can slip in between check and write.
   const { rowCount } = await pool.query(
-    `UPDATE "weddings" SET "budgetCents" = $1, "updatedAt" = now() WHERE id = $2`,
-    [budgetCents, weddingId]
+    expectedRevision === undefined
+      ? `UPDATE "weddings" SET "budgetCents" = $1, "budgetRevision" = "budgetRevision" + 1, "updatedAt" = now() WHERE id = $2`
+      : `UPDATE "weddings" SET "budgetCents" = $1, "budgetRevision" = "budgetRevision" + 1, "updatedAt" = now()
+         WHERE id = $2 AND "budgetRevision" = $3`,
+    expectedRevision === undefined ? [budgetCents, weddingId] : [budgetCents, weddingId, expectedRevision]
   );
+  if ((rowCount ?? 0) === 0 && expectedRevision !== undefined) {
+    const { rows } = await pool.query(`SELECT 1 FROM "weddings" WHERE id = $1`, [weddingId]);
+    if (rows[0]) throw new BudgetConflictError();
+  }
   return (rowCount ?? 0) > 0;
 }

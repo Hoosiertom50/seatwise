@@ -63,7 +63,12 @@ export function TimelineTab({ weddingId, canEdit }: { weddingId: string; canEdit
     try {
       const { entry } = await api.patch<{ entry: TimelineEntryDTO }>(
         `/api/v1/weddings/${weddingId}/timeline-entries/${entryId}`,
-        { time: editTime, description: editDescription }
+        {
+          time: editTime,
+          description: editDescription,
+          // TS-92: the version this edit is based on -- a stale one is refused, never overwrites.
+          expectedRevision: entries.find((e) => e.id === entryId)?.revision,
+        }
       );
       setEntries(
         entries
@@ -72,6 +77,18 @@ export function TimelineTab({ weddingId, canEdit }: { weddingId: string; canEdit
       );
       setEditingId(null);
     } catch (err) {
+      // TS-92: someone else changed this entry first. Show their version and say plainly that
+      // this edit was not saved -- the edit box closes so the stale text can't be mistaken for
+      // what's on record.
+      const fresh = err instanceof ApiError && err.status === 409 ? (err.data?.entry as TimelineEntryDTO | undefined) : undefined;
+      if (fresh) {
+        setEntries(
+          entries
+            .map((e) => (e.id === entryId ? fresh : e))
+            .sort((a, b) => a.time.localeCompare(b.time) || a.sortOrder - b.sortOrder)
+        );
+        setEditingId(null);
+      }
       setError(err instanceof ApiError ? err.message : "Couldn't save that change.");
     } finally {
       setSaving(false);

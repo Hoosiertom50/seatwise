@@ -239,7 +239,17 @@ export function GuestsTab({
       const { result, guests: updatedGuests } = await api.post<{
         result: { createdCount: number; updatedCount: number; warnings: string[] };
         guests: GuestDTO[];
-      }>(`/api/v1/weddings/${weddingId}/guests/import/commit`, { csv: csvText, mapping: cleanMapping() });
+      }>(`/api/v1/weddings/${weddingId}/guests/import/commit`, {
+        csv: csvText,
+        mapping: cleanMapping(),
+        // TS-92: the versions this preview showed, so the import is refused rather than silently
+        // overwriting a guest someone else edited in the meantime.
+        expectedRevisions: Object.fromEntries(
+          (importPreview?.rows ?? [])
+            .filter((r) => r.kind === "update" && r.guestId && r.revision !== undefined)
+            .map((r) => [r.guestId!, r.revision!])
+        ),
+      });
       setGuests(updatedGuests.sort((a, b) => a.lastName.localeCompare(b.lastName)));
       setImportResult(result);
       resetImport();

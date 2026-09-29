@@ -12,11 +12,23 @@ export interface TimelineEntryRow {
   time: string;
   description: string;
   sortOrder: number;
+  // TS-92: bumped on every edit and reorder.
+  revision: number;
   createdAt: Date;
   updatedAt: Date;
 }
 
-const COLUMNS = `id, "weddingId", time, description, "sortOrder", "createdAt", "updatedAt"`;
+const COLUMNS = `id, "weddingId", time, description, "sortOrder", revision, "createdAt", "updatedAt"`;
+
+// TS-92: thrown instead of applying an edit whose expectedRevision no longer matches -- the fresh
+// entry is attached so the caller can show the latest without another round-trip.
+export class TimelineConflictError extends Error {
+  entry: TimelineEntryRow;
+  constructor(entry: TimelineEntryRow) {
+    super("Someone else changed this timeline entry after you opened it — showing the latest. Your edit wasn't saved; make it again if it's still needed.");
+    this.entry = entry;
+  }
+}
 
 export async function listTimelineEntriesForWedding(weddingId: string): Promise<TimelineEntryRow[]> {
   const { rows } = await pool.query(
@@ -64,7 +76,8 @@ export async function createTimelineEntry(
 export async function updateTimelineEntry(
   id: string,
   weddingId: string,
-  input: Partial<CreateTimelineEntryData>
+  input: Partial<CreateTimelineEntryData>,
+  expectedRevision?: number
 ): Promise<TimelineEntryRow | null> {
   const fields: string[] = [];
   const values: unknown[] = [];
@@ -79,14 +92,37 @@ export async function updateTimelineEntry(
   }
   if (fields.length === 0) return getTimelineEntryForWedding(id, weddingId);
 
-  fields.push(`"updatedAt" = now()`);
+  fields.push(`"updatedAt" = now()`, `revision = revision + 1`);
   values.push(id, weddingId);
-  const { rows } = await pool.query(
-    `UPDATE "timeline_entries" SET ${fields.join(", ")} WHERE id = $${i++} AND "weddingId" = $${i}
-     RETURNING ${COLUMNS}`,
-    values
-  );
-  return rows[0] ?? null;
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    // TS-92: lock, then compare -- same pattern as guests/tables/vendors (FR-7.7).
+    const { rows: current } = await client.query(
+      `SELECT ${COLUMNS} FROM "timeline_entries" WHERE id = $1 AND "weddingId" = $2 FOR UPDATE`,
+      [id, weddingId]
+    );
+    if (!current[0]) {
+      await client.query("ROLLBACK");
+      return null;
+    }
+    if (expectedRevision !== undefined && current[0].revision !== expectedRevision) {
+      await client.query("ROLLBACK");
+      throw new TimelineConflictError(current[0]);
+    }
+    const { rows } = await client.query(
+      `UPDATE "timeline_entries" SET ${fields.join(", ")} WHERE id = $${i++} AND "weddingId" = $${i}
+       RETURNING ${COLUMNS}`,
+      values
+    );
+    await client.query("COMMIT");
+    return rows[0] ?? null;
+  } catch (err) {
+    if (!(err instanceof TimelineConflictError)) await client.query("ROLLBACK").catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 
 export async function deleteTimelineEntry(id: string, weddingId: string): Promise<boolean> {
@@ -124,14 +160,16 @@ export async function reorderTimelineEntry(
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    await client.query(`UPDATE "timeline_entries" SET "sortOrder" = $1, "updatedAt" = now() WHERE id = $2`, [
-      neighbor.sortOrder,
-      entry.id,
-    ]);
-    await client.query(`UPDATE "timeline_entries" SET "sortOrder" = $1, "updatedAt" = now() WHERE id = $2`, [
-      entry.sortOrder,
-      neighbor.id,
-    ]);
+    // TS-92: a reorder bumps both entries' revisions, so an edit made from a copy loaded before
+    // the reorder is caught too.
+    await client.query(
+      `UPDATE "timeline_entries" SET "sortOrder" = $1, "updatedAt" = now(), revision = revision + 1 WHERE id = $2`,
+      [neighbor.sortOrder, entry.id]
+    );
+    await client.query(
+      `UPDATE "timeline_entries" SET "sortOrder" = $1, "updatedAt" = now(), revision = revision + 1 WHERE id = $2`,
+      [entry.sortOrder, neighbor.id]
+    );
     await client.query("COMMIT");
   } catch (err) {
     await client.query("ROLLBACK");
