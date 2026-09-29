@@ -194,9 +194,10 @@ export class DashboardPage extends BasePage {
     return this.page.getByText("No weddings match your search/filter.", { exact: true });
   }
 
-  /** Business-readable operation: fill and submit the inline create-wedding form. Waits for the
-   * new wedding to actually appear in the list rather than just for the click to register, so
-   * callers never race the form's own async submit handler. */
+  /** Business-readable operation: fill and submit the inline create-wedding form. TS-112: creating
+   * a wedding now opens it, so this waits for that navigation, then returns to the dashboard and
+   * waits for the new wedding to appear in the list -- callers carry on from the dashboard exactly
+   * as before, and never race the form's own async submit handler. */
   async createWedding(input: CreateWeddingInput): Promise<void> {
     await this.nameInput().fill(input.name);
     if (input.date) await this.dateInput().fill(input.date);
@@ -205,8 +206,16 @@ export class DashboardPage extends BasePage {
       await this.addNoteToggle().click();
       await this.noteInput().fill(input.note);
     }
-    await this.addWeddingButton().click();
+    await Promise.all([this.page.waitForURL(/\/weddings\/[^/]+$/), this.addWeddingButton().click()]);
+    await this.goto();
     await expect(this.weddingLink(input.name)).toBeVisible();
+  }
+
+  /** TS-112: submits the create-wedding form and stays wherever the app takes you (the new
+   * wedding's own page). */
+  async createWeddingAndLandOnIt(name: string): Promise<void> {
+    await this.nameInput().fill(name);
+    await Promise.all([this.page.waitForURL(/\/weddings\/[^/]+$/), this.addWeddingButton().click()]);
   }
 
   /** Clicks a wedding's list link and waits for the resulting navigation to its detail page. */

@@ -103,6 +103,8 @@ export function GuestsTab({
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const [partyName, setPartyName] = useState("");
+  // TS-112: the add-guest form's optional fields start collapsed.
+  const [showMoreDetails, setShowMoreDetails] = useState(false);
   const [headcount, setHeadcount] = useState(1);
   const [tier, setTier] = useState<GuestTier>("OTHER");
   const [rsvpStatus, setRsvpStatus] = useState<RsvpStatus>("PENDING");
@@ -541,125 +543,140 @@ export function GuestsTab({
             maxLength={100}
           />
         </div>
-        <div>
-          <label htmlFor="guest-party-name" className="mb-1 block text-sm font-medium">
-            Party / household
-          </label>
-          <input
-            id="guest-party-name"
-            className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
-            placeholder="e.g. The Carter Family"
-            value={partyName}
-            onChange={(e) => setPartyName(e.target.value)}
-          />
-        </div>
-        <div>
-          <label htmlFor="guest-email" className="mb-1 block text-sm font-medium">
-            Email
-          </label>
-          <input
-            id="guest-email"
-            type="email"
-            className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
-            placeholder="Optional -- lets you send them their own RSVP link"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-          />
-        </div>
-        <div>
-          <label htmlFor="guest-headcount" className="mb-1 block text-sm font-medium">
-            Headcount
-          </label>
-          <input
-            id="guest-headcount"
-            type="number"
-            min={1}
-            max={20}
-            className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
-            value={headcount}
-            onChange={(e) => setHeadcount(Number(e.target.value))}
-          />
-        </div>
-        <div>
-          <label htmlFor="guest-tier" className="mb-1 block text-sm font-medium">
-            Tier
-          </label>
-          <select
-            id="guest-tier"
-            className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
-            value={tier}
-            onChange={(e) => setTier(e.target.value as GuestTier)}
+        {/* TS-112: only a name is required, so the other eight fields wait behind "More details"
+            -- their defaults are exactly what a name-only guest gets anyway. */}
+        {!showMoreDetails ? (
+          <button
+            type="button"
+            onClick={() => setShowMoreDetails(true)}
+            aria-expanded={false}
+            className="justify-self-start text-sm text-neutral-600 dark:text-neutral-300 underline hover:no-underline sm:col-span-2"
           >
-            {TIERS.map((t) => (
-              <option key={t} value={t}>
-                {GUEST_TIER_LABELS[t]}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div>
-          <label htmlFor="guest-rsvp" className="mb-1 block text-sm font-medium">
-            RSVP
+            + More details (household, email, headcount, tier, RSVP, side, age, accessibility)
+          </button>
+        ) : (
+          <>
+          <div>
+            <label htmlFor="guest-party-name" className="mb-1 block text-sm font-medium">
+              Party / household
+            </label>
+            <input
+              id="guest-party-name"
+              className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
+              placeholder="e.g. The Carter Family"
+              value={partyName}
+              onChange={(e) => setPartyName(e.target.value)}
+            />
+          </div>
+          <div>
+            <label htmlFor="guest-email" className="mb-1 block text-sm font-medium">
+              Email
+            </label>
+            <input
+              id="guest-email"
+              type="email"
+              className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
+              placeholder="Optional -- lets you send them their own RSVP link"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+            />
+          </div>
+          <div>
+            <label htmlFor="guest-headcount" className="mb-1 block text-sm font-medium">
+              Headcount
+            </label>
+            <input
+              id="guest-headcount"
+              type="number"
+              min={1}
+              max={20}
+              className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
+              value={headcount}
+              onChange={(e) => setHeadcount(Number(e.target.value))}
+            />
+          </div>
+          <div>
+            <label htmlFor="guest-tier" className="mb-1 block text-sm font-medium">
+              Tier
+            </label>
+            <select
+              id="guest-tier"
+              className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
+              value={tier}
+              onChange={(e) => setTier(e.target.value as GuestTier)}
+            >
+              {TIERS.map((t) => (
+                <option key={t} value={t}>
+                  {GUEST_TIER_LABELS[t]}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label htmlFor="guest-rsvp" className="mb-1 block text-sm font-medium">
+              RSVP
+            </label>
+            <select
+              id="guest-rsvp"
+              className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
+              value={rsvpStatus}
+              onChange={(e) => setRsvpStatus(e.target.value as RsvpStatus)}
+            >
+              {RSVP_STATUSES.map((s) => (
+                <option key={s} value={s}>
+                  {RSVP_STATUS_LABELS[s]}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label htmlFor="guest-side" className="mb-1 block text-sm font-medium">
+              Side
+            </label>
+            <select
+              id="guest-side"
+              className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
+              value={side}
+              onChange={(e) => setSide(e.target.value as GuestSide)}
+            >
+              {SIDE_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label htmlFor="guest-age-category" className="mb-1 block text-sm font-medium">
+              Age category
+            </label>
+            <select
+              id="guest-age-category"
+              className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
+              value={ageCategory}
+              onChange={(e) => setAgeCategory(e.target.value as AgeCategory)}
+            >
+              {AGE_CATEGORIES.map((a) => (
+                <option key={a} value={a}>
+                  {a.charAt(0) + a.slice(1).toLowerCase()}
+                </option>
+              ))}
+            </select>
+            <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
+              Only used as a soft preference for a Purpose table&apos;s Age Category criterion
+              (e.g. a &quot;Kids&apos; Table&quot;).
+            </p>
+          </div>
+          <label className="flex items-center gap-2 text-sm sm:col-span-2">
+            <input
+              type="checkbox"
+              checked={requiresAccessibleTable}
+              onChange={(e) => setRequiresAccessibleTable(e.target.checked)}
+            />
+            Requires an accessible table
           </label>
-          <select
-            id="guest-rsvp"
-            className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
-            value={rsvpStatus}
-            onChange={(e) => setRsvpStatus(e.target.value as RsvpStatus)}
-          >
-            {RSVP_STATUSES.map((s) => (
-              <option key={s} value={s}>
-                {RSVP_STATUS_LABELS[s]}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div>
-          <label htmlFor="guest-side" className="mb-1 block text-sm font-medium">
-            Side
-          </label>
-          <select
-            id="guest-side"
-            className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
-            value={side}
-            onChange={(e) => setSide(e.target.value as GuestSide)}
-          >
-            {SIDE_OPTIONS.map((o) => (
-              <option key={o.value} value={o.value}>
-                {o.label}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div>
-          <label htmlFor="guest-age-category" className="mb-1 block text-sm font-medium">
-            Age category
-          </label>
-          <select
-            id="guest-age-category"
-            className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
-            value={ageCategory}
-            onChange={(e) => setAgeCategory(e.target.value as AgeCategory)}
-          >
-            {AGE_CATEGORIES.map((a) => (
-              <option key={a} value={a}>
-                {a.charAt(0) + a.slice(1).toLowerCase()}
-              </option>
-            ))}
-          </select>
-          <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
-            Only used as a soft preference for a Purpose table&apos;s Age Category criterion
-            (e.g. a &quot;Kids&apos; Table&quot;).
-          </p>
-        </div>
-        <label className="flex items-center gap-2 text-sm sm:col-span-2">
-          <input
-            type="checkbox"
-            checked={requiresAccessibleTable}
-            onChange={(e) => setRequiresAccessibleTable(e.target.checked)}
-          />
-          Requires an accessible table
-        </label>
+          </>
+        )}
         <button
           type="submit"
           disabled={adding}

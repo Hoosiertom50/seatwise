@@ -71,10 +71,23 @@ export class WeddingGuestsPage extends BasePage {
     return typeof text === "string" ? this.page.getByText(text, { exact: true }) : this.page.getByText(text);
   }
 
+  /** TS-112: the add-guest form's optional fields sit behind "More details" -- opens it if it's
+   * still collapsed (a no-op once open). */
+  async openMoreDetails(): Promise<void> {
+    const toggle = this.page.getByRole("button", { name: /^\+ More details/ });
+    if (await toggle.count()) await toggle.click();
+  }
+
+  /** TS-112: whether the optional fields are currently showing. */
+  optionalFieldsVisible() {
+    return this.partyNameInput();
+  }
+
   /** Business-readable operation: fill the add-guest form and submit it. */
   async addGuest(input: AddGuestInput): Promise<void> {
     await this.firstNameInput().fill(input.firstName);
     await this.lastNameInput().fill(input.lastName);
+    if (input.partyName || input.email) await this.openMoreDetails();
     if (input.partyName) await this.partyNameInput().fill(input.partyName);
     if (input.email) await this.emailInput().fill(input.email);
     await this.addGuestButton().click();
