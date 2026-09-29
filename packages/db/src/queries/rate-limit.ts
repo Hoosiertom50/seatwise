@@ -33,3 +33,20 @@ export async function hitRateLimit(key: string, limit: number, windowSeconds: nu
     retryAfterSeconds: Math.max(1, Math.ceil((windowStart.getTime() + windowMs - nowMs) / 1000)),
   };
 }
+
+// TS-113: how many hits `key` already has in the current window, without adding one -- for limits
+// that only count failures (a failed sign-in), so the check happens before the attempt and the
+// count only goes up if it fails.
+export async function peekRateLimit(key: string, limit: number, windowSeconds: number): Promise<RateLimitResult> {
+  const nowMs = Date.now();
+  const windowMs = windowSeconds * 1000;
+  const windowStart = new Date(Math.floor(nowMs / windowMs) * windowMs);
+  const { rows } = await pool.query<{ count: number }>(
+    `SELECT count FROM "rate_limit_counters" WHERE key = $1 AND "windowStart" = $2`,
+    [key, windowStart]
+  );
+  return {
+    allowed: (rows[0]?.count ?? 0) < limit,
+    retryAfterSeconds: Math.max(1, Math.ceil((windowStart.getTime() + windowMs - nowMs) / 1000)),
+  };
+}
