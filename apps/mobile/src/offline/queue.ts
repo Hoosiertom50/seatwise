@@ -1,4 +1,4 @@
-import type { PlanVersionDetailDTO } from "@seatwise/shared";
+import type { GuestDTO, PlanVersionDetailDTO, SeatingTableDTO } from "@seatwise/shared";
 import { MoveConflictError, MoveRejectedError } from "../api/planVersions";
 import { NetworkError } from "../api/client";
 import type { KeyValueStore } from "./storage";
@@ -58,6 +58,48 @@ export async function readCachedPlan(store: KeyValueStore, weddingId: string): P
 
 export async function writeCachedPlan(store: KeyValueStore, cache: PlanCache): Promise<void> {
   await store.setItem(cacheKey(cache.weddingId), JSON.stringify(cache));
+}
+
+// TS-111: the plan alone can't be drawn -- the floor plan also needs the wedding's tables and
+// guests. Those used to be fetched live every time and never cached, so opening the screen cold
+// while offline restored the plan, failed the tables/guests fetch, and spun forever. Kept under
+// their own key (not folded into PlanCache) because the plan is rewritten on every move while
+// these only change on a full load.
+export interface WeddingDataCache {
+  weddingId: string;
+  tables: SeatingTableDTO[];
+  guests: GuestDTO[];
+  cachedAt: string;
+}
+
+const weddingDataKey = (weddingId: string) => `seatwise:weddingDataCache:${weddingId}`;
+
+// The free-text notes are encrypted at rest on the server (NFR-9.3b) and the email is contact
+// data; the floor plan uses none of them, and AsyncStorage is plain unencrypted storage -- so
+// they're blanked before anything is written to the device.
+export async function writeCachedWeddingData(store: KeyValueStore, cache: WeddingDataCache): Promise<void> {
+  const guests = cache.guests.map((g) => ({ ...g, notes: null, rsvpNotes: null, email: null }));
+  await store.setItem(weddingDataKey(cache.weddingId), JSON.stringify({ ...cache, guests }));
+}
+
+export interface OfflineSnapshot {
+  planVersion: PlanVersionDetailDTO;
+  tables: SeatingTableDTO[];
+  guests: GuestDTO[];
+}
+
+// Everything the floor plan needs to render with no network, or null if any piece is missing --
+// e.g. a device whose only cache predates TS-111 (plan but no tables/guests). A partial snapshot
+// is never returned: the screen can't draw one, and treating it as usable is what caused the
+// endless spinner.
+export async function readOfflineSnapshot(store: KeyValueStore, weddingId: string): Promise<OfflineSnapshot | null> {
+  const [plan, rawData] = await Promise.all([
+    readCachedPlan(store, weddingId),
+    store.getItem(weddingDataKey(weddingId)),
+  ]);
+  if (!plan || !rawData) return null;
+  const data = JSON.parse(rawData) as WeddingDataCache;
+  return { planVersion: plan.planVersion, tables: data.tables, guests: data.guests };
 }
 
 export type ReplayResult =
