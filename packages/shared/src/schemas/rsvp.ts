@@ -22,6 +22,8 @@ export interface GuestRsvpPreviewDTO {
   headcount?: number;
   rsvpStatus?: "PENDING" | "CONFIRMED" | "DECLINED";
   plusOneNames?: string | null;
+  // TS-107: the guest's own note (stored as Guest.rsvpNotes). Never the planner's private
+  // Guest.notes, which this public flow must not read or write.
   notes?: string | null;
   requiresAccessibleTable?: boolean;
   // Echoed back so the page can show "responses closed on <date>" rather than just "closed".

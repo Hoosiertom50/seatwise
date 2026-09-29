@@ -36,7 +36,8 @@ export async function GET(_req: NextRequest, { params }: Params) {
     headcount: guest.headcount,
     rsvpStatus: guest.rsvpStatus as GuestRsvpPreviewDTO["rsvpStatus"],
     plusOneNames: guest.plusOneNames,
-    notes: guest.notes,
+    // TS-107: the guest's own RSVP note -- never the planner's private `notes`.
+    notes: guest.rsvpNotes,
     requiresAccessibleTable: guest.requiresAccessibleTable,
     rsvpCutoffDate: guest.rsvpCutoffDate,
   };
@@ -55,7 +56,8 @@ export async function POST(req: NextRequest, { params }: Params) {
   if (!parsed.success) return zodErrorResponse(parsed.error);
 
   try {
-    await submitGuestRsvp(token, parsed.data);
+    const { notes, ...rest } = parsed.data;
+    await submitGuestRsvp(token, { ...rest, rsvpNotes: notes });
     return NextResponse.json({ ok: true });
   } catch (err) {
     if (err instanceof RsvpSubmissionError) {

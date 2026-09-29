@@ -28,6 +28,12 @@
  * packages/db/src/queries/notifications.ts's own union), so a guest's own answer is silent to the
  * planner in-app; the only way the planner learns of it is by revisiting the Guests tab and seeing
  * the "responded" badge (`rsvpRespondedAt`), which this test also confirms flips correctly.
+ *
+ * TS-107: the guest's free-text note is stored in its own `rsvpNotes` field, never in the
+ * planner's private `notes`. Before TS-107 the RSVP page read and overwrote `notes` directly, so a
+ * guest saw whatever the planner had written about them and could erase it. This test gives the
+ * guest a planner note up front and asserts it never reaches the guest (API response or page) and
+ * survives both submissions untouched.
  */
 
 import { expect, defineQualityTest, test } from "../fixtures/index.js";
@@ -43,17 +49,20 @@ interface GuestListRow {
   headcount: number;
   plusOneNames: string | null;
   notes: string | null;
+  rsvpNotes: string | null;
   requiresAccessibleTable: boolean;
 }
+
+const PLANNER_NOTE = "Planner-only: keep away from table 3 (ex-partner seated there).";
 
 defineQualityTest(
   {
     id: "rsvp.guest-can-submit-and-update-their-own-rsvp-through-the-link.no-account-needed-and-no-lock-after-first-answer",
     title: "a guest submits and later changes their own RSVP through their unauthenticated link, with no account and no lock after their first answer, and the change is silently reflected on the planner's Guests tab with no notification",
     objective:
-      "Confirms a fresh, cookie-free browser context can open a guest's RSVP link, see their own name and the wedding name, submit an attending response with party details, see it persisted on reload, then revisit the same link and change to declining -- all without any sign-in. Confirms the guest record's rsvpStatus/rsvpRespondedAt/revision update accordingly, dayOfAttendance is untouched, no notification is created, and previously-submitted party details survive a switch to declining even though their fields are hidden.",
+      "Confirms a fresh, cookie-free browser context can open a guest's RSVP link, see their own name and the wedding name, submit an attending response with party details, see it persisted on reload, then revisit the same link and change to declining -- all without any sign-in. Confirms the planner's private note on the guest is never exposed to the guest and never overwritten (TS-107). Confirms the guest record's rsvpStatus/rsvpRespondedAt/revision update accordingly, dayOfAttendance is untouched, no notification is created, and previously-submitted party details survive a switch to declining even though their fields are hidden.",
     expectedOutcome:
-      "The guest sees their own first name and the wedding's name with no login. Submitting shows the success banner and persists on reload (pre-filled). Revisiting and switching to declining succeeds with no restriction. The planner's own guest record afterward shows rsvpStatus DECLINED, a non-null rsvpRespondedAt, revision bumped by 2, dayOfAttendance still ATTENDING, and the earlier party details (headcount/plusOneNames/requiresAccessibleTable) still on file. No new notification is created for the planner.",
+      "The guest sees their own first name and the wedding's name with no login. Submitting shows the success banner and persists on reload (pre-filled). Revisiting and switching to declining succeeds with no restriction. The planner's own guest record afterward shows rsvpStatus DECLINED, a non-null rsvpRespondedAt, revision bumped by 2, dayOfAttendance still ATTENDING, and the earlier party details (headcount/plusOneNames/requiresAccessibleTable) still on file. The planner's private note is absent from the RSVP API response and page and unchanged afterward, while the guest's own final note is in rsvpNotes. No new notification is created for the planner.",
     requirementIds: ["REQ-CLIENT-RSVP-COLLECTION"],
     tags: ["@mutating", "@feature:rsvp", "@risk:critical", "@suite:regression"],
   },
@@ -63,7 +72,7 @@ defineQualityTest(
     const guestName = uniquePersonName(testInfo.workerIndex);
 
     await test.step("Arrange: a guest and their RSVP link", async () => {
-      const guest = await weddingData.createGuest(managedWedding.id, guestName);
+      const guest = await weddingData.createGuest(managedWedding.id, { ...guestName, notes: PLANNER_NOTE });
       guestId = guest.id;
 
       const res = await context.request.post(
@@ -91,6 +100,13 @@ defineQualityTest(
         await rsvpPage.goto(rsvpToken);
         await expect(rsvpPage.heading()).toHaveText(managedWedding.name);
         await expect(guestPage.getByText(`Hi ${guestName.firstName} —`, { exact: false })).toBeVisible();
+      });
+
+      await test.step("Assert (TS-107): the planner's private note is not in the public RSVP response or anywhere on the page", async () => {
+        const res = await guestPage.request.get(`/api/v1/rsvp/${rsvpToken}`);
+        expect(res.status()).toBe(200);
+        expect(await res.text()).not.toContain(PLANNER_NOTE);
+        await expect(guestPage.locator("body")).not.toContainText(PLANNER_NOTE);
       });
 
       await test.step("Act + Assert: the guest submits an attending RSVP with party details, and sees the success banner", async () => {
@@ -127,7 +143,9 @@ defineQualityTest(
       expect(guest!.rsvpRespondedAt).toBeTruthy();
       expect(guest!.revision).toBeGreaterThanOrEqual(2); // bumped once per submission (2 submissions)
       expect(guest!.dayOfAttendance).toBe("ATTENDING"); // RSVP never touches Day-Of Mode's own signal
-      expect(guest!.notes).toBe("Can't make it after all, sorry!");
+      // TS-107: the guest's note lands in rsvpNotes; the planner's own note is untouched.
+      expect(guest!.rsvpNotes).toBe("Can't make it after all, sorry!");
+      expect(guest!.notes).toBe(PLANNER_NOTE);
       // Real finding: declining hides these fields from the form, but their previously-submitted
       // values are simply re-sent as-is (the component's local state for them is never reset), not
       // cleared -- so they remain exactly what was set during the earlier CONFIRMED submission.

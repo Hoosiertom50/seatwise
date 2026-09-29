@@ -948,6 +948,13 @@ export function GuestsTab({
                   {g.ageCategory !== "ADULT" ? ` · ${g.ageCategory.charAt(0)}${g.ageCategory.slice(1).toLowerCase()}` : ""}
                   {g.plusOneNames ? ` · with ${g.plusOneNames}` : ""}
                 </p>
+                {/* TS-107: the guest's own note from their RSVP link -- read-only here, and kept
+                    apart from the planner's private notes, which the guest never sees. */}
+                {g.rsvpNotes && (
+                  <p className="text-sm text-neutral-600 dark:text-neutral-400">
+                    <span className="font-medium">Guest&apos;s RSVP note:</span> {g.rsvpNotes}
+                  </p>
+                )}
                 {canEdit ? (
                   <input
                     type="email"

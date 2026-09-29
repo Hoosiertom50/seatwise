@@ -19,6 +19,9 @@ const HEADERS = [
   "Attendance",
   "Side",
   "Notes",
+  // TS-107: last, so the columns an update import maps by name keep their positions. Import never
+  // maps this one -- a guest's own RSVP note is only ever written through their RSVP link.
+  "Guest's RSVP note",
 ];
 
 // Exists so a bulk *update* import (FR-2.4a) has a Guest ID to map back in the first place --
@@ -44,6 +47,7 @@ export async function GET(req: NextRequest, { params }: Params) {
     g.dayOfAttendance,
     g.side,
     g.notes ?? "",
+    g.rsvpNotes ?? "",
   ]);
   const csv = toCsv(HEADERS, rows);
 
