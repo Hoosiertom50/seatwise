@@ -897,6 +897,19 @@ function FloorPlan({
     });
   }
 
+  // TS-90: the browser can abandon a touch drag (a system gesture, an incoming call, the finger
+  // leaving the screen edge). Nothing was saved, so just put the table back where it was.
+  function onPointerCancel() {
+    const id = dragId.current;
+    if (!id) return;
+    dragId.current = null;
+    setLocalPositions((prev) => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+  }
+
   const width = Math.max(760, ...tables.map((t) => positionFor(t).x + sizeForShape(t.shape).width + 40));
   const height = Math.max(520, ...tables.map((t) => positionFor(t).y + sizeForShape(t.shape).height + 40));
 
@@ -911,6 +924,7 @@ function FloorPlan({
         ref={containerRef}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
+        onPointerCancel={onPointerCancel}
         style={{ width: "100%", height, maxWidth: width }}
         className="relative overflow-hidden rounded-lg border border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-900"
       >
@@ -924,7 +938,9 @@ function FloorPlan({
               onPointerDown={(e) => onPointerDown(e, t)}
               style={{ left: pos.x, top: pos.y, ...sizeForShape(t.shape) }}
               className={`absolute flex select-none flex-col items-center justify-center border-2 bg-white dark:bg-neutral-900 p-1 text-center text-xs shadow-sm ${
-                canEdit ? "cursor-grab active:cursor-grabbing" : "cursor-default"
+                // TS-90: touch-none so a finger drags the table instead of scrolling the page
+                // (the browser would otherwise claim the gesture and cancel the pointer).
+                canEdit ? "cursor-grab touch-none active:cursor-grabbing" : "cursor-default"
               } ${SHAPE_STYLE[t.shape]} ${
                 over ? "border-red-400 dark:border-red-500" : t.isAccessible ? "border-blue-400 dark:border-blue-500" : "border-neutral-300 dark:border-neutral-600"
               }`}

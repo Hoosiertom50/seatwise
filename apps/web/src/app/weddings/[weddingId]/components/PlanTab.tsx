@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, ApiError } from "@/lib/api-client";
 import { RULE_WEIGHT_CONFIG, compareTableLabels } from "@seatwise/shared";
 import type {
@@ -1154,10 +1154,20 @@ export function PlanTab({
 }
 
 // FR-7.1: a user with Edit permission can drag a guest from one table to another in a visual
-// view. Uses the native HTML5 drag-and-drop API -- a guest chip is the drag source, a table box
-// is the drop target -- and always calls the same onMoveGuest handler the list view's "Move
+// view. Every way of making that move calls the same onMoveGuest handler the list view's "Move
 // to..." dropdown uses, so FR-7.2 (hard-rule blocking) and FR-7.3 (soft-rule warnings) are
 // enforced identically no matter which UI made the move.
+//
+// TS-90: three ways in, all direct -- none goes through a dialog:
+// - mouse: the native HTML5 drag-and-drop API (a guest chip is the drag source, a table box the
+//   drop target), as before;
+// - touch/pen: native HTML5 drag doesn't fire for a finger on most mobile browsers, so a chip
+//   also runs its own pointer-driven drag for non-mouse pointers -- a label follows the finger
+//   and whichever table box is under it on release is the drop target;
+// - keyboard, or a tap/click without dragging: pick-and-place -- pick a guest up (Enter/Space,
+//   or tap), then choose a table (Enter/Space, or tap); Escape cancels.
+// Moves are to a table, never a numbered seat: Seatwise deliberately has no seat numbers (see
+// tables.no-seat-or-chair-number-feature-exists.spec.ts).
 function PlanFloorPlan({
   tables,
   grouped,
@@ -1184,6 +1194,16 @@ function PlanFloorPlan({
   const [dropFeedback, setDropFeedback] = useState<{ tableId: string; kind: "error" | "warning"; message: string } | null>(
     null
   );
+  // TS-90: the guest currently picked up by keyboard or tap, waiting for a table to be chosen.
+  const [pickedGuestId, setPickedGuestId] = useState<string | null>(null);
+  // TS-90: a finger/pen drag in progress -- where to draw the label that follows it.
+  const [touchDrag, setTouchDrag] = useState<{ guestId: string; x: number; y: number } | null>(null);
+  const touchStart = useRef<{ guestId: string; pointerId: number; x: number; y: number; dragging: boolean } | null>(null);
+  // A pointer drag can end with the browser's own click on the chip, which must not also count as a
+  // tap-to-pick. Browsers don't reliably send that click after a long drag, though, so it's
+  // matched by timing (a click right after a drag ended) rather than a flag that could stay set
+  // and swallow the next genuine tap.
+  const dragEndedAt = useRef(0);
 
   useEffect(() => {
     if (!dropFeedback) return;
@@ -1191,18 +1211,19 @@ function PlanFloorPlan({
     return () => clearTimeout(timer);
   }, [dropFeedback]);
 
-  function onGuestDragStart(e: React.DragEvent<HTMLSpanElement>, guestId: string) {
-    if (!canEditThisVersion) return;
-    e.dataTransfer.setData("text/plain", guestId);
-    e.dataTransfer.effectAllowed = "move";
-  }
+  useEffect(() => {
+    if (!pickedGuestId) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setPickedGuestId(null);
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [pickedGuestId]);
 
-  async function onTableDrop(e: React.DragEvent<HTMLDivElement>, tableId: string) {
-    e.preventDefault();
+  async function moveTo(guestId: string, tableId: string) {
+    setPickedGuestId(null);
     setDragOverTableId(null);
     if (!canEditThisVersion) return;
-    const guestId = e.dataTransfer.getData("text/plain");
-    if (!guestId) return;
     const result = await onMoveGuest(guestId, tableId);
     if (result.error) {
       setDropFeedback({ tableId, kind: "error", message: result.error });
@@ -1213,6 +1234,93 @@ function PlanFloorPlan({
     }
   }
 
+  function onGuestDragStart(e: React.DragEvent<HTMLSpanElement>, guestId: string) {
+    if (!canEditThisVersion) return;
+    e.dataTransfer.setData("text/plain", guestId);
+    e.dataTransfer.effectAllowed = "move";
+  }
+
+  async function onTableDrop(e: React.DragEvent<HTMLDivElement>, tableId: string) {
+    e.preventDefault();
+    setDragOverTableId(null);
+    const guestId = e.dataTransfer.getData("text/plain");
+    if (!guestId) return;
+    await moveTo(guestId, tableId);
+  }
+
+  function tableIdAt(x: number, y: number): string | null {
+    const el = document.elementFromPoint(x, y)?.closest<HTMLElement>("[data-table-id]");
+    return el?.dataset.tableId ?? null;
+  }
+
+  // TS-90: finger/pen drag. Mouse keeps using native HTML5 DnD (onDragStart) -- a mouse
+  // pointerdown here does nothing, so the two never both fire for one gesture.
+  function onChipPointerDown(e: React.PointerEvent<HTMLSpanElement>, guestId: string) {
+    if (!canEditThisVersion || e.pointerType === "mouse") return;
+    // Capture keeps the chip receiving move/up events wherever the finger goes. It can throw for a
+    // pointer the browser doesn't consider active (e.g. one it has already handed to a system
+    // gesture) -- the drag still works from the chip's own events, so that's not fatal.
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {
+      /* not capturable -- carry on uncaptured */
+    }
+    touchStart.current = { guestId, pointerId: e.pointerId, x: e.clientX, y: e.clientY, dragging: false };
+  }
+
+  function onChipPointerMove(e: React.PointerEvent<HTMLSpanElement>) {
+    const start = touchStart.current;
+    if (!start || start.pointerId !== e.pointerId) return;
+    // A few pixels of wobble is still a tap, not a drag.
+    if (!start.dragging && Math.hypot(e.clientX - start.x, e.clientY - start.y) < 8) return;
+    start.dragging = true;
+    setTouchDrag({ guestId: start.guestId, x: e.clientX, y: e.clientY });
+    setDragOverTableId(tableIdAt(e.clientX, e.clientY));
+  }
+
+  function onChipPointerUp(e: React.PointerEvent<HTMLSpanElement>) {
+    const start = touchStart.current;
+    if (!start || start.pointerId !== e.pointerId) return;
+    touchStart.current = null;
+    setTouchDrag(null);
+    if (!start.dragging) return; // a tap -- the click handler picks the guest up
+    dragEndedAt.current = e.timeStamp;
+    const tableId = tableIdAt(e.clientX, e.clientY);
+    if (tableId) void moveTo(start.guestId, tableId);
+    else setDragOverTableId(null);
+  }
+
+  function onChipPointerCancel() {
+    touchStart.current = null;
+    setTouchDrag(null);
+    setDragOverTableId(null);
+  }
+
+  function onChipClick(e: React.MouseEvent, guestId: string) {
+    // Inside a table box, a click on a chip is about the chip, never a drop on that table.
+    e.stopPropagation();
+    if (e.timeStamp - dragEndedAt.current < 500) return;
+    if (!canEditThisVersion) return;
+    setPickedGuestId((cur) => (cur === guestId ? null : guestId));
+  }
+
+  function onChipKeyDown(e: React.KeyboardEvent, guestId: string) {
+    if (!canEditThisVersion || (e.key !== "Enter" && e.key !== " ")) return;
+    e.preventDefault();
+    e.stopPropagation();
+    setPickedGuestId((cur) => (cur === guestId ? null : guestId));
+  }
+
+  const chipHandlers: GuestChipHandlers = {
+    onDragStart: onGuestDragStart,
+    onPointerDown: onChipPointerDown,
+    onPointerMove: onChipPointerMove,
+    onPointerUp: onChipPointerUp,
+    onPointerCancel: onChipPointerCancel,
+    onClick: onChipClick,
+    onKeyDown: onChipKeyDown,
+  };
+
   const width = Math.max(760, ...tables.map((t) => (t.positionX ?? 40) + PLAN_BOX_WIDTH + 40));
   const height = Math.max(480, ...tables.map((t) => (t.positionY ?? 40) + PLAN_BOX_HEIGHT + 40));
 
@@ -1220,26 +1328,38 @@ function PlanFloorPlan({
     <div>
       <p className="mb-3 text-sm text-neutral-500 dark:text-neutral-400">
         {canEditThisVersion
-          ? "Drag a guest onto a different table to move them — hard rules are enforced exactly as with the dropdowns above."
+          ? "Drag a guest onto a different table to move them — or tap or press Enter on a guest, then on a table. Hard rules are enforced exactly as with the dropdowns above."
           : "View-only — dragging guests between tables is turned off for your access level."}
       </p>
+      <p role="status" aria-live="polite" className="sr-only">
+        {pickedGuestId ? `${guestName(pickedGuestId)} picked up. Choose a table, or press Escape to cancel.` : ""}
+      </p>
+      {pickedGuestId && (
+        <div className="mb-3 flex items-center justify-between gap-3 rounded-md bg-blue-50 dark:bg-blue-950 px-3 py-2 text-sm text-blue-800 dark:text-blue-300">
+          <span>
+            Moving <span className="font-medium">{guestName(pickedGuestId)}</span> — choose a table.
+          </span>
+          <button type="button" onClick={() => setPickedGuestId(null)} className="shrink-0 underline hover:no-underline">
+            Cancel
+          </button>
+        </div>
+      )}
       {unassignedGuestIds.length > 0 && (
         <div className="mb-4 rounded-lg border border-neutral-200 dark:border-neutral-700 p-3">
           <p className="mb-2 text-xs font-medium text-neutral-500 dark:text-neutral-400">Unassigned — drag onto a table</p>
           <div className="flex flex-wrap gap-1.5">
-            {unassignedGuestIds.map((id) => (
-              <span
+            {unassignedGuestIds.map((id) =>
+              <GuestChip
                 key={id}
-                data-guest-id={id}
-                draggable={canEditThisVersion}
-                onDragStart={(e) => onGuestDragStart(e, id)}
-                className={`rounded-full border border-dashed border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-900 px-2 py-1 text-xs ${
-                  canEditThisVersion ? "cursor-grab active:cursor-grabbing" : ""
-                } ${movingGuestId === id ? "opacity-50" : ""}`}
-              >
-                {guestName(id)}
-              </span>
-            ))}
+                guestId={id}
+                name={guestName(id)}
+                baseClass="rounded-full border border-dashed border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-900 px-2 py-1 text-xs"
+                canEdit={canEditThisVersion}
+                picked={pickedGuestId === id}
+                moving={movingGuestId === id}
+                handlers={chipHandlers}
+              />
+            )}
           </div>
         </div>
       )}
@@ -1251,20 +1371,19 @@ function PlanFloorPlan({
         <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50/40 dark:bg-amber-950/40 p-3">
           <p className="mb-2 text-xs font-medium text-amber-800 dark:text-amber-300">Needs reassignment — drag onto a table</p>
           <div className="flex flex-wrap gap-1.5">
-            {needsReassignmentGuests.map((g) => (
-              <span
+            {needsReassignmentGuests.map((g) =>
+              <GuestChip
                 key={g.guestId}
-                data-guest-id={g.guestId}
-                draggable={canEditThisVersion}
-                onDragStart={(e) => onGuestDragStart(e, g.guestId)}
+                guestId={g.guestId}
+                name={g.guestName}
+                baseClass="rounded-full border border-dashed border-amber-300 dark:border-amber-700 bg-white dark:bg-neutral-900 px-2 py-1 text-xs text-amber-800 dark:text-amber-300"
                 title={`Currently at ${g.tableLabel}, which no longer fits a hard rule for them`}
-                className={`rounded-full border border-dashed border-amber-300 dark:border-amber-700 bg-white dark:bg-neutral-900 px-2 py-1 text-xs text-amber-800 dark:text-amber-300 ${
-                  canEditThisVersion ? "cursor-grab active:cursor-grabbing" : ""
-                } ${movingGuestId === g.guestId ? "opacity-50" : ""}`}
-              >
-                {g.guestName}
-              </span>
-            ))}
+                canEdit={canEditThisVersion}
+                picked={pickedGuestId === g.guestId}
+                moving={movingGuestId === g.guestId}
+                handlers={chipHandlers}
+              />
+            )}
           </div>
         </div>
       )}
@@ -1275,6 +1394,7 @@ function PlanFloorPlan({
         {tables.map((t) => {
           const entry = grouped.get(t.id);
           const tableGuests = entry?.guests ?? [];
+          const isTarget = pickedGuestId !== null && canEditThisVersion;
           return (
             <div
               key={t.id}
@@ -1286,6 +1406,21 @@ function PlanFloorPlan({
               }}
               onDragLeave={() => setDragOverTableId((cur) => (cur === t.id ? null : cur))}
               onDrop={(e) => onTableDrop(e, t.id)}
+              // TS-90: while a guest is picked up, every table is a place to put them -- by tap,
+              // click, or keyboard (Tab to it, then Enter/Space).
+              onClick={isTarget ? () => void moveTo(pickedGuestId, t.id) : undefined}
+              onKeyDown={
+                isTarget
+                  ? (e) => {
+                      if (e.target !== e.currentTarget || (e.key !== "Enter" && e.key !== " ")) return;
+                      e.preventDefault();
+                      void moveTo(pickedGuestId, t.id);
+                    }
+                  : undefined
+              }
+              {...(isTarget
+                ? { role: "button", tabIndex: 0, "aria-label": `Move ${guestName(pickedGuestId)} to ${t.label}` }
+                : {})}
               style={{
                 left: t.positionX ?? 40,
                 top: t.positionY ?? 40,
@@ -1293,6 +1428,8 @@ function PlanFloorPlan({
                 height: PLAN_BOX_HEIGHT,
               }}
               className={`absolute flex flex-col overflow-hidden rounded-md border-2 bg-white dark:bg-neutral-900 p-2 text-xs shadow-sm ${
+                isTarget ? "cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500" : ""
+              } ${
                 dragOverTableId === t.id ? "border-blue-500 dark:border-blue-400 bg-blue-50 dark:bg-blue-950" : "border-neutral-300 dark:border-neutral-600"
               }`}
             >
@@ -1301,20 +1438,18 @@ function PlanFloorPlan({
               </p>
               <div className="flex max-h-36 flex-col gap-1 overflow-y-auto">
                 {tableGuests.length === 0 && <span className="text-neutral-400 dark:text-neutral-500">Empty</span>}
-                {tableGuests.map((g) => (
-                  <span
-                    key={g.guestId}
-                    data-guest-id={g.guestId}
-                    draggable={canEditThisVersion}
-                    onDragStart={(e) => onGuestDragStart(e, g.guestId)}
-                    title={g.guestName}
-                    className={`truncate rounded px-1.5 py-0.5 bg-neutral-100 dark:bg-neutral-800 text-neutral-900 dark:text-neutral-100 ${
-                      canEditThisVersion ? "cursor-grab active:cursor-grabbing" : ""
-                    } ${movingGuestId === g.guestId ? "opacity-50" : ""}`}
-                  >
-                    {g.guestName}
-                  </span>
-                ))}
+                {tableGuests.map((g) =>
+                  <GuestChip
+                key={g.guestId}
+                guestId={g.guestId}
+                name={g.guestName}
+                baseClass="truncate rounded px-1.5 py-0.5 bg-neutral-100 dark:bg-neutral-800 text-neutral-900 dark:text-neutral-100"
+                canEdit={canEditThisVersion}
+                picked={pickedGuestId === g.guestId}
+                moving={movingGuestId === g.guestId}
+                handlers={chipHandlers}
+              />
+                )}
               </div>
             </div>
           );
@@ -1355,6 +1490,83 @@ function PlanFloorPlan({
             );
           })()}
       </div>
+      {/* TS-90: the label that follows a finger/pen drag. pointer-events-none so it never sits
+          between the finger and the table box elementFromPoint needs to find. */}
+      {touchDrag && (
+        <div
+          aria-hidden="true"
+          style={{ left: touchDrag.x, top: touchDrag.y }}
+          className="pointer-events-none fixed z-50 -translate-x-1/2 -translate-y-[140%] rounded-full bg-blue-600 px-3 py-1 text-xs font-medium text-white shadow-lg"
+        >
+          {guestName(touchDrag.guestId)}
+        </div>
+      )}
     </div>
+  );
+}
+
+interface GuestChipHandlers {
+  onDragStart: (e: React.DragEvent<HTMLSpanElement>, guestId: string) => void;
+  onPointerDown: (e: React.PointerEvent<HTMLSpanElement>, guestId: string) => void;
+  onPointerMove: (e: React.PointerEvent<HTMLSpanElement>) => void;
+  onPointerUp: (e: React.PointerEvent<HTMLSpanElement>) => void;
+  onPointerCancel: () => void;
+  onClick: (e: React.MouseEvent, guestId: string) => void;
+  onKeyDown: (e: React.KeyboardEvent, guestId: string) => void;
+}
+
+// TS-90: one guest on the floor plan -- a native drag source for a mouse, a pointer-drag source for
+// a finger or pen, and (when editable) a button that picks the guest up for keyboard/tap placing.
+function GuestChip({
+  guestId,
+  name,
+  baseClass,
+  title,
+  canEdit,
+  picked,
+  moving,
+  handlers,
+}: {
+  guestId: string;
+  name: string;
+  baseClass: string;
+  title?: string;
+  canEdit: boolean;
+  picked: boolean;
+  moving: boolean;
+  handlers: GuestChipHandlers;
+}) {
+  return (
+    <span
+      data-guest-id={guestId}
+      draggable={canEdit}
+      onDragStart={(e) => handlers.onDragStart(e, guestId)}
+      onPointerDown={(e) => handlers.onPointerDown(e, guestId)}
+      onPointerMove={handlers.onPointerMove}
+      onPointerUp={handlers.onPointerUp}
+      onPointerCancel={handlers.onPointerCancel}
+      onClick={(e) => handlers.onClick(e, guestId)}
+      onKeyDown={(e) => handlers.onKeyDown(e, guestId)}
+      {...(canEdit
+        ? {
+            role: "button",
+            tabIndex: 0,
+            "aria-pressed": picked,
+            "aria-label": picked ? `${name} — picked up, choose a table` : `Move ${name}`,
+          }
+        : {})}
+      title={title ?? name}
+      // touch-none: a finger on a chip drags the guest instead of scrolling the page. Scrolling
+      // still works from anywhere else on the plan.
+      className={`${baseClass} ${
+        canEdit
+          ? `cursor-grab touch-none select-none active:cursor-grabbing focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500 ${
+              picked ? "ring-2 ring-blue-500" : ""
+            }`
+          : ""
+      } ${moving ? "opacity-50" : ""}`}
+    >
+      {name}
+    </span>
   );
 }
