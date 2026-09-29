@@ -60,3 +60,16 @@ export interface SeatingTemplateDTO {
 export interface SeatingTemplateDetailDTO extends SeatingTemplateDTO {
   tables: SeatingTemplateTableDTO[];
 }
+
+// TS-91: add one of your saved templates' tables to a wedding that already exists (additive only).
+export const addTemplateTablesSchema = z.object({
+  templateId: z.string().min(1),
+});
+export type AddTemplateTablesInput = z.infer<typeof addTemplateTablesSchema>;
+
+// TS-91: copy a wedding's room layout and seating settings into a new wedding. Name defaults to
+// "<original name> (copy)".
+export const duplicateWeddingSchema = z.object({
+  name: z.string().trim().min(1).max(200).optional(),
+});
+export type DuplicateWeddingInput = z.infer<typeof duplicateWeddingSchema>;

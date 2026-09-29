@@ -147,6 +147,13 @@ export function TablesTab({
   const [savingTemplate, setSavingTemplate] = useState(false);
   const [savedTemplate, setSavedTemplate] = useState<SeatingTemplateDTO | null>(null);
 
+  // TS-91: add a saved template's tables to this existing wedding (additive -- nothing already
+  // here changes). The template list loads the first time the section is opened.
+  const [myTemplates, setMyTemplates] = useState<SeatingTemplateDTO[] | null>(null);
+  const [applyTemplateId, setApplyTemplateId] = useState("");
+  const [applyingTemplate, setApplyingTemplate] = useState(false);
+  const [appliedMessage, setAppliedMessage] = useState<string | null>(null);
+
   // FR-4.5: capacity overview needs the current plan version's assignments, purely to display --
   // never used for anything that affects seating logic.
   const [assignedHeadcountByTable, setAssignedHeadcountByTable] = useState<Record<string, number>>({});
@@ -258,6 +265,40 @@ export function TablesTab({
       setError(err instanceof ApiError ? err.message : "Couldn't save that template.");
     } finally {
       setSavingTemplate(false);
+    }
+  }
+
+  async function loadMyTemplates() {
+    if (myTemplates) return;
+    try {
+      const { templates } = await api.get<{ templates: SeatingTemplateDTO[] }>(`/api/v1/templates`);
+      setMyTemplates(templates);
+      if (templates[0]) setApplyTemplateId(templates[0].id);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Couldn't load your templates.");
+    }
+  }
+
+  async function onApplyTemplate(e: React.FormEvent) {
+    e.preventDefault();
+    if (!applyTemplateId) return;
+    setError(null);
+    setAppliedMessage(null);
+    setApplyingTemplate(true);
+    try {
+      const res = await api.post<{ addedCount: number; tables: SeatingTableDTO[] }>(
+        `/api/v1/weddings/${weddingId}/apply-template`,
+        { templateId: applyTemplateId }
+      );
+      setTables(res.tables);
+      const name = myTemplates?.find((t) => t.id === applyTemplateId)?.name ?? "the template";
+      setAppliedMessage(
+        `Added ${res.addedCount} table${res.addedCount === 1 ? "" : "s"} from “${name}”. Tables already here weren't changed.`
+      );
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Couldn't add tables from that template.");
+    } finally {
+      setApplyingTemplate(false);
     }
   }
 
@@ -663,6 +704,58 @@ export function TablesTab({
             your dashboard.
           </p>
         )}
+      </details>
+
+      {/* TS-91: the other half of reusable layouts -- until now a template could only be picked
+          when creating a wedding. */}
+      <details
+        className="mb-6 rounded-lg border border-neutral-200 dark:border-neutral-700 p-4"
+        onToggle={(e) => {
+          if ((e.currentTarget as HTMLDetailsElement).open) void loadMyTemplates();
+        }}
+      >
+        <summary className="cursor-pointer text-sm font-medium">Add tables from a template</summary>
+        <p className="mt-2 mb-3 text-sm text-neutral-500 dark:text-neutral-400">
+          Adds a saved template&apos;s tables (with their positions, shapes and settings) to this
+          wedding. Tables already here stay exactly as they are; a name that&apos;s already taken
+          gets a number added.
+        </p>
+        {myTemplates === null ? (
+          <p className="text-sm text-neutral-500 dark:text-neutral-400">Loading your templates…</p>
+        ) : myTemplates.length === 0 ? (
+          <p className="text-sm text-neutral-500 dark:text-neutral-400">
+            You haven&apos;t saved any templates yet — use &ldquo;Save as a reusable template&rdquo; above on a
+            wedding whose layout you want to reuse.
+          </p>
+        ) : (
+          <form onSubmit={onApplyTemplate} className="flex flex-col gap-2 sm:flex-row sm:items-end">
+            <div className="flex-1">
+              <label htmlFor="apply-template" className="mb-1 block text-xs font-medium">
+                Template
+              </label>
+              <select
+                id="apply-template"
+                className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1.5 text-sm"
+                value={applyTemplateId}
+                onChange={(e) => setApplyTemplateId(e.target.value)}
+              >
+                {myTemplates.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.name} ({t.tableCount} table{t.tableCount === 1 ? "" : "s"})
+                  </option>
+                ))}
+              </select>
+            </div>
+            <button
+              type="submit"
+              disabled={applyingTemplate}
+              className="rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50"
+            >
+              {applyingTemplate ? "Adding..." : "Add these tables"}
+            </button>
+          </form>
+        )}
+        {appliedMessage && <p className="mt-2 text-sm text-green-700 dark:text-green-400">{appliedMessage}</p>}
       </details>
         </>
       )}

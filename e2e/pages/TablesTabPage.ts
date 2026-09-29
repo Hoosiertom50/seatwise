@@ -147,6 +147,19 @@ export class TablesTabPage extends BasePage {
     await this.page.mouse.up();
   }
 
+  /** TS-91: opens "Add tables from a template", picks the saved template whose option label starts
+   * with `templateName`, adds it, and waits for the confirmation line (only shown once the request
+   * has settled). */
+  async addTablesFromTemplate(templateName: string): Promise<void> {
+    await this.page.getByText("Add tables from a template", { exact: true }).click();
+    const select = this.page.locator("#apply-template");
+    await select.waitFor();
+    const value = await select.locator("option", { hasText: templateName }).getAttribute("value");
+    await select.selectOption(value!);
+    await this.page.getByRole("button", { name: "Add these tables", exact: true }).click();
+    await expect(this.page.getByText(/^Added \d+ tables? from/)).toBeVisible();
+  }
+
   // TS-51 (REQ-REUSABLE-TEMPLATES, FR-14.1): expands the collapsed "Save as a reusable template"
   // section, fills its name field, submits, and waits for the success banner -- mirrors this
   // framework's established "fill + submit + wait for the real confirming effect" page-object

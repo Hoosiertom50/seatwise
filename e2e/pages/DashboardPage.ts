@@ -219,6 +219,12 @@ export class DashboardPage extends BasePage {
   }
 
   /** Clicks a wedding's list link and waits for the resulting navigation to its detail page. */
+  /** TS-91: the owner-only "Duplicate layout" button beside a wedding's row. Clicking it creates the
+   * copy and navigates into it. */
+  duplicateLayoutButton(weddingName: string) {
+    return this.page.getByRole("button", { name: `Duplicate layout of ${weddingName}`, exact: true });
+  }
+
   async openWedding(nameContains: string): Promise<void> {
     await this.weddingLink(nameContains).click();
     await this.page.waitForURL(/\/weddings\/[^/]+$/);
