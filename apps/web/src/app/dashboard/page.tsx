@@ -444,7 +444,9 @@ export default function DashboardPage() {
 
       {weddings.length === 0 ? (
         <p className="text-sm text-neutral-500 dark:text-neutral-400">
-          No weddings yet — add one above to start building a guest list.
+          {/* TS-96: say what happens after this first step, not just "add one". */}
+          No weddings yet — add one above. Then open it to add your guests and tables, and Seatwise
+          will generate a seating plan that follows your rules.
         </p>
       ) : visibleWeddings.length === 0 ? (
         <p className="text-sm text-neutral-500 dark:text-neutral-400">No weddings match your search/filter.</p>

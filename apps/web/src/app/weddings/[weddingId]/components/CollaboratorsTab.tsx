@@ -18,7 +18,7 @@ const LEVELS: { value: CollaboratorPermission; label: string; hint: string }[] =
 
 const ROLES: { value: CollaboratorRole; label: string; hint: string }[] = [
   { value: "COLLABORATOR", label: "Collaborator", hint: "A helper — planner, family member, friend" },
-  { value: "COUPLE", label: "Couple", hint: "One of the couple — can approve a plan (FR-6.4) at Comment/Edit" },
+  { value: "COUPLE", label: "Couple", hint: "One of the couple — can approve a plan at Comment or Edit access" },
 ];
 
 function roleLabel(role: CollaboratorRole) {

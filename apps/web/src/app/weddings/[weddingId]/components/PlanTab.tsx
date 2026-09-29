@@ -795,7 +795,7 @@ export function PlanTab({
 
           {detail.status === "APPROVED" && (
             <div className="mb-6 flex flex-wrap items-center gap-2 rounded-lg border border-neutral-200 dark:border-neutral-700 p-3">
-              <span className="text-sm font-medium">Export (FR-9.1/9.2/9.3):</span>
+              <span className="text-sm font-medium">Export:</span>
               <a
                 href={`/api/v1/weddings/${weddingId}/plan-versions/${detail.id}/export/chart`}
                 target="_blank"
@@ -827,7 +827,7 @@ export function PlanTab({
             <div className="mb-6 rounded-lg border border-neutral-200 dark:border-neutral-700 p-4">
               <p className="mb-2 text-sm text-neutral-500 dark:text-neutral-400">
                 This is a past version — status can only be changed on the current one. Restoring
-                it (FR-9.4) makes a brand-new current version with a copy of its assignments,
+                it makes a brand-new current version with a copy of its assignments,
                 re-checked against today's guests/tables/rules — it never rewrites this version or
                 anything newer.
               </p>
@@ -999,7 +999,7 @@ export function PlanTab({
                 Redo
               </button>
               <span className="text-xs text-neutral-500 dark:text-neutral-400">
-                Undo/redo covers this browser session's own moves only (FR-7.5) — reload or switch
+                Undo/redo covers this browser session's own moves only — reload or switch
                 versions and use version history instead.
               </span>
             </div>

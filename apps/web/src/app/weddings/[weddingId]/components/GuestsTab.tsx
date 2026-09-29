@@ -12,7 +12,7 @@ import type {
   RsvpStatus,
   WeddingDTO,
 } from "@seatwise/shared";
-import { parseCsv, toCsv } from "@seatwise/shared";
+import { parseCsv, toCsv, GUEST_TIER_LABELS, RSVP_STATUS_LABELS } from "@seatwise/shared";
 
 const TIERS: GuestTier[] = ["VIP", "FAMILY", "FRIEND", "PLUS_ONE", "OTHER"];
 const RSVP_STATUSES: RsvpStatus[] = ["PENDING", "CONFIRMED", "DECLINED"];
@@ -582,7 +582,7 @@ export function GuestsTab({
           >
             {TIERS.map((t) => (
               <option key={t} value={t}>
-                {t.replace("_", " ")}
+                {GUEST_TIER_LABELS[t]}
               </option>
             ))}
           </select>
@@ -599,7 +599,7 @@ export function GuestsTab({
           >
             {RSVP_STATUSES.map((s) => (
               <option key={s} value={s}>
-                {s}
+                {RSVP_STATUS_LABELS[s]}
               </option>
             ))}
           </select>
@@ -953,7 +953,7 @@ export function GuestsTab({
                 </div>
                 <p className="text-sm text-neutral-500 dark:text-neutral-400">
                   {g.partyName ? `${g.partyName} · ` : ""}
-                  {g.tier.replace("_", " ")}
+                  {GUEST_TIER_LABELS[g.tier]}
                   {g.side !== "BOTH" ? ` · ${sideLabelFor(g.side)}` : ""}
                   {g.ageCategory !== "ADULT" ? ` · ${g.ageCategory.charAt(0)}${g.ageCategory.slice(1).toLowerCase()}` : ""}
                   {g.plusOneNames ? ` · with ${g.plusOneNames}` : ""}
@@ -1006,7 +1006,7 @@ export function GuestsTab({
                     >
                       {RSVP_STATUSES.map((s) => (
                         <option key={s} value={s}>
-                          {s}
+                          {RSVP_STATUS_LABELS[s]}
                         </option>
                       ))}
                     </select>
@@ -1044,7 +1044,7 @@ export function GuestsTab({
                     </button>
                   </>
                 ) : (
-                  <span className="text-sm text-neutral-500 dark:text-neutral-400">{g.rsvpStatus}</span>
+                  <span className="text-sm text-neutral-500 dark:text-neutral-400">{RSVP_STATUS_LABELS[g.rsvpStatus]}</span>
                 )}
               </div>
             </li>
