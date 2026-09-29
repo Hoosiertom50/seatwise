@@ -567,7 +567,11 @@ jobs:
 
   merge-reports:
     name: Merge sharded HTML report
-    if: always()
+    # Still runs when shards fail (that's when the combined report matters most), but not when the
+    # whole run was cancelled -- e.g. superseded by a newer push via the concurrency group above.
+    # Under always() it ran anyway, found no blob reports, and posted a misleading red failure on
+    # a run whose real jobs were only cancelled.
+    if: ${{ !cancelled() }}
     needs: [e2e, e2e-firefox, e2e-webkit, e2e-edge]
     runs-on: ubuntu-latest
     steps:
