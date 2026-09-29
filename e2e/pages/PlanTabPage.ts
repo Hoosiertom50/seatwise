@@ -220,15 +220,27 @@ export class PlanTabPage extends BasePage {
   }
 
   /** TS-90: keyboard pick-and-place -- focus the guest, Enter to pick up, Tab to the target table,
-   * Enter to place. Tabs forward from the chip until the target table box has focus. */
+   * Enter to place. Tabs toward the target table -- Shift+Tab when it comes earlier in the page than
+   * the guest -- until it has focus. The direction matters: tabbing forward past the last element
+   * wraps back to the top of the page in Chromium, but Firefox hands focus to its own browser UI
+   * instead and never returns to the page (caught by TS-90's first CI run on Firefox). */
   async keyboardMoveGuestToTable(guestId: string, tableId: string): Promise<void> {
     await this.guestChip(guestId).focus();
     await this.page.keyboard.press("Enter");
     await expect(this.guestChip(guestId)).toHaveAttribute("aria-pressed", "true");
     const table = this.tableBox(tableId);
+    const tableIsEarlier = await this.page.evaluate(
+      ([g, t]) => {
+        const chip = document.querySelector(`[data-guest-id="${g}"]`)!;
+        const box = document.querySelector(`[data-table-id="${t}"]`)!;
+        return Boolean(chip.compareDocumentPosition(box) & Node.DOCUMENT_POSITION_PRECEDING);
+      },
+      [guestId, tableId],
+    );
+    const key = tableIsEarlier ? "Shift+Tab" : "Tab";
     for (let i = 0; i < 50; i++) {
       if (await table.evaluate((el) => el === document.activeElement)) break;
-      await this.page.keyboard.press("Tab");
+      await this.page.keyboard.press(key);
     }
     await expect(table).toBeFocused();
     await Promise.all([this.waitForMove(), this.page.keyboard.press("Enter")]);

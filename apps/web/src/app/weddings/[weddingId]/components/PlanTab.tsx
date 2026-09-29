@@ -1200,10 +1200,11 @@ function PlanFloorPlan({
   const [touchDrag, setTouchDrag] = useState<{ guestId: string; x: number; y: number } | null>(null);
   const touchStart = useRef<{ guestId: string; pointerId: number; x: number; y: number; dragging: boolean } | null>(null);
   // A pointer drag can end with the browser's own click on the chip, which must not also count as a
-  // tap-to-pick. Browsers don't reliably send that click after a long drag, though, so it's
-  // matched by timing (a click right after a drag ended) rather than a flag that could stay set
-  // and swallow the next genuine tap.
-  const dragEndedAt = useRef(0);
+  // tap-to-pick. Browsers don't reliably send that click after a long drag, so it's matched by
+  // timing (a click right after a drag ended) -- and any new pointerdown clears it, since a genuine
+  // tap always starts with one while that leftover click never does. Without the reset, a quick
+  // real tap straight after a drag was swallowed too (caught on WebKit/Edge in CI).
+  const dragEndedAt = useRef<number | null>(null);
 
   useEffect(() => {
     if (!dropFeedback) return;
@@ -1256,6 +1257,7 @@ function PlanFloorPlan({
   // TS-90: finger/pen drag. Mouse keeps using native HTML5 DnD (onDragStart) -- a mouse
   // pointerdown here does nothing, so the two never both fire for one gesture.
   function onChipPointerDown(e: React.PointerEvent<HTMLSpanElement>, guestId: string) {
+    dragEndedAt.current = null; // a new gesture -- whatever follows is its own click, not a drag's
     if (!canEditThisVersion || e.pointerType === "mouse") return;
     // Capture keeps the chip receiving move/up events wherever the finger goes. It can throw for a
     // pointer the browser doesn't consider active (e.g. one it has already handed to a system
@@ -1299,7 +1301,10 @@ function PlanFloorPlan({
   function onChipClick(e: React.MouseEvent, guestId: string) {
     // Inside a table box, a click on a chip is about the chip, never a drop on that table.
     e.stopPropagation();
-    if (e.timeStamp - dragEndedAt.current < 500) return;
+    if (dragEndedAt.current !== null && e.timeStamp - dragEndedAt.current < 500) {
+      dragEndedAt.current = null;
+      return;
+    }
     if (!canEditThisVersion) return;
     setPickedGuestId((cur) => (cur === guestId ? null : guestId));
   }
