@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { api, ApiError } from "@/lib/api-client";
+import { loginUrlReturningTo } from "@/lib/safe-next";
 import type { WeddingDTO, GuestDTO } from "@seatwise/shared";
 import { GuestsTab } from "./components/GuestsTab";
 import { RulesTab } from "./components/RulesTab";
@@ -81,7 +82,7 @@ export default function WeddingDetailPage() {
         setCurrentUserId(me.user.id);
       } catch (err) {
         if (err instanceof ApiError && err.status === 401) {
-          router.push("/login");
+          router.push(loginUrlReturningTo(`/weddings/${weddingId}`));
           return;
         }
         if (err instanceof ApiError && err.status === 404) {
@@ -126,13 +127,17 @@ export default function WeddingDetailPage() {
           }
         }
       } catch (err) {
-        if (err instanceof ApiError && (err.status === 404 || err.status === 401)) {
+        if (err instanceof ApiError && err.status === 404) {
           setAccessRevoked(true);
           setAccessNotice("Your access to this wedding has been removed.");
           clearInterval(interval);
           setTimeout(() => router.push("/dashboard"), 3000);
         }
-        // A transient network error is ignored -- the next tick tries again.
+        // TS-109: a 401 is an expired session, not revoked access -- the app-wide
+        // SessionExpiredNotice (fired from api-client) says so and offers sign-in, and this page
+        // stays mounted so nothing on it is lost. Polling carries on, so a session restored in
+        // another tab is picked up on the next tick. A transient network error is likewise
+        // ignored -- the next tick tries again.
       }
     }, 4000);
     return () => clearInterval(interval);

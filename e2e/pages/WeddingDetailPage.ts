@@ -30,6 +30,20 @@ export class WeddingDetailPage extends BasePage {
     await this.page.goto(`/weddings/${weddingId}`);
   }
 
+  /** TS-109: the app-wide "Your session has expired" banner (SessionExpiredNotice, role="alert"). */
+  sessionExpiredNotice() {
+    return this.page.getByRole("alert").filter({ hasText: "Your session has expired" });
+  }
+
+  async clickSignInAgain(): Promise<void> {
+    await this.page.getByRole("link", { name: "Sign in again", exact: true }).click();
+  }
+
+  /** FR-1.6's full-revocation message -- must only ever appear when access really was removed. */
+  accessRemovedMessage() {
+    return this.page.getByText("Your access to this wedding has been removed.");
+  }
+
   /** Clicks the named tab button (its exact visible label, e.g. "Seating rules", "Day-of mode")
    * and waits for its own data fetch(es) to settle. */
   async openTab(label: string): Promise<void> {

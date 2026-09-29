@@ -17,6 +17,18 @@ export class ApiError extends Error {
   }
 }
 
+// TS-109: fired on `window` when a request that needs a session gets a 401 after this page has
+// already had one -- i.e. the session expired (or was cleared) mid-work. SessionExpiredNotice
+// listens for it. Never fired for a page that was simply opened while signed out (nothing has
+// succeeded yet, and that page's own load handling redirects to /login), nor for /api/v1/auth/*,
+// where a 401 is an ordinary answer (e.g. a wrong password) rather than a lost session.
+export const SESSION_EXPIRED_EVENT = "seatwise:session-expired";
+// Fired once a request succeeds again after SESSION_EXPIRED_EVENT (e.g. after signing back in), so
+// the notice can go away without anyone having to reason about which page it's on.
+export const SESSION_RESTORED_EVENT = "seatwise:session-restored";
+let hadSession = false;
+let sessionExpired = false;
+
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const res = await fetch(path, {
     ...options,
@@ -28,6 +40,19 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   });
 
   const data = await res.json().catch(() => ({}));
+
+  const isAuthRoute = path.startsWith("/api/v1/auth/");
+  if (typeof window !== "undefined") {
+    if (res.ok && sessionExpired) {
+      sessionExpired = false;
+      window.dispatchEvent(new Event(SESSION_RESTORED_EVENT));
+    }
+    if (res.ok && !isAuthRoute) hadSession = true;
+    if (res.status === 401 && !isAuthRoute && hadSession) {
+      sessionExpired = true;
+      window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT));
+    }
+  }
 
   if (!res.ok) {
     throw new ApiError(data.error || "Something went wrong", res.status, data.fieldErrors, data);

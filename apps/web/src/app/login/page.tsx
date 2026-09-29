@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { api, ApiError } from "@/lib/api-client";
 import type { AuthResponse } from "@seatwise/shared";
+import { safeNextPath } from "@/lib/safe-next";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -19,7 +20,10 @@ export default function LoginPage() {
     setLoading(true);
     try {
       await api.post<AuthResponse>("/api/v1/auth/login", { email, password });
-      router.push("/dashboard");
+      // TS-109: back to wherever sent the user here (e.g. the session-expired notice), else the
+      // dashboard. Read at submit time rather than via useSearchParams, which would force this
+      // whole page behind a Suspense boundary for one query value.
+      router.push(safeNextPath(new URLSearchParams(window.location.search).get("next")));
       router.refresh();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Something went wrong");
