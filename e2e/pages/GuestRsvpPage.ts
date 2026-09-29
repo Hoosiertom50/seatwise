@@ -56,6 +56,11 @@ export class GuestRsvpPage extends BasePage {
     await this.page.goto(`/rsvp/${token}`);
   }
 
+  /** TS-98: any text on the page (e.g. the too-many-attempts message, or the invalid-link one). */
+  pageText(text: string | RegExp) {
+    return this.page.getByText(text);
+  }
+
   heading() {
     return this.page.locator("h1");
   }

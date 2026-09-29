@@ -18,6 +18,9 @@ export default function GuestRsvpPage() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [justSubmitted, setJustSubmitted] = useState(false);
+  // TS-98: the page couldn't load for a reason other than a bad link (e.g. too many attempts) --
+  // shown instead of "this link doesn't exist", which would wrongly tell a guest their link is dead.
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const [attending, setAttending] = useState<"CONFIRMED" | "DECLINED">("CONFIRMED");
   const [headcount, setHeadcount] = useState(1);
@@ -36,8 +39,12 @@ export default function GuestRsvpPage() {
         setNotes(res.rsvp.notes ?? "");
         setRequiresAccessibleTable(res.rsvp.requiresAccessibleTable ?? false);
       }
-    } catch {
-      setPreview({ status: "NOT_FOUND" });
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 429) {
+        setLoadError(err.message);
+      } else {
+        setPreview({ status: "NOT_FOUND" });
+      }
     } finally {
       setLoading(false);
     }
@@ -67,6 +74,17 @@ export default function GuestRsvpPage() {
     } finally {
       setSubmitting(false);
     }
+  }
+
+  if (loadError) {
+    return (
+      <main className="flex flex-1 items-center justify-center px-6">
+        <div className="w-full max-w-sm text-center">
+          <h1 className="mb-4 text-2xl font-semibold">RSVP</h1>
+          <p className="text-sm text-neutral-600 dark:text-neutral-300">{loadError}</p>
+        </div>
+      </main>
+    );
   }
 
   if (loading || !preview) {

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { submitGuestRsvpSchema, type GuestRsvpPreviewDTO } from "@seatwise/shared";
 import { getGuestByRsvpToken, submitGuestRsvp, RsvpSubmissionError } from "@seatwise/db";
 import { errorResponse, zodErrorResponse } from "@/lib/api-response";
+import { clientAddress, rateLimitOr429, RSVP_LIMITS } from "@/lib/rate-limit";
 
 type Params = { params: Promise<{ token: string }> };
 
@@ -19,8 +20,11 @@ function isPastCutoff(rsvpCutoffDate: string | null): boolean {
 // a bare error) for a valid token past the wedding's cutoff -- either way pre-filled with
 // whatever's already on file, so re-opening the link (open or closed) shows the guest what's
 // currently on record instead of a blank form.
-export async function GET(_req: NextRequest, { params }: Params) {
+export async function GET(req: NextRequest, { params }: Params) {
   const { token } = await params;
+  // TS-98: this endpoint needs no sign-in, so it's rate-limited per network address.
+  const limited = await rateLimitOr429(`rsvp:addr:${clientAddress(req)}`, RSVP_LIMITS.perAddress);
+  if (limited) return limited;
   const guest = await getGuestByRsvpToken(token);
 
   if (!guest) {
@@ -50,6 +54,12 @@ export async function GET(_req: NextRequest, { params }: Params) {
 // everything they submitted; the frontend re-fetches GET to show the just-confirmed state.
 export async function POST(req: NextRequest, { params }: Params) {
   const { token } = await params;
+  // TS-98: per network address, and per guest link -- so neither one flooding source nor one
+  // leaked link can hammer a guest's record.
+  const limited =
+    (await rateLimitOr429(`rsvp:addr:${clientAddress(req)}`, RSVP_LIMITS.perAddress)) ??
+    (await rateLimitOr429(`rsvp:submit:${token}`, RSVP_LIMITS.submitsPerLink));
+  if (limited) return limited;
 
   const body = await req.json().catch(() => null);
   const parsed = submitGuestRsvpSchema.safeParse(body);
