@@ -14,3 +14,4 @@ export * from "./queries/notifications";
 export * from "./queries/timeline";
 export * from "./queries/templates";
 export * from "./queries/vendors";
+export * from "./queries/rate-limit";

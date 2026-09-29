@@ -679,3 +679,16 @@ model RuleWeightConfig {
   @@unique([weddingId, version])
   @@map("rule_weight_configs")
 }
+
+// TS-98: fixed-window request counters for rate-limiting public endpoints (see
+// packages/db/src/queries/rate-limit.ts). In the database, not server memory, so limits hold across
+// every server instance on any host.
+model RateLimitCounter {
+  key         String
+  windowStart DateTime
+  count       Int      @default(0)
+
+  @@id([key, windowStart])
+  @@index([windowStart])
+  @@map("rate_limit_counters")
+}
