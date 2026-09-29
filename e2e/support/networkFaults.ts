@@ -19,16 +19,18 @@ type Fault = { status: number; error: string } | "network";
 
 /** Fails every `method` request to a URL matching `urlPattern` with `fault` -- either an HTTP
  * error status carrying the app's standard `{ error }` body, or `"network"` to abort the request
- * the way a dropped connection would. */
+ * the way a dropped connection would. With `times`, only the first `times` matching requests fail
+ * and later ones reach the real server (e.g. a connection blip that a retry recovers from). */
 export async function failRequests(
   page: Page,
   urlPattern: string | RegExp,
   method: string,
   fault: Fault,
+  times = Infinity,
 ): Promise<FaultHandle> {
   let hits = 0;
   const handler = async (route: Route) => {
-    if (route.request().method() !== method) return route.fallback();
+    if (route.request().method() !== method || hits >= times) return route.fallback();
     hits++;
     if (fault === "network") return route.abort("connectionfailed");
     return route.fulfill({
@@ -36,6 +38,31 @@ export async function failRequests(
       contentType: "application/json",
       body: JSON.stringify({ error: fault.error }),
     });
+  };
+  await page.route(urlPattern, handler);
+  return {
+    get hits() {
+      return hits;
+    },
+    clear: () => page.unroute(urlPattern, handler),
+  };
+}
+
+/** Holds every `method` request to a URL matching `urlPattern` for `ms` before letting it through
+ * to the real server -- makes an in-flight state (e.g. "Saving…") observable instead of racing a
+ * sub-100ms local request. */
+export async function delayRequests(
+  page: Page,
+  urlPattern: string | RegExp,
+  method: string,
+  ms: number,
+): Promise<FaultHandle> {
+  let hits = 0;
+  const handler = async (route: Route) => {
+    if (route.request().method() !== method) return route.fallback();
+    hits++;
+    await new Promise((resolve) => setTimeout(resolve, ms));
+    return route.fallback();
   };
   await page.route(urlPattern, handler);
   return {

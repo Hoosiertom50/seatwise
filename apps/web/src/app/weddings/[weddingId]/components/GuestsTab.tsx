@@ -357,11 +357,13 @@ export function GuestsTab({
   }
 
   // TS-17 (FR-12.4): inline-editable per row, same optimistic-update-then-reconcile pattern as
-  // the other per-guest edit handlers above.
-  async function onUpdateEmail(guestId: string, newEmail: string) {
+  // the other per-guest edit handlers above. TS-93: uncontrolled like the name inputs (TS-108), so a
+  // rejected edit writes the committed email back into the input itself.
+  async function onUpdateEmail(guestId: string, input: HTMLInputElement) {
     const prev = guests;
-    const expectedRevision = prev.find((g) => g.id === guestId)?.revision;
-    const normalized = newEmail.trim() || null;
+    const current = prev.find((g) => g.id === guestId);
+    const expectedRevision = current?.revision;
+    const normalized = input.value.trim() || null;
     setGuests(prev.map((g) => (g.id === guestId ? { ...g, email: normalized } : g)));
     try {
       const { guest } = await api.patch<{ guest: GuestDTO }>(
@@ -373,11 +375,13 @@ export function GuestsTab({
       const fresh = conflictGuest(err);
       if (fresh) {
         setGuests(prev.map((g) => (g.id === guestId ? fresh : g)));
+        input.value = fresh.email ?? "";
         setError(
           `${fresh.firstName} ${fresh.lastName} was just edited elsewhere — showing the latest. Try again if you still want to make this change.`
         );
       } else {
         setGuests(prev);
+        input.value = current?.email ?? "";
         setError(err instanceof ApiError ? err.message : "Couldn't update that guest's email.");
       }
     }
@@ -969,7 +973,7 @@ export function GuestsTab({
                     placeholder="Email (for their RSVP link)"
                     defaultValue={g.email ?? ""}
                     onBlur={(e) => {
-                      if (e.target.value !== (g.email ?? "")) onUpdateEmail(g.id, e.target.value);
+                      if (e.target.value !== (g.email ?? "")) onUpdateEmail(g.id, e.currentTarget);
                     }}
                   />
                 ) : (

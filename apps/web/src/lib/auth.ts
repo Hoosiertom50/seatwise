@@ -1,4 +1,5 @@
 import { SignJWT, jwtVerify } from "jose";
+import type { NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 
 const JWT_SECRET = process.env.JWT_SECRET;
@@ -44,7 +45,22 @@ export function isSecureCookieContext(): boolean {
 export interface TokenPayload {
   sub: string;
   email: string;
+  // TS-94: when the user actually signed in (seconds since epoch), carried forward unchanged every
+  // time the token is renewed, so renewal can have an absolute limit. Absent on tokens issued
+  // before TS-94 -- treated as their own issue time.
+  authTime?: number;
 }
+
+export interface VerifiedToken extends TokenPayload {
+  issuedAt: number;
+  authTime: number;
+}
+
+// TS-94: a token is valid for 30 days from when it was *issued*, and an active session keeps being
+// re-issued (see proxy.ts / session-renewal.ts) -- so in practice a session only ends after 30 days
+// with no activity at all, or once RENEWAL_LIMIT_SECONDS has passed since the user last really
+// signed in, whichever comes first.
+export const AUTH_TOKEN_TTL_SECONDS = 60 * 60 * 24 * 30;
 
 export async function hashPassword(password: string): Promise<string> {
   return bcrypt.hash(password, 10);
@@ -55,20 +71,36 @@ export async function verifyPassword(password: string, hash: string): Promise<bo
 }
 
 export async function signToken(payload: TokenPayload): Promise<string> {
-  return new SignJWT({ email: payload.email })
+  const now = Math.floor(Date.now() / 1000);
+  return new SignJWT({ email: payload.email, authTime: payload.authTime ?? now })
     .setProtectedHeader({ alg: "HS256" })
     .setSubject(payload.sub)
-    .setIssuedAt()
-    .setExpirationTime("30d")
+    .setIssuedAt(now)
+    .setExpirationTime(now + AUTH_TOKEN_TTL_SECONDS)
     .sign(getSecretKey());
 }
 
-export async function verifyToken(token: string): Promise<TokenPayload | null> {
+export async function verifyToken(token: string): Promise<VerifiedToken | null> {
   try {
     const { payload } = await jwtVerify(token, getSecretKey());
     if (typeof payload.sub !== "string" || typeof payload.email !== "string") return null;
-    return { sub: payload.sub, email: payload.email };
+    const issuedAt = typeof payload.iat === "number" ? payload.iat : 0;
+    const authTime = typeof payload.authTime === "number" ? payload.authTime : issuedAt;
+    return { sub: payload.sub, email: payload.email, issuedAt, authTime };
   } catch {
     return null;
   }
+}
+
+// One definition of the session cookie, shared by login, signup and TS-94's renewal (proxy.ts) so
+// the three can never drift apart on lifetime or flags.
+export function setAuthCookie(response: NextResponse, token: string): void {
+  response.cookies.set(AUTH_COOKIE_NAME, token, {
+    httpOnly: true,
+    // TS-62: see isSecureCookieContext's own doc comment above.
+    secure: isSecureCookieContext(),
+    sameSite: "lax",
+    path: "/",
+    maxAge: AUTH_TOKEN_TTL_SECONDS,
+  });
 }

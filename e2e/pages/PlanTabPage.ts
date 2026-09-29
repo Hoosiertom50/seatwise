@@ -7,6 +7,7 @@
  * structured) -- this page object covers only the real UI controls a planner actually operates.
  */
 
+import { expect } from "@playwright/test";
 import { BasePage } from "./BasePage.js";
 
 export class PlanTabPage extends BasePage {
@@ -181,6 +182,90 @@ export class PlanTabPage extends BasePage {
       table.dispatchEvent("drop", init),
     ]);
     await chip.dispatchEvent("dragend", init);
+  }
+
+  private waitForMove() {
+    return this.page.waitForResponse((res) => res.url().includes("/assignments") && res.request().method() === "POST");
+  }
+
+  /** TS-90: a finger (or pen) drag -- real `PointerEvent`s with `pointerType: "touch"`, the only
+   * input a touch browser gives this gesture (native HTML5 drag doesn't fire for a finger). Sent
+   * with `dispatchEvent` rather than the Chromium-only CDP touch API, so the same gesture runs on
+   * every browser project. The chip's handlers take it from there: pointerdown on the chip,
+   * pointermoves past the 8px tap threshold, pointerup over the target, found by elementFromPoint. */
+  async touchDragGuestToTable(guestId: string, tableId: string): Promise<void> {
+    const chip = this.guestChip(guestId);
+    const table = this.tableBox(tableId);
+    await table.scrollIntoViewIfNeeded();
+    await chip.scrollIntoViewIfNeeded();
+    const from = (await chip.boundingBox())!;
+    const to = (await table.boundingBox())!;
+    const start = { x: from.x + from.width / 2, y: from.y + from.height / 2 };
+    // Aim at the table's label strip, clear of any chips inside it.
+    const end = { x: to.x + to.width / 2, y: to.y + 10 };
+    const base = { pointerId: 7, pointerType: "touch", isPrimary: true, bubbles: true, cancelable: true };
+    await chip.dispatchEvent("pointerdown", { ...base, clientX: start.x, clientY: start.y, buttons: 1 });
+    for (let i = 1; i <= 5; i++) {
+      await chip.dispatchEvent("pointermove", {
+        ...base,
+        clientX: start.x + ((end.x - start.x) * i) / 5,
+        clientY: start.y + ((end.y - start.y) * i) / 5,
+        buttons: 1,
+      });
+    }
+    await Promise.all([
+      this.waitForMove(),
+      chip.dispatchEvent("pointerup", { ...base, clientX: end.x, clientY: end.y, buttons: 0 }),
+    ]);
+  }
+
+  /** TS-90: keyboard pick-and-place -- focus the guest, Enter to pick up, Tab to the target table,
+   * Enter to place. Tabs toward the target table -- Shift+Tab when it comes earlier in the page than
+   * the guest -- until it has focus. The direction matters: tabbing forward past the last element
+   * wraps back to the top of the page in Chromium, but Firefox hands focus to its own browser UI
+   * instead and never returns to the page (caught by TS-90's first CI run on Firefox). */
+  async keyboardMoveGuestToTable(guestId: string, tableId: string): Promise<void> {
+    await this.guestChip(guestId).focus();
+    await this.page.keyboard.press("Enter");
+    await expect(this.guestChip(guestId)).toHaveAttribute("aria-pressed", "true");
+    const table = this.tableBox(tableId);
+    const tableIsEarlier = await this.page.evaluate(
+      ([g, t]) => {
+        const chip = document.querySelector(`[data-guest-id="${g}"]`)!;
+        const box = document.querySelector(`[data-table-id="${t}"]`)!;
+        return Boolean(chip.compareDocumentPosition(box) & Node.DOCUMENT_POSITION_PRECEDING);
+      },
+      [guestId, tableId],
+    );
+    const key = tableIsEarlier ? "Shift+Tab" : "Tab";
+    for (let i = 0; i < 50; i++) {
+      if (await table.evaluate((el) => el === document.activeElement)) break;
+      await this.page.keyboard.press(key);
+    }
+    await expect(table).toBeFocused();
+    await Promise.all([this.waitForMove(), this.page.keyboard.press("Enter")]);
+  }
+
+  /** TS-90: keyboard pick-up then Escape -- leaves nothing picked and makes no move. */
+  async keyboardPickUpThenCancel(guestId: string): Promise<void> {
+    await this.guestChip(guestId).focus();
+    await this.page.keyboard.press("Enter");
+    await expect(this.guestChip(guestId)).toHaveAttribute("aria-pressed", "true");
+    await this.page.keyboard.press("Escape");
+  }
+
+  /** A guest's chip on the floor plan, for state assertions (e.g. its aria-pressed pick-up state). */
+  guestChipFor(guestId: string) {
+    return this.guestChip(guestId);
+  }
+
+  /** TS-90: tap/click pick-and-place -- tap the guest, then tap the target table. */
+  async tapMoveGuestToTable(guestId: string, tableId: string): Promise<void> {
+    await this.guestChip(guestId).click();
+    const table = this.tableBox(tableId);
+    await table.scrollIntoViewIfNeeded();
+    const box = (await table.boundingBox())!;
+    await Promise.all([this.waitForMove(), this.page.mouse.click(box.x + box.width / 2, box.y + 10)]);
   }
 
   async undo(): Promise<void> {

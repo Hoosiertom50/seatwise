@@ -1,3 +1,5 @@
+import { writeFailed, writeStarted, writeSucceeded } from "./save-status";
+
 export class ApiError extends Error {
   status: number;
   fieldErrors?: Record<string, string[] | undefined>;
@@ -29,19 +31,63 @@ export const SESSION_RESTORED_EVENT = "seatwise:session-restored";
 let hadSession = false;
 let sessionExpired = false;
 
+// TS-93: a request that got no response at all (offline, DNS, connection dropped) -- status 0,
+// since there is no HTTP status. Surfaced as an ApiError like any other failure, so every existing
+// `err instanceof ApiError ? err.message : fallback` handler shows the user this instead of a
+// generic fallback (fetch itself only ever throws an unhelpful "Failed to fetch" TypeError).
+export const NETWORK_ERROR_STATUS = 0;
+const NETWORK_ERROR_MESSAGE = "Couldn't reach Seatwise — check your connection and try again.";
+
+// TS-93: how long to wait before each automatic retry of a request that got no response. Only
+// GET/PATCH/DELETE are retried: re-reading is harmless, every PATCH that can conflict carries an
+// expectedRevision (so a retry of one that did land comes back as a 409 with the fresh data, never
+// a double apply), and a repeated DELETE only finds nothing left. POST is never retried -- if the
+// first create landed and only its response was lost, a retry would create a duplicate.
+const RETRY_DELAYS_MS = [400, 1200];
+
+async function fetchWithRetry(path: string, init: RequestInit): Promise<Response> {
+  const retryable = init.method !== "POST";
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await fetch(path, init);
+    } catch {
+      if (!retryable || attempt >= RETRY_DELAYS_MS.length) {
+        throw new ApiError(NETWORK_ERROR_MESSAGE, NETWORK_ERROR_STATUS);
+      }
+      await new Promise((resolve) => setTimeout(resolve, RETRY_DELAYS_MS[attempt]));
+    }
+  }
+}
+
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const res = await fetch(path, {
-    ...options,
-    credentials: "include",
-    headers: {
-      "Content-Type": "application/json",
-      ...(options.headers || {}),
-    },
-  });
+  const isAuthRoute = path.startsWith("/api/v1/auth/");
+  // TS-93: every write except signing in/out counts toward the visible save status.
+  const tracksSave = options.method !== "GET" && !isAuthRoute;
+  if (tracksSave) writeStarted();
+
+  let res: Response;
+  try {
+    res = await fetchWithRetry(path, {
+      ...options,
+      credentials: "include",
+      headers: {
+        "Content-Type": "application/json",
+        ...(options.headers || {}),
+      },
+    });
+  } catch (err) {
+    if (tracksSave) writeFailed(NETWORK_ERROR_MESSAGE);
+    throw err;
+  }
 
   const data = await res.json().catch(() => ({}));
 
-  const isAuthRoute = path.startsWith("/api/v1/auth/");
+  if (tracksSave) {
+    if (res.ok) writeSucceeded();
+    else if (res.status === 401) writeFailed("Not saved — your session has expired.");
+    else writeFailed(data.error || "Something went wrong");
+  }
+
   if (typeof window !== "undefined") {
     if (res.ok && sessionExpired) {
       sessionExpired = false;

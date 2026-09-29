@@ -111,9 +111,11 @@ export class TablesTabPage extends BasePage {
     await this.page.getByRole("button", { name: "Floor plan", exact: true }).click();
   }
 
-  /** Any message the tab shows the user (e.g. its red error banner), matched by its text. */
+  /** Any message the tab shows the user (e.g. its red error banner), matched by its text -- a
+   * string matches the whole element text exactly, so the same reason echoed inside the header's
+   * save status ("Not saved: <reason>", TS-93) isn't a second match. */
   message(text: string | RegExp) {
-    return this.page.getByText(text);
+    return typeof text === "string" ? this.page.getByText(text, { exact: true }) : this.page.getByText(text);
   }
 
   floorPlanTable(label: string) {

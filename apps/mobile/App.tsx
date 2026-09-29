@@ -3,7 +3,7 @@ import { ActivityIndicator, View } from "react-native";
 import { StatusBar } from "expo-status-bar";
 import type { WeddingSummaryDTO } from "@seatwise/shared";
 import { createApiClient, type ApiClient } from "./src/api/client";
-import { clearSession, loadSession, type AuthSession } from "./src/api/auth";
+import { clearSession, loadSession, saveSession, type AuthSession } from "./src/api/auth";
 import { createAsyncStorageStore } from "./src/offline/storage";
 import { API_BASE_URL } from "./src/config";
 import { SessionContext } from "./src/state/SessionContext";
@@ -44,10 +44,19 @@ export default function App() {
     );
   }
 
-  const api: ApiClient = createApiClient(API_BASE_URL, async () => {
-    const current = await loadSession(store);
-    return current?.token ?? null;
-  });
+  const api: ApiClient = createApiClient(
+    API_BASE_URL,
+    async () => {
+      const current = await loadSession(store);
+      return current?.token ?? null;
+    },
+    // TS-94: every request reads the token from the store, so saving the renewed one here is all
+    // it takes for the next request to use it.
+    async (token) => {
+      const current = await loadSession(store);
+      if (current) await saveSession(store, { ...current, token });
+    }
+  );
 
   async function logout() {
     await clearSession(store);
