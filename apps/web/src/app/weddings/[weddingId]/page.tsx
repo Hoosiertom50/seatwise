@@ -17,6 +17,8 @@ import { CommentsTab } from "./components/CommentsTab";
 import { TimelineTab } from "./components/TimelineTab";
 import { BudgetTab } from "./components/BudgetTab";
 import { NotificationsBell } from "@/components/NotificationsBell";
+import { SaveStatusIndicator } from "@/components/SaveStatusIndicator";
+import { saveStatusStore } from "@/lib/save-status";
 
 type Tab =
   | "guests"
@@ -68,6 +70,8 @@ export default function WeddingDetailPage() {
   const [accessRevoked, setAccessRevoked] = useState(false);
 
   useEffect(() => {
+    // TS-93: the save indicator's history belongs to the wedding it happened on.
+    saveStatusStore.resetHistory();
     (async () => {
       try {
         const [w, g, me] = await Promise.all([
@@ -184,7 +188,10 @@ export default function WeddingDetailPage() {
         <Link href="/dashboard" className="text-sm text-neutral-500 dark:text-neutral-400 hover:underline">
           &larr; Back to dashboard
         </Link>
-        <NotificationsBell />
+        <div className="flex items-center gap-4">
+          <SaveStatusIndicator />
+          <NotificationsBell />
+        </div>
       </div>
       {accessNotice && !accessRevoked && (
         // FR-1.6: access changed (but was not revoked entirely) while this tab was already open --

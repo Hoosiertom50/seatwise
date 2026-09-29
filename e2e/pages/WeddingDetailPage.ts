@@ -30,6 +30,16 @@ export class WeddingDetailPage extends BasePage {
     await this.page.goto(`/weddings/${weddingId}`);
   }
 
+  /** TS-93: the header's save-state indicator (SaveStatusIndicator) -- "Saving…", "All changes
+   * saved", "Not saved: <why>", or "Offline — …". */
+  saveStatus() {
+    return this.page.getByRole("status", { name: "Save status" });
+  }
+
+  async dismissSaveError(): Promise<void> {
+    await this.saveStatus().getByRole("button", { name: "Dismiss" }).click();
+  }
+
   /** TS-109: the app-wide "Your session has expired" banner (SessionExpiredNotice, role="alert"). */
   sessionExpiredNotice() {
     return this.page.getByRole("alert").filter({ hasText: "Your session has expired" });
