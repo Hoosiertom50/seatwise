@@ -355,7 +355,8 @@ export function TablesTab({
   }
 
   async function onMove(id: string, x: number, y: number) {
-    const expectedRevision = tables.find((t) => t.id === id)?.revision;
+    const before = tables.find((t) => t.id === id);
+    const expectedRevision = before?.revision;
     setTables((cur) => cur.map((t) => (t.id === id ? { ...t, positionX: x, positionY: y } : t)));
     try {
       const { table } = await api.patch<{ table: SeatingTableDTO }>(
@@ -373,6 +374,9 @@ export function TablesTab({
       if (fresh) {
         setTables((cur) => cur.map((t) => (t.id === id ? fresh : t)));
       } else {
+        // TS-110: put the table back where the server still has it -- leaving it at the dropped
+        // position would show a layout that was never saved.
+        if (before) setTables((cur) => cur.map((t) => (t.id === id ? before : t)));
         setError(err instanceof ApiError ? err.message : "Couldn't save that table's position.");
       }
     }
@@ -838,7 +842,7 @@ function FloorPlan({
 }: {
   tables: SeatingTableDTO[];
   assignedHeadcountByTable: Record<string, number>;
-  onMove: (id: string, x: number, y: number) => void;
+  onMove: (id: string, x: number, y: number) => Promise<void>;
   canEdit: boolean;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -874,12 +878,23 @@ function FloorPlan({
     setLocalPositions((prev) => ({ ...prev, [dragId.current!]: { x, y } }));
   }
 
-  function onPointerUp() {
+  async function onPointerUp() {
     if (!dragId.current) return;
     const id = dragId.current;
     const pos = localPositions[id];
     dragId.current = null;
-    if (pos) onMove(id, Math.round(pos.x), Math.round(pos.y));
+    if (!pos) return;
+    await onMove(id, Math.round(pos.x), Math.round(pos.y));
+    // TS-110: the drag-time override has done its job once the save settles. Dropping it means the
+    // table renders from `tables` again -- the saved position on success, the reverted one on
+    // failure, or the other collaborator's on a 409 -- instead of sticking wherever it was dropped.
+    // Left alone if the same table is already being dragged again, so a fast re-grab doesn't jump.
+    if (dragId.current === id) return;
+    setLocalPositions((prev) => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
   }
 
   const width = Math.max(760, ...tables.map((t) => positionFor(t).x + sizeForShape(t.shape).width + 40));
