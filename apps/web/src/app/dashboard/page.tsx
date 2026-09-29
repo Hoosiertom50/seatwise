@@ -155,6 +155,21 @@ export default function DashboardPage() {
     return sorted;
   }, [weddings, search, planStatusFilter, sortKey]);
 
+  // TS-91: start a new wedding from one of yours -- same room layout (tables, positions, shapes,
+  // table settings) and seating settings, none of its guests, rules or plans -- then open it.
+  const [duplicatingId, setDuplicatingId] = useState<string | null>(null);
+  async function onDuplicate(w: WeddingSummaryDTO) {
+    setError(null);
+    setDuplicatingId(w.id);
+    try {
+      const { wedding } = await api.post<{ wedding: { id: string } }>(`/api/v1/weddings/${w.id}/duplicate`, {});
+      router.push(`/weddings/${wedding.id}`);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Couldn't duplicate that wedding.");
+      setDuplicatingId(null);
+    }
+  }
+
   async function onCreate(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
@@ -461,10 +476,10 @@ export default function DashboardPage() {
             {visibleWeddings.map((w) => {
               const totalIssues = w.unassignedCount + w.needsReassignmentCount;
               return (
-                <li key={w.id}>
+                <li key={w.id} className="flex items-stretch gap-2">
                   <Link
                     href={`/weddings/${w.id}`}
-                    className="flex flex-col gap-2 rounded-lg border border-neutral-200 dark:border-neutral-700 px-4 py-3 hover:border-neutral-400 dark:hover:border-neutral-500 sm:flex-row sm:items-center sm:justify-between"
+                    className="flex flex-1 flex-col gap-2 rounded-lg border border-neutral-200 dark:border-neutral-700 px-4 py-3 hover:border-neutral-400 dark:hover:border-neutral-500 sm:flex-row sm:items-center sm:justify-between"
                   >
                     <div>
                       <p className="flex flex-wrap items-center gap-2 font-medium">
@@ -503,6 +518,20 @@ export default function DashboardPage() {
                       </span>
                     </div>
                   </Link>
+                  {/* TS-91: beside the row's link, not inside it -- a button nested in a link is
+                      invalid and unreachable by keyboard. Owners only: the copy becomes yours. */}
+                  {userId && w.ownerId === userId && (
+                    <button
+                      type="button"
+                      onClick={() => onDuplicate(w)}
+                      disabled={duplicatingId !== null}
+                      aria-label={`Duplicate layout of ${w.name}`}
+                      title="Start a new wedding with this one's tables and seating settings (no guests)"
+                      className="shrink-0 rounded-lg border border-neutral-200 dark:border-neutral-700 px-3 text-sm text-neutral-600 dark:text-neutral-300 hover:border-neutral-400 dark:hover:border-neutral-500 disabled:opacity-50"
+                    >
+                      {duplicatingId === w.id ? "Duplicating…" : "Duplicate layout"}
+                    </button>
+                  )}
                 </li>
               );
             })}

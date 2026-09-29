@@ -170,3 +170,132 @@ export async function deleteTemplateForOwner(id: string, ownerId: string): Promi
   );
   return (rowCount ?? 0) > 0;
 }
+
+// TS-91: the table columns a layout carries -- shared by applying a template to an existing
+// wedding and by duplicating a wedding, so both copy exactly what a saved template would.
+const LAYOUT_COLUMNS = `label, capacity, "isRestricted", "isAccessible", "isLocked", purpose,
+  "purposeCriterionType", "purposeCriterionValue", "singleSideOnly", shape, "positionX", "positionY"`;
+
+interface LayoutTable {
+  label: string;
+  capacity: number;
+  isRestricted: boolean;
+  isAccessible: boolean;
+  isLocked: boolean;
+  purpose: string | null;
+  purposeCriterionType: string | null;
+  purposeCriterionValue: string | null;
+  singleSideOnly: boolean;
+  shape: string;
+  positionX: number | null;
+  positionY: number | null;
+}
+
+// A label already used in the wedding gets " (2)", " (3)"… so two tables are never both called
+// "Table 1" -- every other attribute is copied as-is.
+function uniqueLabel(label: string, taken: Set<string>): string {
+  if (!taken.has(label)) return label;
+  for (let n = 2; ; n++) {
+    const candidate = `${label} (${n})`;
+    if (!taken.has(candidate)) return candidate;
+  }
+}
+
+async function insertLayoutTables(
+  client: import("pg").PoolClient,
+  weddingId: string,
+  tables: LayoutTable[]
+): Promise<number> {
+  const { rows: existing } = await client.query<{ label: string }>(
+    `SELECT label FROM "seating_tables" WHERE "weddingId" = $1`,
+    [weddingId]
+  );
+  const taken = new Set(existing.map((r) => r.label));
+  for (const t of tables) {
+    const label = uniqueLabel(t.label, taken);
+    taken.add(label);
+    await client.query(
+      `INSERT INTO "seating_tables"
+         (id, "weddingId", label, capacity, "isRestricted", "isAccessible", "isLocked", purpose,
+          "purposeCriterionType", "purposeCriterionValue", "singleSideOnly", shape, "positionX", "positionY", "updatedAt")
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::"TablePurposeCriterionType", $10, $11, $12::"TableShape", $13, $14, now())`,
+      [
+        randomUUID(), weddingId, label, t.capacity, t.isRestricted, t.isAccessible, t.isLocked, t.purpose,
+        t.purposeCriterionType, t.purposeCriterionValue, t.singleSideOnly, t.shape, t.positionX, t.positionY,
+      ]
+    );
+  }
+  return tables.length;
+}
+
+// TS-91: adds a saved template's tables to a wedding that already exists -- until now a template
+// could only be applied when creating a wedding. Purely additive: existing tables, guests, rules
+// and plans are never touched or removed. Only the template's own owner can apply it.
+export async function addTemplateTablesToWedding(
+  weddingId: string,
+  templateId: string,
+  userId: string
+): Promise<number> {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const { rows: owned } = await client.query(
+      `SELECT 1 FROM "seating_templates" WHERE id = $1 AND "ownerId" = $2`,
+      [templateId, userId]
+    );
+    if (!owned[0]) throw new TemplateNotFoundError("Template not found.");
+    const { rows } = await client.query<LayoutTable>(
+      `SELECT ${LAYOUT_COLUMNS} FROM "seating_template_tables" WHERE "templateId" = $1 ORDER BY "sortOrder"`,
+      [templateId]
+    );
+    const added = await insertLayoutTables(client, weddingId, rows);
+    await client.query("COMMIT");
+    return added;
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+// TS-91: a brand-new wedding owned by `ownerId` with the source wedding's room layout (every
+// table, its position, shape and flags) and seating settings (side mixing and side labels), so a
+// planner can reuse a venue without rebuilding it. Deliberately not copied: guests, rules,
+// required-guest lists, plans, comments, timeline, vendors -- those belong to the source couple.
+export async function duplicateWeddingLayout(
+  sourceWeddingId: string,
+  ownerId: string,
+  name: string
+): Promise<string | null> {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const { rows: src } = await client.query(
+      `SELECT "venueName", "sideMixing", "sideLabel1", "sideLabel2" FROM "weddings" WHERE id = $1 AND "ownerId" = $2`,
+      [sourceWeddingId, ownerId]
+    );
+    if (!src[0]) {
+      await client.query("ROLLBACK");
+      return null;
+    }
+    const id = randomUUID();
+    await client.query(
+      `INSERT INTO "weddings" (id, "ownerId", name, "venueName", "sideMixing", "sideLabel1", "sideLabel2", "updatedAt")
+       VALUES ($1, $2, $3, $4, $5::"SideMixingSetting", $6, $7, now())`,
+      [id, ownerId, name, src[0].venueName, src[0].sideMixing, src[0].sideLabel1, src[0].sideLabel2]
+    );
+    const { rows: tables } = await client.query<LayoutTable>(
+      `SELECT ${LAYOUT_COLUMNS} FROM "seating_tables" WHERE "weddingId" = $1`,
+      [sourceWeddingId]
+    );
+    await insertLayoutTables(client, id, tables.sort((a, b) => compareTableLabels(a.label, b.label)));
+    await client.query("COMMIT");
+    return id;
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
+}
