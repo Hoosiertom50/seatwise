@@ -414,6 +414,10 @@ model Guest {
   // TS-17 (FR-12.4): set only by the guest's own public submission (submitGuestRsvp), never by a
   // planner editing the guest directly -- this is what "responded via their link" means.
   rsvpRespondedAt         DateTime?
+  // TS-107: the guest's own note from their RSVP form -- kept apart from the planner's private
+  // `notes` above, which the public RSVP flow must never read or write. Encrypted at rest like
+  // `notes` (NFR-9.3b).
+  rsvpNotes               String?
   createdAt               DateTime   @default(now())
   updatedAt               DateTime   @updatedAt
 

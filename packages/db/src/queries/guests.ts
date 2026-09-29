@@ -28,6 +28,8 @@ export interface GuestRow {
   // TS-17: set only by the guest's own public submission (submitGuestRsvp below), never by a
   // planner editing the guest directly.
   rsvpRespondedAt: Date | null;
+  // TS-107: the guest's own RSVP-form note, separate from the planner's private `notes`.
+  rsvpNotes: string | null;
   createdAt: Date;
   updatedAt: Date;
   // FR-7.7: an optimistic-concurrency counter for this guest -- an edit that names an
@@ -43,9 +45,14 @@ export interface GuestRow {
 // bug in a lower-privilege view) can never see a guest's secret RSVP link through this path.
 const COLUMNS = `g.id, g."weddingId", g."firstName", g."lastName", g."partyName", g.headcount, g.tier,
   g."rsvpStatus", g."requiresAccessibleTable", g."isLocked", g."dayOfAttendance", g.notes, g.side,
-  g."ageCategory", g.email, g."plusOneNames", g."rsvpRespondedAt", g.revision,
+  g."ageCategory", g.email, g."plusOneNames", g."rsvpRespondedAt", g."rsvpNotes", g.revision,
   rtg."tableId" AS "requiredTableId", g."createdAt", g."updatedAt"`;
 const FROM_JOINED = `FROM "guests" g LEFT JOIN "restricted_table_guests" rtg ON rtg."guestId" = g.id`;
+
+// NFR-9.3b / TS-107: both free-text note columns are encrypted at rest -- every read decrypts both.
+function decryptGuestNotes<T extends { notes: string | null; rsvpNotes: string | null }>(row: T): T {
+  return { ...row, notes: decryptText(row.notes), rsvpNotes: decryptText(row.rsvpNotes) };
+}
 
 // FR-7.7: thrown instead of applying an edit whose expectedRevision no longer matches the guest's
 // current one -- the fresh, up-to-date guest is attached so the caller can refresh the UI with it
@@ -86,7 +93,7 @@ export async function createGuest(weddingId: string, input: CreateGuestData): Pr
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, now())
      RETURNING id, "weddingId", "firstName", "lastName", "partyName", headcount, tier,
                "rsvpStatus", "requiresAccessibleTable", "isLocked", "dayOfAttendance", notes, side,
-               "ageCategory", email, "plusOneNames", "rsvpRespondedAt", revision, "createdAt", "updatedAt"`,
+               "ageCategory", email, "plusOneNames", "rsvpRespondedAt", "rsvpNotes", revision, "createdAt", "updatedAt"`,
     [
       id,
       weddingId,
@@ -106,7 +113,7 @@ export async function createGuest(weddingId: string, input: CreateGuestData): Pr
       input.plusOneNames ?? null,
     ]
   );
-  return { ...rows[0], notes: decryptText(rows[0].notes), requiredTableId: null };
+  return { ...decryptGuestNotes(rows[0]), requiredTableId: null };
 }
 
 export async function listGuestsByWedding(weddingId: string): Promise<GuestRow[]> {
@@ -114,7 +121,7 @@ export async function listGuestsByWedding(weddingId: string): Promise<GuestRow[]
     `SELECT ${COLUMNS} ${FROM_JOINED} WHERE g."weddingId" = $1 ORDER BY g."lastName", g."firstName"`,
     [weddingId]
   );
-  return rows.map((r) => ({ ...r, notes: decryptText(r.notes) }));
+  return rows.map(decryptGuestNotes);
 }
 
 export async function getGuestForWedding(id: string, weddingId: string): Promise<GuestRow | null> {
@@ -123,7 +130,7 @@ export async function getGuestForWedding(id: string, weddingId: string): Promise
     [id, weddingId]
   );
   if (!rows[0]) return null;
-  return { ...rows[0], notes: decryptText(rows[0].notes) };
+  return decryptGuestNotes(rows[0]);
 }
 
 // FR-7.7, extended to guests: an optional expectedRevision locks the guest's row (FOR UPDATE,
@@ -223,7 +230,9 @@ export interface GuestRsvpLookupRow {
   headcount: number;
   rsvpStatus: string;
   plusOneNames: string | null;
-  notes: string | null;
+  // TS-107: the guest's own RSVP note only. The planner's private `notes` is deliberately never
+  // selected on this unauthenticated path -- an RSVP link is meant to be emailed and forwarded.
+  rsvpNotes: string | null;
   requiresAccessibleTable: boolean;
   // FR-12.2: null means no cutoff at all -- the caller never treats a null cutoff as "closed".
   rsvpCutoffDate: string | null;
@@ -232,14 +241,14 @@ export interface GuestRsvpLookupRow {
 export async function getGuestByRsvpToken(token: string): Promise<GuestRsvpLookupRow | null> {
   const { rows } = await pool.query(
     `SELECT g.id, g."weddingId", w.name AS "weddingName", g."firstName", g."lastName",
-            g.headcount, g."rsvpStatus", g."plusOneNames", g.notes,
+            g.headcount, g."rsvpStatus", g."plusOneNames", g."rsvpNotes",
             g."requiresAccessibleTable", w."rsvpCutoffDate"::text AS "rsvpCutoffDate"
      FROM "guests" g JOIN "weddings" w ON w.id = g."weddingId"
      WHERE g."rsvpToken" = $1`,
     [token]
   );
   if (!rows[0]) return null;
-  return { ...rows[0], notes: decryptText(rows[0].notes) };
+  return { ...rows[0], rsvpNotes: decryptText(rows[0].rsvpNotes) };
 }
 
 // FR-12.4: idempotent -- most guests, especially bulk-imported ones, may never need a link at
@@ -288,7 +297,8 @@ export interface SubmitGuestRsvpData {
   rsvpStatus: string;
   headcount?: number;
   plusOneNames?: string | null;
-  notes?: string | null;
+  // TS-107: stored in rsvpNotes, never in the planner's own `notes`.
+  rsvpNotes?: string | null;
   requiresAccessibleTable?: boolean;
 }
 
@@ -317,7 +327,7 @@ export async function submitGuestRsvp(token: string, input: SubmitGuestRsvpData)
 
   await pool.query(
     `UPDATE "guests"
-     SET "rsvpStatus" = $1, headcount = $2, "plusOneNames" = $3, notes = $4,
+     SET "rsvpStatus" = $1, headcount = $2, "plusOneNames" = $3, "rsvpNotes" = $4,
          "requiresAccessibleTable" = $5, "rsvpRespondedAt" = now(), "updatedAt" = now(),
          revision = revision + 1
      WHERE id = $6`,
@@ -325,7 +335,7 @@ export async function submitGuestRsvp(token: string, input: SubmitGuestRsvpData)
       input.rsvpStatus,
       input.headcount ?? 1,
       input.plusOneNames ?? null,
-      encryptText(input.notes ?? null),
+      encryptText(input.rsvpNotes ?? null),
       input.requiresAccessibleTable ?? false,
       found.guestId,
     ]

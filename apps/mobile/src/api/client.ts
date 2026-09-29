@@ -32,7 +32,15 @@ export interface ApiClient {
   patch<T>(path: string, body: unknown): Promise<T>;
 }
 
-export function createApiClient(baseUrl: string, getToken: () => Promise<string | null>): ApiClient {
+// TS-94: the server's sliding session renewal (apps/web/src/proxy.ts) hands a Bearer client its
+// re-issued token in this response header -- there's no cookie jar here for it to land in.
+export const RENEWED_TOKEN_HEADER = "x-seatwise-renewed-token";
+
+export function createApiClient(
+  baseUrl: string,
+  getToken: () => Promise<string | null>,
+  onRenewedToken?: (token: string) => Promise<void>
+): ApiClient {
   async function request<T>(path: string, init: { method: string; body?: unknown }): Promise<T> {
     const token = await getToken();
     const headers: Record<string, string> = { "Content-Type": "application/json" };
@@ -51,6 +59,13 @@ export function createApiClient(baseUrl: string, getToken: () => Promise<string 
       // manage to send back (including its own 5xx).
       throw new NetworkError();
     }
+
+    // TS-94: keep the renewed token so an actively-used app never reaches its token's expiry --
+    // which could otherwise land on the wedding day itself for a planner who signed in a month
+    // earlier. Saved before the response is even inspected: the renewal is valid regardless of
+    // whether this particular request succeeded.
+    const renewed = res.headers.get(RENEWED_TOKEN_HEADER);
+    if (renewed && onRenewedToken) await onRenewedToken(renewed);
 
     const contentType = res.headers.get("content-type") ?? "";
     const body = contentType.includes("application/json") ? await res.json().catch(() => null) : null;

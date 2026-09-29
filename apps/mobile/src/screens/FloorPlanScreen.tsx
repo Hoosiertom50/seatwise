@@ -21,11 +21,12 @@ import { moveGuest, MoveConflictError, MoveRejectedError } from "../api/planVers
 import {
   enqueueMove,
   loadQueue,
-  readCachedPlan,
+  readOfflineSnapshot,
   rebaseQueue,
   replayQueue,
   saveQueue,
   writeCachedPlan,
+  writeCachedWeddingData,
   type QueuedMove,
 } from "../offline/queue";
 import {
@@ -90,8 +91,14 @@ export function FloorPlanScreen({
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const cached = await readCachedPlan(store, weddingId);
-      if (cached && !cancelled) setPlanVersion(cached.planVersion);
+      // TS-111: restore the plan *and* the tables/guests it's drawn from, or nothing at all -- a
+      // plan on its own can't render, and treating it as usable left a cold offline start spinning.
+      const cached = await readOfflineSnapshot(store, weddingId);
+      if (cached && !cancelled) {
+        setPlanVersion(cached.planVersion);
+        setTables(cached.tables);
+        setGuests(cached.guests);
+      }
       await refreshPendingCount();
 
       try {
@@ -105,6 +112,12 @@ export function FloorPlanScreen({
         if (cancelled) return;
         setTables(tablesRes.tables);
         setGuests(guestsRes.guests);
+        await writeCachedWeddingData(store, {
+          weddingId,
+          tables: tablesRes.tables,
+          guests: guestsRes.guests,
+          cachedAt: new Date().toISOString(),
+        });
 
         // FR-5.6 (TS-8): a Comparison Draft can be generated with a higher versionNumber than the
         // actual Current version and never replace it, so "highest version number" and "current"
@@ -129,7 +142,7 @@ export function FloorPlanScreen({
         if (cancelled) return;
         if (err instanceof NetworkError) {
           if (!cached) setLoadError("Offline, and nothing cached yet for this wedding.");
-          // else: we already showed the cached plan above -- offline is fine, not an error.
+          // else: we already drew the cached snapshot above -- offline is fine, not an error.
         } else {
           setLoadError("Couldn't load this wedding's seating plan.");
         }

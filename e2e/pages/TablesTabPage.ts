@@ -104,6 +104,49 @@ export class TablesTabPage extends BasePage {
     return this.page.getByText(/Short \d+ seat/);
   }
 
+  // TS-110: the optional FR-4.3 floor plan (TablesTab.tsx's `FloorPlan`). Each table box has no
+  // role or id of its own; its `title` attribute ("<label> — <n> seats...") is the one stable,
+  // user-meaningful handle, so boxes are matched by that title's leading label.
+  async openFloorPlan(): Promise<void> {
+    await this.page.getByRole("button", { name: "Floor plan", exact: true }).click();
+  }
+
+  /** Any message the tab shows the user (e.g. its red error banner), matched by its text -- a
+   * string matches the whole element text exactly, so the same reason echoed inside the header's
+   * save status ("Not saved: <reason>", TS-93) isn't a second match. */
+  message(text: string | RegExp) {
+    return typeof text === "string" ? this.page.getByText(text, { exact: true }) : this.page.getByText(text);
+  }
+
+  floorPlanTable(label: string) {
+    return this.page.locator(`[title^="${label} — "]`);
+  }
+
+  /** The box's rendered position inside the floor-plan canvas, read from its inline `left`/`top`
+   * style -- exactly what `FloorPlan.positionFor()` resolved for it. */
+  async floorPlanTablePosition(label: string): Promise<{ x: number; y: number }> {
+    return this.floorPlanTable(label).evaluate((el) => ({
+      x: parseFloat((el as HTMLElement).style.left),
+      y: parseFloat((el as HTMLElement).style.top),
+    }));
+  }
+
+  /** Drags a table box by (dx, dy) with real pointer events -- the same pointerdown/move/up
+   * sequence FloorPlan listens for -- in several steps so every intermediate move registers. */
+  async dragFloorPlanTable(label: string, dx: number, dy: number): Promise<void> {
+    // The floor plan sits below the tab's add-table form, so it's usually off-screen -- and
+    // `page.mouse` works in viewport coordinates, which only hit the box once it's scrolled in.
+    await this.floorPlanTable(label).scrollIntoViewIfNeeded();
+    const box = await this.floorPlanTable(label).boundingBox();
+    if (!box) throw new Error(`Floor-plan table "${label}" is not visible`);
+    const startX = box.x + box.width / 2;
+    const startY = box.y + box.height / 2;
+    await this.page.mouse.move(startX, startY);
+    await this.page.mouse.down();
+    await this.page.mouse.move(startX + dx, startY + dy, { steps: 8 });
+    await this.page.mouse.up();
+  }
+
   // TS-51 (REQ-REUSABLE-TEMPLATES, FR-14.1): expands the collapsed "Save as a reusable template"
   // section, fills its name field, submits, and waits for the success banner -- mirrors this
   // framework's established "fill + submit + wait for the real confirming effect" page-object

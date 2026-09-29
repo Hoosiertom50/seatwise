@@ -3,15 +3,17 @@ import {
   enqueueMove,
   loadQueue,
   readCachedPlan,
+  readOfflineSnapshot,
   rebaseQueue,
   replayQueue,
   saveQueue,
   writeCachedPlan,
+  writeCachedWeddingData,
   type QueuedMove,
 } from "../src/offline/queue";
 import { MoveConflictError, MoveRejectedError } from "../src/api/planVersions";
 import { NetworkError } from "../src/api/client";
-import { makePlanVersion } from "./testFixtures";
+import { makeGuest, makePlanVersion, makeTable } from "./testFixtures";
 
 function move(overrides: Partial<QueuedMove> & { guestId: string; expectedRevision: number }): QueuedMove {
   return {
@@ -49,6 +51,51 @@ describe("plan cache", () => {
 
     const cached = await readCachedPlan(store, "w1");
     expect(cached?.planVersion.id).toBe("pv1");
+  });
+});
+
+// TS-111: a cold start while offline must be able to draw the floor plan from cache alone.
+describe("readOfflineSnapshot", () => {
+  const planVersion = makePlanVersion({ id: "pv1" });
+  const tables = [makeTable({ id: "t1" })];
+  const guests = [makeGuest({ id: "g1" })];
+
+  it("returns the plan together with the tables and guests it's drawn from", async () => {
+    const store = createInMemoryStore();
+    await writeCachedPlan(store, { weddingId: "w1", planVersionId: "pv1", planVersion, cachedAt: "now" });
+    await writeCachedWeddingData(store, { weddingId: "w1", tables, guests, cachedAt: "now" });
+
+    const snapshot = await readOfflineSnapshot(store, "w1");
+    expect(snapshot?.planVersion.id).toBe("pv1");
+    expect(snapshot?.tables.map((t) => t.id)).toEqual(["t1"]);
+    expect(snapshot?.guests.map((g) => g.id)).toEqual(["g1"]);
+  });
+
+  it("never writes a guest's notes or email to the device", async () => {
+    const store = createInMemoryStore();
+    const sensitive = [makeGuest({ id: "g1", notes: "planner-private", rsvpNotes: "guest note", email: "a@b.test" })];
+    await writeCachedPlan(store, { weddingId: "w1", planVersionId: "pv1", planVersion, cachedAt: "now" });
+    await writeCachedWeddingData(store, { weddingId: "w1", tables, guests: sensitive, cachedAt: "now" });
+
+    const guest = (await readOfflineSnapshot(store, "w1"))!.guests[0];
+    expect(guest.notes).toBeNull();
+    expect(guest.rsvpNotes).toBeNull();
+    expect(guest.email).toBeNull();
+    expect(guest.id).toBe("g1");
+  });
+
+  it("returns null for a plan-only cache (written before TS-111) rather than a snapshot the screen can't draw", async () => {
+    const store = createInMemoryStore();
+    await writeCachedPlan(store, { weddingId: "w1", planVersionId: "pv1", planVersion, cachedAt: "now" });
+    expect(await readOfflineSnapshot(store, "w1")).toBeNull();
+  });
+
+  it("returns null when only tables/guests are cached, and keeps weddings separate", async () => {
+    const store = createInMemoryStore();
+    await writeCachedWeddingData(store, { weddingId: "w1", tables, guests, cachedAt: "now" });
+    await writeCachedPlan(store, { weddingId: "w2", planVersionId: "pv1", planVersion, cachedAt: "now" });
+    expect(await readOfflineSnapshot(store, "w1")).toBeNull();
+    expect(await readOfflineSnapshot(store, "w2")).toBeNull();
   });
 });
 

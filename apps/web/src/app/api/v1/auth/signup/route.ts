@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { signupSchema } from "@seatwise/shared";
 import { createUser, findUserByEmail } from "@seatwise/db";
-import { hashPassword, signToken, AUTH_COOKIE_NAME, isSecureCookieContext } from "@/lib/auth";
+import { hashPassword, signToken, setAuthCookie } from "@/lib/auth";
 import { errorResponse, zodErrorResponse } from "@/lib/api-response";
 
 export async function POST(req: NextRequest) {
@@ -24,13 +24,6 @@ export async function POST(req: NextRequest) {
     { user: { id: user.id, name: user.name, email: user.email }, token },
     { status: 201 }
   );
-  response.cookies.set(AUTH_COOKIE_NAME, token, {
-    httpOnly: true,
-    // TS-62: see isSecureCookieContext's own doc comment in lib/auth.ts.
-    secure: isSecureCookieContext(),
-    sameSite: "lax",
-    path: "/",
-    maxAge: 60 * 60 * 24 * 30,
-  });
+  setAuthCookie(response, token);
   return response;
 }

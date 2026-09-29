@@ -22,6 +22,7 @@ export function makeGuest(overrides: Partial<GuestDTO> & { id: string }): GuestD
     email: null,
     plusOneNames: null,
     rsvpRespondedAt: null,
+    rsvpNotes: null,
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-01-01T00:00:00.000Z",
     revision: 0,

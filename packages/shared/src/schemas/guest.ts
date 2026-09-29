@@ -93,6 +93,9 @@ export interface GuestDTO {
   // TS-17 (FR-12.4): set only by the guest's own public RSVP submission -- null means "hasn't
   // responded via their link yet" (independent of rsvpStatus, which a planner can also set directly).
   rsvpRespondedAt: string | null;
+  // TS-107: the guest's own note from their RSVP form -- read-only to the planner, and separate
+  // from `notes`, which is the planner's own and is never shown to the guest.
+  rsvpNotes: string | null;
   createdAt: string;
   updatedAt: string;
   // FR-7.7: an optimistic-concurrency counter -- send this back as expectedRevision on an edit to

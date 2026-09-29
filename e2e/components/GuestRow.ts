@@ -85,6 +85,12 @@ export class GuestRow {
     return this.lastNameInput().inputValue();
   }
 
+  /** TS-108: the inline name edit saves on blur -- replace the field's text, then Tab away. */
+  async editFirstName(value: string): Promise<void> {
+    await this.firstNameInput().fill(value);
+    await this.firstNameInput().press("Tab");
+  }
+
   async rsvpStatus(): Promise<string> {
     return this.rsvpStatusSelect().inputValue();
   }
