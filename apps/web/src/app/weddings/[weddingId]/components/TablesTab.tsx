@@ -367,12 +367,15 @@ export function TablesTab({
       // is still accurate -- without this, every move after the first would be rejected as stale.
       setTables((cur) => cur.map((t) => (t.id === id ? table : t)));
     } catch (err) {
-      // A position conflict is low-stakes (nobody's seating was affected) and dragging is a
-      // frequent, low-friction gesture -- silently re-sync to the fresh table instead of
-      // interrupting the user with an error for something this minor.
+      // TS-92: a position conflict used to re-sync silently, as too minor to mention -- but then the
+      // table jumps somewhere the planner didn't put it with no explanation, and they can't tell
+      // their move didn't save. Re-sync to the other person's position *and* say so.
       const fresh = conflictTable(err);
       if (fresh) {
         setTables((cur) => cur.map((t) => (t.id === id ? fresh : t)));
+        setError(
+          `"${fresh.label}" was moved by someone else just before you — showing where they put it. Drag it again if you still want it moved.`
+        );
       } else {
         // TS-110: put the table back where the server still has it -- leaving it at the dropped
         // position would show a layout that was never saved.

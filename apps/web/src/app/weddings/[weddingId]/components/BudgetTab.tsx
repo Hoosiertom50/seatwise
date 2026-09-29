@@ -96,11 +96,19 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
     try {
       const { summary: updated } = await api.patch<{ summary: BudgetSummaryDTO }>(
         `/api/v1/weddings/${weddingId}/budget`,
-        { budgetCents: dollarsStringToCents(budgetInput) }
+        // TS-92: the version this figure is based on -- a stale one is refused, never overwrites.
+        { budgetCents: dollarsStringToCents(budgetInput), expectedRevision: summary?.budgetRevision }
       );
       setSummary(updated);
       setBudgetInput(centsToDollarsString(updated.budgetCents));
     } catch (err) {
+      // TS-92: someone else changed the budget first -- show their figure in the box, so the
+      // number on screen is what's actually on record.
+      const fresh = err instanceof ApiError && err.status === 409 ? (err.data?.summary as BudgetSummaryDTO | undefined) : undefined;
+      if (fresh) {
+        setSummary(fresh);
+        setBudgetInput(centsToDollarsString(fresh.budgetCents));
+      }
       setError(err instanceof ApiError ? err.message : "Couldn't save that budget figure.");
     } finally {
       setSavingBudget(false);

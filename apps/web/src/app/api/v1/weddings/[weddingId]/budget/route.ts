@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { setBudgetSchema } from "@seatwise/shared";
-import { getBudgetSummaryForWedding, setBudgetForWedding } from "@seatwise/db";
+import { getBudgetSummaryForWedding, setBudgetForWedding, BudgetConflictError } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
 import { errorResponse, zodErrorResponse } from "@/lib/api-response";
 import { requireAccess } from "@/lib/access";
@@ -33,7 +33,16 @@ export async function PATCH(req: NextRequest, { params }: Params) {
   const parsed = setBudgetSchema.safeParse(body);
   if (!parsed.success) return zodErrorResponse(parsed.error);
 
-  await setBudgetForWedding(weddingId, parsed.data.budgetCents);
+  try {
+    await setBudgetForWedding(weddingId, parsed.data.budgetCents, parsed.data.expectedRevision);
+  } catch (err) {
+    // TS-92: stale save -- refused, with the current figure so the UI can show the latest.
+    if (err instanceof BudgetConflictError) {
+      const summary = await getBudgetSummaryForWedding(weddingId);
+      return NextResponse.json({ error: err.message, summary }, { status: 409 });
+    }
+    throw err;
+  }
   const summary = await getBudgetSummaryForWedding(weddingId);
   return NextResponse.json({ summary });
 }

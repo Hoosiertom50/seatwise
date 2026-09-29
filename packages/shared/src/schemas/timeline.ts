@@ -16,7 +16,11 @@ export const createTimelineEntrySchema = z.object({
 });
 export type CreateTimelineEntryInput = z.infer<typeof createTimelineEntrySchema>;
 
-export const updateTimelineEntrySchema = createTimelineEntrySchema.partial();
+// TS-92: expectedRevision is the entry revision the client last saw -- a save based on a stale copy
+// is refused (409, with the fresh entry) instead of overwriting a collaborator's edit.
+export const updateTimelineEntrySchema = createTimelineEntrySchema.partial().extend({
+  expectedRevision: z.number().int().nonnegative().optional(),
+});
 export type UpdateTimelineEntryInput = z.infer<typeof updateTimelineEntrySchema>;
 
 // FR-13.2: "reordered" -- moves an entry earlier or later among any other entries sharing its
@@ -34,6 +38,8 @@ export interface TimelineEntryDTO {
   time: string;
   description: string;
   sortOrder: number;
+  // TS-92: optimistic-concurrency counter -- send back as expectedRevision when editing.
+  revision: number;
   createdAt: string;
   updatedAt: string;
 }

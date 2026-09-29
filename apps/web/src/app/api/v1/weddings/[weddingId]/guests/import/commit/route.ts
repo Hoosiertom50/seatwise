@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { guestImportRequestSchema } from "@seatwise/shared";
-import { commitGuestImport, GuestImportError, listGuestsByWedding } from "@seatwise/db";
+import { commitGuestImport, GuestImportError, listGuestsByWedding, GuestImportConflictError } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
 import { errorResponse, zodErrorResponse } from "@/lib/api-response";
 import { requireAccess } from "@/lib/access";
@@ -23,10 +23,19 @@ export async function POST(req: NextRequest, { params }: Params) {
   if (!parsed.success) return zodErrorResponse(parsed.error);
 
   try {
-    const result = await commitGuestImport(weddingId, parsed.data.csv, parsed.data.mapping);
+    const result = await commitGuestImport(
+      weddingId,
+      parsed.data.csv,
+      parsed.data.mapping,
+      parsed.data.expectedRevisions
+    );
     const guests = await listGuestsByWedding(weddingId);
     return NextResponse.json({ result, guests });
   } catch (err) {
+    // TS-92: a guest in the file was edited by someone else since the preview -- nothing saved.
+    if (err instanceof GuestImportConflictError) {
+      return errorResponse(err.message, 409);
+    }
     if (err instanceof GuestImportError) {
       return errorResponse(err.message, 422);
     }

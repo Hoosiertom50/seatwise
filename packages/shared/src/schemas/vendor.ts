@@ -82,6 +82,9 @@ export type UpdateVendorInput = z.infer<typeof updateVendorSchema>;
 // FR-15.2 rather than requiring a wedding to have one before vendors can be tracked at all.
 export const setBudgetSchema = z.object({
   budgetCents: z.number().int().min(0).max(1_000_000_000).nullable(),
+  // TS-92: the budgetRevision the client last saw -- a stale save is refused (409) rather than
+  // overwriting a collaborator's newer budget figure.
+  expectedRevision: z.number().int().nonnegative().optional(),
 });
 export type SetBudgetInput = z.infer<typeof setBudgetSchema>;
 
@@ -111,4 +114,6 @@ export interface BudgetSummaryDTO {
   budgetCents: number | null;
   totalCostCents: number;
   remainingCents: number | null;
+  // TS-92: send back as expectedRevision when changing the budget figure.
+  budgetRevision: number;
 }

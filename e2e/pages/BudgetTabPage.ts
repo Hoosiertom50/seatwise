@@ -75,6 +75,12 @@ export class BudgetTabPage extends BasePage {
     return this.page.getByText(label, { exact: true }).locator("xpath=following-sibling::p");
   }
 
+  /** TS-92: what the budget box itself currently holds (e.g. after a refused save shows the
+   * latest figure). */
+  async budgetInputValue(): Promise<string> {
+    return this.budgetInput().inputValue();
+  }
+
   budgetText() {
     return this.statText("Budget");
   }

@@ -28,6 +28,20 @@ export class GuestImportError extends Error {
   }
 }
 
+// TS-92: thrown by commitGuestImport when a guest the import would update was changed by someone
+// else after the preview -- nothing is written, and the caller shows who changed so the planner can
+// preview again against the latest.
+export class GuestImportConflictError extends Error {
+  guestNames: string[];
+  constructor(guestNames: string[]) {
+    const list = guestNames.length <= 3 ? guestNames.join(", ") : `${guestNames.slice(0, 3).join(", ")} and ${guestNames.length - 3} more`;
+    super(
+      `Nothing was imported: someone else changed ${guestNames.length === 1 ? "a guest" : `${guestNames.length} guests`} in this file since you previewed it (${list}). Preview again to see the latest, then import.`
+    );
+    this.guestNames = guestNames;
+  }
+}
+
 // A field that's nullable on the guest record (partyName, notes) needs a way to say "clear this
 // value" that's distinct from "this cell is blank, leave the existing value alone" (FR-2.4a) --
 // this literal token (case-insensitive) is that signal.
@@ -171,11 +185,12 @@ export async function classifyGuestImport(
 
   const { headers, rows } = parseCsv(csv);
 
-  const { rows: existingGuests } = await pool.query<{ id: string }>(
-    `SELECT id FROM "guests" WHERE "weddingId" = $1`,
+  const { rows: existingGuests } = await pool.query<{ id: string; revision: number }>(
+    `SELECT id, revision FROM "guests" WHERE "weddingId" = $1`,
     [weddingId]
   );
   const existingIds = new Set(existingGuests.map((g) => g.id));
+  const revisionById = new Map(existingGuests.map((g) => [g.id, g.revision]));
 
   // A guestId cell referenced by more than one row is ambiguous -- FR-2.4a calls this out as its
   // own row error, distinct from "not found".
@@ -210,7 +225,7 @@ export async function classifyGuestImport(
       return { rowNumber, kind: "error", reason: errors.join("; "), guestId, preview: data };
     }
     if (guestId) {
-      return { rowNumber, kind: "update", guestId, preview: data };
+      return { rowNumber, kind: "update", guestId, revision: revisionById.get(guestId), preview: data };
     }
     return { rowNumber, kind: "new", preview: data };
   });
@@ -233,7 +248,8 @@ export async function classifyGuestImport(
 export async function commitGuestImport(
   weddingId: string,
   csv: string,
-  mapping: GuestImportMapping
+  mapping: GuestImportMapping,
+  expectedRevisions?: Record<string, number>
 ): Promise<GuestImportCommitResult> {
   const preview = await classifyGuestImport(weddingId, csv, mapping);
   if (preview.summary.totalRows === 0) {
@@ -257,6 +273,24 @@ export async function commitGuestImport(
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
+
+    // TS-92: refuse the whole import (it's all-or-nothing already) if any guest it would update
+    // was changed by someone else after the planner previewed it -- otherwise the import would
+    // silently overwrite that edit. Rows are locked so nothing can change between this check and
+    // the writes below.
+    const updateIds = preview.rows.filter((r) => r.kind === "update" && r.guestId).map((r) => r.guestId!);
+    if (expectedRevisions && updateIds.length > 0) {
+      const { rows: locked } = await client.query<{ id: string; revision: number; name: string }>(
+        `SELECT id, revision, ("firstName" || ' ' || "lastName") AS name
+         FROM "guests" WHERE "weddingId" = $1 AND id = ANY($2::text[]) FOR UPDATE`,
+        [weddingId, updateIds]
+      );
+      const changed = locked.filter((g) => expectedRevisions[g.id] !== undefined && expectedRevisions[g.id] !== g.revision);
+      if (changed.length > 0) {
+        throw new GuestImportConflictError(changed.map((g) => g.name));
+      }
+    }
+
     let createdCount = 0;
     let updatedCount = 0;
     // FR-2.9: names of guests whose current assignment was flagged Needs Reassignment by this
@@ -337,7 +371,9 @@ export async function commitGuestImport(
           values.push(encryptText(p.notes ?? null));
         }
         if (fields.length > 0) {
-          fields.push(`"updatedAt" = now()`);
+          // TS-92: bump revision like every other guest edit, so anyone holding this guest from
+          // before the import gets a conflict on their next save instead of overwriting it.
+          fields.push(`"updatedAt" = now()`, `revision = revision + 1`);
           values.push(row.guestId, weddingId);
           await client.query(
             `UPDATE "guests" SET ${fields.join(", ")} WHERE id = $${i++} AND "weddingId" = $${i}`,
