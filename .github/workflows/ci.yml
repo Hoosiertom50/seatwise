@@ -32,6 +32,12 @@
 #      scheduled-regression.yml or weekly-quality-review.yml -- a small, stable, dependency-free
 #      unit suite has no reason to newly fail between pushes the way a flaky browser-driven e2e test
 #      might).
+#   3b. web-unit-tests -- TS-94: apps/web's own Node unit tests (`pnpm --filter @seatwise/web
+#      test` -- src/**/*.test.mts, currently the session-renewal policy and token claims in
+#      lib/session-renewal.ts and lib/auth.ts). Same shape and reasoning as mobile-unit-tests:
+#      no Postgres, browser or real JWT_SECRET (the tests set a throwaway one), independent of
+#      every other job, blocking, PR/push only. None of the e2e jobs can reach this logic -- aging
+#      a token needs the server's signing secret -- so without this job it could regress silently.
 #   4. e2e-firefox -- TS-61: adds Firefox as a second browser in the real, blocking CI gate,
 #      following TS-60's throwaway spike (branch ts60-cross-browser-spike, draft PR #10, GitHub
 #      Actions run #18, plus 2 additional manual re-runs of just the firefox job) which showed 3
@@ -154,6 +160,25 @@ jobs:
 
       - name: Run apps/mobile's Jest suite (planMerge, offline queue -- no simulator/device needed)
         run: pnpm --filter @seatwise/mobile test
+
+  web-unit-tests:
+    name: Web app unit tests (apps/web)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run apps/web's unit tests (session-renewal policy -- no database/browser needed)
+        run: pnpm --filter @seatwise/web test
 
   e2e:
     name: "Application E2E (shard ${{ matrix.shard }}/2)"
