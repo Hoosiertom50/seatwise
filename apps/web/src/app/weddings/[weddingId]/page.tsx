@@ -16,6 +16,7 @@ import { ActivityTab } from "./components/ActivityTab";
 import { CommentsTab } from "./components/CommentsTab";
 import { TimelineTab } from "./components/TimelineTab";
 import { BudgetTab } from "./components/BudgetTab";
+import { GettingStarted } from "./components/GettingStarted";
 import { NotificationsBell } from "@/components/NotificationsBell";
 import { SaveStatusIndicator } from "@/components/SaveStatusIndicator";
 import { saveStatusStore } from "@/lib/save-status";
@@ -217,6 +218,12 @@ export default function WeddingDetailPage() {
           </span>
         )}
       </p>
+
+      {/* TS-96: where-to-start hint for a wedding with no plan yet -- editors only, since the steps
+          are all edits. */}
+      {canEdit && (
+        <GettingStarted weddingId={weddingId} guestCount={guests.length} refreshKey={tab} onGoTo={setTab} />
+      )}
 
       <div className="mb-8 flex gap-1 overflow-x-auto border-b border-neutral-200 dark:border-neutral-700">
         {TABS.map((t) => (

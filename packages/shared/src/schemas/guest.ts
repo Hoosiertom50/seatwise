@@ -7,6 +7,23 @@ export type GuestTier = z.infer<typeof guestTierEnum>;
 export const rsvpStatusEnum = z.enum(["PENDING", "CONFIRMED", "DECLINED"]);
 export type RsvpStatus = z.infer<typeof rsvpStatusEnum>;
 
+// TS-96: how these values read on screen. The stored/API values above stay exactly as they are --
+// only the wording a planner sees changes (it used to be the raw enum: "PLUS ONE", "PENDING").
+export const GUEST_TIER_LABELS: Record<GuestTier, string> = {
+  VIP: "VIP",
+  FAMILY: "Family",
+  FRIEND: "Friend",
+  PLUS_ONE: "Plus-one",
+  OTHER: "Other",
+};
+
+export const RSVP_STATUS_LABELS: Record<RsvpStatus, string> = {
+  // Not "Attending": that word already means Day-of mode's separate attendance status.
+  PENDING: "Pending",
+  CONFIRMED: "Confirmed",
+  DECLINED: "Declined",
+};
+
 // FR-8.1: distinct from rsvpStatus — the same-day, freely-flippable "are they actually here"
 // signal used by Day-Of Mode, independent of whatever they RSVP'd weeks earlier.
 export const dayOfAttendanceEnum = z.enum(["ATTENDING", "NOT_ATTENDING"]);

@@ -12,7 +12,7 @@ import type {
   TablePurposeCriterionType,
   WeddingDTO,
 } from "@seatwise/shared";
-import { compareTableLabels } from "@seatwise/shared";
+import { compareTableLabels, GUEST_TIER_LABELS, type GuestTier } from "@seatwise/shared";
 
 const SHAPES: TableShape[] = ["ROUND", "RECTANGULAR", "SQUARE", "OVAL", "OTHER"];
 
@@ -38,7 +38,7 @@ function criterionValueLabel(
 ): string {
   if (!value) return "";
   if (type === "SIDE") return sideValues.find((o) => o.value === value)?.label ?? value;
-  if (type === "TIER") return value.replace("_", " ");
+  if (type === "TIER") return GUEST_TIER_LABELS[value as GuestTier] ?? value;
   return value.charAt(0) + value.slice(1).toLowerCase();
 }
 
@@ -503,7 +503,7 @@ export function TablesTab({
               {(criterionType === "SIDE"
                 ? SIDE_VALUES
                 : criterionType === "TIER"
-                  ? TIER_VALUES.map((v) => ({ value: v, label: v.replace("_", " ") }))
+                  ? TIER_VALUES.map((v) => ({ value: v, label: GUEST_TIER_LABELS[v] }))
                   : AGE_CATEGORY_VALUES.map((v) => ({ value: v, label: v.charAt(0) + v.slice(1).toLowerCase() }))
               ).map((o) => (
                 <option key={o.value} value={o.value}>
@@ -513,7 +513,7 @@ export function TablesTab({
             </select>
           )}
           <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
-            A soft preference (FR-3.7) — favors matching guests but never blocks anyone else, and
+            A soft preference — favors matching guests but never blocks anyone else, and
             overflow is seated elsewhere rather than failing generation.
           </p>
         </div>
@@ -727,7 +727,10 @@ export function TablesTab({
       </div>
 
       {tables.length === 0 ? (
-        <p className="text-sm text-neutral-500 dark:text-neutral-400">No tables yet — add your first one above.</p>
+        <p className="text-sm text-neutral-500 dark:text-neutral-400">
+          {/* TS-96: point a new planner at the one-step way to set up a whole room. */}
+          No tables yet — add one above, or open “Quick-create a standard set of tables” to make them all in one step.
+        </p>
       ) : view === "floorplan" ? (
         <FloorPlan
           tables={tables}
@@ -776,7 +779,7 @@ export function TablesTab({
                     {t.purposeCriterionType && (
                       <span
                         className="ml-2 rounded bg-emerald-50 px-1.5 py-0.5 text-xs text-emerald-700"
-                        title="A soft preference for generation (FR-3.7) -- never blocks anyone else from being seated here."
+                        title="A soft preference for generation — never blocks anyone else from being seated here."
                       >
                         favors {criterionValueLabel(t.purposeCriterionType, t.purposeCriterionValue, SIDE_VALUES)}
                       </span>

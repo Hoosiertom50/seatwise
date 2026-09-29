@@ -30,6 +30,23 @@ export class WeddingDetailPage extends BasePage {
     await this.page.goto(`/weddings/${weddingId}`);
   }
 
+  /** A tab's own level-2 heading (e.g. the Seating plan tab's "Seating plan") -- proof that tab is
+   * the one showing. */
+  tabHeading(text: string) {
+    return this.page.getByRole("heading", { level: 2, name: text, exact: true });
+  }
+
+  /** TS-96: the "Getting started" step strip shown on a wedding with no plan yet. */
+  gettingStarted() {
+    return this.page.getByRole("region", { name: "Getting started" });
+  }
+
+  /** One step button in the strip, by its leading label (e.g. "2. Add tables"). Its accessible
+   * name includes "(done)" once the step is complete. */
+  gettingStartedStep(label: string) {
+    return this.gettingStarted().getByRole("button", { name: new RegExp(`^[✓○]?\\s*${label.replace(/[.()]/g, "\\$&")}`) });
+  }
+
   /** TS-93: the header's save-state indicator (SaveStatusIndicator) -- "Saving…", "All changes
    * saved", "Not saved: <why>", or "Offline — …". */
   saveStatus() {
