@@ -388,14 +388,18 @@ export function GuestsTab({
   // short of re-importing or deleting/re-adding; the API/DB already supported it, only the UI
   // didn't expose it). firstName/lastName are both required server-side (min length 1), so an
   // emptied-out field is never sent -- it just reverts to the last saved value on blur instead.
-  async function onUpdateName(guestId: string, field: "firstName" | "lastName", newValue: string) {
-    const trimmed = newValue.trim();
+  // TS-108: the name inputs are uncontrolled (defaultValue), and React never pushes a changed
+  // defaultValue into an already-mounted input -- so restoring state alone leaves the rejected
+  // text on screen. Every path that doesn't keep the user's text writes the committed name back
+  // into the input element itself.
+  async function onUpdateName(guestId: string, field: "firstName" | "lastName", input: HTMLInputElement) {
+    const trimmed = input.value.trim();
     const prev = guests;
     const current = prev.find((g) => g.id === guestId);
     if (!current || trimmed === current[field]) return;
     if (trimmed === "") {
       setError(field === "firstName" ? "First name can't be blank." : "Last name can't be blank.");
-      setGuests([...prev]); // force the input back to its defaultValue
+      input.value = current[field];
       return;
     }
     const expectedRevision = current.revision;
@@ -410,11 +414,13 @@ export function GuestsTab({
       const fresh = conflictGuest(err);
       if (fresh) {
         setGuests(prev.map((g) => (g.id === guestId ? fresh : g)));
+        input.value = fresh[field];
         setError(
           `${fresh.firstName} ${fresh.lastName} was just edited elsewhere — showing the latest. Try again if you still want to make this change.`
         );
       } else {
         setGuests(prev);
+        input.value = current[field];
         setError(
           apiErrorMessage(
             err,
@@ -882,14 +888,14 @@ export function GuestsTab({
                         aria-label={`First name for ${g.firstName} ${g.lastName}`}
                         className="w-24 rounded-md border border-transparent px-1 py-0.5 font-medium hover:border-neutral-200 dark:hover:border-neutral-700 focus:border-neutral-300 dark:focus:border-neutral-600 focus:outline-none"
                         defaultValue={g.firstName}
-                        onBlur={(e) => onUpdateName(g.id, "firstName", e.target.value)}
+                        onBlur={(e) => onUpdateName(g.id, "firstName", e.currentTarget)}
                         maxLength={100}
                       />
                       <input
                         aria-label={`Last name for ${g.firstName} ${g.lastName}`}
                         className="w-28 rounded-md border border-transparent px-1 py-0.5 font-medium hover:border-neutral-200 dark:hover:border-neutral-700 focus:border-neutral-300 dark:focus:border-neutral-600 focus:outline-none"
                         defaultValue={g.lastName}
-                        onBlur={(e) => onUpdateName(g.id, "lastName", e.target.value)}
+                        onBlur={(e) => onUpdateName(g.id, "lastName", e.currentTarget)}
                         maxLength={100}
                       />
                     </span>

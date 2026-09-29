@@ -48,6 +48,11 @@ export class WeddingGuestsPage extends BasePage {
     await this.guestsTabButton().click();
   }
 
+  /** Any message the tab shows the user (e.g. its red error banner), matched by its text. */
+  message(text: string | RegExp) {
+    return this.page.getByText(text);
+  }
+
   /** Business-readable operation: fill the add-guest form and submit it. */
   async addGuest(input: AddGuestInput): Promise<void> {
     await this.firstNameInput().fill(input.firstName);
