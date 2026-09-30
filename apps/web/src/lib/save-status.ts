@@ -54,6 +54,13 @@ export function writeSucceeded() {
   set({ pending: Math.max(0, status.pending - 1), lastError: null, lastSavedAt: Date.now() });
 }
 
+// TS-124: the server answered with a question ("guests are seated here -- remove anyway?"), not
+// a failure: nothing was saved and nothing was lost, so the indicator neither reports an error nor
+// claims a save.
+export function writeAwaitingConfirmation() {
+  set({ pending: Math.max(0, status.pending - 1) });
+}
+
 export function writeFailed(reason: string) {
   set({ pending: Math.max(0, status.pending - 1), lastError: reason });
 }

@@ -103,6 +103,17 @@ export class GuestRow {
     await this.sideSelect().selectOption(side);
   }
 
+  /** TS-117: "New link" -- issues a fresh RSVP token, invalidating the old one. */
+  async requestNewRsvpLink(): Promise<void> {
+    await this.root.getByRole("button", { name: "New link", exact: true }).click();
+  }
+
+  /** TS-117: the line the row shows after an RSVP-link action: "Link copied…", "Emailed to …", or
+   * the bare link when the clipboard isn't available. */
+  rsvpLinkResult(): Locator {
+    return this.root.getByText(/Link copied|Emailed to|\/rsvp\//);
+  }
+
   async remove(): Promise<void> {
     await this.removeButton().click();
   }

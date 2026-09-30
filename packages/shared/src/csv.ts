@@ -64,10 +64,26 @@ export function parseCsv(text: string): { headers: string[]; rows: string[][] } 
   }
 
   const headers = (rows.shift() ?? []).map((h) => h.trim());
-  return { headers, rows };
+  return { headers, rows: rows.map((r) => r.map(fromSpreadsheetSafe)) };
 }
 
-function csvEscape(value: string): string {
+// TS-125: a cell that starts with = + - @ (or a tab/CR) is run as a formula by Excel, Numbers and
+// Google Sheets. Guest RSVP notes are typed by anyone holding a public RSVP link, so the export
+// neutralises such cells with a leading apostrophe (OWASP's CSV-injection guidance) -- spreadsheets
+// show it as plain text -- and parseCsv strips exactly that apostrophe back off, so an exported file
+// re-imports unchanged.
+const FORMULA_START = /^[=+\-@\t\r]/;
+
+function toSpreadsheetSafe(value: string): string {
+  return FORMULA_START.test(value) ? `'${value}` : value;
+}
+
+function fromSpreadsheetSafe(value: string): string {
+  return value.startsWith("'") && FORMULA_START.test(value.slice(1)) ? value.slice(1) : value;
+}
+
+function csvEscape(raw: string): string {
+  const value = toSpreadsheetSafe(raw);
   if (/[",\n\r]/.test(value)) {
     return `"${value.replace(/"/g, '""')}"`;
   }

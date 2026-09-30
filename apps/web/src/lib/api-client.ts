@@ -1,4 +1,4 @@
-import { writeFailed, writeStarted, writeSucceeded } from "./save-status";
+import { writeAwaitingConfirmation, writeFailed, writeStarted, writeSucceeded } from "./save-status";
 
 export class ApiError extends Error {
   status: number;
@@ -84,6 +84,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 
   if (tracksSave) {
     if (res.ok) writeSucceeded();
+    else if (data.needsConfirmation === true) writeAwaitingConfirmation();
     else if (res.status === 401) writeFailed("Not saved — your session has expired.");
     else writeFailed(data.error || "Something went wrong");
   }

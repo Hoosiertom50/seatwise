@@ -286,12 +286,91 @@ export async function updateSeatingTableForWedding(
   }
 }
 
-export async function deleteSeatingTableForWedding(id: string, weddingId: string): Promise<boolean> {
-  const { rowCount } = await pool.query(
-    `DELETE FROM "seating_tables" WHERE id = $1 AND "weddingId" = $2`,
-    [id, weddingId]
-  );
-  return (rowCount ?? 0) > 0;
+export type RemoveTableResult =
+  | { status: "NOT_FOUND" }
+  | { status: "NEEDS_CONFIRMATION"; label: string; seatedCount: number }
+  | { status: "REMOVED"; label: string; seatedCount: number };
+
+// TS-124: removing a table takes every seat assignment at it with it (ON DELETE CASCADE), so it
+// must never be silent about the guests seated there. If the current plan seats anyone at this
+// table, nothing happens unless the caller confirms; once it does, the current plan is kept honest
+// in the same transaction -- isComplete recomputed (those guests are now unassigned), revision
+// bumped, and a change-history entry written, which is also what raises "Modified since approval"
+// on an Approved plan (FR-6.6). An empty table is simply removed.
+//
+// Known limit: past (non-current) versions lose their assignments at this table too, through the
+// same cascade -- keeping them needs a schema change and is tracked separately.
+export async function removeSeatingTable(
+  id: string,
+  weddingId: string,
+  actorUserId: string,
+  confirmed: boolean
+): Promise<RemoveTableResult> {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const { rows: tableRows } = await client.query<{ label: string }>(
+      `SELECT label FROM "seating_tables" WHERE id = $1 AND "weddingId" = $2 FOR UPDATE`,
+      [id, weddingId]
+    );
+    if (!tableRows[0]) {
+      await client.query("ROLLBACK");
+      return { status: "NOT_FOUND" };
+    }
+    const label = tableRows[0].label;
+
+    const { rows: planRows } = await client.query<{ id: string }>(
+      `SELECT id FROM "plan_versions" WHERE "weddingId" = $1 AND "isCurrent" FOR UPDATE`,
+      [weddingId]
+    );
+    const currentPlanId = planRows[0]?.id;
+    let seatedCount = 0;
+    if (currentPlanId) {
+      const { rows } = await client.query<{ n: number }>(
+        `SELECT COUNT(*)::int AS n FROM "seat_assignments" WHERE "planVersionId" = $1 AND "seatingTableId" = $2`,
+        [currentPlanId, id]
+      );
+      seatedCount = rows[0].n;
+    }
+    if (seatedCount > 0 && !confirmed) {
+      await client.query("ROLLBACK");
+      return { status: "NEEDS_CONFIRMATION", label, seatedCount };
+    }
+
+    await client.query(`DELETE FROM "seating_tables" WHERE id = $1`, [id]);
+
+    if (currentPlanId && seatedCount > 0) {
+      // Same combined unassigned + needs-reassignment formula as recomputeCurrentPlanCompleteness.
+      const { rows: countRows } = await client.query(
+        `SELECT
+           (SELECT COUNT(*)::int FROM "guests" g WHERE g."weddingId" = $1 AND g."dayOfAttendance" = 'ATTENDING'
+              AND NOT EXISTS (SELECT 1 FROM "seat_assignments" sa WHERE sa."planVersionId" = $2 AND sa."guestId" = g.id)
+           ) AS "unassignedCount",
+           (SELECT COUNT(*)::int FROM "seat_assignments" WHERE "planVersionId" = $2 AND "needsReassignment" = true)
+             AS "needsReassignmentCount"`,
+        [weddingId, currentPlanId]
+      );
+      const isComplete = countRows[0].unassignedCount === 0 && countRows[0].needsReassignmentCount === 0;
+      await client.query(
+        `UPDATE "plan_versions" SET "isComplete" = $1, revision = revision + 1 WHERE id = $2`,
+        [isComplete, currentPlanId]
+      );
+      const guests = seatedCount === 1 ? "1 guest" : `${seatedCount} guests`;
+      await client.query(
+        `INSERT INTO "change_history_entries" (id, "planVersionId", action, description, "actorUserId")
+         VALUES ($1, $2, 'TABLE_REMOVED', $3, $4)`,
+        [randomUUID(), currentPlanId, `Table "${label}" removed — ${guests} left unassigned`, actorUserId]
+      );
+    }
+
+    await client.query("COMMIT");
+    return { status: "REMOVED", label, seatedCount };
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 
 // FR-3.7a: replace a Restricted table's entire required-guest list in one atomic operation — the
