@@ -1017,6 +1017,13 @@ function FloorPlan({
   // edge runs past the canvas. Captured on pointer-down so the move handler stays cheap.
   const dragSize = useRef<{ width: number; height: number }>({ width: BOX_SIZE, height: BOX_SIZE });
   const [localPositions, setLocalPositions] = useState<Record<string, { x: number; y: number }>>({});
+  // TS-121: keyboard moves. Each arrow press moves the table on screen at once; the save waits
+  // until the planner pauses (or tabs away), so a run of presses is one save -- one revision --
+  // rather than several racing each other into a conflict.
+  // The pending position lives in the ref itself: the delayed save runs from an earlier render's
+  // closure, so it must not read `localPositions` (which would be one press behind).
+  const keyboardSave = useRef<{ id: string; pos: { x: number; y: number }; timer: ReturnType<typeof setTimeout> } | null>(null);
+  const [announcement, setAnnouncement] = useState("");
 
   function positionFor(t: SeatingTableDTO): { x: number; y: number } {
     return localPositions[t.id] ?? { x: t.positionX ?? 40, y: t.positionY ?? 40 };
@@ -1074,6 +1081,50 @@ function FloorPlan({
     });
   }
 
+  async function flushKeyboardMove() {
+    const pending = keyboardSave.current;
+    if (!pending) return;
+    clearTimeout(pending.timer);
+    keyboardSave.current = null;
+    await onMove(pending.id, Math.round(pending.pos.x), Math.round(pending.pos.y));
+    // A newer run of presses on the same table owns the override now -- leave it be.
+    // (Re-read through a widened type: TypeScript narrows it to null above, but presses during
+    // the await can set it again.)
+    const now = keyboardSave.current as { id: string } | null;
+    if (now?.id === pending.id) return;
+    setLocalPositions((prev) => {
+      const next = { ...prev };
+      delete next[pending.id];
+      return next;
+    });
+  }
+
+  function onKeyDown(e: React.KeyboardEvent<HTMLDivElement>, t: SeatingTableDTO) {
+    if (!canEdit || !containerRef.current) return;
+    const step = e.shiftKey ? 50 : 10;
+    const delta: Record<string, [number, number]> = {
+      ArrowLeft: [-step, 0],
+      ArrowRight: [step, 0],
+      ArrowUp: [0, -step],
+      ArrowDown: [0, step],
+    };
+    const d = delta[e.key];
+    if (!d) return;
+    e.preventDefault();
+    const size = sizeForShape(t.shape);
+    const bounds = containerRef.current.getBoundingClientRect();
+    const from = positionFor(t);
+    const to = {
+      x: Math.max(0, Math.min(from.x + d[0], bounds.width - size.width)),
+      y: Math.max(0, Math.min(from.y + d[1], bounds.height - size.height)),
+    };
+    setLocalPositions((prev) => ({ ...prev, [t.id]: to }));
+    setAnnouncement(`${t.label} moved to ${Math.round(to.x)}, ${Math.round(to.y)}.`);
+    if (keyboardSave.current && keyboardSave.current.id !== t.id) void flushKeyboardMove();
+    if (keyboardSave.current) clearTimeout(keyboardSave.current.timer);
+    keyboardSave.current = { id: t.id, pos: to, timer: setTimeout(() => void flushKeyboardMove(), 500) };
+  }
+
   const width = Math.max(760, ...tables.map((t) => positionFor(t).x + sizeForShape(t.shape).width + 40));
   const height = Math.max(520, ...tables.map((t) => positionFor(t).y + sizeForShape(t.shape).height + 40));
 
@@ -1081,7 +1132,7 @@ function FloorPlan({
     <div>
       <p className="mb-2 text-sm text-neutral-500 dark:text-neutral-400">
         {canEdit
-          ? "Drag a table to arrange the room. Position is saved automatically and never affects seating rules or generation."
+          ? "Drag a table to arrange the room, or select it with Tab and move it with the arrow keys (Shift for bigger steps). Position is saved automatically and never affects seating rules or generation."
           : "View-only — dragging tables to rearrange the room is turned off for your access level."}
       </p>
       <div
@@ -1100,8 +1151,17 @@ function FloorPlan({
             <div
               key={t.id}
               onPointerDown={(e) => onPointerDown(e, t)}
+              // TS-121: every table can be reached with Tab and, for editors, moved with the arrow keys.
+              tabIndex={canEdit ? 0 : undefined}
+              role={canEdit ? "button" : "img"}
+              aria-roledescription={canEdit ? "movable table" : undefined}
+              aria-label={`${t.label}, ${t.capacity} seats, at ${Math.round(pos.x)}, ${Math.round(pos.y)}${canEdit ? ". Use the arrow keys to move it." : ""}`}
+              onKeyDown={(e) => onKeyDown(e, t)}
+              onBlur={() => {
+                if (keyboardSave.current?.id === t.id) void flushKeyboardMove();
+              }}
               style={{ left: pos.x, top: pos.y, ...sizeForShape(t.shape) }}
-              className={`absolute flex select-none flex-col items-center justify-center border-2 bg-white dark:bg-neutral-900 p-1 text-center text-xs shadow-sm ${
+              className={`absolute flex select-none flex-col items-center justify-center border-2 bg-white dark:bg-neutral-900 p-1 text-center text-xs shadow-sm outline-none focus-visible:ring-4 focus-visible:ring-blue-500 ${
                 // TS-90: touch-none so a finger drags the table instead of scrolling the page
                 // (the browser would otherwise claim the gesture and cancel the pointer).
                 canEdit ? "cursor-grab touch-none active:cursor-grabbing" : "cursor-default"
@@ -1119,6 +1179,9 @@ function FloorPlan({
           );
         })}
       </div>
+      <p aria-live="polite" className="sr-only">
+        {announcement}
+      </p>
     </div>
   );
 }
