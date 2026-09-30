@@ -231,6 +231,26 @@ export interface RestorePreview {
 export type CollaboratorPermission = "VIEW" | "COMMENT" | "EDIT";
 export type CollaboratorRole = "COUPLE" | "COLLABORATOR";
 
+/** TS-116: an invite as the owner's invite list returns it -- never with its token. */
+export interface WeddingInvite {
+  id: string;
+  email: string;
+  role: CollaboratorRole;
+  permissionLevel: CollaboratorPermission;
+  status: "PENDING" | "ACCEPTED" | "REVOKED" | "EXPIRED";
+  expiresAt: string;
+}
+
+/** TS-116: a collaborator as GET .../collaborators returns it. */
+export interface CollaboratorRow {
+  id: string;
+  userId: string;
+  userName: string;
+  userEmail: string;
+  role: CollaboratorRole;
+  permissionLevel: CollaboratorPermission;
+}
+
 export interface CreatedCollaborator {
   id: string;
   userId: string;
@@ -830,6 +850,54 @@ export class WeddingDataSetup {
     // TS-102: a wedding the test deleted itself no longer needs cleaning up on teardown. A 404 is
     // treated the same way -- it is already gone.
     this.trackedWeddingIds.delete(weddingId);
+  }
+
+  /** TS-116 (FR-1.4a): the owner sends an email invite (POST .../invites) -- the real way anyone
+   * joins a wedding, as opposed to `addCollaborator`'s direct-grant setup shortcut. Returns the raw
+   * response, since refusals (already owner, already a collaborator, not the owner) are tested. The
+   * response never includes the invite's token; see e2e/support/testDatabase.ts for that. */
+  async createInvite(
+    weddingId: string,
+    email: string,
+    permissionLevel: CollaboratorPermission,
+    role: CollaboratorRole = "COLLABORATOR",
+  ): Promise<{ status: number; body: { invite?: WeddingInvite; error?: string } }> {
+    const res = await this.request.post(`/api/v1/weddings/${weddingId}/invites`, {
+      data: { email, permissionLevel, role },
+    });
+    return { status: res.status(), body: await res.json() };
+  }
+
+  async listInvites(weddingId: string): Promise<WeddingInvite[]> {
+    const res = await this.request.get(`/api/v1/weddings/${weddingId}/invites`);
+    await assertOk(res, "listInvites");
+    return ((await res.json()) as { invites: WeddingInvite[] }).invites;
+  }
+
+  async revokeInvite(weddingId: string, inviteId: string): Promise<{ status: number; body: { error?: string } }> {
+    const res = await this.request.delete(`/api/v1/weddings/${weddingId}/invites/${inviteId}`);
+    return { status: res.status(), body: await res.json() };
+  }
+
+  /** TS-116: the wedding's guests (GET .../guests), e.g. to check a refused write changed nothing. */
+  async listGuests(weddingId: string): Promise<CreatedGuest[]> {
+    const res = await this.request.get(`/api/v1/weddings/${weddingId}/guests`);
+    await assertOk(res, "listGuests");
+    return ((await res.json()) as { guests: CreatedGuest[] }).guests;
+  }
+
+  /** TS-116: the wedding's seating rules (GET .../relationships). */
+  async listRelationships(weddingId: string): Promise<{ id: string; type: RelationshipType }[]> {
+    const res = await this.request.get(`/api/v1/weddings/${weddingId}/relationships`);
+    await assertOk(res, "listRelationships");
+    return ((await res.json()) as { relationships: { id: string; type: RelationshipType }[] }).relationships;
+  }
+
+  /** TS-116: every collaborator on the wedding (GET .../collaborators). */
+  async listCollaborators(weddingId: string): Promise<CollaboratorRow[]> {
+    const res = await this.request.get(`/api/v1/weddings/${weddingId}/collaborators`);
+    await assertOk(res, "listCollaborators");
+    return ((await res.json()) as { collaborators: CollaboratorRow[] }).collaborators;
   }
 
   /**

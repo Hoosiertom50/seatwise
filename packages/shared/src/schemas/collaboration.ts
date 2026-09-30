@@ -41,7 +41,9 @@ export interface CollaboratorDTO {
 // FR-1.4a: a real invite lifecycle -- carries no guest data, looked up only by its opaque token,
 // and must be accepted by someone signed in with the exact invited address.
 export const createInviteSchema = z.object({
-  email: z.string().email("Enter a valid email address"),
+  // TS-123: trimmed before it is validated, so a pasted address with a stray space is accepted
+  // (createInvite then lowercases it) rather than refused as invalid.
+  email: z.string().trim().email("Enter a valid email address"),
   permissionLevel: collaboratorPermissionEnum.default("VIEW"),
   role: collaboratorRoleEnum.default("COLLABORATOR"),
 });

@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { api, ApiError } from "@/lib/api-client";
 import type { AuthResponse } from "@seatwise/shared";
-import { safeNextPath } from "@/lib/safe-next";
+import { safeNextPath, withCurrentNext } from "@/lib/safe-next";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -74,7 +74,14 @@ export default function LoginPage() {
         </form>
         <p className="mt-4 text-sm text-neutral-600 dark:text-neutral-300">
           Don&apos;t have an account?{" "}
-          <Link href="/signup" className="font-medium underline">
+          <Link
+            href="/signup"
+            onClick={(e) => {
+              e.preventDefault();
+              router.push(withCurrentNext("/signup"));
+            }}
+            className="font-medium underline"
+          >
             Sign up
           </Link>
         </p>

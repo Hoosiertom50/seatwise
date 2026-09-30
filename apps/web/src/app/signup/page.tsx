@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { api, ApiError } from "@/lib/api-client";
 import type { AuthResponse } from "@seatwise/shared";
+import { safeNextPath, withCurrentNext } from "@/lib/safe-next";
 
 export default function SignupPage() {
   const router = useRouter();
@@ -20,7 +21,9 @@ export default function SignupPage() {
     setLoading(true);
     try {
       await api.post<AuthResponse>("/api/v1/auth/signup", { name, email, password });
-      router.push("/dashboard");
+      // TS-122: same as login -- back to wherever sent the user here (e.g. an invite link), else
+      // the dashboard, and only ever a same-site path.
+      router.push(safeNextPath(new URLSearchParams(window.location.search).get("next")));
       router.refresh();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Something went wrong");
@@ -88,7 +91,14 @@ export default function SignupPage() {
         </form>
         <p className="mt-4 text-sm text-neutral-600 dark:text-neutral-300">
           Already have an account?{" "}
-          <Link href="/login" className="font-medium underline">
+          <Link
+            href="/login"
+            onClick={(e) => {
+              e.preventDefault();
+              router.push(withCurrentNext("/login"));
+            }}
+            className="font-medium underline"
+          >
             Log in
           </Link>
         </p>

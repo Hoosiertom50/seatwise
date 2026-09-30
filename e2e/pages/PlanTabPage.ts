@@ -48,6 +48,11 @@ export class PlanTabPage extends BasePage {
   private approveButton() {
     return this.page.getByRole("button", { name: "Approve", exact: true });
   }
+  /** TS-116: the Approve button itself, for asserting it's disabled on an incomplete plan. */
+  approveControl() {
+    return this.approveButton();
+  }
+
   private reopenForReviewButton() {
     return this.page.getByRole("button", { name: "Reopen for review", exact: true });
   }

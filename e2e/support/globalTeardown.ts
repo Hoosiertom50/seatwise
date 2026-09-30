@@ -43,13 +43,12 @@
 // `sourceWeddingId IS NULL`: a template legitimately orphaned by a real planner deleting its source
 // wedding is a supported product state, not test residue, and must never be swept.
 
-import { readFileSync } from "node:fs";
-import path from "node:path";
 import { Pool } from "pg";
 import { getEnv } from "./env";
 import { resolveIsProduction } from "./productionGuard";
 import { TEST_DATA_MARKER } from "../data/ids";
 import { TEST_ACCOUNT_EMAIL_DOMAIN } from "./auth";
+import { resolveDatabaseUrl } from "./testDatabase";
 
 /** Set PW_TEARDOWN_SWEEP to exactly this to inspect without deleting. Any other value (including
  * unset) sweeps for real -- see guard 2 above for why this is opt-out rather than opt-in. */
@@ -58,25 +57,6 @@ const DRY_RUN_VALUE = "dry-run";
 interface SweepRow {
   id: string;
   name: string;
-}
-
-/**
- * DATABASE_URL lives in the repo-root .env, which nothing in the Playwright process loads (the
- * app and Prisma CLI each load their own). Read it directly rather than adding a dotenv dependency
- * for one value. Returns undefined -- and the sweep then skips -- if it isn't found either way.
- */
-function resolveDatabaseUrl(): string | undefined {
-  if (process.env.DATABASE_URL) return process.env.DATABASE_URL;
-  try {
-    const raw = readFileSync(path.join(process.cwd(), ".env"), "utf8");
-    for (const line of raw.split("\n")) {
-      const match = /^\s*DATABASE_URL\s*=\s*(.*)$/.exec(line);
-      if (match) return match[1].trim().replace(/^["']|["']$/g, "");
-    }
-  } catch {
-    // No root .env, or unreadable -- fall through to undefined and skip.
-  }
-  return undefined;
 }
 
 export default async function globalTeardown(): Promise<void> {
