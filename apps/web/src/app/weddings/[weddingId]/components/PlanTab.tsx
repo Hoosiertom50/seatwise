@@ -493,6 +493,13 @@ export function PlanTab({
       grouped.get(a.tableId)!.guests.push({ guestId: a.guestId, guestName: a.guestName });
     }
   }
+  // TS-126: every seat taken at each table -- including guests flagged Needs Reassignment, who
+  // still physically sit there -- counted by headcount, so the list can show free seats.
+  const headcountByGuest = new Map(guests.map((g) => [g.id, g.headcount]));
+  const seatsTakenByTable = new Map<string, number>();
+  for (const a of detail?.assignments ?? []) {
+    seatsTakenByTable.set(a.tableId, (seatsTakenByTable.get(a.tableId) ?? 0) + (headcountByGuest.get(a.guestId) ?? 1));
+  }
   const canEditThisVersion = canEdit && Boolean(detail?.isCurrent);
 
   return (
@@ -1111,11 +1118,33 @@ export function PlanTab({
               {/* `grouped`'s insertion order already follows the assignments the API returns
                   (now table-ordered numerically at the source), but this list is re-sorted
                   explicitly too rather than depending on that indirectly. */}
-              {[...grouped.entries()]
-                .sort((a, b) => compareTableLabels(a[1].tableLabel, b[1].tableLabel))
-                .map(([tableId, t]) => (
+              {/* TS-126: every table in the wedding, not just the ones someone is seated at -- an
+                  empty table used to be missing from this list entirely, and nothing showed how
+                  many seats were free. (A table this version seats someone at but that no longer
+                  exists can't happen: removing a table removes its seats.) */}
+              {[...tables]
+                .sort((a, b) => compareTableLabels(a.label, b.label))
+                .map((table) => {
+                  const tableId = table.id;
+                  const t = grouped.get(tableId) ?? { tableLabel: table.label, guests: [] };
+                  const taken = seatsTakenByTable.get(tableId) ?? 0;
+                  return (
                 <div key={tableId} className="rounded-lg border border-neutral-200 dark:border-neutral-700 px-4 py-3">
-                  <p className="mb-2 font-medium">{t.tableLabel}</p>
+                  <p className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
+                    <span className="font-medium">
+                      {t.tableLabel}
+                      {table.isAccessible && (
+                        <span className="ml-2 rounded bg-blue-50 dark:bg-blue-950 px-1.5 py-0.5 text-xs text-blue-700 dark:text-blue-400">
+                          accessible
+                        </span>
+                      )}
+                    </span>
+                    <span
+                      className={`text-sm ${taken > table.capacity ? "font-medium text-red-600 dark:text-red-400" : "text-neutral-500 dark:text-neutral-400"}`}
+                    >
+                      {taken === 0 ? `Empty — ${table.capacity} seats free` : `${taken}/${table.capacity} seated`}
+                    </span>
+                  </p>
                   <ul className="flex flex-col gap-1.5">
                     {t.guests.map((g) => (
                       <li key={g.guestId} className="flex items-center justify-between gap-2 text-sm">
@@ -1144,7 +1173,8 @@ export function PlanTab({
                     ))}
                   </ul>
                 </div>
-              ))}
+                  );
+                })}
             </div>
           )}
         </>
