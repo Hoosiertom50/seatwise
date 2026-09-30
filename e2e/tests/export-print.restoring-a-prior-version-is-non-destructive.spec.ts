@@ -127,6 +127,13 @@ defineQualityTest(
       await weddingData.updateTable(managedWedding.id, capTableId, { capacity: 1 }); // capGuest (headcount 2) no longer fits
       await weddingData.createRelationship(managedWedding.id, mnstAId, mnstBId, "MUST_NOT_SIT_TOGETHER");
       await weddingData.createRelationship(managedWedding.id, mtogAId, mtogBId, "MUST_SIT_TOGETHER");
+
+      // TS-120: shrinking a table now flags anyone at the Current version who no longer fits
+      // (Needs Reassignment) -- a change to that version made by the shrink, not by the restore.
+      // Re-read both later versions here so the "untouched by the restore" check below compares
+      // against their state just before the restore.
+      laterVersion1Before = await weddingData.getPlanVersionDetail(managedWedding.id, laterVersion1Id);
+      laterVersion2Before = await weddingData.getPlanVersionDetail(managedWedding.id, laterVersion2Id);
     });
 
     let expectedDroppedMnstId = "";

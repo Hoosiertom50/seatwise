@@ -89,6 +89,9 @@ export const updateTableSchema = tableBaseSchema
     positionX: z.number().finite().nullable().optional(),
     positionY: z.number().finite().nullable().optional(),
     expectedRevision: expectedRevisionField,
+    // TS-120: a Restricted table's required-guest list, saved in the same edit as the table's
+    // other fields so current seating is re-checked once, against the final state.
+    requiredGuestIds: z.array(z.string()).max(50).optional(),
   })
   .superRefine(validatePurposeCriterion);
 export type UpdateTableInput = z.infer<typeof updateTableSchema>;

@@ -136,6 +136,8 @@ export function TablesTab({
   // planner confirms, from the server's own count.
   const [confirmRemoval, setConfirmRemoval] = useState<{ id: string; message: string } | null>(null);
   const [tableWarnings, setTableWarnings] = useState<string[]>([]);
+  // TS-120: the one table (if any) whose row is open for editing.
+  const [editingId, setEditingId] = useState<string | null>(null);
 
   // FR-4.2: quick-create a standard set of tables in one action.
   const [qcCount, setQcCount] = useState(12);
@@ -919,6 +921,17 @@ export function TablesTab({
                         {t.isLocked ? "Unlock" : "Lock"}
                       </button>
                       <button
+                        onClick={() => {
+                          setError(null);
+                          setEditingId(editingId === t.id ? null : t.id);
+                        }}
+                        aria-label={`Edit ${t.label}`}
+                        aria-expanded={editingId === t.id}
+                        className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800"
+                      >
+                        Edit
+                      </button>
+                      <button
                         onClick={() => onRemove(t.id)}
                         aria-label={`Remove ${t.label}`}
                         className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950"
@@ -930,6 +943,28 @@ export function TablesTab({
                     t.isAccessible && <span className="text-sm text-neutral-500 dark:text-neutral-400">Accessible</span>
                   )}
                 </div>
+                {editingId === t.id && (
+                  <TableEditForm
+                    table={t}
+                    guests={guests}
+                    sideValues={SIDE_VALUES}
+                    weddingId={weddingId}
+                    onSaved={(saved, warnings) => {
+                      setTables((current) => current.map((x) => (x.id === saved.id ? saved : x)));
+                      setTableWarnings(warnings);
+                      setEditingId(null);
+                    }}
+                    onConflict={(fresh, message) => {
+                      setTables((current) => current.map((x) => (x.id === fresh.id ? fresh : x)));
+                      setEditingId(null);
+                      setError(
+                        message ??
+                          `"${fresh.label}" was just edited elsewhere — showing the latest. Open Edit again to make your change.`
+                      );
+                    }}
+                    onCancel={() => setEditingId(null)}
+                  />
+                )}
                 {confirmRemoval?.id === t.id && (
                   <div
                     role="alert"
@@ -1085,5 +1120,208 @@ function FloorPlan({
         })}
       </div>
     </div>
+  );
+}
+
+// TS-120: edit a table after creating it, in place in its row -- name, seats, shape, purpose and
+// the soft "favors" criterion, and whether it's Restricted to a chosen list of guests. Saves
+// through the same revision check as every other table edit (a stale save is refused with a
+// visible message, TS-92), and anything that makes current seating invalid -- fewer seats than
+// are taken, a guest no longer on a restricted list -- comes back as a warning with those guests
+// flagged Needs Reassignment. Nobody is unseated by an edit.
+function TableEditForm({
+  table,
+  guests,
+  sideValues,
+  weddingId,
+  onSaved,
+  onConflict,
+  onCancel,
+}: {
+  table: SeatingTableDTO;
+  guests: GuestDTO[];
+  sideValues: { value: string; label: string }[];
+  weddingId: string;
+  onSaved: (table: SeatingTableDTO, warnings: string[]) => void;
+  // A 409 (someone else's edit landed first) or a 422 partial save (the table saved, its guest
+  // list didn't): either way the row shows the table as it now is, with the server's message.
+  onConflict: (fresh: SeatingTableDTO, message?: string) => void;
+  onCancel: () => void;
+}) {
+  const [label, setLabel] = useState(table.label);
+  const [capacity, setCapacity] = useState(table.capacity);
+  const [shape, setShape] = useState<TableShape>(table.shape);
+  const [purpose, setPurpose] = useState(table.purpose ?? "");
+  const [criterionType, setCriterionType] = useState<TablePurposeCriterionType | "">(table.purposeCriterionType ?? "");
+  const [criterionValue, setCriterionValue] = useState(table.purposeCriterionValue ?? "");
+  const [isRestricted, setIsRestricted] = useState(table.isRestricted);
+  const [requiredGuestIds, setRequiredGuestIds] = useState<string[]>(table.requiredGuestIds);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const idBase = `edit-table-${table.id}`;
+
+  const criterionOptions =
+    criterionType === "SIDE"
+      ? sideValues
+      : criterionType === "TIER"
+        ? TIER_VALUES.map((v) => ({ value: v, label: GUEST_TIER_LABELS[v] }))
+        : AGE_CATEGORY_VALUES.map((v) => ({ value: v, label: v.charAt(0) + v.slice(1).toLowerCase() }));
+
+  async function onSave(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+    setSaving(true);
+    try {
+      const listChanged =
+        isRestricted &&
+        (requiredGuestIds.length !== table.requiredGuestIds.length ||
+          requiredGuestIds.some((id) => !table.requiredGuestIds.includes(id)));
+      const { table: saved, warnings } = await api.patch<{ table: SeatingTableDTO; warnings?: string[] }>(
+        `/api/v1/weddings/${weddingId}/tables/${table.id}`,
+        {
+          label: label.trim(),
+          capacity,
+          shape,
+          purpose: purpose.trim() || null,
+          purposeCriterionType: criterionType || null,
+          purposeCriterionValue: criterionType ? criterionValue || criterionOptions[0]?.value || null : null,
+          isRestricted,
+          ...(listChanged ? { requiredGuestIds } : {}),
+          expectedRevision: table.revision,
+        }
+      );
+      const allWarnings = warnings ?? [];
+      onSaved(saved, allWarnings);
+    } catch (err) {
+      if (err instanceof ApiError && (err.status === 409 || err.status === 422) && err.data?.table) {
+        onConflict(err.data.table as SeatingTableDTO, err.status === 422 ? err.message : undefined);
+        return;
+      }
+      setError(err instanceof ApiError ? err.message : "Couldn't save that table.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const field = "w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm";
+  return (
+    <form
+      onSubmit={onSave}
+      aria-label={`Edit ${table.label}`}
+      className="mt-3 grid w-full grid-cols-1 gap-3 rounded-md border border-neutral-200 dark:border-neutral-700 p-3 sm:grid-cols-2"
+    >
+      <div>
+        <label htmlFor={`${idBase}-label`} className="mb-1 block text-sm font-medium">Table name</label>
+        <input id={`${idBase}-label`} className={field} value={label} onChange={(e) => setLabel(e.target.value)} required maxLength={100} />
+      </div>
+      <div>
+        <label htmlFor={`${idBase}-capacity`} className="mb-1 block text-sm font-medium">Seats</label>
+        <input
+          id={`${idBase}-capacity`}
+          type="number"
+          min={1}
+          max={50}
+          className={field}
+          value={capacity}
+          onChange={(e) => setCapacity(Number(e.target.value))}
+          required
+        />
+      </div>
+      <div>
+        <label htmlFor={`${idBase}-shape`} className="mb-1 block text-sm font-medium">Shape</label>
+        <select id={`${idBase}-shape`} className={field} value={shape} onChange={(e) => setShape(e.target.value as TableShape)}>
+          {SHAPES.map((s) => (
+            <option key={s} value={s}>
+              {s.charAt(0) + s.slice(1).toLowerCase()}
+            </option>
+          ))}
+        </select>
+      </div>
+      <div>
+        <label htmlFor={`${idBase}-purpose`} className="mb-1 block text-sm font-medium">Purpose (optional)</label>
+        <input id={`${idBase}-purpose`} className={field} value={purpose} onChange={(e) => setPurpose(e.target.value)} maxLength={200} />
+      </div>
+      <div className="sm:col-span-2">
+        <label htmlFor={`${idBase}-criterion`} className="mb-1 block text-sm font-medium">Favors</label>
+        <div className="flex flex-wrap gap-2">
+          <select
+            id={`${idBase}-criterion`}
+            className={field}
+            value={criterionType}
+            onChange={(e) => {
+              setCriterionType(e.target.value as TablePurposeCriterionType | "");
+              setCriterionValue("");
+            }}
+          >
+            {CRITERION_TYPES.map((c) => (
+              <option key={c.value} value={c.value}>
+                {c.label}
+              </option>
+            ))}
+          </select>
+          {criterionType && (
+            <select
+              aria-label="Favors which"
+              className={field}
+              value={criterionValue || criterionOptions[0]?.value}
+              onChange={(e) => setCriterionValue(e.target.value)}
+            >
+              {criterionOptions.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          )}
+        </div>
+      </div>
+      <div className="sm:col-span-2">
+        <label className="flex items-center gap-2 text-sm">
+          <input type="checkbox" checked={isRestricted} onChange={(e) => setIsRestricted(e.target.checked)} />
+          Restricted — only the guests chosen below sit here
+        </label>
+        {isRestricted && (
+          <div
+            role="group"
+            aria-label={`Required guests for ${table.label}`}
+            className="mt-2 max-h-48 overflow-y-auto rounded-md border border-neutral-200 dark:border-neutral-700 p-2"
+          >
+            {guests.length === 0 ? (
+              <p className="text-sm text-neutral-500 dark:text-neutral-400">No guests yet.</p>
+            ) : (
+              guests.map((g) => (
+                <label key={g.id} className="flex items-center gap-2 py-0.5 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={requiredGuestIds.includes(g.id)}
+                    onChange={(e) =>
+                      setRequiredGuestIds((ids) => (e.target.checked ? [...ids, g.id] : ids.filter((id) => id !== g.id)))
+                    }
+                  />
+                  {g.firstName} {g.lastName}
+                </label>
+              ))
+            )}
+          </div>
+        )}
+      </div>
+      {error && <p className="text-sm text-red-600 dark:text-red-400 sm:col-span-2">{error}</p>}
+      <div className="flex gap-2 sm:col-span-2">
+        <button
+          type="submit"
+          disabled={saving}
+          className="rounded-md bg-neutral-900 dark:bg-neutral-100 px-4 py-2 text-sm font-medium text-white dark:text-neutral-900 hover:bg-neutral-700 dark:hover:bg-neutral-300 disabled:opacity-50"
+        >
+          {saving ? "Saving..." : "Save changes"}
+        </button>
+        <button
+          type="button"
+          onClick={onCancel}
+          className="rounded-md border border-neutral-300 dark:border-neutral-600 px-4 py-2 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800"
+        >
+          Cancel
+        </button>
+      </div>
+    </form>
   );
 }
