@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api-client";
 
 // TS-96: a new wedding opens on ten tabs with nothing saying where to start. This is the order that
@@ -14,32 +14,48 @@ import { api } from "@/lib/api-client";
 
 type StepTab = "guests" | "tables" | "rules" | "plan";
 
+export type GettingStartedCounts = { tables: number; rules: number; plans: number };
+
+// TS-115: the page loads these alongside the wedding itself, so the strip is drawn in the same
+// render as the tab row. Loaded on its own afterwards, the strip popped in above the tabs and
+// pushed them ~100px down under a click already on its way. A hint is never worth an error
+// banner, so a failure resolves to null (no strip) rather than failing the page.
+export function loadGettingStartedCounts(weddingId: string): Promise<GettingStartedCounts | null> {
+  return Promise.all([
+    api.get<{ tables: unknown[] }>(`/api/v1/weddings/${weddingId}/tables`),
+    api.get<{ relationships: unknown[] }>(`/api/v1/weddings/${weddingId}/relationships`),
+    api.get<{ planVersions: unknown[] }>(`/api/v1/weddings/${weddingId}/plan-versions`),
+  ])
+    .then(([t, r, p]) => ({ tables: t.tables.length, rules: r.relationships.length, plans: p.planVersions.length }))
+    .catch(() => null);
+}
+
 export function GettingStarted({
   weddingId,
   guestCount,
+  initialCounts,
   refreshKey,
   onGoTo,
 }: {
   weddingId: string;
   guestCount: number;
+  initialCounts: GettingStartedCounts | null;
   // Changes whenever the planner switches tabs, so counts made on another tab are picked up.
   refreshKey: string;
   onGoTo: (tab: StepTab) => void;
 }) {
-  const [counts, setCounts] = useState<{ tables: number; rules: number; plans: number } | null>(null);
+  const [counts, setCounts] = useState<GettingStartedCounts | null>(initialCounts);
+  // The first render already has fresh counts from the page's own load; refetch only when the
+  // planner has since switched tabs.
+  const firstKey = useRef(refreshKey);
 
   useEffect(() => {
+    if (refreshKey === firstKey.current) return;
+    firstKey.current = "";
     let cancelled = false;
-    Promise.all([
-      api.get<{ tables: unknown[] }>(`/api/v1/weddings/${weddingId}/tables`),
-      api.get<{ relationships: unknown[] }>(`/api/v1/weddings/${weddingId}/relationships`),
-      api.get<{ planVersions: unknown[] }>(`/api/v1/weddings/${weddingId}/plan-versions`),
-    ])
-      .then(([t, r, p]) => {
-        if (!cancelled) setCounts({ tables: t.tables.length, rules: r.relationships.length, plans: p.planVersions.length });
-      })
-      // A hint is never worth an error banner -- if it can't load, it just doesn't show.
-      .catch(() => {});
+    loadGettingStartedCounts(weddingId).then((c) => {
+      if (!cancelled && c) setCounts(c);
+    });
     return () => {
       cancelled = true;
     };
