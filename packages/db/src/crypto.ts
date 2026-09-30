@@ -8,19 +8,42 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes } from "crypt
 // clear. Encryption in transit (TLS) and disk-level database encryption are a deployment/hosting
 // concern rather than application code — see the README's NFR-9.3b note for what's expected there.
 //
-// ENCRYPTION_KEY should be a long random secret in any real deployment (set via the environment,
-// same as JWT_SECRET) — falling back to a fixed dev-only key here only so local development and
-// the test suite work without extra setup.
-const KEY = createHash("sha256")
-  .update(process.env.ENCRYPTION_KEY || "dev-only-encryption-key-change-in-production-9d2f7a1c")
-  .digest();
+// ENCRYPTION_KEY must be a long random secret in any real deployment (set via the environment,
+// same as JWT_SECRET). Outside production it falls back to a fixed dev-only key, so local
+// development and the test suite work without extra setup.
+//
+// TS-127: in production there is no fallback. A deployment missing the key used to run normally
+// and quietly encrypt every guest note with the dev key above -- which is published in this file
+// -- and adding the real key later would then have made all of those notes unreadable. Now any
+// encrypt/decrypt in production without a real key (32+ characters) throws, so the mistake is
+// loud and immediate. The key is read on first use rather than at import, so `next build` (which
+// imports server code) doesn't need the secret. It must never change once real data exists: a
+// lost or changed key leaves every note saved so far unreadable.
+const DEV_ONLY_KEY = "dev-only-encryption-key-change-in-production-9d2f7a1c";
+const MIN_KEY_LENGTH = 32;
+
+let cached: { source: string; key: Buffer } | null = null;
+
+function encryptionKey(): Buffer {
+  const configured = process.env.ENCRYPTION_KEY;
+  if (process.env.NODE_ENV === "production" && (!configured || configured.length < MIN_KEY_LENGTH)) {
+    throw new Error(
+      configured
+        ? `ENCRYPTION_KEY is too short (needs at least ${MIN_KEY_LENGTH} characters) -- refusing to encrypt guest notes with it.`
+        : "ENCRYPTION_KEY is not set -- refusing to encrypt guest notes with the development key in production."
+    );
+  }
+  const source = configured || DEV_ONLY_KEY;
+  if (cached?.source !== source) cached = { source, key: createHash("sha256").update(source).digest() };
+  return cached.key;
+}
 
 const PREFIX = "enc:v1:";
 
 export function encryptText(plain: string | null | undefined): string | null {
   if (plain === null || plain === undefined) return null;
   const iv = randomBytes(12);
-  const cipher = createCipheriv("aes-256-gcm", KEY, iv);
+  const cipher = createCipheriv("aes-256-gcm", encryptionKey(), iv);
   const ciphertext = Buffer.concat([cipher.update(plain, "utf8"), cipher.final()]);
   const authTag = cipher.getAuthTag();
   return `${PREFIX}${iv.toString("base64")}:${authTag.toString("base64")}:${ciphertext.toString("base64")}`;
@@ -33,12 +56,15 @@ export function decryptText(stored: string | null | undefined): string | null {
     // (or anything written before this migration) still read back instead of breaking the app.
     return stored;
   }
+  // Outside the try below: a missing production key must fail loudly, not read as "[unable to
+  // decrypt]" for every guest.
+  const key = encryptionKey();
   try {
     const [ivB64, authTagB64, dataB64] = stored.slice(PREFIX.length).split(":");
     const iv = Buffer.from(ivB64, "base64");
     const authTag = Buffer.from(authTagB64, "base64");
     const ciphertext = Buffer.from(dataB64, "base64");
-    const decipher = createDecipheriv("aes-256-gcm", KEY, iv);
+    const decipher = createDecipheriv("aes-256-gcm", key, iv);
     decipher.setAuthTag(authTag);
     const plain = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
     return plain.toString("utf8");
