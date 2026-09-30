@@ -22,6 +22,18 @@ export function resolveIsProduction(baseURL: string, productionHostnames: string
   return productionHostnames.includes(hostname);
 }
 
+/**
+ * TS-74: whether the selection about to run may change data, as far as globalSetup can know.
+ * `pnpm pw:run` always sets PW_RUN_HAS_MUTATING_SELECTION to "1" or "0" from the real, evaluated
+ * selection. A bare `playwright test` sets nothing -- and Playwright gives globalSetup no way to
+ * see what its --grep resolved to -- so an unset value is treated as mutating. Fail closed: against
+ * production that refuses the run outright; anywhere else assertMutationAllowed returns before this
+ * matters, so local and CI runs are unaffected.
+ */
+export function selectionMayMutate(flag: string | undefined): boolean {
+  return flag !== "0";
+}
+
 export interface MutationCheckInput {
   baseURL: string;
   /** Whether the current selection includes any @mutating-tagged test. */

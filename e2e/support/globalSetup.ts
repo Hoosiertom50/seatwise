@@ -10,18 +10,19 @@
 // Stage 01's temporary PW_SIMULATE_MUTATING_SELECTION hook (tracked as a Stage 05 follow-up in
 // DEC-007), which no longer exists anywhere in this codebase.
 //
-// This guard's accuracy is therefore scoped to runs launched through `pnpm pw:run` (or its saved-
-// selection wrappers): a bare `playwright test --grep ...` invoked directly bypasses run-tests.ts
-// entirely, so PW_RUN_HAS_MUTATING_SELECTION is simply unset and this defaults to "not mutating" --
-// see the Stage 05 Decision Log entry for why Playwright's globalSetup has no API to determine a
-// --grep-resolved test list itself, and why "always run through pw:run" is documented as a
-// requirement rather than something this guard can enforce unconditionally on its own.
+// A bare `playwright test --grep ...` invoked directly bypasses run-tests.ts, so
+// PW_RUN_HAS_MUTATING_SELECTION is unset (Playwright's globalSetup has no API to see what a --grep
+// resolved to -- see the Stage 05 Decision Log). TS-74: that used to default to "not mutating",
+// which -- once a real production site existed -- meant a bare run with PLAYWRIGHT_ALLOW_PRODUCTION=1
+// left set could have run the whole mutating suite against real data. It now fails closed: an
+// unknown selection counts as mutating (selectionMayMutate), so against production only a pw:run
+// read-only selection can ever get past this.
 import { getEnv } from "./env";
-import { assertMutationAllowed } from "./productionGuard";
+import { assertMutationAllowed, selectionMayMutate } from "./productionGuard";
 
 export default function globalSetup(): void {
   const env = getEnv();
-  const hasMutatingSelection = process.env.PW_RUN_HAS_MUTATING_SELECTION === "1";
+  const hasMutatingSelection = selectionMayMutate(process.env.PW_RUN_HAS_MUTATING_SELECTION);
 
   assertMutationAllowed({
     baseURL: env.APP_URL,

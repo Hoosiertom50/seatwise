@@ -128,6 +128,62 @@ Client for the query layer instead of the current `pg`-based one, that's a reaso
 once `prisma generate` can run — the schema and `@prisma/adapter-pg` (already installed) are set
 up for it.
 
+## Production deployment
+
+The web app is live at **https://seatwise-app.netlify.app** (since 2026-09-30, TS-67/TS-69–TS-77).
+
+| Piece | Where | Notes |
+|---|---|---|
+| Web app | Netlify, project `seatwise-app`, Free plan | Next.js via Netlify's OpenNext adapter; config in `apps/web/netlify.toml` |
+| Database | Neon, project `Seatwise`, branch `production`, AWS US East 2 (Ohio), Free plan | Same region as Netlify's functions |
+| Email | Resend (account created, **not yet wired**) | Needs a verified domain before it can email guests — until then the app's console stand-in is used and invite/RSVP links are copied by hand |
+
+**How a change reaches production.** Merge to `main` → Netlify builds and publishes automatically
+(about a minute). Nothing else deploys:
+- **Deploy Previews are off** ("Don't deploy pull requests") and branch deploys are production-only —
+  a preview would run unmerged code against the production database.
+- The `ignore` rule in `netlify.toml` skips the build when a merge doesn't touch the web app
+  (`apps/web`, `packages`, the lockfile). The Free plan has **300 credits a month and each
+  production deploy costs 15** — batch small merges where it's easy, and keep an eye on
+  *Usage & billing* in Netlify. When credits run out, every site on the account goes offline until
+  the next cycle.
+
+**Environment variables** (Netlify → Project configuration → Environment variables; never in the
+repo): `DATABASE_URL` (Neon's **pooled** `-pooler` string), `JWT_SECRET`, `ENCRYPTION_KEY`,
+`APP_URL` (`https://seatwise-app.netlify.app`). The three secrets are marked *Contains secret
+values* and are **not** available in local development. The two keys were generated with
+`openssl rand -hex 32` and are kept in the owner's password manager.
+
+> ⚠️ **`ENCRYPTION_KEY` must never change or be lost.** It encrypts every guest's dietary/
+> accessibility notes at rest; a new key makes every note saved before it unreadable. Production
+> refuses to run encryption without a real key (TS-127) rather than silently using the dev one.
+
+**Running database migrations against production.** Migrations are never run by the deploy. After
+merging a PR that adds one, run it from your machine with Neon's **direct** (non-pooled) string —
+typed without echo, so it never lands in shell history or anywhere else:
+
+```bash
+read -rs NEON_URL && DATABASE_URL="$NEON_URL" pnpm --filter @seatwise/db exec prisma migrate deploy; unset NEON_URL
+```
+
+(Paste the string after pressing Return — nothing is shown — then Return again.) Do this **before**
+or together with the deploy that needs it.
+
+**Backups.** Neon Free keeps 6 hours of history (point-in-time restore within that window). A
+longer-term backup (e.g. a nightly `pg_dump`) is an open decision on TS-70 — settle it before real
+couples rely on the site.
+
+**Security on the live site.** HTTPS with HSTS (Netlify); the app adds X-Frame-Options/CSP
+`frame-ancestors 'none'`, Referrer-Policy, Permissions-Policy and nosniff, and no `x-powered-by`
+(TS-130). Per-address rate limits key on Netlify's `x-nf-client-connection-ip` (TS-73), since
+`x-forwarded-for` can be forged there.
+
+**Tests never touch production.** `seatwise-app.netlify.app` is built into the Playwright
+framework's production list (`KNOWN_PRODUCTION_HOSTNAMES` in `e2e/support/env.ts`, TS-74):
+mutating selections are always refused, a bare `playwright test` against it is refused, and even a
+fully-approved `@readonly` run stops at test-account creation, so no test setup can write to real
+data. Check the live site by hand instead.
+
 ## What's implemented
 
 - **Account & Wedding Management** (TS-4 — now fully built, see below): email/password signup and login,
@@ -1207,14 +1263,12 @@ start there if you're writing or reviewing a test. The basics, as of Stage 10:
   `PLAYWRIGHT_TESTING.md`'s "Running tests by tag" section for the full behavior: unknown-tag and
   contradictory-expression rejection, zero-match detection, `--list`/preview mode, the production/
   mutation preflight, and the run manifests it writes to `artifacts/playwright/runs/run-manifests/`.
-- **Production safety:** there's no real production deployment of this app yet, so
-  `PRODUCTION_HOSTNAMES` defaults to empty and every target is treated as non-production. The guard
-  itself (`e2e/support/productionGuard.ts`) is fully implemented and unit-tested so that whenever a
-  real production host does exist, it can be added to that list and mutating tests will be blocked
-  against it automatically, by default, with no further code changes needed. As of Stage 05,
-  `pnpm pw:run` is what actually computes "does this selection include a mutating test" for real and
-  wires it into the guard — see `PLAYWRIGHT_TESTING.md` for the coverage caveat (always run tagged
-  tests through `pw:run`, not `playwright test` directly, once a production host is configured).
+- **Production safety:** the real site (`seatwise-app.netlify.app`) is always on the production
+  list (`KNOWN_PRODUCTION_HOSTNAMES`, TS-74); `PRODUCTION_HOSTNAMES` can add more hosts but never
+  remove it. Against production: `pnpm pw:run` refuses any mutating selection outright; a bare
+  `playwright test` is refused too, because a selection globalSetup can't see now counts as mutating;
+  and test-account creation refuses, so even an approved `@readonly` run can't write its setup into
+  real data. See "Production deployment" above and `PLAYWRIGHT_TESTING.md`.
 - **Test-run reports (Stage 06):** a custom Playwright reporter
   (`playwright-framework/reporting/normalizedReporter.ts`) classifies every test into one of 8
   statuses (passed, passed-on-retry/flaky, failed, timed out, skipped, failed-as-expected,

@@ -4,6 +4,14 @@
 // misconfiguring a test run.
 import { z } from "zod";
 
+/**
+ * TS-74: the real Seatwise production site (Netlify, live since 2026-09-30). Always treated as
+ * production, whatever PRODUCTION_HOSTNAMES says -- so no one can run the mutating suite against
+ * real couples' data by forgetting to set a variable, or by setting it to something else. Add a
+ * custom domain here too if one is ever pointed at the site.
+ */
+export const KNOWN_PRODUCTION_HOSTNAMES: readonly string[] = ["seatwise-app.netlify.app"];
+
 const envSchema = z.object({
   // Base URL for the app under test. Defaults to local dev, matching apps/web/.env's own default.
   APP_URL: z
@@ -11,19 +19,22 @@ const envSchema = z.object({
     .url("APP_URL must be a valid absolute URL, e.g. http://localhost:3000")
     .default("http://localhost:3000"),
 
-  // Comma-separated list of hostnames that are recognized as production. Intentionally empty by
-  // default (see spec Decision Log DEC-005): this repo has no real production deployment yet, so
-  // nothing should ever be silently treated as production until a human configures a real host.
+  // Comma-separated list of hostnames that are recognized as production, on top of
+  // KNOWN_PRODUCTION_HOSTNAMES (which are always included). Empty by default. DEC-005 kept this
+  // list empty while no real deployment existed; TS-74 added the real host once it went live.
   PRODUCTION_HOSTNAMES: z
     .string()
     .optional()
     .default("")
-    .transform((raw) =>
-      raw
-        .split(",")
-        .map((h) => h.trim().toLowerCase())
-        .filter((h) => h.length > 0)
-    ),
+    .transform((raw) => [
+      ...new Set([
+        ...raw
+          .split(",")
+          .map((h) => h.trim().toLowerCase())
+          .filter((h) => h.length > 0),
+        ...KNOWN_PRODUCTION_HOSTNAMES,
+      ]),
+    ]),
 
   // Explicit human approval to run against a recognized production host. This is a second,
   // independent gate on top of PRODUCTION_HOSTNAMES -- per spec Section 9.3, "A production run

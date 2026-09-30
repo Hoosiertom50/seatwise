@@ -41,11 +41,8 @@ let pool: Pool | undefined;
 
 function testPool(): Pool {
   const env = getEnv();
-  const productionHostnames = (process.env.PRODUCTION_HOSTNAMES ?? "")
-    .split(",")
-    .map((h) => h.trim())
-    .filter(Boolean);
-  if (resolveIsProduction(env.APP_URL, productionHostnames)) {
+  // TS-74: the same parsed list as the guard -- including KNOWN_PRODUCTION_HOSTNAMES.
+  if (resolveIsProduction(env.APP_URL, env.PRODUCTION_HOSTNAMES)) {
     throw new Error(`testDatabase: refused -- ${env.APP_URL} resolves to a production hostname.`);
   }
   if (!pool) {

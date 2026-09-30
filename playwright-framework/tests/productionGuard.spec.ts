@@ -2,7 +2,7 @@
 // TypeScript-native test runner (no `page`/browser fixture involved) -- pure-function logic gets
 // pure-function tests, matching spec Section 8.2's "quality" idea of testing at the right level.
 import { test, expect } from "@playwright/test";
-import { resolveIsProduction, assertMutationAllowed, ProductionMutationBlockedError } from "../../e2e/support/productionGuard";
+import { resolveIsProduction, assertMutationAllowed, ProductionMutationBlockedError, selectionMayMutate } from "../../e2e/support/productionGuard";
 
 test.describe("resolveIsProduction", () => {
   test("an empty production hostname list never matches, by construction", () => {
@@ -78,4 +78,21 @@ test.describe("assertMutationAllowed", () => {
       })
     ).not.toThrow();
   });
+});
+
+test("TS-74: an unknown selection (a bare `playwright test`, no pw:run) counts as mutating -- fail closed", () => {
+  expect(selectionMayMutate(undefined)).toBe(true);
+  expect(selectionMayMutate("")).toBe(true);
+  expect(selectionMayMutate("1")).toBe(true);
+  expect(selectionMayMutate("0")).toBe(false);
+});
+
+test("TS-74: a bare run against the real production site is refused even with PLAYWRIGHT_ALLOW_PRODUCTION=1", () => {
+  expect(() =>
+    assertMutationAllowed({
+      baseURL: "https://seatwise-app.netlify.app",
+      hasMutatingSelection: selectionMayMutate(undefined),
+      env: { PRODUCTION_HOSTNAMES: ["seatwise-app.netlify.app"], PLAYWRIGHT_ALLOW_PRODUCTION: true },
+    }),
+  ).toThrow();
 });

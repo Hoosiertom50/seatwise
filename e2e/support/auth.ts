@@ -15,6 +15,25 @@
 import type { APIRequestContext, Browser, BrowserContext } from "@playwright/test";
 import { randomBytes } from "node:crypto";
 import { uniqueToken } from "../data/ids.js";
+import { getEnv } from "./env.js";
+import { resolveIsProduction } from "./productionGuard.js";
+
+/**
+ * TS-74: every test that touches the app starts by signing up a throwaway account -- even the
+ * @readonly ones, whose *action under test* only reads. Against production that would leave test
+ * accounts (and whatever the test arranges next) in real data, and the teardown sweep rightly
+ * refuses to delete anything there. So account creation refuses outright on a production host,
+ * with or without --allow-production: no test can write its setup into production.
+ */
+function refuseTestAccountsOnProduction(): void {
+  const env = getEnv();
+  if (resolveIsProduction(env.APP_URL, env.PRODUCTION_HOSTNAMES)) {
+    throw new Error(
+      `Refusing to create a test account on "${new URL(env.APP_URL).hostname}": it's a production host. ` +
+        `Test setup must never write to real data -- check the live site by hand instead (see TS-75).`,
+    );
+  }
+}
 
 export interface SignedUpAccount {
   name: string;
@@ -57,6 +76,7 @@ export async function signUpFreshAccount(
   request: APIRequestContext,
   workerIndex: number,
 ): Promise<SignedUpAccount> {
+  refuseTestAccountsOnProduction();
   const token = uniqueToken(workerIndex);
   const name = `Playwright Tester ${token}`;
   // `.invalid` is the IANA-reserved TLD guaranteed to never resolve or deliver (RFC 2606) — the
@@ -97,6 +117,7 @@ export async function signUpFreshAccountInNewContext(
   workerIndex: number,
   label = "",
 ): Promise<SignedUpBrowserSession> {
+  refuseTestAccountsOnProduction();
   const context = await browser.newContext();
   const token = uniqueToken(workerIndex);
   const name = `Playwright Tester ${label ? `${label} ` : ""}${token}`;

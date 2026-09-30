@@ -373,11 +373,24 @@ profile is deliberately not treated as consent for a run someone didn't mean to 
 targeted. `--list`/preview mode never blocks on this (nothing executes), but it always tells you
 what would happen if you dropped `--list` and ran it for real.
 
-This coverage is scoped to runs launched through `pw:run` (or its saved-selection wrappers): a bare
-`playwright test --grep ...` invoked directly bypasses this computation entirely, since Playwright's
-own `globalSetup` has no API to inspect a `--grep`-resolved test list on its own (see the spec's
-Stage 05 Decision Log). Always run tagged application tests through `pw:run`, never Playwright
-directly, when a production `APP_URL` is configured.
+**The real production host is always configured.** Since the site went live (TS-74),
+`seatwise-app.netlify.app` is built in (`KNOWN_PRODUCTION_HOSTNAMES` in `e2e/support/env.ts`);
+`PRODUCTION_HOSTNAMES` adds hosts on top of it and can never drop it.
+
+A bare `playwright test --grep ...` bypasses `pw:run`'s computation, since Playwright's own
+`globalSetup` has no API to inspect a `--grep`-resolved test list (see the spec's Stage 05 Decision
+Log). `pw:run` always passes `PW_RUN_HAS_MUTATING_SELECTION` as `1` or `0`; a bare run passes
+nothing, and globalSetup now treats that unknown selection as mutating (TS-74, fail closed) — so
+against production a bare run is refused even with `PLAYWRIGHT_ALLOW_PRODUCTION=1` set. Local and CI
+runs are unaffected (they aren't production).
+
+**Read-only still writes setup.** Every application test signs up a throwaway account first — the
+`@readonly` ones included (their *action under test* reads; their arrange step writes). So test-
+account creation (`signUpFreshAccount*` in `e2e/support/auth.ts`) refuses on a production host, and
+an approved `@readonly` run against production stops there, having written nothing. The live site
+is checked by hand (TS-75), not by this suite. Verified live against `seatwise-app.netlify.app` on
+2026-09-30: mutating via `pw:run`, read-only with no or one approval, a bare run with the override,
+and a fully-approved `@readonly` run were all refused before anything reached the site.
 
 ### Run manifests
 
@@ -1172,8 +1185,9 @@ so CI's real invocation can never silently drift from what a human previewing th
 locally would see — and the workflow spawns `playwright test` directly with that plus `--shard` and
 a real `blob,<normalizedReporter path>` multi-reporter list. This intentionally bypasses `pw:run`'s
 own production/mutation preflight; DEC-018 already discloses this exact bypass for any bare
-`playwright test --grep` invocation, and it is a no-op here regardless since `PRODUCTION_HOSTNAMES`
-is always empty in this repository (DEC-005 — there is no real production deployment). **`pw:run`
+`playwright test --grep` invocation, and it is a no-op here regardless since CI's `APP_URL` is always its own ephemeral
+`localhost` build, never a production host (DEC-005 originally kept the production list empty
+because no deployment existed; TS-74 added the real one, which CI never targets). **`pw:run`
 remains the only way to safely run a selection against a real, configured production host** — never
 adapt this CI pattern for that case.
 
