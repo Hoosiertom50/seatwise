@@ -47,6 +47,18 @@ export class WeddingDetailPage extends BasePage {
     return this.gettingStarted().getByRole("button", { name: new RegExp(`^[✓○]?\\s*${label.replace(/[.()]/g, "\\$&")}`) });
   }
 
+  /** TS-115: the tab row's vertical position (its first tab's top edge), for checking nothing
+   * above it -- e.g. the Getting started strip -- pops in afterwards and pushes it down. */
+  async tabRowTop(): Promise<number> {
+    const guestsTab = this.page.getByRole("button", { name: "Guests", exact: true });
+    await guestsTab.waitFor();
+    return (await guestsTab.boundingBox())!.y;
+  }
+
+  async waitForDataToSettle(): Promise<void> {
+    await this.page.waitForLoadState("networkidle");
+  }
+
   /** TS-93: the header's save-state indicator (SaveStatusIndicator) -- "Saving…", "All changes
    * saved", "Not saved: <why>", or "Offline — …". */
   saveStatus() {

@@ -16,7 +16,7 @@ import { ActivityTab } from "./components/ActivityTab";
 import { CommentsTab } from "./components/CommentsTab";
 import { TimelineTab } from "./components/TimelineTab";
 import { BudgetTab } from "./components/BudgetTab";
-import { GettingStarted } from "./components/GettingStarted";
+import { GettingStarted, loadGettingStartedCounts, type GettingStartedCounts } from "./components/GettingStarted";
 import { NotificationsBell } from "@/components/NotificationsBell";
 import { SaveStatusIndicator } from "@/components/SaveStatusIndicator";
 import { saveStatusStore } from "@/lib/save-status";
@@ -63,6 +63,7 @@ export default function WeddingDetailPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>("guests");
+  const [startCounts, setStartCounts] = useState<GettingStartedCounts | null>(null);
   // FR-1.6: "a change [to a collaborator's access] takes effect within five seconds, even for a
   // wedding already open in the user's browser." accessLevelRef lets the poll below compare
   // against the latest value without the interval's closure going stale between ticks.
@@ -75,16 +76,20 @@ export default function WeddingDetailPage() {
     saveStatusStore.resetHistory();
     (async () => {
       try {
-        const [w, g, me] = await Promise.all([
+        const [w, g, me, counts] = await Promise.all([
           api.get<{ wedding: WeddingDTO; accessLevel: AccessLevel }>(`/api/v1/weddings/${weddingId}`),
           api.get<{ guests: GuestDTO[] }>(`/api/v1/weddings/${weddingId}/guests`),
           api.get<{ user: { id: string } }>("/api/v1/auth/me"),
+          // TS-115: loaded with the page, not after it, so the Getting started strip never
+          // pushes the tab row down once it's on screen.
+          loadGettingStartedCounts(weddingId),
         ]);
         setWedding(w.wedding);
         setAccessLevel(w.accessLevel);
         accessLevelRef.current = w.accessLevel;
         setGuests(g.guests);
         setCurrentUserId(me.user.id);
+        setStartCounts(counts);
       } catch (err) {
         if (err instanceof ApiError && err.status === 401) {
           router.push(loginUrlReturningTo(`/weddings/${weddingId}`));
@@ -222,7 +227,13 @@ export default function WeddingDetailPage() {
       {/* TS-96: where-to-start hint for a wedding with no plan yet -- editors only, since the steps
           are all edits. */}
       {canEdit && (
-        <GettingStarted weddingId={weddingId} guestCount={guests.length} refreshKey={tab} onGoTo={setTab} />
+        <GettingStarted
+          weddingId={weddingId}
+          guestCount={guests.length}
+          initialCounts={startCounts}
+          refreshKey={tab}
+          onGoTo={setTab}
+        />
       )}
 
       <div className="mb-8 flex gap-1 overflow-x-auto border-b border-neutral-200 dark:border-neutral-700">
