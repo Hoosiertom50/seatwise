@@ -169,9 +169,28 @@ read -rs NEON_URL && DATABASE_URL="$NEON_URL" pnpm --filter @seatwise/db exec pr
 (Paste the string after pressing Return — nothing is shown — then Return again.) Do this **before**
 or together with the deploy that needs it.
 
-**Backups.** Neon Free keeps 6 hours of history (point-in-time restore within that window). A
-longer-term backup (e.g. a nightly `pg_dump`) is an open decision on TS-70 — settle it before real
-couples rely on the site.
+**Backups.** Two layers:
+- **Neon** keeps 6 hours of history — for a mistake noticed right away, restore to a point in time
+  from the Neon console (Branches → Restore).
+- **Nightly encrypted backup** (TS-131, `.github/workflows/nightly-db-backup.yml`): every night at
+  3am Eastern, GitHub Actions `pg_dump`s the production database, checks the core tables are in it,
+  encrypts it (GPG, AES-256), proves the encrypted file decrypts back byte-for-byte, and keeps it as
+  a workflow artifact for **30 days**. Run it on demand from the repo's **Actions** tab →
+  *Nightly production database backup* → *Run workflow*. The repository is public, so the
+  encryption is what keeps guest data private: without `BACKUP_PASSPHRASE` (a repository secret,
+  also in the owner's password manager) a backup can't be read by anyone. Secrets:
+  `NEON_BACKUP_DATABASE_URL` (Neon's **direct** string) and `BACKUP_PASSPHRASE`.
+
+  **Restoring from a nightly backup** (only when you mean to overwrite production — it replaces
+  what's there; consider restoring into a fresh Neon branch first and pointing the app at it):
+  1. Actions → a successful *Nightly production database backup* run → download the
+     `seatwise-db-….dump.gpg` artifact and unzip it.
+  2. Decrypt it (passphrase from the password manager; you'll be prompted):
+     `gpg --decrypt --output seatwise.dump seatwise-db-….dump.gpg`
+  3. Restore it with a Postgres 18 client (e.g. `docker run --rm -it -v "$PWD:/w" postgres:18 sh`),
+     against Neon's **direct** string for the target branch:
+     `pg_restore --clean --if-exists --no-owner --no-privileges --dbname "<direct string>" /w/seatwise.dump`
+  4. Delete the decrypted `seatwise.dump` afterwards — it holds guests' personal data in the clear.
 
 **Security on the live site.** HTTPS with HSTS (Netlify); the app adds X-Frame-Options/CSP
 `frame-ancestors 'none'`, Referrer-Policy, Permissions-Policy and nosniff, and no `x-powered-by`
