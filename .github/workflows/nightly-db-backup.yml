@@ -1,0 +1,103 @@
+# TS-131: nightly backup of the production database (Neon, project "Seatwise").
+#
+# Why: Neon's Free plan keeps only 6 hours of point-in-time history, so a mistake noticed the next
+# day (a deleted wedding, a bad import) couldn't be undone. This keeps 30 days of nightly backups.
+#
+# Why it's encrypted: this repository is PUBLIC, and a public repo's workflow artifacts can be
+# downloaded by anyone with a GitHub account. The dump holds guests' names and emails, so it is
+# encrypted (GPG, AES-256) before upload with a passphrase that exists only as a repository secret
+# and in the owner's password manager. Without BACKUP_PASSPHRASE a backup is unreadable -- to
+# anyone, including us. (Guest notes are additionally encrypted by the app itself -- TS-127.)
+#
+# Secrets (Settings -> Secrets and variables -> Actions):
+#   NEON_BACKUP_DATABASE_URL  Neon's DIRECT connection string (no "-pooler"; pg_dump needs a real
+#                             session, which the pooler doesn't provide).
+#   BACKUP_PASSPHRASE         e.g. `openssl rand -hex 32`; keep a copy in the password manager.
+#
+# Restore: see README "Production deployment" -> "Backups".
+name: Nightly production database backup
+
+on:
+  schedule:
+    - cron: "0 7 * * *" # 07:00 UTC = 3am Eastern (daylight time), 2am standard time
+  workflow_dispatch: {} # "Run workflow" button, for an on-demand backup or a test run
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly-db-backup
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      # Same major version as the Neon server (Postgres 18), so pg_dump/pg_restore match it.
+      PG_IMAGE: postgres:18
+    steps:
+      - name: Check the two secrets are set
+        env:
+          NEON_BACKUP_DATABASE_URL: ${{ secrets.NEON_BACKUP_DATABASE_URL }}
+          BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+        run: |
+          missing=""
+          [ -n "$NEON_BACKUP_DATABASE_URL" ] || missing="$missing NEON_BACKUP_DATABASE_URL"
+          [ -n "$BACKUP_PASSPHRASE" ] || missing="$missing BACKUP_PASSPHRASE"
+          if [ -n "$missing" ]; then
+            echo "::error::Missing repository secret(s):$missing -- add them under Settings -> Secrets and variables -> Actions."
+            exit 1
+          fi
+          case "$NEON_BACKUP_DATABASE_URL" in
+            *-pooler*) echo "::error::NEON_BACKUP_DATABASE_URL is Neon's POOLED string; pg_dump needs the direct one (turn 'Connection pooling' off in Neon's Connect dialog)."; exit 1 ;;
+          esac
+          if [ "${#BACKUP_PASSPHRASE}" -lt 32 ]; then
+            echo "::error::BACKUP_PASSPHRASE is shorter than 32 characters -- generate one with: openssl rand -hex 32"
+            exit 1
+          fi
+
+      - name: Dump the database
+        env:
+          PGURL: ${{ secrets.NEON_BACKUP_DATABASE_URL }}
+        run: |
+          mkdir -p out && chmod 700 out
+          docker run --rm -e PGURL -v "$PWD/out:/out" "$PG_IMAGE" \
+            sh -c 'pg_dump --format=custom --no-owner --no-privileges --file=/out/seatwise.dump "$PGURL"'
+          ls -l out/seatwise.dump
+
+      - name: Check the dump contains the core tables
+        run: |
+          docker run --rm -v "$PWD/out:/out" "$PG_IMAGE" pg_restore --list /out/seatwise.dump > out/contents.txt
+          for table in users weddings guests seating_tables plan_versions seat_assignments; do
+            grep -qE "TABLE public ${table} " out/contents.txt || { echo "::error::Backup is missing table: ${table}"; exit 1; }
+          done
+          echo "Tables in backup: $(grep -cE ' TABLE public ' out/contents.txt)"
+
+      - name: Encrypt it, then prove the encrypted file decrypts back to the same dump
+        env:
+          BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+        run: |
+          stamp="$(date -u +%Y-%m-%dT%H%MZ)"
+          name="seatwise-db-${stamp}.dump.gpg"
+          umask 077
+          printf '%s' "$BACKUP_PASSPHRASE" > out/.pass
+          gpg --batch --yes --pinentry-mode loopback --passphrase-file out/.pass \
+            --symmetric --cipher-algo AES256 --output "out/${name}" out/seatwise.dump
+          gpg --batch --yes --pinentry-mode loopback --passphrase-file out/.pass \
+            --decrypt --output out/roundtrip.dump "out/${name}"
+          rm -f out/.pass
+          cmp out/seatwise.dump out/roundtrip.dump || { echo "::error::Decrypted backup does not match the dump."; exit 1; }
+          docker run --rm -v "$PWD/out:/out" "$PG_IMAGE" pg_restore --list /out/roundtrip.dump > /dev/null
+          # Only the encrypted file leaves this runner.
+          rm -f out/seatwise.dump out/roundtrip.dump out/contents.txt
+          echo "BACKUP_NAME=${name}" >> "$GITHUB_ENV"
+          ls -l out
+
+      - name: Keep the encrypted backup for 30 days
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.BACKUP_NAME }}
+          path: out/${{ env.BACKUP_NAME }}
+          retention-days: 30
+          if-no-files-found: error
