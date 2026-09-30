@@ -136,6 +136,53 @@ export class TablesTabPage extends BasePage {
     await this.removalConfirmation().getByRole("button", { name: "Keep table", exact: true }).click();
   }
 
+  /** TS-120: the row's Edit button and the in-place form it opens (named "Edit <label>"). */
+  editTableButton(label: string) {
+    return this.page.getByRole("button", { name: `Edit ${label}`, exact: true });
+  }
+
+  editForm(label: string) {
+    return this.page.getByRole("form", { name: `Edit ${label}`, exact: true });
+  }
+
+  async openTableEdit(label: string): Promise<void> {
+    await this.editTableButton(label).click();
+    await this.editForm(label).waitFor();
+  }
+
+  /** Fills whichever fields are given in the open edit form for `label` (unset ones untouched). */
+  async fillTableEdit(
+    label: string,
+    fields: { name?: string; seats?: number; shape?: string; purpose?: string; favors?: string; favorsWhich?: string; restricted?: boolean; requiredGuests?: string[] },
+  ): Promise<void> {
+    const form = this.editForm(label);
+    if (fields.name !== undefined) await form.getByLabel("Table name", { exact: true }).fill(fields.name);
+    if (fields.seats !== undefined) await form.getByLabel("Seats", { exact: true }).fill(String(fields.seats));
+    if (fields.shape !== undefined) await form.getByLabel("Shape", { exact: true }).selectOption({ label: fields.shape });
+    if (fields.purpose !== undefined) await form.getByLabel("Purpose (optional)", { exact: true }).fill(fields.purpose);
+    if (fields.favors !== undefined) await form.getByLabel("Favors", { exact: true }).selectOption({ label: fields.favors });
+    if (fields.favorsWhich !== undefined) await form.getByLabel("Favors which", { exact: true }).selectOption({ label: fields.favorsWhich });
+    if (fields.restricted !== undefined) await form.getByLabel(/^Restricted — only the guests chosen below sit here$/).setChecked(fields.restricted);
+    if (fields.requiredGuests !== undefined) {
+      const group = form.getByRole("group", { name: `Required guests for ${label}` });
+      for (const box of await group.getByRole("checkbox").all()) await box.setChecked(false);
+      for (const name of fields.requiredGuests) await group.getByRole("checkbox", { name, exact: true }).check();
+    }
+  }
+
+  async saveTableEdit(label: string): Promise<void> {
+    await this.editForm(label).getByRole("button", { name: "Save changes", exact: true }).click();
+  }
+
+  async cancelTableEdit(label: string): Promise<void> {
+    await this.editForm(label).getByRole("button", { name: "Cancel", exact: true }).click();
+  }
+
+  /** The tab's amber warnings panel (e.g. guests flagged Needs Reassignment after an edit). */
+  warning(text: string | RegExp) {
+    return this.page.getByText(text);
+  }
+
   /** The Remove button for a table -- present while its row is listed. */
   removeTableButton(label: string) {
     return this.page.getByRole("button", { name: `Remove ${label}`, exact: true });

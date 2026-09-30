@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { setRequiredGuestsSchema } from "@seatwise/shared";
-import { setRequiredGuestsForTable, RestrictedTableError } from "@seatwise/db";
+import { setRequiredGuestsForTable, RestrictedTableError, resyncTableSeating } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
 import { errorResponse, zodErrorResponse } from "@/lib/api-response";
 import { requireAccess } from "@/lib/access";
@@ -24,7 +24,14 @@ export async function PUT(req: NextRequest, { params }: Params) {
 
   try {
     const table = await setRequiredGuestsForTable(tableId, weddingId, parsed.data.guestIds);
-    return NextResponse.json({ table });
+    // TS-120: someone already seated here who's no longer on the list is flagged, never unseated.
+    const { newlyFlagged } = await resyncTableSeating(weddingId, tableId);
+    const warnings = newlyFlagged.map(({ name, reason }) =>
+      reason === "restricted"
+        ? `${name} isn't on this table's required list any more — flagged as Needs Reassignment.`
+        : `${name} can no longer sit at this table — flagged as Needs Reassignment.`
+    );
+    return NextResponse.json({ table, warnings });
   } catch (err) {
     if (err instanceof RestrictedTableError) {
       return errorResponse(err.message, 409);

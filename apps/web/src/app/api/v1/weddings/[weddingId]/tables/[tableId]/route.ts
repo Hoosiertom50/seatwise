@@ -3,7 +3,9 @@ import { updateTableSchema } from "@seatwise/shared";
 import {
   updateSeatingTableForWedding,
   getSeatingTableForWedding,
-  syncAccessibleTableReassignment,
+  resyncTableSeating,
+  setRequiredGuestsForTable,
+  RestrictedTableError,
   removeSeatingTable,
   TableConflictError,
 } from "@seatwise/db";
@@ -25,7 +27,7 @@ export async function PATCH(req: NextRequest, { params }: Params) {
   const parsed = updateTableSchema.safeParse(body);
   if (!parsed.success) return zodErrorResponse(parsed.error);
 
-  const { expectedRevision, ...data } = parsed.data;
+  const { expectedRevision, requiredGuestIds, ...data } = parsed.data;
   try {
     const updated = await updateSeatingTableForWedding(tableId, weddingId, data, expectedRevision);
     if (!updated) return errorResponse("Table not found", 404);
@@ -38,15 +40,44 @@ export async function PATCH(req: NextRequest, { params }: Params) {
     throw err;
   }
 
-  // FR-4.6: an isAccessible change (either direction) re-checks anyone currently assigned here
-  // who requires an accessible table -- flagging or clearing Needs Reassignment and keeping the
-  // current plan version's completeness in sync, in both directions.
+  // TS-120: the required-guest list goes in after the table itself (it can only be set once the
+  // table is Restricted). The table's other changes are already saved by then, so a list that
+  // can't be saved says exactly that rather than pretending the whole edit failed.
+  if (requiredGuestIds !== undefined) {
+    try {
+      await setRequiredGuestsForTable(tableId, weddingId, requiredGuestIds);
+    } catch (err) {
+      if (err instanceof RestrictedTableError) {
+        await resyncTableSeating(weddingId, tableId);
+        const table = await getSeatingTableForWedding(tableId, weddingId);
+        return NextResponse.json(
+          { error: `The table's other changes were saved, but its guest list wasn't: ${err.message}`, table },
+          { status: 422 }
+        );
+      }
+      throw err;
+    }
+  }
+
+  // FR-4.6 / TS-120: an edit that can invalidate who's seated here -- accessible on/off, seats
+  // changed, restricted on/off -- re-checks everyone at this table in the current plan, flagging
+  // (or clearing) Needs Reassignment and keeping completeness in sync. Nobody is ever unseated.
   let warnings: string[] = [];
-  if (parsed.data.isAccessible !== undefined) {
-    const { affectedGuestNames } = await syncAccessibleTableReassignment(weddingId, tableId);
-    warnings = affectedGuestNames.map(
-      (name) =>
-        `${name} requires an accessible table and this one no longer is one — flagged as Needs Reassignment.`
+  if (
+    data.isAccessible !== undefined ||
+    data.capacity !== undefined ||
+    data.isRestricted !== undefined ||
+    requiredGuestIds !== undefined
+  ) {
+    const { newlyFlagged } = await resyncTableSeating(weddingId, tableId);
+    warnings = newlyFlagged.map(({ name, reason }) =>
+      reason === "capacity"
+        ? `${name} no longer fits at this table (it now seats ${data.capacity}) — flagged as Needs Reassignment.`
+        : reason === "accessible"
+          ? `${name} requires an accessible table and this one no longer is one — flagged as Needs Reassignment.`
+          : reason === "restricted"
+            ? `${name} isn't on this table's required list any more — flagged as Needs Reassignment.`
+            : `${name} can no longer sit at this table under the seating rules — flagged as Needs Reassignment.`
     );
   }
 
