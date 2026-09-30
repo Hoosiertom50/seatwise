@@ -1,5 +1,5 @@
 /**
- * TS-116 (REQ-COLLABORATION-NOTIFICATIONS, REQ-NON-FUNCTIONAL) — every access level held to exactly
+ * TS-116 (REQ-ACCESS-CONTROL, REQ-COLLABORATION-NOTIFICATIONS, REQ-NON-FUNCTIONAL) — every access level held to exactly
  * what it allows, by the server and on screen.
  *
  * The existing access-control spec covers a stranger with *no* access. This covers the people who
@@ -48,7 +48,7 @@ defineQualityTest(
       "Confirms that owner-only actions (rename, delete, invites, collaborators, notification settings, duplicate) are refused for an Edit collaborator with 403 and not rendered for them, and that guest, table, rule, day-of, import, generate, plan and template writes are refused for View and Comment collaborators with 403, with each tab showing its read-only notice -- and that nothing about the wedding changed.",
     expectedOutcome:
       "Every listed attempt returns 403. The Edit collaborator's Collaborators tab has no invite form and no Remove buttons, and their dashboard has no Duplicate layout button for the shared wedding. The View collaborator sees the view-only notice on the Guests, Seating rules, Tables, Seating plan and Day-of mode tabs. Afterwards the wedding's name, guests, tables, rules, plan versions, invites and collaborators are unchanged.",
-    requirementIds: ["REQ-COLLABORATION-NOTIFICATIONS", "REQ-NON-FUNCTIONAL"],
+    requirementIds: ["REQ-ACCESS-CONTROL", "REQ-COLLABORATION-NOTIFICATIONS", "REQ-NON-FUNCTIONAL"],
     tags: ["@mutating", "@feature:collaboration", "@risk:critical", "@suite:regression"],
   },
   async ({ managedWedding, weddingData, browser }, testInfo) => {
