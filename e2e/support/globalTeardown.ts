@@ -67,11 +67,8 @@ export default async function globalTeardown(): Promise<void> {
     const env = getEnv();
 
     // Guard 3: never sweep anything that resolves to production, armed or not.
-    const productionHostnames = (process.env.PRODUCTION_HOSTNAMES ?? "")
-      .split(",")
-      .map((h) => h.trim())
-      .filter(Boolean);
-    if (resolveIsProduction(env.APP_URL, productionHostnames)) {
+    // TS-74: the same parsed list as the guard -- including KNOWN_PRODUCTION_HOSTNAMES.
+    if (resolveIsProduction(env.APP_URL, env.PRODUCTION_HOSTNAMES)) {
       console.warn(`[teardown-sweep] REFUSED: ${env.APP_URL} resolves to a production hostname.`);
       return;
     }

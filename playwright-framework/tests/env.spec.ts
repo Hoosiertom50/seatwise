@@ -1,7 +1,7 @@
 // Stage 01: unit tests for the environment config schema (spec Section 7.3 acceptance criterion:
 // "Invalid environment configuration fails with an actionable message").
 import { test, expect } from "@playwright/test";
-import { getEnv, __resetEnvCacheForTests } from "../../e2e/support/env";
+import { getEnv, __resetEnvCacheForTests, KNOWN_PRODUCTION_HOSTNAMES } from "../../e2e/support/env";
 
 test.beforeEach(() => {
   __resetEnvCacheForTests();
@@ -10,7 +10,8 @@ test.beforeEach(() => {
 test("valid, minimal environment parses with documented defaults", () => {
   const env = getEnv({});
   expect(env.APP_URL).toBe("http://localhost:3000");
-  expect(env.PRODUCTION_HOSTNAMES).toEqual([]);
+  // TS-74: the real production site is always on the list, even with nothing configured.
+  expect(env.PRODUCTION_HOSTNAMES).toEqual(["seatwise-app.netlify.app"]);
   expect(env.PLAYWRIGHT_ALLOW_PRODUCTION).toBe(false);
   expect(env.CI).toBe(false);
 });
@@ -21,7 +22,14 @@ test("a malformed APP_URL fails with an actionable, field-specific message", () 
 
 test("PRODUCTION_HOSTNAMES is parsed into a trimmed, lowercased, filtered array", () => {
   const env = getEnv({ PRODUCTION_HOSTNAMES: " App.Example.com , , staging.example.com " });
-  expect(env.PRODUCTION_HOSTNAMES).toEqual(["app.example.com", "staging.example.com"]);
+  expect(env.PRODUCTION_HOSTNAMES).toEqual(["app.example.com", "staging.example.com", ...KNOWN_PRODUCTION_HOSTNAMES]);
+});
+
+test("TS-74: setting PRODUCTION_HOSTNAMES can add hosts but never drops the real production site", () => {
+  const env = getEnv({ PRODUCTION_HOSTNAMES: "other.example.com" });
+  expect(env.PRODUCTION_HOSTNAMES).toContain("seatwise-app.netlify.app");
+  __resetEnvCacheForTests();
+  expect(getEnv({ PRODUCTION_HOSTNAMES: "SEATWISE-APP.netlify.app" }).PRODUCTION_HOSTNAMES).toEqual(["seatwise-app.netlify.app"]);
 });
 
 test("PLAYWRIGHT_ALLOW_PRODUCTION only recognizes '1' as true", () => {
