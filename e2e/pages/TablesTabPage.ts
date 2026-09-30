@@ -188,6 +188,32 @@ export class TablesTabPage extends BasePage {
     return this.page.getByRole("button", { name: `Remove ${label}`, exact: true });
   }
 
+  /** TS-121: a floor-plan table as a keyboard user reaches it -- a "movable table" button named
+   * "<label>, <n> seats, at <x>, <y>. Use the arrow keys to move it." (editors only). */
+  movableFloorPlanTable(label: string) {
+    // Test labels are plain words, so the label is used in the pattern as-is.
+    return this.page.getByRole("button", { name: new RegExp(`^${label}, \\d+ seats, at `) });
+  }
+
+  /** TS-121: Tab through the page until the table is focused, as a keyboard-only user would. */
+  async tabToFloorPlanTable(label: string): Promise<void> {
+    const target = this.movableFloorPlanTable(label);
+    for (let i = 0; i < 80; i++) {
+      if (await target.evaluate((el) => el === document.activeElement)) return;
+      await this.page.keyboard.press("Tab");
+    }
+    throw new Error(`Couldn't reach "${label}" on the floor plan with Tab.`);
+  }
+
+  async pressOnFocusedTable(key: string, times = 1): Promise<void> {
+    for (let i = 0; i < times; i++) await this.page.keyboard.press(key);
+  }
+
+  /** TS-121: the floor plan's screen-reader announcement after a keyboard move. */
+  moveAnnouncement() {
+    return this.page.locator("p[aria-live='polite']").filter({ hasText: /moved to/ });
+  }
+
   floorPlanTable(label: string) {
     return this.page.locator(`[title^="${label} — "]`);
   }
