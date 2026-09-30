@@ -87,6 +87,18 @@ export class WeddingDetailPage extends BasePage {
     await notice.getByRole("button", { name: "Sign in here", exact: true }).click();
   }
 
+  /** TS-116: the "Your access: Edit/Comment/View" badge a collaborator (never the owner) sees
+   * beside the wedding's date. */
+  yourAccessBadge() {
+    return this.page.getByText(/^Your access: (Edit|Comment|View)$/);
+  }
+
+  /** TS-116 (FR-1.6): the non-blocking notice an open page shows once the owner changes this
+   * user's access level (but doesn't remove it). */
+  accessChangedNotice(level: "Owner" | "Edit" | "Comment" | "View") {
+    return this.page.getByText(`Your access to this wedding was changed to ${level}.`, { exact: true });
+  }
+
   /** FR-1.6's full-revocation message -- must only ever appear when access really was removed. */
   accessRemovedMessage() {
     return this.page.getByText("Your access to this wedding has been removed.");

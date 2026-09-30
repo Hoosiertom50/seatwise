@@ -7,6 +7,14 @@ export function safeNextPath(raw: string | null | undefined, fallback = "/dashbo
   return raw;
 }
 
+// TS-122: the other auth page's URL, keeping this page's `?next=` along -- so switching between
+// "Log in" and "Sign up" never drops where the user was headed (e.g. back to an invite).
+export function withCurrentNext(authPath: "/login" | "/signup"): string {
+  const next = new URLSearchParams(window.location.search).get("next");
+  const safe = safeNextPath(next, "");
+  return safe ? `${authPath}?next=${encodeURIComponent(safe)}` : authPath;
+}
+
 // The login URL that brings the user back to `path` afterwards.
 export function loginUrlReturningTo(path: string): string {
   return `/login?next=${encodeURIComponent(path)}`;

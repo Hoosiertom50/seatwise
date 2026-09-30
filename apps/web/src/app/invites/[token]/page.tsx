@@ -5,6 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { api, ApiError } from "@/lib/api-client";
 import type { InvitePreviewDTO } from "@seatwise/shared";
+import { loginUrlReturningTo } from "@/lib/safe-next";
 
 // FR-1.4a: the invite accept page. Deliberately shows nothing about the wedding unless the
 // invite is genuinely PENDING and (once we know who's signed in) the address matches -- an
@@ -104,16 +105,16 @@ export default function InviteAcceptPage() {
             ) : (
               <div className="flex flex-col gap-3">
                 <p className="text-sm text-neutral-500 dark:text-neutral-400">
-                  Sign in or create an account with {preview.invitedEmail} to accept — then come
-                  back to this link.
+                  Sign in or create an account with {preview.invitedEmail} to accept. You&apos;ll come
+                  straight back here afterwards.
                 </p>
                 <Link
-                  href="/login"
+                  href={loginUrlReturningTo(`/invites/${token}`)}
                   className="w-full rounded-md bg-neutral-900 dark:bg-neutral-100 px-4 py-2 text-sm font-medium text-white dark:text-neutral-900 hover:bg-neutral-700 dark:hover:bg-neutral-300"
                 >
                   Log in
                 </Link>
-                <Link href="/signup" className="text-sm underline">
+                <Link href={`/signup?next=${encodeURIComponent(`/invites/${token}`)}`} className="text-sm underline">
                   Or create an account
                 </Link>
               </div>
