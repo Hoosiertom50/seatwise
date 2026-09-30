@@ -23,6 +23,21 @@ export class PlanTabPage extends BasePage {
     return this.page.getByRole("checkbox", { name: /save as comparison draft/i });
   }
 
+  /** TS-126: a table's card in the List view (every table appears, seated or not). Found by the
+   * card whose heading line starts with the table's label. */
+  listTableCard(label: string) {
+    return this.page
+      .locator("div.rounded-lg")
+      .filter({ has: this.page.getByText(label, { exact: true }) })
+      .filter({ hasText: /seated|seats free/ })
+      .last();
+  }
+
+  /** TS-126: the card's seat summary -- "x/N seated" or "Empty — N seats free". */
+  listTableSeatSummary(label: string) {
+    return this.listTableCard(label).getByText(/^(\d+\/\d+ seated|Empty — \d+ seats free)$/);
+  }
+
   versionSelect() {
     return this.page.locator("#plan-version-select");
   }
