@@ -1,4 +1,4 @@
-import { NextResponse, type NextRequest } from "next/server";
+import { NextResponse } from "next/server";
 import { hitRateLimit, peekRateLimit } from "@seatwise/db";
 
 // TS-98: limits for the public, unauthenticated guest RSVP link -- the one part of the API anyone
@@ -37,14 +37,9 @@ export async function over429(
   );
 }
 
-// The caller's network address. Hosting platforms (Vercel, Netlify, most proxies) put the real
-// client address first in x-forwarded-for and overwrite anything the client sent, so it can be
-// trusted there. Behind no proxy at all (local dev) the header is whatever the client says --
-// fine for development, and the per-link limit doesn't depend on it.
-export function clientAddress(req: NextRequest): string {
-  const forwarded = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
-  return forwarded || req.headers.get("x-real-ip") || "unknown";
-}
+// TS-73: moved to ./client-address so it can be unit-tested without a database; re-exported here
+// so every existing caller keeps importing it from this module.
+export { clientAddress } from "./client-address";
 
 // Counts this request against `key`; returns a ready 429 response when it's over the limit, or
 // null to carry on.
