@@ -82,6 +82,12 @@ export interface CreatedGuest {
   lastName: string;
 }
 
+/** TS-116/TS-117: a guest as GET .../guests returns it (the fields tests compare). */
+export interface ListedGuest extends CreatedGuest {
+  email: string | null;
+  notes: string | null;
+}
+
 export interface CreateGuestInput {
   firstName: string;
   lastName: string;
@@ -880,10 +886,10 @@ export class WeddingDataSetup {
   }
 
   /** TS-116: the wedding's guests (GET .../guests), e.g. to check a refused write changed nothing. */
-  async listGuests(weddingId: string): Promise<CreatedGuest[]> {
+  async listGuests(weddingId: string): Promise<ListedGuest[]> {
     const res = await this.request.get(`/api/v1/weddings/${weddingId}/guests`);
     await assertOk(res, "listGuests");
-    return ((await res.json()) as { guests: CreatedGuest[] }).guests;
+    return ((await res.json()) as { guests: ListedGuest[] }).guests;
   }
 
   /** TS-116: the wedding's seating rules (GET .../relationships). */

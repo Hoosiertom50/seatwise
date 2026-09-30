@@ -118,6 +118,29 @@ export class TablesTabPage extends BasePage {
     return typeof text === "string" ? this.page.getByText(text, { exact: true }) : this.page.getByText(text);
   }
 
+  /** TS-124: the row's Remove button (accessible name "Remove <label>"). */
+  async removeTable(label: string): Promise<void> {
+    await this.page.getByRole("button", { name: `Remove ${label}`, exact: true }).click();
+  }
+
+  /** TS-124: the in-row question shown when guests are seated at the table being removed. */
+  removalConfirmation() {
+    return this.page.getByRole("alert").filter({ hasText: "in the current plan. Removing it will leave them unassigned." });
+  }
+
+  async confirmTableRemoval(): Promise<void> {
+    await this.removalConfirmation().getByRole("button", { name: "Remove anyway", exact: true }).click();
+  }
+
+  async keepTable(): Promise<void> {
+    await this.removalConfirmation().getByRole("button", { name: "Keep table", exact: true }).click();
+  }
+
+  /** The Remove button for a table -- present while its row is listed. */
+  removeTableButton(label: string) {
+    return this.page.getByRole("button", { name: `Remove ${label}`, exact: true });
+  }
+
   floorPlanTable(label: string) {
     return this.page.locator(`[title^="${label} — "]`);
   }

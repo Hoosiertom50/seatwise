@@ -132,6 +132,9 @@ export function TablesTab({
   const [shape, setShape] = useState<TableShape>("ROUND");
   const [adding, setAdding] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // TS-124: a table with guests seated at it in the current plan is only removed after the
+  // planner confirms, from the server's own count.
+  const [confirmRemoval, setConfirmRemoval] = useState<{ id: string; message: string } | null>(null);
   const [tableWarnings, setTableWarnings] = useState<string[]>([]);
 
   // FR-4.2: quick-create a standard set of tables in one action.
@@ -302,14 +305,20 @@ export function TablesTab({
     }
   }
 
-  async function onRemove(id: string) {
-    const prev = tables;
-    setTables(tables.filter((t) => t.id !== id));
+  async function onRemove(id: string, confirmed = false) {
+    setError(null);
     try {
-      await api.delete(`/api/v1/weddings/${weddingId}/tables/${id}`);
-    } catch {
-      setTables(prev);
-      setError("Couldn't remove that table.");
+      await api.delete(`/api/v1/weddings/${weddingId}/tables/${id}${confirmed ? "?confirm=true" : ""}`);
+      setConfirmRemoval(null);
+      setTables((current) => current.filter((t) => t.id !== id));
+    } catch (err) {
+      // TS-124: guests are seated here -- ask rather than silently unseat them.
+      if (err instanceof ApiError && err.status === 409 && err.data?.needsConfirmation) {
+        setConfirmRemoval({ id, message: err.message });
+        return;
+      }
+      setConfirmRemoval(null);
+      setError(err instanceof ApiError ? err.message : "Couldn't remove that table.");
     }
   }
 
@@ -911,6 +920,7 @@ export function TablesTab({
                       </button>
                       <button
                         onClick={() => onRemove(t.id)}
+                        aria-label={`Remove ${t.label}`}
                         className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950"
                       >
                         Remove
@@ -920,6 +930,26 @@ export function TablesTab({
                     t.isAccessible && <span className="text-sm text-neutral-500 dark:text-neutral-400">Accessible</span>
                   )}
                 </div>
+                {confirmRemoval?.id === t.id && (
+                  <div
+                    role="alert"
+                    className="mt-3 flex w-full flex-wrap items-center gap-3 rounded-md bg-amber-50 dark:bg-amber-950 px-3 py-2 text-sm text-amber-900 dark:text-amber-200"
+                  >
+                    <span className="flex-1">{confirmRemoval.message}</span>
+                    <button
+                      onClick={() => onRemove(t.id, true)}
+                      className="rounded-md bg-red-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-red-800"
+                    >
+                      Remove anyway
+                    </button>
+                    <button
+                      onClick={() => setConfirmRemoval(null)}
+                      className="rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800"
+                    >
+                      Keep table
+                    </button>
+                  </div>
+                )}
               </li>
             );
           })}

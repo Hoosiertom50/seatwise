@@ -4,7 +4,7 @@ import {
   updateSeatingTableForWedding,
   getSeatingTableForWedding,
   syncAccessibleTableReassignment,
-  deleteSeatingTableForWedding,
+  removeSeatingTable,
   TableConflictError,
 } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
@@ -62,8 +62,22 @@ export async function DELETE(req: NextRequest, { params }: Params) {
   const access = await requireAccess(weddingId, user.id, "EDIT");
   if ("error" in access) return access.error;
 
-  const deleted = await deleteSeatingTableForWedding(tableId, weddingId);
-  if (!deleted) return errorResponse("Table not found", 404);
+  // TS-124: a table with guests seated at it in the current plan is only removed once the caller
+  // confirms (?confirm=true) -- the 409 says how many, so the UI can ask.
+  const confirmed = req.nextUrl.searchParams.get("confirm") === "true";
+  const result = await removeSeatingTable(tableId, weddingId, user.id, confirmed);
+  if (result.status === "NOT_FOUND") return errorResponse("Table not found", 404);
+  if (result.status === "NEEDS_CONFIRMATION") {
+    const guests = result.seatedCount === 1 ? "1 guest is" : `${result.seatedCount} guests are`;
+    return NextResponse.json(
+      {
+        error: `${guests} seated at "${result.label}" in the current plan. Removing it will leave them unassigned.`,
+        needsConfirmation: true,
+        seatedCount: result.seatedCount,
+      },
+      { status: 409 }
+    );
+  }
 
-  return NextResponse.json({ ok: true });
+  return NextResponse.json({ ok: true, unseatedCount: result.seatedCount });
 }
