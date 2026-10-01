@@ -12,6 +12,11 @@ export const RSVP_LIMITS = {
   submitsPerLink: { limit: 10, windowSeconds: 600 },
 };
 
+// TS-114: a vendor's read-only link needs no sign-in either -- same per-address ceiling as RSVP.
+export const VENDOR_LINK_LIMITS = {
+  perAddress: { limit: 100, windowSeconds: 600 },
+};
+
 // TS-113: failed sign-in attempts (a correct password never counts), so real use can never lock
 // anyone out. Per account, so no one can keep guessing one person's password; per address, so one
 // source can't spray guesses across many accounts. Once over, even the right password waits out
