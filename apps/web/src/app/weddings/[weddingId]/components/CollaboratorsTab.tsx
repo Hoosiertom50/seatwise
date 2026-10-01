@@ -73,7 +73,6 @@ export function CollaboratorsTab({
   // label rename. Local input state so typing doesn't PATCH on every keystroke; saved on blur.
   const [sideLabel1, setSideLabel1] = useState(wedding?.sideLabel1 ?? "Bride");
   const [sideLabel2, setSideLabel2] = useState(wedding?.sideLabel2 ?? "Groom");
-  const [savingLabels, setSavingLabels] = useState(false);
   // FR-1.3: the wedding's optional free-text note -- same local-input-then-save-on-blur pattern
   // as the side labels above.
   const [note, setNote] = useState(wedding?.note ?? "");
@@ -155,7 +154,6 @@ export function CollaboratorsTab({
     const label1 = sideLabel1.trim() || "Bride";
     const label2 = sideLabel2.trim() || "Groom";
     if (label1 === wedding.sideLabel1 && label2 === wedding.sideLabel2) return;
-    setSavingLabels(true);
     setError(null);
     try {
       const { wedding: updated } = await api.patch<{ wedding: WeddingDTO }>(
@@ -163,14 +161,14 @@ export function CollaboratorsTab({
         { sideLabel1: label1, sideLabel2: label2 }
       );
       setWedding(updated);
-      setSideLabel1(updated.sideLabel1);
-      setSideLabel2(updated.sideLabel2);
+      // TS-137: only fill in a label the planner left blank (it saved as Bride/Groom). Never
+      // overwrite the other box: leaving Side 1 saves while they may already be typing in Side 2.
+      setSideLabel1((current) => (current.trim() === "" ? updated.sideLabel1 : current));
+      setSideLabel2((current) => (current.trim() === "" ? updated.sideLabel2 : current));
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't save the side labels.");
       setSideLabel1(wedding.sideLabel1);
       setSideLabel2(wedding.sideLabel2);
-    } finally {
-      setSavingLabels(false);
     }
   }
 
@@ -460,7 +458,6 @@ export function CollaboratorsTab({
                     onChange={(e) => setSideLabel1(e.target.value)}
                     onBlur={onSaveSideLabels}
                     maxLength={40}
-                    disabled={savingLabels}
                   />
                 </div>
                 <div>
@@ -474,7 +471,6 @@ export function CollaboratorsTab({
                     onChange={(e) => setSideLabel2(e.target.value)}
                     onBlur={onSaveSideLabels}
                     maxLength={40}
-                    disabled={savingLabels}
                   />
                 </div>
               </div>

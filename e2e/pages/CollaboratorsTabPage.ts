@@ -69,6 +69,33 @@ export class CollaboratorsTabPage extends BasePage {
     await this.person(email).getByRole("button", { name: "Remove", exact: true }).click();
   }
 
+  // TS-118: the owner-only wedding settings on this tab. Each saves when the field loses focus.
+  weddingNameInput() {
+    return this.page.getByLabel("Wedding name", { exact: true });
+  }
+  sideLabelInput(which: 1 | 2) {
+    return this.page.getByLabel(`Side ${which}`, { exact: true });
+  }
+  weddingNoteInput() {
+    return this.page.getByLabel("Wedding note", { exact: true });
+  }
+  rsvpCutoffInput() {
+    return this.page.getByLabel("RSVP cutoff date", { exact: true });
+  }
+  emailNotificationsCheckbox() {
+    return this.page.getByRole("checkbox", { name: /^Also send email notifications for this wedding/ });
+  }
+  /** Replaces a settings field's value and leaves the field, which is what saves it. (Blur rather
+   * than Tab: in a date input, Tab only moves between its month/day/year parts.) */
+  async setAndLeave(field: ReturnType<CollaboratorsTabPage["weddingNameInput"]>, value: string): Promise<void> {
+    await field.fill(value);
+    await field.blur();
+  }
+  /** The tab's error line, matched by its text. */
+  message(text: string | RegExp) {
+    return typeof text === "string" ? this.page.getByText(text, { exact: true }) : this.page.getByText(text);
+  }
+
   /** Every Remove button on the tab -- none should render for a non-owner. */
   removeButtons() {
     return this.page.getByRole("button", { name: "Remove", exact: true });
