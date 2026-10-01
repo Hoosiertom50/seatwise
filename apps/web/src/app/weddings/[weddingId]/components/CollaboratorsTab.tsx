@@ -208,13 +208,17 @@ export function CollaboratorsTab({
     setInviteSent(null);
     setAdding(true);
     try {
-      await api.post<{ invite: WeddingInviteDTO }>(`/api/v1/weddings/${weddingId}/invites`, {
-        email,
-        permissionLevel: level,
-        role,
-      });
+      const res = await api.post<{ invite: WeddingInviteDTO; emailed: boolean; acceptUrl?: string }>(
+        `/api/v1/weddings/${weddingId}/invites`,
+        { email, permissionLevel: level, role }
+      );
       await refreshInvites();
-      setInviteSent(`Invite sent to ${email}.`);
+      // TS-132: only say "sent" when the email really went. Otherwise hand over the link to share.
+      setInviteSent(
+        res.emailed
+          ? `Invite sent to ${email}.`
+          : `Invite created, but the email to ${email} couldn't be sent. Send them this link yourself: ${res.acceptUrl}`
+      );
       setEmail("");
       setLevel("VIEW");
       setRole("COLLABORATOR");
@@ -378,7 +382,15 @@ export function CollaboratorsTab({
               {adding ? "Sending invite..." : "Send invite"}
             </button>
           </form>
-          {inviteSent && <p className="mb-8 text-sm text-green-700 dark:text-green-400">{inviteSent}</p>}
+          {inviteSent && (
+            <p
+              className={`mb-8 break-all text-sm ${
+                inviteSent.startsWith("Invite sent") ? "text-green-700 dark:text-green-400" : "text-amber-800 dark:text-amber-300"
+              }`}
+            >
+              {inviteSent}
+            </p>
+          )}
 
           {invites.filter((i) => i.status === "PENDING" || i.status === "EXPIRED").length > 0 && (
             <div className="mb-8">

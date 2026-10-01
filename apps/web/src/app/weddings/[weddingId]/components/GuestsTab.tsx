@@ -492,20 +492,22 @@ export function GuestsTab({
     setRsvpLinkBusy(guestId);
     setRsvpLinkResult((prev) => ({ ...prev, [guestId]: "" }));
     try {
-      const { rsvp } = await api.post<{ rsvp: { url: string; emailed: boolean } }>(
+      const { rsvp } = await api.post<{ rsvp: { url: string; emailed: boolean; emailFailed?: boolean } }>(
         `/api/v1/weddings/${weddingId}/guests/${guestId}/rsvp-link`,
         { regenerate }
       );
+      // TS-132: if the email couldn't be sent, say so -- the planner then sends the link themselves.
+      const notEmailed = rsvp.emailFailed ? `Couldn't email ${guestEmail} — send them the link yourself. ` : "";
       try {
         await navigator.clipboard.writeText(rsvp.url);
         setRsvpLinkResult((prev) => ({
           ...prev,
-          [guestId]: rsvp.emailed ? `Link copied & emailed to ${guestEmail}` : "Link copied to clipboard",
+          [guestId]: rsvp.emailed ? `Link copied & emailed to ${guestEmail}` : `${notEmailed}Link copied to clipboard`,
         }));
       } catch {
         setRsvpLinkResult((prev) => ({
           ...prev,
-          [guestId]: rsvp.emailed ? `Emailed to ${guestEmail} — ${rsvp.url}` : rsvp.url,
+          [guestId]: rsvp.emailed ? `Emailed to ${guestEmail} — ${rsvp.url}` : `${notEmailed}${rsvp.url}`,
         }));
       }
     } catch (err) {

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { rsvpLinkActionSchema, type RsvpLinkDTO } from "@seatwise/shared";
-import { getGuestForWedding, ensureGuestRsvpToken, regenerateGuestRsvpToken, sendEmailNotification } from "@seatwise/db";
+import { getGuestForWedding, ensureGuestRsvpToken, regenerateGuestRsvpToken, sendEmailNotification, emailDelivered } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
 import { errorResponse, zodErrorResponse } from "@/lib/api-response";
 import { requireAccess } from "@/lib/access";
@@ -38,19 +38,23 @@ export async function POST(req: NextRequest, { params }: Params) {
   // the link to it. A guest with no email still gets a usable link back for the planner to copy
   // and send however they normally would. A failed/unconfigured send never blocks the response
   // (same "never throws" guarantee as every other notification email in the app).
+  // TS-132: `emailed` is only true when the email really went (or, in dev/CI, was logged) -- a
+  // failed or unconfigured send says so, and the planner shares the link by hand.
   let emailed = false;
+  let emailFailed = false;
   if (guest.email) {
     const cutoffNote = access.wedding.rsvpCutoffDate
       ? ` Please respond by ${access.wedding.rsvpCutoffDate}.`
       : "";
-    await sendEmailNotification(
+    const result = await sendEmailNotification(
       guest.email,
       `RSVP for ${access.wedding.name}`,
       `Hi ${guest.firstName},\n\nPlease RSVP for "${access.wedding.name}" here: ${url}\n\nIf you've already responded, this same link shows what you submitted and lets you update it.${cutoffNote}`
     );
-    emailed = true;
+    emailed = emailDelivered(result);
+    emailFailed = !emailed;
   }
 
-  const result: RsvpLinkDTO = { url, emailed };
-  return NextResponse.json({ rsvp: result });
+  const link: RsvpLinkDTO = { url, emailed, emailFailed };
+  return NextResponse.json({ rsvp: link });
 }

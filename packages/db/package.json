@@ -26,11 +26,13 @@
     "@seatwise/shared": "workspace:*",
     "bcryptjs": "^2.4.3",
     "dotenv": "^16.6.1",
+    "nodemailer": "^7.0.13",
     "pg": "^8.23.0",
     "resend": "^6.26.0"
   },
   "devDependencies": {
     "@types/bcryptjs": "^2.4.6",
+    "@types/nodemailer": "^8.0.2",
     "@types/pg": "^8.23.1",
     "prisma": "^6.9.0",
     "tsx": "^4.23.13"

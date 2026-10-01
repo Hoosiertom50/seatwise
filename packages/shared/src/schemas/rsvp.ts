@@ -54,7 +54,10 @@ export type RsvpLinkActionInput = z.infer<typeof rsvpLinkActionSchema>;
 
 export interface RsvpLinkDTO {
   url: string;
-  // true when the guest has an email on file and sendEmailNotification was attempted for it --
-  // mirrors the invite-send pattern, and lets the UI say "link copied" vs. "link emailed to X".
+  // TS-132: true only when the email really went out (or, in local dev/CI, was logged) -- lets the
+  // UI say "link emailed to X" vs. "link copied".
   emailed: boolean;
+  // TS-132: the guest has an email on file but sending failed or isn't set up -- the UI says so,
+  // so the planner knows to send the link themselves.
+  emailFailed: boolean;
 }
