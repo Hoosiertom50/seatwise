@@ -59,6 +59,17 @@ export class RulesTabPage extends BasePage {
     ]);
   }
 
+  /** TS-118: submits the add-rule form with whatever guests are picked (possibly none, or the same
+   * guest twice) and doesn't wait for a request -- a client-side refusal sends none. */
+  async submitRuleWith(guestAFullName: string | null, guestBFullName: string | null): Promise<void> {
+    if (guestAFullName) await this.guestASelect().selectOption({ label: guestAFullName });
+    if (guestBFullName) await this.guestBSelect().selectOption({ label: guestBFullName });
+    await this.addRuleButton().click();
+  }
+  message(text: string | RegExp) {
+    return typeof text === "string" ? this.page.getByText(text, { exact: true }) : this.page.getByText(text);
+  }
+
   /** The "Rules (N)" list heading, whose count updates live as rules are added/removed. */
   rulesHeading(count: number) {
     return this.page.getByText(`Rules (${count})`, { exact: true });
