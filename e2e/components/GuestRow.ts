@@ -42,6 +42,11 @@ export class GuestRow {
     return this.fieldByAriaLabelPrefix("input", "Last name for ");
   }
 
+  /** TS-129: the planner's private notes -- a textarea for Owner/Edit users. */
+  private notesInput() {
+    return this.root.locator('textarea[aria-label^="Notes for "]');
+  }
+
   private removeButton() {
     return this.root.getByRole("button", { name: "Remove" });
   }
@@ -89,6 +94,27 @@ export class GuestRow {
   async editFirstName(value: string): Promise<void> {
     await this.firstNameInput().fill(value);
     await this.firstNameInput().press("Tab");
+  }
+
+  /** TS-129: the notes as the editable textarea currently shows them. */
+  async notes(): Promise<string> {
+    return this.notesInput().inputValue();
+  }
+
+  /** TS-129: notes save on blur, like the name -- replace the text, then Tab away. */
+  async editNotes(value: string): Promise<void> {
+    await this.notesInput().fill(value);
+    await this.notesInput().press("Tab");
+  }
+
+  /** TS-129: whether this row offers the notes for editing (View/Comment users get plain text). */
+  notesEditor(): Locator {
+    return this.notesInput();
+  }
+
+  /** TS-129: the read-only "Notes: …" line a View/Comment user sees. */
+  readOnlyNotes(): Locator {
+    return this.root.locator("p").filter({ hasText: /^Notes:/ });
   }
 
   async rsvpStatus(): Promise<string> {

@@ -13,6 +13,8 @@ export interface AddGuestInput {
   lastName: string;
   partyName?: string;
   email?: string;
+  /** TS-129: the planner's private notes. */
+  notes?: string;
 }
 
 export class WeddingGuestsPage extends BasePage {
@@ -34,6 +36,10 @@ export class WeddingGuestsPage extends BasePage {
 
   private emailInput() {
     return this.page.locator("#guest-email");
+  }
+
+  private notesInput() {
+    return this.page.locator("#guest-notes");
   }
 
   private addGuestButton() {
@@ -87,9 +93,10 @@ export class WeddingGuestsPage extends BasePage {
   async addGuest(input: AddGuestInput): Promise<void> {
     await this.firstNameInput().fill(input.firstName);
     await this.lastNameInput().fill(input.lastName);
-    if (input.partyName || input.email) await this.openMoreDetails();
+    if (input.partyName || input.email || input.notes) await this.openMoreDetails();
     if (input.partyName) await this.partyNameInput().fill(input.partyName);
     if (input.email) await this.emailInput().fill(input.email);
+    if (input.notes) await this.notesInput().fill(input.notes);
     await this.addGuestButton().click();
   }
 
@@ -174,6 +181,12 @@ export class WeddingGuestsPage extends BasePage {
    * value is never part of an element's rendered text content, so a `hasText` filter silently
    * matches nothing for exactly the common case. This was caught live by this stage's own
    * reference test failing against the real app — see stage-03-audit.md. */
+  /** TS-129: a guest's row as a View/Comment user sees it -- the name is plain text there, not
+   * inputs, so (unlike `guestRow`) it's found by the row's text. */
+  readOnlyGuestRow(fullName: string): GuestRow {
+    return new GuestRow(this.page.locator("li").filter({ hasText: fullName }));
+  }
+
   guestRow(fullName: string): GuestRow {
     const li = this.page.locator("li").filter({
       has: this.page.locator(`input[aria-label="First name for ${fullName}"]`),

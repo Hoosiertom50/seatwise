@@ -113,6 +113,7 @@ export function GuestsTab({
   const [ageCategory, setAgeCategory] = useState<AgeCategory>("ADULT");
   // TS-17 (FR-12.4): optional -- lets a planner send/resend this guest their own RSVP link later.
   const [email, setEmail] = useState("");
+  const [notes, setNotes] = useState("");
   const [adding, setAdding] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // TS-17 (FR-12.4): which guest's RSVP-link action is in flight, and the last result shown for
@@ -278,6 +279,7 @@ export function GuestsTab({
         side,
         ageCategory,
         email: email || null,
+        notes: notes.trim() || null,
       });
       setGuests([...guests, guest].sort((a, b) => a.lastName.localeCompare(b.lastName)));
       setFirstName("");
@@ -290,6 +292,7 @@ export function GuestsTab({
       setSide("BOTH");
       setAgeCategory("ADULT");
       setEmail("");
+      setNotes("");
     } catch (err) {
       setError(apiErrorMessage(err, ["firstName", "lastName"], "Couldn't add that guest."));
     } finally {
@@ -395,6 +398,38 @@ export function GuestsTab({
         setGuests(prev);
         input.value = current?.email ?? "";
         setError(err instanceof ApiError ? err.message : "Couldn't update that guest's email.");
+      }
+    }
+  }
+
+  // TS-129: the planner's private notes (dietary, accessibility, anything the team should know),
+  // inline-editable like the email above and uncontrolled for the same reason (TS-108): every path
+  // that doesn't keep the planner's text writes the committed note back into the textarea itself.
+  async function onUpdateNotes(guestId: string, input: HTMLTextAreaElement) {
+    const prev = guests;
+    const current = prev.find((g) => g.id === guestId);
+    const normalized = input.value.trim() || null;
+    if (!current || normalized === (current.notes ?? null)) return;
+    const expectedRevision = current.revision;
+    setGuests(prev.map((g) => (g.id === guestId ? { ...g, notes: normalized } : g)));
+    try {
+      const { guest } = await api.patch<{ guest: GuestDTO }>(
+        `/api/v1/weddings/${weddingId}/guests/${guestId}`,
+        { notes: normalized, expectedRevision }
+      );
+      setGuests(prev.map((g) => (g.id === guestId ? guest : g)));
+    } catch (err) {
+      const fresh = conflictGuest(err);
+      if (fresh) {
+        setGuests(prev.map((g) => (g.id === guestId ? fresh : g)));
+        input.value = fresh.notes ?? "";
+        setError(
+          `${fresh.firstName} ${fresh.lastName} was just edited elsewhere — showing the latest. Try again if you still want to make this change.`
+        );
+      } else {
+        setGuests(prev);
+        input.value = current.notes ?? "";
+        setError(apiErrorMessage(err, ["notes"], "Couldn't update that guest's notes."));
       }
     }
   }
@@ -552,7 +587,7 @@ export function GuestsTab({
             aria-expanded={false}
             className="justify-self-start text-sm text-neutral-600 dark:text-neutral-300 underline hover:no-underline sm:col-span-2"
           >
-            + More details (household, email, headcount, tier, RSVP, side, age, accessibility)
+            + More details (household, email, notes, headcount, tier, RSVP, side, age, accessibility)
           </button>
         ) : (
           <>
@@ -580,6 +615,25 @@ export function GuestsTab({
               value={email}
               onChange={(e) => setEmail(e.target.value)}
             />
+          </div>
+          {/* TS-129 */}
+          <div className="sm:col-span-2">
+            <label htmlFor="guest-notes" className="mb-1 block text-sm font-medium">
+              Notes
+            </label>
+            <textarea
+              id="guest-notes"
+              rows={2}
+              maxLength={2000}
+              aria-describedby="guest-notes-hint"
+              className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
+              placeholder="e.g. vegetarian, nut allergy, uses a wheelchair"
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+            />
+            <p id="guest-notes-hint" className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
+              Private to your planning team — the guest never sees this.
+            </p>
           </div>
           <div>
             <label htmlFor="guest-headcount" className="mb-1 block text-sm font-medium">
@@ -991,6 +1045,26 @@ export function GuestsTab({
                   <p className="text-sm text-neutral-600 dark:text-neutral-400">
                     <span className="font-medium">Guest&apos;s RSVP note:</span> {g.rsvpNotes}
                   </p>
+                )}
+                {/* TS-129: the planner's private notes -- editable by Owner/Edit, read-only for
+                    View/Comment (who can already read them in the CSV export). */}
+                {canEdit ? (
+                  <textarea
+                    aria-label={`Notes for ${g.firstName} ${g.lastName}`}
+                    title="Private to your planning team — the guest never sees this."
+                    rows={1}
+                    maxLength={2000}
+                    className="mt-1 block w-72 max-w-full rounded-md border border-neutral-200 dark:border-neutral-700 px-2 py-1 text-xs"
+                    placeholder="Private notes (dietary, accessibility…)"
+                    defaultValue={g.notes ?? ""}
+                    onBlur={(e) => onUpdateNotes(g.id, e.currentTarget)}
+                  />
+                ) : (
+                  g.notes && (
+                    <p className="text-sm text-neutral-600 dark:text-neutral-400">
+                      <span className="font-medium">Notes:</span> {g.notes}
+                    </p>
+                  )
                 )}
                 {canEdit ? (
                   <input
