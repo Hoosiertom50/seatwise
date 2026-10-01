@@ -64,10 +64,19 @@ export class GuestRow {
    * immediately after can race the click against the lock-status mutation + re-render (TS-66:
    * this raced intermittently in Firefox). Mirrors the same "wait for the button's resting state"
    * pattern DayOfTabPage.addWalkIn()/swap() already use for their own submit buttons. */
+  // TS-128: the label flips optimistically, before the server has saved anything -- so waiting for
+  // the label alone let a caller race ahead (e.g. regenerate the plan) while the lock was still in
+  // flight, and an occasional WebKit failure here was never explained. It now also waits for the
+  // PATCH itself and fails with its status if the server refused it.
   async toggleLock(): Promise<void> {
     const button = this.lockButton();
     const wasLocked = (await button.textContent())?.trim() === "Unlock";
-    await button.click();
+    const page = this.root.page();
+    const [res] = await Promise.all([
+      page.waitForResponse((r) => r.request().method() === "PATCH" && /\/api\/v1\/weddings\/[^/]+\/guests\/[^/]+$/.test(new URL(r.url()).pathname)),
+      button.click(),
+    ]);
+    expect(res.ok(), `saving the lock returned ${res.status()}`).toBe(true);
     const newLabel = wasLocked ? "Lock" : "Unlock";
     await this.root.getByRole("button", { name: newLabel, exact: true }).waitFor();
   }
