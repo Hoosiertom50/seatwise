@@ -98,6 +98,8 @@ concurrency:
   cancel-in-progress: true
 
 env:
+  # TS-132: CI never sends real email -- it's printed instead, and the app treats that as sent.
+  EMAIL_TRANSPORT: log
   # No secret here: an ephemeral, CI-job-lifetime-only Postgres database that never holds anything
   # but throwaway test data, matching this framework's own e2e/support/env.ts default APP_URL and
   # the .env.example DATABASE_URL shape.

@@ -22,6 +22,8 @@ on:
   workflow_dispatch: {}
 
 env:
+  # TS-132: CI never sends real email -- it's printed instead, and the app treats that as sent.
+  EMAIL_TRANSPORT: log
   DATABASE_URL: postgresql://postgres:postgres@localhost:5432/seatwise_ci?schema=public
 
 jobs:

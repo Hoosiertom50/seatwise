@@ -1,5 +1,5 @@
 import { randomUUID } from "crypto";
-import { Resend } from "resend";
+import { sendEmail, type EmailResult } from "../email";
 import { pool } from "../pool";
 
 export interface NotificationRow {
@@ -13,46 +13,11 @@ export interface NotificationRow {
   createdAt: Date;
 }
 
-// FR-10.2: real email delivery via Resend. This sandbox has no real Resend account, so
-// RESEND_API_KEY is an env-var placeholder — see .env.example. With no key configured, this falls
-// back to the same console-log stand-in the app always used, so local/dev/sandbox behavior (and
-// every existing test) is unaffected; set RESEND_API_KEY (and optionally RESEND_FROM_EMAIL, which
-// must be a verified sending address/domain in the Resend account) to send real email instead. A
-// failed "send" — no key, a rejected request, a network error — must never block the in-app
-// notification or the action that triggered it, so this never throws.
-const resendFromAddress = process.env.RESEND_FROM_EMAIL || "Seatwise <notifications@seatwise.app>";
-let resendClient: Resend | null | undefined;
-
-function getResendClient(): Resend | null {
-  if (resendClient === undefined) {
-    const apiKey = process.env.RESEND_API_KEY;
-    resendClient = apiKey ? new Resend(apiKey) : null;
-  }
-  return resendClient;
-}
-
-// Exported so other flows that need to send a real (or stubbed) email outside the in-app
-// notification system -- FR-1.4a's invite email, specifically -- can reuse the same Resend
-// wiring, fallback stub, and never-throws guarantee instead of duplicating it.
-export async function sendEmailNotification(toEmail: string, subject: string, body: string): Promise<void> {
-  try {
-    const client = getResendClient();
-    if (!client) {
-      console.log(`[email-stub] to=${toEmail} subject="${subject}" body="${body}"`);
-      return;
-    }
-    const { error } = await client.emails.send({
-      from: resendFromAddress,
-      to: toEmail,
-      subject,
-      text: body,
-    });
-    if (error) {
-      console.error(`[email] Resend rejected a notification to ${toEmail}: ${error.message}`);
-    }
-  } catch (err) {
-    console.error(`[email] failed to send notification to ${toEmail}:`, err);
-  }
+// FR-10.2 / TS-132: email goes through ../email.ts, which picks Gmail SMTP, Resend, a log line
+// (local dev and CI) or nothing (production with no email service set up) -- and never throws.
+// Returns what happened, so a caller can tell the planner when an email didn't go out.
+export async function sendEmailNotification(toEmail: string, subject: string, body: string): Promise<EmailResult> {
+  return sendEmail(toEmail, subject, body);
 }
 
 // Every collaborator (and the wedding's owner) except whoever caused the event gets an in-app

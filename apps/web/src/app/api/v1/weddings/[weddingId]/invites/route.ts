@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createInviteSchema } from "@seatwise/shared";
-import { createInvite, listInvitesForWedding, sendEmailNotification, InviteError } from "@seatwise/db";
+import { createInvite, listInvitesForWedding, sendEmailNotification, emailDelivered, InviteError } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
 import { errorResponse, zodErrorResponse } from "@/lib/api-response";
 import { requireAccess } from "@/lib/access";
@@ -49,14 +49,21 @@ export async function POST(req: NextRequest, { params }: Params) {
     const appUrl = process.env.APP_URL || "http://localhost:3000";
     const acceptUrl = `${appUrl}/invites/${invite.token}`;
     const roleLabel = invite.role === "COUPLE" ? "a Couple member" : "a collaborator";
-    await sendEmailNotification(
+    const sent = await sendEmailNotification(
       invite.email,
       `You've been invited to plan a wedding on Seatwise`,
       `${access.wedding.name ? `${user.name} invited you` : "You've been invited"} to join "${access.wedding.name}" on Seatwise as ${roleLabel} with ${invite.permissionLevel.toLowerCase()} access.\n\nAccept the invite: ${acceptUrl}\n\nThis link expires in 7 days. If you weren't expecting this, you can ignore it.`
     );
 
     const { token: _token, ...invitePublic } = invite;
-    return NextResponse.json({ invite: invitePublic }, { status: 201 });
+    // TS-132: if the email didn't go out, hand the owner the accept link to send themselves --
+    // otherwise the invitee has no way in. (Accepting still requires signing in with this exact
+    // address, so the link is no use to anyone else.)
+    const emailed = emailDelivered(sent);
+    return NextResponse.json(
+      { invite: invitePublic, emailed, ...(emailed ? {} : { acceptUrl }) },
+      { status: 201 }
+    );
   } catch (err) {
     if (err instanceof InviteError) {
       return errorResponse(err.message, err.code === "NOT_FOUND" ? 404 : 409);

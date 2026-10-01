@@ -15,3 +15,4 @@ export * from "./queries/timeline";
 export * from "./queries/templates";
 export * from "./queries/vendors";
 export * from "./queries/rate-limit";
+export * from "./email";
