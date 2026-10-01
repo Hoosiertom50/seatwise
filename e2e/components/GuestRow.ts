@@ -126,6 +126,25 @@ export class GuestRow {
     return this.root.locator("p").filter({ hasText: /^Notes:/ });
   }
 
+  /** TS-118: the inline email field (Owner/Edit users). */
+  private emailInput() {
+    return this.fieldByAriaLabelPrefix("input", "Email for ");
+  }
+
+  async email(): Promise<string> {
+    return this.emailInput().inputValue();
+  }
+
+  /** TS-118: email saves on blur -- replace the text, then Tab away. */
+  async editEmail(value: string): Promise<void> {
+    await this.emailInput().fill(value);
+    await this.emailInput().press("Tab");
+  }
+
+  async side(): Promise<string> {
+    return this.sideSelect().inputValue();
+  }
+
   async rsvpStatus(): Promise<string> {
     return this.rsvpStatusSelect().inputValue();
   }

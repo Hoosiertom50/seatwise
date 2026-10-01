@@ -78,12 +78,47 @@ export class DayOfTabPage extends BasePage {
     return this.swapButton();
   }
 
+  /** TS-118: the message shown before any seating plan exists. */
+  noPlanMessage() {
+    return this.page.getByText(/^No seating plan generated yet/);
+  }
+
+  /** TS-118: one table's card in the occupancy strip, e.g. "Alpha" + "2/2 seated". */
+  occupancyCard(tableLabel: string) {
+    return this.page
+      .locator("div")
+      .filter({ has: this.page.getByText("Table occupancy", { exact: true }) })
+      .locator("div.shrink-0")
+      .filter({ has: this.page.getByText(tableLabel, { exact: true }) });
+  }
+
+  /** TS-118: the guests the list is currently showing (after any search). */
+  visibleGuestRows() {
+    return this.page.locator("ul > li");
+  }
+
+  /** TS-118: a guest's row, for visibility checks after a search. */
+  guestRowLocator(guestName: string) {
+    return this.guestRow(guestName);
+  }
+
+  /** TS-118: the "No guests match …" line a search with no results shows. */
+  noSearchMatchMessage() {
+    return this.page.getByText(/^No guests match/);
+  }
+
+  /** TS-118: the Swap panel -- only offered once a plan has at least two seated guests. */
+  swapPanel() {
+    return this.page.getByText("Swap two guests' tables", { exact: true });
+  }
+
   noticeText() {
     return this.page.locator("p.text-blue-800, p.text-blue-300");
   }
 
+  // TS-118: a full table's "N/N seated" in the occupancy strip is red too -- not an error.
   errorText() {
-    return this.page.locator("p.text-red-600, p.text-red-400");
+    return this.page.locator("p.text-red-600, p.text-red-400").filter({ hasNotText: /^\d+\/\d+ seated$/ });
   }
 
   async goto(weddingId: string): Promise<void> {

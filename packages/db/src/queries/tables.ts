@@ -566,3 +566,21 @@ export async function resyncTableSeating(
     client.release();
   }
 }
+
+// TS-134: the same re-check for one guest, on whichever table they're seated at in the Current
+// Plan Version -- for a change to the guest rather than the table that can make their seat invalid:
+// needing an accessible seat, or a bigger party than the table has room for. Used after a guest's
+// own RSVP and after a planner edits their headcount. Does nothing if they aren't seated.
+export async function resyncGuestSeat(
+  weddingId: string,
+  guestId: string
+): Promise<{ newlyFlagged: { name: string; reason: TableSeatingFlagReason }[] }> {
+  const { rows } = await pool.query<{ tableId: string }>(
+    `SELECT sa."seatingTableId" AS "tableId"
+     FROM "seat_assignments" sa JOIN "plan_versions" pv ON pv.id = sa."planVersionId"
+     WHERE pv."weddingId" = $1 AND pv."isCurrent" AND sa."guestId" = $2`,
+    [weddingId, guestId]
+  );
+  if (!rows[0]) return { newlyFlagged: [] };
+  return resyncTableSeating(weddingId, rows[0].tableId);
+}
