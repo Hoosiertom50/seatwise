@@ -111,6 +111,15 @@ jobs:
   validate:
     name: Typecheck, metadata validation, lint, framework unit tests
     runs-on: ubuntu-latest
+    # TS-139: run inside Playwright's official image, pinned to the same version as
+    # @playwright/test. Its browsers and every OS library they need are already installed, so the job
+    # no longer spends 10-20 minutes on `playwright install --with-deps` downloading ~150 packages
+    # from Ubuntu's mirrors whenever those are slow. Keep the tag in step with package.json.
+    # --user 1001 is the runner's own uid (Playwright's documented setting for GitHub Actions, so the
+    # checked-out workspace stays writable and Firefox doesn't refuse to run as root).
+    container:
+      image: mcr.microsoft.com/playwright:v1.63.0-noble
+      options: --user 1001 --ipc=host
     steps:
       - uses: actions/checkout@v4
 
@@ -132,12 +141,6 @@ jobs:
 
       - name: Lint tests (authoring-standards static checks)
         run: pnpm pw:lint-tests
-
-      - name: Install Playwright's Chromium (with OS deps)
-        # TS-56: added. A few framework-unit tests (the HTML-report renderers) launch a real
-        # browser directly -- see this job's own top-of-file comment -- so this step is required
-        # even though this job never touches Postgres or the built app.
-        run: pnpm exec playwright install --with-deps chromium
 
       - name: Run framework unit tests (schemas, scoring, hooks, CLIs, and a few real-browser HTML-report render checks)
         run: pnpm exec playwright test --project=framework-unit
@@ -183,6 +186,18 @@ jobs:
   e2e:
     name: "Application E2E (shard ${{ matrix.shard }}/2)"
     runs-on: ubuntu-latest
+    # TS-139: run inside Playwright's official image, pinned to the same version as
+    # @playwright/test. Its browsers and every OS library they need are already installed, so the job
+    # no longer spends 10-20 minutes on `playwright install --with-deps` downloading ~150 packages
+    # from Ubuntu's mirrors whenever those are slow. Keep the tag in step with package.json.
+    # --user 1001 is the runner's own uid (Playwright's documented setting for GitHub Actions, so the
+    # checked-out workspace stays writable and Firefox doesn't refuse to run as root).
+    container:
+      image: mcr.microsoft.com/playwright:v1.63.0-noble
+      options: --user 1001 --ipc=host
+    # Inside a container job the Postgres service is reached by its service name, not localhost.
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/seatwise_ci?schema=public
     needs: validate
     strategy:
       fail-fast: false
@@ -215,9 +230,6 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Install Playwright's Chromium (with OS deps)
-        run: pnpm exec playwright install --with-deps chromium
-
       - name: Generate ephemeral, non-secret app config for this CI run only
         # These gate a throwaway CI-only Postgres database and app instance that stops existing the
         # moment this job ends -- never a real credential, so generating them fresh per run (rather
@@ -225,8 +237,8 @@ jobs:
         # narrower-scoped choice. Written to GITHUB_ENV, never echoed to the log; see
         # PLAYWRIGHT_TESTING.md's "CI secrets and scoping" section for the full rationale.
         run: |
-          echo "JWT_SECRET=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
-          echo "ENCRYPTION_KEY=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
+          echo "JWT_SECRET=$(node -e "process.stdout.write(require('crypto').randomBytes(32).toString('hex'))")" >> "$GITHUB_ENV"
+          echo "ENCRYPTION_KEY=$(node -e "process.stdout.write(require('crypto').randomBytes(32).toString('hex'))")" >> "$GITHUB_ENV"
 
       - name: Apply database migrations
         run: pnpm --filter @seatwise/db migrate:deploy
@@ -292,6 +304,18 @@ jobs:
   e2e-firefox:
     name: "Application E2E on Firefox (shard ${{ matrix.shard }}/2)"
     runs-on: ubuntu-latest
+    # TS-139: run inside Playwright's official image, pinned to the same version as
+    # @playwright/test. Its browsers and every OS library they need are already installed, so the job
+    # no longer spends 10-20 minutes on `playwright install --with-deps` downloading ~150 packages
+    # from Ubuntu's mirrors whenever those are slow. Keep the tag in step with package.json.
+    # --user 1001 is the runner's own uid (Playwright's documented setting for GitHub Actions, so the
+    # checked-out workspace stays writable and Firefox doesn't refuse to run as root).
+    container:
+      image: mcr.microsoft.com/playwright:v1.63.0-noble
+      options: --user 1001 --ipc=host
+    # Inside a container job the Postgres service is reached by its service name, not localhost.
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/seatwise_ci?schema=public
     needs: validate
     strategy:
       fail-fast: false
@@ -324,13 +348,10 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Install Playwright's Firefox (with OS deps)
-        run: pnpm exec playwright install --with-deps firefox
-
       - name: Generate ephemeral, non-secret app config for this CI run only
         run: |
-          echo "JWT_SECRET=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
-          echo "ENCRYPTION_KEY=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
+          echo "JWT_SECRET=$(node -e "process.stdout.write(require('crypto').randomBytes(32).toString('hex'))")" >> "$GITHUB_ENV"
+          echo "ENCRYPTION_KEY=$(node -e "process.stdout.write(require('crypto').randomBytes(32).toString('hex'))")" >> "$GITHUB_ENV"
 
       - name: Apply database migrations
         run: pnpm --filter @seatwise/db migrate:deploy
@@ -383,6 +404,18 @@ jobs:
   e2e-webkit:
     name: "Application E2E on WebKit (shard ${{ matrix.shard }}/2)"
     runs-on: ubuntu-latest
+    # TS-139: run inside Playwright's official image, pinned to the same version as
+    # @playwright/test. Its browsers and every OS library they need are already installed, so the job
+    # no longer spends 10-20 minutes on `playwright install --with-deps` downloading ~150 packages
+    # from Ubuntu's mirrors whenever those are slow. Keep the tag in step with package.json.
+    # --user 1001 is the runner's own uid (Playwright's documented setting for GitHub Actions, so the
+    # checked-out workspace stays writable and Firefox doesn't refuse to run as root).
+    container:
+      image: mcr.microsoft.com/playwright:v1.63.0-noble
+      options: --user 1001 --ipc=host
+    # Inside a container job the Postgres service is reached by its service name, not localhost.
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/seatwise_ci?schema=public
     needs: validate
     strategy:
       fail-fast: false
@@ -415,13 +448,10 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Install Playwright's WebKit (with OS deps)
-        run: pnpm exec playwright install --with-deps webkit
-
       - name: Generate ephemeral, non-secret app config for this CI run only
         run: |
-          echo "JWT_SECRET=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
-          echo "ENCRYPTION_KEY=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
+          echo "JWT_SECRET=$(node -e "process.stdout.write(require('crypto').randomBytes(32).toString('hex'))")" >> "$GITHUB_ENV"
+          echo "ENCRYPTION_KEY=$(node -e "process.stdout.write(require('crypto').randomBytes(32).toString('hex'))")" >> "$GITHUB_ENV"
 
       - name: Apply database migrations
         run: pnpm --filter @seatwise/db migrate:deploy
@@ -514,8 +544,8 @@ jobs:
 
       - name: Generate ephemeral, non-secret app config for this CI run only
         run: |
-          echo "JWT_SECRET=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
-          echo "ENCRYPTION_KEY=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
+          echo "JWT_SECRET=$(node -e "process.stdout.write(require('crypto').randomBytes(32).toString('hex'))")" >> "$GITHUB_ENV"
+          echo "ENCRYPTION_KEY=$(node -e "process.stdout.write(require('crypto').randomBytes(32).toString('hex'))")" >> "$GITHUB_ENV"
 
       - name: Apply database migrations
         run: pnpm --filter @seatwise/db migrate:deploy
