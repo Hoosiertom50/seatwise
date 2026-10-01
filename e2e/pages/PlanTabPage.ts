@@ -296,6 +296,72 @@ export class PlanTabPage extends BasePage {
     await this.redoButton().click();
   }
 
+  // TS-118: the plan-version screens -- status badge, nickname, comparison, score explanation,
+  // and a past version's read-only notice and restore flow.
+  statusBadge(label: "Draft" | "In review" | "Approved") {
+    return this.page.getByText(label, { exact: true });
+  }
+  addNicknameButton() {
+    return this.page.getByRole("button", { name: /^(Add a nickname\.\.\.|“.*” \(rename\))$/ });
+  }
+  nicknameInput() {
+    return this.page.getByLabel("Version nickname", { exact: true });
+  }
+  async setNickname(value: string, save = true): Promise<void> {
+    await this.addNicknameButton().click();
+    await this.nicknameInput().fill(value);
+    await this.page.getByRole("button", { name: save ? "Save" : "Cancel", exact: true }).click();
+  }
+  async cancelNicknameEdit(): Promise<void> {
+    await this.page.getByRole("button", { name: "Cancel", exact: true }).click();
+  }
+  scoreExplanationToggle() {
+    return this.page.getByRole("button", { name: /^(How is this calculated\?|Hide calculation)$/ });
+  }
+  async openComparison(): Promise<void> {
+    await this.page.getByRole("button", { name: "Compare two versions...", exact: true }).click();
+  }
+  async compare(fromLabel?: RegExp, toLabel?: RegExp): Promise<void> {
+    if (fromLabel) await this.selectOptionMatching(this.page.getByLabel("From", { exact: true }), fromLabel);
+    if (toLabel) await this.selectOptionMatching(this.page.getByLabel("To", { exact: true }), toLabel);
+    await this.page.getByRole("button", { name: "Compare", exact: true }).click();
+  }
+  comparisonSummary() {
+    return this.page.getByText(/^v\d+.* → v\d+.*: \d+ moved, \d+ added, \d+ removed, \d+ unchanged$/);
+  }
+  async selectVersion(optionLabel: RegExp): Promise<void> {
+    await this.selectOptionMatching(this.versionSelect(), optionLabel);
+  }
+  pastVersionNotice() {
+    return this.page.getByText(/^This is a past version — status can only be changed on the current one\./);
+  }
+  restoreButton(versionNumber: number) {
+    return this.page.getByRole("button", { name: `Restore version ${versionNumber}...`, exact: true });
+  }
+  restorePreview(versionNumber: number) {
+    return this.page.getByText(new RegExp(`^Restoring version ${versionNumber} will create a new version`));
+  }
+  async confirmRestore(): Promise<void> {
+    await this.page.getByRole("button", { name: "Confirm restore", exact: true }).click();
+  }
+  async cancelRestore(): Promise<void> {
+    await this.page.getByRole("button", { name: "Cancel", exact: true }).click();
+  }
+  /** Any status-change button (none should show on a past version). */
+  statusChangeButtons() {
+    return this.page.getByRole("button", { name: /^(Move to review|Move back to draft|Approve|Reopen for review)$/ });
+  }
+  /** The tab's red error line, matched by its text. */
+  message(text: string | RegExp) {
+    return typeof text === "string" ? this.page.getByText(text, { exact: true }) : this.page.getByText(text);
+  }
+  private async selectOptionMatching(select: ReturnType<PlanTabPage["versionSelect"]>, label: RegExp): Promise<void> {
+    const options = await select.locator("option").allTextContents();
+    const match = options.find((o) => label.test(o));
+    if (!match) throw new Error(`No option matching ${label} (have: ${options.join(" | ")})`);
+    await select.selectOption({ label: match });
+  }
+
   /** Runs one generation. `saveAsDraft` mirrors the real "Save as comparison draft" checkbox
    * (unchecked -- the default -- makes the new version Current); waits for the button to return
    * to its ready label, which only happens after the request settles either way (success or a

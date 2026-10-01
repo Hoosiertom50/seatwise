@@ -766,6 +766,7 @@ export function PlanTab({
               <span className="flex items-center gap-1">
                 <input
                   autoFocus
+                  aria-label="Version nickname"
                   value={labelInput}
                   onChange={(e) => setLabelInput(e.target.value)}
                   placeholder="Version nickname"
