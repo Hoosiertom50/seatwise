@@ -9,6 +9,7 @@ import {
   setGuestAttendance,
   revalidateGuestAssignment,
   recomputeCurrentPlanCompleteness,
+  resyncGuestSeat,
   GuestConflictError,
 } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
@@ -77,6 +78,14 @@ export async function PATCH(req: NextRequest, { params }: Params) {
       warnings.push(
         `${result.guestName}'s current table no longer fits a hard rule for them — flagged as Needs Reassignment.`
       );
+    }
+  }
+
+  // TS-134: a bigger party can outgrow the table they're seated at -- re-check its room.
+  if (parsed.data.headcount !== undefined) {
+    const { newlyFlagged } = await resyncGuestSeat(weddingId, guestId);
+    for (const f of newlyFlagged) {
+      warnings.push(`${f.name} no longer fits at their table — flagged as Needs Reassignment.`);
     }
   }
 

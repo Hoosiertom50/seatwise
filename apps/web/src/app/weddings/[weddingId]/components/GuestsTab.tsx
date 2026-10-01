@@ -398,7 +398,8 @@ export function GuestsTab({
       } else {
         setGuests(prev);
         input.value = current?.email ?? "";
-        setError(err instanceof ApiError ? err.message : "Couldn't update that guest's email.");
+        // TS-135: a 422's top-level message is just "Validation failed" -- show the field's own reason.
+        setError(apiErrorMessage(err, ["email"], "Couldn't update that guest's email."));
       }
     }
   }

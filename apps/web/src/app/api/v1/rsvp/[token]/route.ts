@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { submitGuestRsvpSchema, type GuestRsvpPreviewDTO } from "@seatwise/shared";
-import { getGuestByRsvpToken, submitGuestRsvp, RsvpSubmissionError } from "@seatwise/db";
+import { getGuestByRsvpToken, submitGuestRsvp, RsvpSubmissionError, resyncGuestSeat } from "@seatwise/db";
 import { errorResponse, zodErrorResponse } from "@/lib/api-response";
 import { clientAddress, rateLimitOr429, RSVP_LIMITS } from "@/lib/rate-limit";
 
@@ -67,7 +67,11 @@ export async function POST(req: NextRequest, { params }: Params) {
 
   try {
     const { notes, ...rest } = parsed.data;
-    await submitGuestRsvp(token, { ...rest, rsvpNotes: notes });
+    const guest = await submitGuestRsvp(token, { ...rest, rsvpNotes: notes });
+    // TS-134: a guest who now needs an accessible seat, or is bringing more people than their
+    // table has room for, is flagged Needs Reassignment -- exactly as a planner's own edit would --
+    // instead of silently staying where they no longer fit.
+    await resyncGuestSeat(guest.weddingId, guest.id);
     return NextResponse.json({ ok: true });
   } catch (err) {
     if (err instanceof RsvpSubmissionError) {
