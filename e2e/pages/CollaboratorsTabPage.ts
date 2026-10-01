@@ -99,6 +99,20 @@ export class CollaboratorsTabPage extends BasePage {
     return typeof text === "string" ? this.page.getByText(text, { exact: true }) : this.page.getByText(text);
   }
 
+  /** TS-105: hands the wedding to `personName`, answering "Yes"; the page reloads afterwards. */
+  async handOffTo(personName: string): Promise<void> {
+    await this.page.getByLabel("New owner", { exact: true }).selectOption({ label: personName });
+    await this.page.getByRole("button", { name: "Hand off", exact: true }).click();
+    await Promise.all([
+      this.page.waitForEvent("load"),
+      new ConfirmDelete(this.page).confirm(),
+    ]);
+  }
+
+  handOffSection() {
+    return this.page.getByRole("heading", { name: "Hand off this wedding", exact: true });
+  }
+
   /** Every Remove button on the tab -- none should render for a non-owner. */
   removeButtons() {
     return this.page.getByRole("button", { name: /^Remove / });

@@ -208,8 +208,10 @@ model Comment {
   // what's shown in its place.
   targetLabel      String
   body             String
-  authorUserId     String
-  author           User              @relation(fields: [authorUserId], references: [id], onDelete: Cascade)
+  // TS-105: null once the author deletes their account -- the comment stays (other planners'
+  // discussion shouldn't vanish) and shows as written by "Former member".
+  authorUserId     String?
+  author           User?             @relation(fields: [authorUserId], references: [id], onDelete: SetNull)
   parentCommentId  String?
   parentComment    Comment?          @relation("CommentReplies", fields: [parentCommentId], references: [id])
   replies          Comment[]         @relation("CommentReplies")

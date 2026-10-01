@@ -240,6 +240,13 @@ export default function DashboardPage() {
         </div>
         <div className="flex items-center gap-2">
           <NotificationsBell />
+          {/* TS-105 */}
+          <Link
+            href="/account"
+            className="rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800"
+          >
+            Account
+          </Link>
           <button
             onClick={onLogout}
             className="rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800"

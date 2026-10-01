@@ -56,6 +56,8 @@ export function CollaboratorsTab({
   setWedding: (w: WeddingDTO) => void;
 }) {
   const [collaborators, setCollaborators] = useState<CollaboratorDTO[]>([]);
+  // TS-105: which collaborator the owner is handing the wedding to.
+  const [handOffTo, setHandOffTo] = useState("");
   const [invites, setInvites] = useState<WeddingInviteDTO[]>([]);
   const [loading, setLoading] = useState(true);
   const [email, setEmail] = useState("");
@@ -197,6 +199,18 @@ export function CollaboratorsTab({
       setNote(wedding.note ?? "");
     } finally {
       setSavingNote(false);
+    }
+  }
+
+  // TS-105: hand the wedding off, then reload -- this page's own access level has just changed.
+  async function onHandOff() {
+    if (!handOffTo) return;
+    setError(null);
+    try {
+      await api.post(`/api/v1/weddings/${weddingId}/transfer-ownership`, { collaboratorId: handOffTo });
+      window.location.reload();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Couldn't hand off this wedding.");
     }
   }
 
@@ -602,6 +616,42 @@ export function CollaboratorsTab({
             </li>
           ))}
         </ul>
+      )}
+
+      {/* TS-105: the owner hands the wedding to someone who already has access. Needed before the
+          owner can delete their account, so no wedding is ever left with nobody in charge. */}
+      {isOwner && collaborators.length > 0 && (
+        <div className="mt-8 rounded-lg border border-neutral-200 dark:border-neutral-700 p-4">
+          <h3 className="mb-1 text-sm font-medium">Hand off this wedding</h3>
+          <p className="mb-3 text-sm text-neutral-500 dark:text-neutral-400">
+            Make someone with access the owner. You&apos;ll stay on with Edit access, and they&apos;ll
+            manage who has access from then on.
+          </p>
+          <div className="flex flex-wrap items-center gap-2">
+            <select
+              aria-label="New owner"
+              className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1.5 text-sm"
+              value={handOffTo}
+              onChange={(e) => setHandOffTo(e.target.value)}
+            >
+              <option value="">Choose a person…</option>
+              {collaborators.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.userName}
+                </option>
+              ))}
+            </select>
+            <ConfirmDeleteButton
+              label="Hand off"
+              disabled={!handOffTo}
+              question={`Make ${collaborators.find((c) => c.id === handOffTo)?.userName ?? "them"} the owner of this wedding? You'll stay on with Edit access. Only the new owner can undo this.`}
+              confirmLabel="Yes, hand it off"
+              busyLabel="Handing off…"
+              className="rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50"
+              onConfirm={onHandOff}
+            />
+          </div>
+        </div>
       )}
     </div>
   );

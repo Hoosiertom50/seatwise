@@ -16,6 +16,7 @@ export function ConfirmDeleteButton({
   onConfirm,
   disabled = false,
   className,
+  busyLabel = "Removing…",
 }: {
   /** The trigger button's visible text. */
   label?: string;
@@ -29,6 +30,8 @@ export function ConfirmDeleteButton({
   onConfirm: () => void | Promise<void>;
   disabled?: boolean;
   className?: string;
+  /** Shown on the confirm button while it works. */
+  busyLabel?: string;
 }) {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -93,7 +96,7 @@ export function ConfirmDeleteButton({
             disabled={busy}
             className="rounded-md bg-red-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-red-800 disabled:opacity-50"
           >
-            {busy ? "Removing…" : confirmLabel}
+            {busy ? busyLabel : confirmLabel}
           </button>
           <button
             ref={cancelRef}
