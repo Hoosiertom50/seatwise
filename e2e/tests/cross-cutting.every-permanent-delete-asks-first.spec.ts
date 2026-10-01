@@ -46,6 +46,8 @@ defineQualityTest(
       await detail.deleteTrigger(trigger).click();
       await ask.confirm();
       await expect.poll(stillThere).toBe(false);
+      // The question closes once the app has finished (e.g. reloading the invite list).
+      await expect(ask.question()).toHaveCount(0);
     };
 
     const a = uniquePersonName(testInfo.workerIndex);
