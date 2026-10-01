@@ -62,6 +62,11 @@ const vendorBaseSchema = z.object({
   contactPhone: z.string().max(40).optional().nullable(),
   costCents: costCentsField,
   contractNotes: z.string().max(4000).optional().nullable(),
+  // TS-114: "HH:MM" (24-hour), what an <input type="time"> sends. Blank clears it.
+  arrivalTime: z
+    .union([z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Use a time like 14:30"), z.literal(""), z.null()])
+    .optional()
+    .transform((v) => (v === "" ? null : v)),
 });
 
 export const createVendorSchema = vendorBaseSchema.superRefine(validateCategoryOther);
@@ -99,6 +104,10 @@ export interface VendorDTO {
   contactPhone: string | null;
   costCents: number | null;
   contractNotes: string | null;
+  // TS-114
+  arrivalTime: string | null;
+  /** Whether this vendor currently has a working read-only link. */
+  shareLinkActive: boolean;
   createdAt: string;
   updatedAt: string;
   // FR-7.7: send this back as expectedRevision on an edit so the server can detect a save based
@@ -116,4 +125,28 @@ export interface BudgetSummaryDTO {
   remainingCents: number | null;
   // TS-92: send back as expectedRevision when changing the budget figure.
   budgetRevision: number;
+}
+
+// TS-114: POST .../vendors/:id/share-link -- regenerate replaces the link (the old one stops working).
+export const vendorShareLinkActionSchema = z.object({ regenerate: z.boolean().optional() });
+
+export interface VendorShareLinkDTO {
+  url: string;
+}
+
+// TS-114: the vendor's read-only page. Deliberately has no costs, contract notes, budget, guest
+// data or other vendors' contact details -- see getVendorViewByToken.
+export interface VendorViewDTO {
+  wedding: { name: string; eventDate: string | null; venueName: string | null };
+  vendor: {
+    name: string;
+    category: VendorCategory;
+    categoryOther: string | null;
+    contactName: string | null;
+    contactEmail: string | null;
+    contactPhone: string | null;
+    arrivalTime: string | null;
+  };
+  otherVendors: { name: string; category: VendorCategory; categoryOther: string | null; arrivalTime: string | null }[];
+  timeline: { time: string; description: string }[];
 }

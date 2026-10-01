@@ -35,6 +35,8 @@ export interface AddVendorInput {
   contactPhone?: string;
   cost?: string;
   contractNotes?: string;
+  /** TS-114: "HH:MM", 24-hour. */
+  arrivalTime?: string;
 }
 
 export class BudgetTabPage extends BasePage {
@@ -168,6 +170,9 @@ export class BudgetTabPage extends BasePage {
     if (input.contractNotes !== undefined) {
       await this.notesInput().fill(input.contractNotes);
     }
+    if (input.arrivalTime !== undefined) {
+      await this.page.locator("#vendor-arrival-time").fill(input.arrivalTime);
+    }
     await Promise.all([
       this.page.waitForResponse(
         (res) => res.request().method() === "POST" && /\/vendors$/.test(new URL(res.url()).pathname),
@@ -180,6 +185,32 @@ export class BudgetTabPage extends BasePage {
   }
 
   // --- Vendor list ---
+
+  // TS-114: a vendor's private read-only link.
+  shareLinkButton(vendorName: string) {
+    return this.page.getByRole("button", { name: `Share link for ${vendorName}`, exact: true });
+  }
+  newLinkButton(vendorName: string) {
+    return this.page.getByRole("button", { name: `New link for ${vendorName}`, exact: true });
+  }
+  /** Clicks Share link (or New link) and returns the link the row then shows. */
+  async getShareLink(vendorName: string, fresh = false): Promise<string> {
+    const button = fresh ? this.newLinkButton(vendorName) : this.shareLinkButton(vendorName);
+    await Promise.all([
+      this.page.waitForResponse((r) => r.request().method() === "POST" && /\/share-link$/.test(new URL(r.url()).pathname)),
+      button.click(),
+    ]);
+    const line = this.vendorRow(vendorName).getByText(/\/vendor\/[0-9a-f]{64}/);
+    const text = (await line.textContent()) ?? "";
+    return text.match(/https?:\/\/\S+\/vendor\/[0-9a-f]{64}/)![0];
+  }
+  async turnOffShareLink(vendorName: string): Promise<void> {
+    await this.page.getByRole("button", { name: `Turn off the link for ${vendorName}`, exact: true }).click();
+    await Promise.all([
+      this.page.waitForResponse((r) => r.request().method() === "DELETE" && /\/share-link$/.test(new URL(r.url()).pathname)),
+      new ConfirmDelete(this.vendorRow(vendorName)).confirm(),
+    ]);
+  }
 
   vendorsHeading(count: number) {
     return this.page.getByText(`Vendors (${count})`, { exact: true });

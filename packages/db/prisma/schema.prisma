@@ -293,6 +293,12 @@ model Vendor {
   contactPhone   String?
   costCents      Int?
   contractNotes  String?
+  // TS-114: when this vendor arrives on the day ("HH:MM", 24-hour) -- shown to the other vendors
+  // on their read-only links so they can coordinate.
+  arrivalTime    String?
+  // TS-114: the vendor's private read-only link (/vendor/<token>). Null = no link, or turned off.
+  // Never returned by the normal vendor read path -- only by the share-link endpoint.
+  shareToken     String?         @unique
   createdAt      DateTime        @default(now())
   updatedAt      DateTime        @updatedAt
   // FR-7.7, extended to vendors (per Tom's own stated wish for concurrent-edit protection on

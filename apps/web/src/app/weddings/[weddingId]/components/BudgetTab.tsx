@@ -3,7 +3,8 @@
 import { useEffect, useState } from "react";
 import { ConfirmDeleteButton } from "@/components/ConfirmDeleteButton";
 import { api, ApiError } from "@/lib/api-client";
-import type { VendorDTO, VendorCategory, BudgetSummaryDTO } from "@seatwise/shared";
+import { formatClockTime } from "@/lib/display-format";
+import type { VendorDTO, VendorCategory, BudgetSummaryDTO, VendorShareLinkDTO } from "@seatwise/shared";
 
 // TS-20 (FR-15.1/FR-15.2): a per-wedding vendor list plus the wedding's overall budget figure and
 // a running total/remaining against it. Money is always handled here in whole dollars for
@@ -66,7 +67,12 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
   const [contactPhone, setContactPhone] = useState("");
   const [cost, setCost] = useState("");
   const [contractNotes, setContractNotes] = useState("");
+  const [arrivalTime, setArrivalTime] = useState("");
   const [adding, setAdding] = useState(false);
+  // TS-114: per-vendor feedback after a share-link action ("Link copied", or the bare link when
+  // the clipboard isn't available), keyed by vendor id.
+  const [shareResult, setShareResult] = useState<Record<string, string>>({});
+  const [shareBusy, setShareBusy] = useState<string | null>(null);
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editVendor, setEditVendor] = useState<Partial<VendorDTO>>({});
@@ -130,6 +136,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
         contactPhone: contactPhone || null,
         costCents: dollarsStringToCents(cost),
         contractNotes: contractNotes || null,
+        arrivalTime: arrivalTime || null,
       });
       setVendors([...vendors, vendor].sort((a, b) => a.name.localeCompare(b.name)));
       const { summary: updated } = await api.get<{ summary: BudgetSummaryDTO }>(
@@ -144,6 +151,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
       setContactPhone("");
       setCost("");
       setContractNotes("");
+      setArrivalTime("");
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't add that vendor.");
     } finally {
@@ -181,6 +189,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
           contactPhone: editVendor.contactPhone ?? null,
           costCents: editVendor.costCents ?? null,
           contractNotes: editVendor.contractNotes ?? null,
+          arrivalTime: editVendor.arrivalTime ?? null,
           expectedRevision,
         }
       );
@@ -200,6 +209,45 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
       }
     } finally {
       setSaving(false);
+    }
+  }
+
+  // TS-114: get (or, with regenerate, replace) a vendor's private read-only link and copy it.
+  async function onShareLink(vendorId: string, regenerate: boolean) {
+    setError(null);
+    setShareBusy(vendorId);
+    try {
+      const { link } = await api.post<{ link: VendorShareLinkDTO }>(
+        `/api/v1/weddings/${weddingId}/vendors/${vendorId}/share-link`,
+        { regenerate }
+      );
+      setVendors((current) => current.map((v) => (v.id === vendorId ? { ...v, shareLinkActive: true } : v)));
+      let copied = false;
+      try {
+        await navigator.clipboard.writeText(link.url);
+        copied = true;
+      } catch {
+        // No clipboard (e.g. an insecure context) -- show the link so it can be copied by hand.
+      }
+      setShareResult((r) => ({
+        ...r,
+        [vendorId]: `${regenerate ? "New link — the old one no longer works. " : ""}${copied ? "Link copied: " : ""}${link.url}`,
+      }));
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Couldn't get that vendor's link.");
+    } finally {
+      setShareBusy(null);
+    }
+  }
+
+  async function onTurnOffLink(vendorId: string) {
+    setError(null);
+    try {
+      await api.delete(`/api/v1/weddings/${weddingId}/vendors/${vendorId}/share-link`);
+      setVendors((current) => current.map((v) => (v.id === vendorId ? { ...v, shareLinkActive: false } : v)));
+      setShareResult((r) => ({ ...r, [vendorId]: "Link turned off — it no longer works." }));
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Couldn't turn off that link.");
     }
   }
 
@@ -385,6 +433,18 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
                 onChange={(e) => setContactPhone(e.target.value)}
               />
             </div>
+            <div>
+              <label htmlFor="vendor-arrival-time" className="mb-1 block text-sm font-medium">
+                Arrival time on the day (optional)
+              </label>
+              <input
+                id="vendor-arrival-time"
+                type="time"
+                className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
+                value={arrivalTime}
+                onChange={(e) => setArrivalTime(e.target.value)}
+              />
+            </div>
             <div className="sm:col-span-2">
               <label htmlFor="vendor-notes" className="mb-1 block text-sm font-medium">
                 Contract details / notes (optional)
@@ -469,6 +529,13 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
                       onChange={(e) => setEditVendor({ ...editVendor, contactPhone: e.target.value })}
                     />
                     <input
+                      aria-label="Edit arrival time"
+                      type="time"
+                      className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm"
+                      value={editVendor.arrivalTime ?? ""}
+                      onChange={(e) => setEditVendor({ ...editVendor, arrivalTime: e.target.value || null })}
+                    />
+                    <input
                       aria-label="Edit cost"
                       type="number"
                       min={0}
@@ -516,12 +583,49 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
                     <p className="text-sm text-neutral-500 dark:text-neutral-400">
                       {[v.contactName, v.contactEmail, v.contactPhone].filter(Boolean).join(" · ") || "No contact info"}
                     </p>
+                    {v.arrivalTime && (
+                      <p className="text-sm text-neutral-500 dark:text-neutral-400">Arrives {formatClockTime(v.arrivalTime)}</p>
+                    )}
                     {v.contractNotes && <p className="mt-1 text-sm text-neutral-500 dark:text-neutral-400">{v.contractNotes}</p>}
+                    {shareResult[v.id] && (
+                      <p className="mt-1 break-all text-xs text-neutral-500 dark:text-neutral-400">{shareResult[v.id]}</p>
+                    )}
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="font-medium">{v.costCents === null ? "No cost set" : formatCents(v.costCents)}</span>
                     {canEdit && (
                       <>
+                        {/* TS-114: the vendor's private read-only link (timeline, their details, other
+                            vendors' names and arrival times -- never costs or notes). */}
+                        <button
+                          onClick={() => onShareLink(v.id, false)}
+                          disabled={shareBusy === v.id}
+                          aria-label={`Share link for ${v.name}`}
+                          title="Copies a private link to a read-only page for this vendor: the timeline, their details, and the other vendors' arrival times. Never costs or notes."
+                          className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50"
+                        >
+                          Share link
+                        </button>
+                        {v.shareLinkActive && (
+                          <>
+                            <button
+                              onClick={() => onShareLink(v.id, true)}
+                              disabled={shareBusy === v.id}
+                              aria-label={`New link for ${v.name}`}
+                              title="Makes a new link; the old one stops working."
+                              className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50"
+                            >
+                              New link
+                            </button>
+                            <ConfirmDeleteButton
+                              label="Turn off link"
+                              ariaLabel={`Turn off the link for ${v.name}`}
+                              question={`Turn off ${v.name}'s link? It stops working right away. You can make a new one later.`}
+                              confirmLabel="Yes, turn it off"
+                              onConfirm={() => onTurnOffLink(v.id)}
+                            />
+                          </>
+                        )}
                         <button
                           onClick={() => startEdit(v)}
                           className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800"

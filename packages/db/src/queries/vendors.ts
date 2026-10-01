@@ -1,4 +1,4 @@
-import { randomUUID } from "crypto";
+import { randomBytes, randomUUID } from "crypto";
 import { pool } from "../pool";
 
 // TS-20 (FR-15.1/FR-15.2): a per-wedding vendor record, plus the wedding-wide budget figure it's
@@ -16,6 +16,9 @@ export interface VendorRow {
   contactPhone: string | null;
   costCents: number | null;
   contractNotes: string | null;
+  // TS-114
+  arrivalTime: string | null;
+  shareLinkActive: boolean;
   createdAt: Date;
   updatedAt: Date;
   // FR-7.7: an optimistic-concurrency counter -- an edit that names an expectedRevision the
@@ -32,6 +35,7 @@ export interface CreateVendorData {
   contactPhone?: string | null;
   costCents?: number | null;
   contractNotes?: string | null;
+  arrivalTime?: string | null;
 }
 
 // FR-7.7, extended to vendors: thrown instead of applying an edit whose expectedRevision no
@@ -46,15 +50,16 @@ export class VendorConflictError extends Error {
 }
 
 const COLUMNS = `id, "weddingId", name, category, "categoryOther", "contactName", "contactEmail",
-  "contactPhone", "costCents", "contractNotes", revision, "createdAt", "updatedAt"`;
+  "contactPhone", "costCents", "contractNotes", "arrivalTime", ("shareToken" IS NOT NULL) AS "shareLinkActive",
+  revision, "createdAt", "updatedAt"`;
 
 export async function createVendor(weddingId: string, input: CreateVendorData): Promise<VendorRow> {
   const id = randomUUID();
   const { rows } = await pool.query(
     `INSERT INTO "vendors"
        (id, "weddingId", name, category, "categoryOther", "contactName", "contactEmail",
-        "contactPhone", "costCents", "contractNotes", "updatedAt")
-     VALUES ($1, $2, $3, $4::"VendorCategory", $5, $6, $7, $8, $9, $10, now())
+        "contactPhone", "costCents", "contractNotes", "arrivalTime", "updatedAt")
+     VALUES ($1, $2, $3, $4::"VendorCategory", $5, $6, $7, $8, $9, $10, $11, now())
      RETURNING ${COLUMNS}`,
     [
       id,
@@ -67,6 +72,7 @@ export async function createVendor(weddingId: string, input: CreateVendorData): 
       input.contactPhone ?? null,
       input.costCents ?? null,
       input.contractNotes ?? null,
+      input.arrivalTime ?? null,
     ]
   );
   return rows[0];
@@ -131,6 +137,10 @@ export async function updateVendorForWedding(
   if (input.contractNotes !== undefined) {
     fields.push(`"contractNotes" = $${i++}`);
     values.push(input.contractNotes);
+  }
+  if (input.arrivalTime !== undefined) {
+    fields.push(`"arrivalTime" = $${i++}`);
+    values.push(input.arrivalTime);
   }
 
   const client = await pool.connect();
@@ -233,4 +243,92 @@ export async function setBudgetForWedding(
     if (rows[0]) throw new BudgetConflictError();
   }
   return (rowCount ?? 0) > 0;
+}
+
+// TS-114: a vendor's private read-only link. Same shape as a guest's RSVP link (guests.ts):
+// 32 random bytes, kept only on the row and handed out only by the share-link endpoint.
+export async function ensureVendorShareToken(id: string, weddingId: string): Promise<string | null> {
+  const { rows } = await pool.query(`SELECT "shareToken" FROM "vendors" WHERE id = $1 AND "weddingId" = $2`, [
+    id,
+    weddingId,
+  ]);
+  if (!rows[0]) return null;
+  if (rows[0].shareToken) return rows[0].shareToken;
+  return regenerateVendorShareToken(id, weddingId);
+}
+
+/** A brand-new token -- the previous link (if any) stops working at once. */
+export async function regenerateVendorShareToken(id: string, weddingId: string): Promise<string | null> {
+  const token = randomBytes(32).toString("hex");
+  const { rowCount } = await pool.query(
+    `UPDATE "vendors" SET "shareToken" = $1 WHERE id = $2 AND "weddingId" = $3`,
+    [token, id, weddingId]
+  );
+  return (rowCount ?? 0) > 0 ? token : null;
+}
+
+/** Turns the link off. Returns false if there's no such vendor. */
+export async function revokeVendorShareToken(id: string, weddingId: string): Promise<boolean> {
+  const { rowCount } = await pool.query(
+    `UPDATE "vendors" SET "shareToken" = NULL WHERE id = $1 AND "weddingId" = $2`,
+    [id, weddingId]
+  );
+  return (rowCount ?? 0) > 0;
+}
+
+export interface VendorViewRow {
+  wedding: { name: string; eventDate: string | null; venueName: string | null };
+  vendor: {
+    name: string;
+    category: string;
+    categoryOther: string | null;
+    contactName: string | null;
+    contactEmail: string | null;
+    contactPhone: string | null;
+    arrivalTime: string | null;
+  };
+  otherVendors: { name: string; category: string; categoryOther: string | null; arrivalTime: string | null }[];
+  timeline: { time: string; description: string }[];
+}
+
+// TS-114: everything the vendor's read-only page shows, and nothing else. Selected column by
+// column on purpose -- costs, contract notes, budget, other vendors' contact details and every
+// guest field are never read here, so they can't leak into the page or its API response.
+export async function getVendorViewByToken(token: string): Promise<VendorViewRow | null> {
+  const { rows } = await pool.query(
+    `SELECT v.id, v."weddingId", v.name, v.category, v."categoryOther", v."contactName", v."contactEmail",
+            v."contactPhone", v."arrivalTime", w.name AS "weddingName", w."eventDate"::text AS "eventDate",
+            w."venueName"
+     FROM "vendors" v JOIN "weddings" w ON w.id = v."weddingId"
+     WHERE v."shareToken" = $1`,
+    [token]
+  );
+  const v = rows[0];
+  if (!v) return null;
+  const [{ rows: others }, { rows: timeline }] = await Promise.all([
+    pool.query(
+      `SELECT name, category, "categoryOther", "arrivalTime" FROM "vendors"
+       WHERE "weddingId" = $1 AND id <> $2
+       ORDER BY "arrivalTime" NULLS LAST, name`,
+      [v.weddingId, v.id]
+    ),
+    pool.query(
+      `SELECT time, description FROM "timeline_entries" WHERE "weddingId" = $1 ORDER BY time, "sortOrder"`,
+      [v.weddingId]
+    ),
+  ]);
+  return {
+    wedding: { name: v.weddingName, eventDate: v.eventDate, venueName: v.venueName },
+    vendor: {
+      name: v.name,
+      category: v.category,
+      categoryOther: v.categoryOther,
+      contactName: v.contactName,
+      contactEmail: v.contactEmail,
+      contactPhone: v.contactPhone,
+      arrivalTime: v.arrivalTime,
+    },
+    otherVendors: others,
+    timeline,
+  };
 }
