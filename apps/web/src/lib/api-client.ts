@@ -30,6 +30,11 @@ export const SESSION_EXPIRED_EVENT = "seatwise:session-expired";
 export const SESSION_RESTORED_EVENT = "seatwise:session-restored";
 let hadSession = false;
 let sessionExpired = false;
+// TS-128: bumped each time the session is restored. A request that was already in flight before
+// the planner signed back in (e.g. the wedding page's 4-second access poll, sent without a cookie)
+// can come back 401 *after* the restore -- that answer is about the old, lost session, so it must
+// not bring the notice straight back.
+let sessionGeneration = 0;
 
 // TS-93: a request that got no response at all (offline, DNS, connection dropped) -- status 0,
 // since there is no HTTP status. Surfaced as an ApiError like any other failure, so every existing
@@ -64,6 +69,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   // TS-93: every write except signing in/out counts toward the visible save status.
   const tracksSave = options.method !== "GET" && !isAuthRoute;
   if (tracksSave) writeStarted();
+  const startedInGeneration = sessionGeneration;
 
   let res: Response;
   try {
@@ -92,10 +98,11 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   if (typeof window !== "undefined") {
     if (res.ok && sessionExpired) {
       sessionExpired = false;
+      sessionGeneration++;
       window.dispatchEvent(new Event(SESSION_RESTORED_EVENT));
     }
     if (res.ok && !isAuthRoute) hadSession = true;
-    if (res.status === 401 && !isAuthRoute && hadSession) {
+    if (res.status === 401 && !isAuthRoute && hadSession && startedInGeneration === sessionGeneration) {
       sessionExpired = true;
       window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT));
     }
