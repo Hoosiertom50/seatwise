@@ -61,4 +61,32 @@ export class CommentsTabPage extends BasePage {
   threadByBody(body: string) {
     return this.page.locator("li").filter({ hasText: body });
   }
+
+  // TS-118: replying to and resolving a thread through the UI.
+  replyOpener(threadBody: string) {
+    return this.threadByBody(threadBody).first().getByRole("button", { name: "Reply", exact: true });
+  }
+
+  async reply(threadBody: string, text: string): Promise<void> {
+    const thread = this.threadByBody(threadBody).first();
+    await this.replyOpener(threadBody).click();
+    await thread.getByLabel("Reply text", { exact: true }).fill(text);
+    await Promise.all([
+      this.page.waitForResponse((r) => r.request().method() === "POST" && /\/comments$/.test(new URL(r.url()).pathname)),
+      thread.getByRole("button", { name: "Reply", exact: true }).click(),
+    ]);
+  }
+
+  async resolve(threadBody: string): Promise<void> {
+    await this.threadByBody(threadBody).first().getByRole("button", { name: "Resolve", exact: true }).click();
+  }
+
+  resolvedBadge(threadBody: string) {
+    return this.threadByBody(threadBody).first().getByText("Resolved", { exact: true });
+  }
+
+  /** The "(removed)" marker a thread shows once its guest/table/entry has been deleted. */
+  removedMarker(threadBody: string) {
+    return this.threadByBody(threadBody).first().getByText("(removed)", { exact: true });
+  }
 }

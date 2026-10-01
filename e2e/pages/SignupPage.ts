@@ -39,6 +39,12 @@ export class SignupPage extends BasePage {
     await this.submitButton().click();
   }
 
+  /** TS-118: the browser's own message for the password field (the field requires 8+ characters,
+   * so a shorter one is stopped before anything is sent). Empty when the field is valid. */
+  async passwordValidationMessage(): Promise<string> {
+    return this.passwordInput().evaluate((el) => (el as HTMLInputElement).validationMessage);
+  }
+
   async expectError(messageSubstring?: string): Promise<void> {
     const error = this.errorMessage();
     await error.waitFor({ state: "visible" });

@@ -171,6 +171,34 @@ export class WeddingGuestsPage extends BasePage {
     ]);
   }
 
+  // TS-118: the import form's helpers and guards.
+  importExampleToggle() {
+    return this.page.getByRole("button", { name: /^(See an example|Hide example)$/ });
+  }
+  importExampleTable() {
+    return this.page.getByRole("table").filter({ has: this.page.getByRole("columnheader", { name: "First name" }) });
+  }
+  downloadExampleButton() {
+    return this.page.getByRole("button", { name: "Download example CSV", exact: true });
+  }
+  /** Chooses a CSV file without previewing it. */
+  async chooseImportFile(csvContent: string, name = "guests.csv"): Promise<void> {
+    await this.importFileInput().setInputFiles({ name, mimeType: "text/csv", buffer: Buffer.from(csvContent, "utf-8") });
+  }
+  /** TS-140: a column-mapping select, by its field label (e.g. "First name *"). */
+  importMappingSelect(label: string | RegExp) {
+    return this.page.getByLabel(label);
+  }
+  previewImportButtonLocator() {
+    return this.previewImportButton();
+  }
+  async cancelImport(): Promise<void> {
+    await this.page.getByRole("button", { name: "Cancel", exact: true }).click();
+  }
+  importMappingHeading() {
+    return this.page.getByText(/ — map columns to guest fields:$/);
+  }
+
   /** Returns a GuestRow component object scoped to the row matching this full name. Does not
    * assert the row exists -- callers await `.expectVisible()` (or Playwright's own auto-waiting
    * assertions) to confirm it appeared, keeping this method a pure locator-builder.

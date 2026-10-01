@@ -833,11 +833,13 @@ export function GuestsTab({
             <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
               {IMPORT_FIELDS.map(({ field, label, required }) => (
                 <div key={field}>
-                  <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-300">
+                  {/* TS-140: tied to its select, so each column picker has an accessible name. */}
+                  <label htmlFor={`import-map-${field}`} className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-300">
                     {label}
                     {required && <span className="text-red-600 dark:text-red-400"> *</span>}
                   </label>
                   <select
+                    id={`import-map-${field}`}
                     className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1.5 text-sm"
                     value={mapping[field] ?? ""}
                     onChange={(e) => onMappingChange(field, e.target.value)}
