@@ -149,26 +149,31 @@ export function CollaboratorsTab({
     }
   }
 
-  async function onSaveSideLabels() {
+  // TS-137: each box saves only its own label. Saving both from either box let a slow save from
+  // leaving Side 1 (carrying Side 2's old value) land after Side 2's own save and undo it, and
+  // refilling both boxes from the response wiped out whatever the planner was typing in the other.
+  async function onSaveSideLabel(which: 1 | 2) {
     if (!wedding) return;
-    const label1 = sideLabel1.trim() || "Bride";
-    const label2 = sideLabel2.trim() || "Groom";
-    if (label1 === wedding.sideLabel1 && label2 === wedding.sideLabel2) return;
+    const typed = which === 1 ? sideLabel1 : sideLabel2;
+    const setTyped = which === 1 ? setSideLabel1 : setSideLabel2;
+    const field = which === 1 ? "sideLabel1" : "sideLabel2";
+    const label = typed.trim() || (which === 1 ? "Bride" : "Groom");
+    if (label === wedding[field]) {
+      if (typed.trim() === "") setTyped(label);
+      return;
+    }
     setError(null);
     try {
       const { wedding: updated } = await api.patch<{ wedding: WeddingDTO }>(
         `/api/v1/weddings/${weddingId}`,
-        { sideLabel1: label1, sideLabel2: label2 }
+        { [field]: label }
       );
       setWedding(updated);
-      // TS-137: only fill in a label the planner left blank (it saved as Bride/Groom). Never
-      // overwrite the other box: leaving Side 1 saves while they may already be typing in Side 2.
-      setSideLabel1((current) => (current.trim() === "" ? updated.sideLabel1 : current));
-      setSideLabel2((current) => (current.trim() === "" ? updated.sideLabel2 : current));
+      // A blank box shows what it saved as (Bride/Groom), unless the planner has typed since.
+      setTyped((current) => (current.trim() === "" ? updated[field] : current));
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't save the side labels.");
-      setSideLabel1(wedding.sideLabel1);
-      setSideLabel2(wedding.sideLabel2);
+      setTyped(wedding[field]);
     }
   }
 
@@ -456,7 +461,7 @@ export function CollaboratorsTab({
                     className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
                     value={sideLabel1}
                     onChange={(e) => setSideLabel1(e.target.value)}
-                    onBlur={onSaveSideLabels}
+                    onBlur={() => onSaveSideLabel(1)}
                     maxLength={40}
                   />
                 </div>
@@ -469,7 +474,7 @@ export function CollaboratorsTab({
                     className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
                     value={sideLabel2}
                     onChange={(e) => setSideLabel2(e.target.value)}
-                    onBlur={onSaveSideLabels}
+                    onBlur={() => onSaveSideLabel(2)}
                     maxLength={40}
                   />
                 </div>
