@@ -247,8 +247,11 @@ jobs:
         run: pnpm build
 
       - name: Start the application and wait for it to be ready
+        # TS-139: the server's output goes to a file. Started in the background, its stdout is a pipe
+        # nobody reads once this step ends; inside a container job that pipe filled after ~20 tests
+        # and every log write -- and so every request -- blocked forever.
         run: |
-          pnpm --filter @seatwise/web start -p 3000 &
+          pnpm --filter @seatwise/web start -p 3000 > "$RUNNER_TEMP/next-server.log" 2>&1 &
           npx --yes wait-on http://localhost:3000 --timeout 60000
 
       - name: Run the application E2E suite (this shard, regression selection minus quarantined)
@@ -274,6 +277,10 @@ jobs:
           pnpm exec playwright test --project=chromium --grep "$PATTERN" $FILES \
             --shard=${{ matrix.shard }}/2 \
             --reporter=blob,./playwright-framework/reporting/normalizedReporter.ts
+
+      - name: Show the end of the app server's log
+        if: always()
+        run: tail -n 200 "$RUNNER_TEMP/next-server.log" || true
 
       - name: CI status gate -- fail on a zero-test shard, surface flaky/quarantined results
         # Runs even when the step above failed (a real test failure must still get a summary), but
@@ -360,8 +367,11 @@ jobs:
         run: pnpm build
 
       - name: Start the application and wait for it to be ready
+        # TS-139: the server's output goes to a file. Started in the background, its stdout is a pipe
+        # nobody reads once this step ends; inside a container job that pipe filled after ~20 tests
+        # and every log write -- and so every request -- blocked forever.
         run: |
-          pnpm --filter @seatwise/web start -p 3000 &
+          pnpm --filter @seatwise/web start -p 3000 > "$RUNNER_TEMP/next-server.log" 2>&1 &
           npx --yes wait-on http://localhost:3000 --timeout 60000
 
       - name: Run the application E2E suite (this shard, regression selection minus quarantined)
@@ -376,6 +386,10 @@ jobs:
           pnpm exec playwright test --project=firefox --grep "$PATTERN" $FILES \
             --shard=${{ matrix.shard }}/2 \
             --reporter=blob,./playwright-framework/reporting/normalizedReporter.ts
+
+      - name: Show the end of the app server's log
+        if: always()
+        run: tail -n 200 "$RUNNER_TEMP/next-server.log" || true
 
       - name: CI status gate -- fail on a zero-test shard, surface flaky/quarantined results
         if: always()
@@ -460,8 +474,11 @@ jobs:
         run: pnpm build
 
       - name: Start the application and wait for it to be ready
+        # TS-139: the server's output goes to a file. Started in the background, its stdout is a pipe
+        # nobody reads once this step ends; inside a container job that pipe filled after ~20 tests
+        # and every log write -- and so every request -- blocked forever.
         run: |
-          pnpm --filter @seatwise/web start -p 3000 &
+          pnpm --filter @seatwise/web start -p 3000 > "$RUNNER_TEMP/next-server.log" 2>&1 &
           npx --yes wait-on http://localhost:3000 --timeout 60000
 
       - name: Run the application E2E suite (this shard, regression selection minus quarantined)
@@ -476,6 +493,10 @@ jobs:
           pnpm exec playwright test --project=webkit --grep "$PATTERN" $FILES \
             --shard=${{ matrix.shard }}/2 \
             --reporter=blob,./playwright-framework/reporting/normalizedReporter.ts
+
+      - name: Show the end of the app server's log
+        if: always()
+        run: tail -n 200 "$RUNNER_TEMP/next-server.log" || true
 
       - name: CI status gate -- fail on a zero-test shard, surface flaky/quarantined results
         if: always()
@@ -554,8 +575,11 @@ jobs:
         run: pnpm build
 
       - name: Start the application and wait for it to be ready
+        # TS-139: the server's output goes to a file. Started in the background, its stdout is a pipe
+        # nobody reads once this step ends; inside a container job that pipe filled after ~20 tests
+        # and every log write -- and so every request -- blocked forever.
         run: |
-          pnpm --filter @seatwise/web start -p 3000 &
+          pnpm --filter @seatwise/web start -p 3000 > "$RUNNER_TEMP/next-server.log" 2>&1 &
           npx --yes wait-on http://localhost:3000 --timeout 60000
 
       - name: Run the application E2E suite (this shard, regression selection minus quarantined)
@@ -570,6 +594,10 @@ jobs:
           pnpm exec playwright test --project=edge --grep "$PATTERN" $FILES \
             --shard=${{ matrix.shard }}/2 \
             --reporter=blob,./playwright-framework/reporting/normalizedReporter.ts
+
+      - name: Show the end of the app server's log
+        if: always()
+        run: tail -n 200 "$RUNNER_TEMP/next-server.log" || true
 
       - name: CI status gate -- fail on a zero-test shard, surface flaky/quarantined results
         if: always()
