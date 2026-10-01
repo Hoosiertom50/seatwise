@@ -24,6 +24,7 @@
 
 import { expect } from "@playwright/test";
 import { BasePage } from "./BasePage.js";
+import { ConfirmDelete } from "../components/ConfirmDelete.js";
 
 export interface AddVendorInput {
   name: string;
@@ -222,7 +223,7 @@ export class BudgetTabPage extends BasePage {
     return this.vendorRow(nameContains).getByRole("button", { name: "Edit", exact: true });
   }
   private removeButton(nameContains: string) {
-    return this.vendorRow(nameContains).getByRole("button", { name: "Remove", exact: true });
+    return this.vendorRow(nameContains).getByRole("button", { name: /^Remove / });
   }
 
   async startEdit(nameContains: string): Promise<void> {
@@ -290,11 +291,13 @@ export class BudgetTabPage extends BasePage {
    * (before the request even settles), so this wait is for callers that go on to check persisted
    * state through the API rather than for the UI update itself. */
   async remove(nameContains: string): Promise<void> {
+    // TS-136: Remove asks first; the DELETE is only sent once "Yes" is clicked.
+    await this.removeButton(nameContains).click();
     await Promise.all([
       this.page.waitForResponse(
         (res) => res.request().method() === "DELETE" && /\/vendors\/[^/]+$/.test(new URL(res.url()).pathname),
       ),
-      this.removeButton(nameContains).click(),
+      new ConfirmDelete(this.vendorRow(nameContains)).confirm(),
     ]);
   }
 
@@ -312,6 +315,6 @@ export class BudgetTabPage extends BasePage {
     return this.page.getByRole("button", { name: "Edit", exact: true });
   }
   allRemoveButtons() {
-    return this.page.getByRole("button", { name: "Remove", exact: true });
+    return this.page.getByRole("button", { name: /^Remove / });
   }
 }

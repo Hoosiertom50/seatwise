@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
+import { ConfirmDeleteButton } from "@/components/ConfirmDeleteButton";
 import { api, ApiError, apiErrorMessage } from "@/lib/api-client";
 import type {
   AgeCategory,
@@ -1137,12 +1138,12 @@ export function GuestsTab({
                     >
                       New link
                     </button>
-                    <button
-                      onClick={() => onDeleteGuest(g.id)}
-                      className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950"
-                    >
-                      Remove
-                    </button>
+                    <ConfirmDeleteButton
+                      ariaLabel={`Remove ${g.firstName} ${g.lastName}`}
+                      question={`Remove ${g.firstName} ${g.lastName} from the guest list? Their seat and any seating rules involving them are removed too. This can't be undone.`}
+                      confirmLabel="Yes, remove guest"
+                      onConfirm={() => onDeleteGuest(g.id)}
+                    />
                   </>
                 ) : (
                   <span className="text-sm text-neutral-500 dark:text-neutral-400">{RSVP_STATUS_LABELS[g.rsvpStatus]}</span>

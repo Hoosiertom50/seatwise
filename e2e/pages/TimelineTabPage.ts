@@ -8,6 +8,7 @@
  */
 
 import { BasePage } from "./BasePage.js";
+import { ConfirmDelete } from "../components/ConfirmDelete.js";
 
 export class TimelineTabPage extends BasePage {
   private timelineTabButton() {
@@ -53,7 +54,7 @@ export class TimelineTabPage extends BasePage {
     return this.entryRow(description).getByRole("button", { name: "↓", exact: true });
   }
   private removeButton(description: string) {
-    return this.entryRow(description).getByRole("button", { name: "Remove", exact: true });
+    return this.entryRow(description).getByRole("button", { name: /^Remove / });
   }
 
   /** The row's own formatted-time `<p>` -- confirmed in TimelineTab.tsx's `formatTime` to render
@@ -99,7 +100,7 @@ export class TimelineTabPage extends BasePage {
     return this.page.getByRole("button", { name: "Edit", exact: true });
   }
   allRemoveButtons() {
-    return this.page.getByRole("button", { name: "Remove", exact: true });
+    return this.page.getByRole("button", { name: /^Remove / });
   }
   allMoveUpButtons() {
     return this.page.getByRole("button", { name: "↑", exact: true });
@@ -212,11 +213,13 @@ export class TimelineTabPage extends BasePage {
    * (before the request even settles), so this wait is for callers that go on to check persisted
    * state through the API rather than for the UI update itself. */
   async remove(description: string): Promise<void> {
+    // TS-136: Remove asks first; the DELETE is only sent once "Yes" is clicked.
+    await this.removeButton(description).click();
     await Promise.all([
       this.page.waitForResponse(
         (res) => res.request().method() === "DELETE" && this.isTimelineEntryItemRequest(res.url()),
       ),
-      this.removeButton(description).click(),
+      new ConfirmDelete(this.entryRow(description)).confirm(),
     ]);
   }
 }

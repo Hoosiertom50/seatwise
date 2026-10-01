@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { ConfirmDeleteButton } from "@/components/ConfirmDeleteButton";
 import { api, ApiError, apiErrorMessage } from "@/lib/api-client";
 import type {
   CollaboratorDTO,
@@ -396,12 +397,13 @@ export function CollaboratorsTab({
                           </span>
                         </p>
                       </div>
-                      <button
-                        onClick={() => onRevokeInvite(i.id)}
-                        className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1.5 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950"
-                      >
-                        Revoke
-                      </button>
+                      <ConfirmDeleteButton
+                        label="Revoke"
+                        ariaLabel={`Revoke the invite for ${i.email}`}
+                        question={`Revoke the invite for ${i.email}? Their link stops working. You can send a new invite later.`}
+                        confirmLabel="Yes, revoke invite"
+                        onConfirm={() => onRevokeInvite(i.id)}
+                      />
                     </li>
                   ))}
               </ul>
@@ -569,12 +571,12 @@ export function CollaboratorsTab({
                       </option>
                     ))}
                   </select>
-                  <button
-                    onClick={() => onRemove(c.id)}
-                    className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1.5 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950"
-                  >
-                    Remove
-                  </button>
+                  <ConfirmDeleteButton
+                    ariaLabel={`Remove ${c.userName}`}
+                    question={`Remove ${c.userName}'s access to this wedding? They'll lose access right away. You can invite them again later.`}
+                    confirmLabel="Yes, remove access"
+                    onConfirm={() => onRemove(c.id)}
+                  />
                 </div>
               ) : (
                 <div className="flex flex-col items-end gap-1">

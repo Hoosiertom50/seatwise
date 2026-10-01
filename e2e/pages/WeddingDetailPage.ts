@@ -17,7 +17,9 @@
  * `CollaboratorsTab.tsx`), so this avoids scanning a still-loading DOM.
  */
 
+import type { Locator } from "@playwright/test";
 import { BasePage } from "./BasePage.js";
+import { ConfirmDelete } from "../components/ConfirmDelete.js";
 
 export class WeddingDetailPage extends BasePage {
   /** The page's own `<h1>` -- the wedding's name. A getter, not an assertion, so the test writes
@@ -102,6 +104,15 @@ export class WeddingDetailPage extends BasePage {
   /** FR-1.6's full-revocation message -- must only ever appear when access really was removed. */
   accessRemovedMessage() {
     return this.page.getByText("Your access to this wedding has been removed.");
+  }
+
+  /** TS-136: any delete control on the page by its accessible name ("Remove Jane Smith",
+   * "Revoke the invite for …", "Delete My template"), and the "Are you sure?" step it opens. */
+  deleteTrigger(name: string | RegExp): Locator {
+    return typeof name === "string" ? this.page.getByRole("button", { name, exact: true }) : this.page.getByRole("button", { name });
+  }
+  deleteConfirmation(): ConfirmDelete {
+    return new ConfirmDelete(this.page);
   }
 
   /** Clicks the named tab button (its exact visible label, e.g. "Seating rules", "Day-of mode")
