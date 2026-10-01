@@ -676,7 +676,9 @@ jobs:
       - name: Merge into one combined native HTML report
         env:
           PLAYWRIGHT_HTML_REPORT: merged-html-report
-        run: pnpm exec playwright merge-reports --reporter=html ./all-blob-reports
+        # TS-139: shards ran in two different checkout paths (container vs runner); the merge config
+        # gives them a shared testDir.
+        run: pnpm exec playwright merge-reports --config=playwright.merge.config.ts --reporter=html ./all-blob-reports
 
       - name: Upload the merged report
         uses: actions/upload-artifact@v4
