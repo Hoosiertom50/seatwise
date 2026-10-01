@@ -24,7 +24,7 @@ export interface CommentRow {
   // comment itself — and the label captured at creation — still stands.
   targetRemoved: boolean;
   body: string;
-  authorUserId: string;
+  authorUserId: string | null;
   authorName: string;
   parentCommentId: string | null;
   resolvedAt: Date | null;
@@ -45,10 +45,10 @@ export interface CreateCommentInput {
 const SELECT_COMMENT = `
   SELECT c.id, c."weddingId", c."targetType", c."guestId", c."tableId", c."timelineEntryId", c."targetLabel",
          (c."guestId" IS NULL AND c."tableId" IS NULL AND c."timelineEntryId" IS NULL) AS "targetRemoved",
-         c.body, c."authorUserId", author.name AS "authorName", c."parentCommentId",
+         c.body, c."authorUserId", COALESCE(author.name, 'Former member') AS "authorName", c."parentCommentId",
          c."resolvedAt", c."resolvedByUserId", resolver.name AS "resolvedByName", c."createdAt"
   FROM "comments" c
-  JOIN "users" author ON author.id = c."authorUserId"
+  LEFT JOIN "users" author ON author.id = c."authorUserId"
   LEFT JOIN "users" resolver ON resolver.id = c."resolvedByUserId"
 `;
 
