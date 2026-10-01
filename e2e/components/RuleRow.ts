@@ -12,6 +12,7 @@
  */
 
 import { type Locator } from "@playwright/test";
+import { ConfirmDelete } from "./ConfirmDelete.js";
 
 export class RuleRow {
   constructor(private readonly root: Locator) {}
@@ -20,11 +21,24 @@ export class RuleRow {
     return this.root;
   }
 
+  // TS-136: the trigger is named "Remove <who/what>", and opens the "Are you sure?" step.
   private removeButton() {
-    return this.root.getByRole("button", { name: "Remove" });
+    return this.root.getByRole("button", { name: /^Remove / });
   }
 
+  /** TS-136: clicks Remove without answering, leaving the "Are you sure?" question open. */
+  async startRemove(): Promise<void> {
+    await this.removeButton().click();
+  }
+
+  /** TS-136: the "Are you sure?" step for this row. */
+  removeConfirmation(): ConfirmDelete {
+    return new ConfirmDelete(this.root);
+  }
+
+  /** Removes the rule, answering "Yes" to the TS-136 question. */
   async remove(): Promise<void> {
     await this.removeButton().click();
+    await this.removeConfirmation().confirm();
   }
 }

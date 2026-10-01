@@ -9,6 +9,7 @@
 
 import { expect } from "@playwright/test";
 import { BasePage } from "./BasePage.js";
+import { ConfirmDelete } from "../components/ConfirmDelete.js";
 
 export interface CreateWeddingInput {
   name: string;
@@ -174,11 +175,12 @@ export class DashboardPage extends BasePage {
     return this.templateRow(nameContains);
   }
 
-  /** TS-51: deletes a template from the management list by name (no confirmation dialog exists for
-   * this action in the real UI, so a single click is the whole interaction) and waits for its row
-   * to actually disappear rather than just for the click to register. */
+  /** TS-51: deletes a template from the management list by name -- answering "Yes" to the TS-136
+   * "Are you sure?" step -- and waits for its row to actually disappear rather than just for the
+   * click to register. */
   async deleteTemplate(nameContains: string): Promise<void> {
-    await this.templateRow(nameContains).getByRole("button", { name: "Delete", exact: true }).click();
+    await this.templateRow(nameContains).getByRole("button", { name: /^Delete / }).click();
+    await new ConfirmDelete(this.templateRow(nameContains)).confirm();
     await expect(this.templateRow(nameContains)).toHaveCount(0);
   }
 

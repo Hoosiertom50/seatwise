@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { ConfirmDeleteButton } from "@/components/ConfirmDeleteButton";
 import { api, ApiError } from "@/lib/api-client";
 import type { VendorDTO, VendorCategory, BudgetSummaryDTO } from "@seatwise/shared";
 
@@ -527,12 +528,12 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
                         >
                           Edit
                         </button>
-                        <button
-                          onClick={() => onRemove(v.id)}
-                          className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950"
-                        >
-                          Remove
-                        </button>
+                        <ConfirmDeleteButton
+                          ariaLabel={`Remove ${v.name}`}
+                          question={`Remove ${v.name} and everything recorded for them, such as cost and contract notes? This can't be undone.`}
+                          confirmLabel="Yes, remove vendor"
+                          onConfirm={() => onRemove(v.id)}
+                        />
                       </>
                     )}
                   </div>

@@ -8,6 +8,7 @@
 
 import { expect } from "@playwright/test";
 import { BasePage } from "./BasePage.js";
+import { ConfirmDelete } from "../components/ConfirmDelete.js";
 
 export class TablesTabPage extends BasePage {
   private tablesTabButton() {
@@ -118,9 +119,11 @@ export class TablesTabPage extends BasePage {
     return typeof text === "string" ? this.page.getByText(text, { exact: true }) : this.page.getByText(text);
   }
 
-  /** TS-124: the row's Remove button (accessible name "Remove <label>"). */
+  /** TS-124: the row's Remove button (accessible name "Remove <label>"), answering "Yes" to the
+   * TS-136 "Are you sure?" step. If guests are seated there, the TS-124 question follows. */
   async removeTable(label: string): Promise<void> {
     await this.page.getByRole("button", { name: `Remove ${label}`, exact: true }).click();
+    await new ConfirmDelete(this.page.getByRole("listitem").filter({ has: this.page.getByRole("alertdialog") })).confirm();
   }
 
   /** TS-124: the in-row question shown when guests are seated at the table being removed. */

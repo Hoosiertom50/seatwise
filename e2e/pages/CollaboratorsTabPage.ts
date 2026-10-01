@@ -7,6 +7,7 @@
  */
 
 import { BasePage } from "./BasePage.js";
+import { ConfirmDelete } from "../components/ConfirmDelete.js";
 
 export type AccessLevelLabel = "View" | "Comment" | "Edit";
 export type RoleLabel = "Collaborator" | "Couple";
@@ -45,7 +46,8 @@ export class CollaboratorsTabPage extends BasePage {
   }
 
   async revokeInvite(email: string): Promise<void> {
-    await this.pendingInvite(email).getByRole("button", { name: "Revoke", exact: true }).click();
+    await this.pendingInvite(email).getByRole("button", { name: /^Revoke/ }).click();
+    await new ConfirmDelete(this.pendingInvite(email)).confirm();
   }
 
   /** A person's row in "People with access". */
@@ -66,7 +68,8 @@ export class CollaboratorsTabPage extends BasePage {
   }
 
   async removePerson(email: string): Promise<void> {
-    await this.person(email).getByRole("button", { name: "Remove", exact: true }).click();
+    await this.person(email).getByRole("button", { name: /^Remove / }).click();
+    await new ConfirmDelete(this.person(email)).confirm();
   }
 
   // TS-118: the owner-only wedding settings on this tab. Each saves when the field loses focus.
@@ -98,6 +101,6 @@ export class CollaboratorsTabPage extends BasePage {
 
   /** Every Remove button on the tab -- none should render for a non-owner. */
   removeButtons() {
-    return this.page.getByRole("button", { name: "Remove", exact: true });
+    return this.page.getByRole("button", { name: /^Remove / });
   }
 }

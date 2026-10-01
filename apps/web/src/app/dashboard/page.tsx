@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { ConfirmDeleteButton } from "@/components/ConfirmDeleteButton";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { api, ApiError, apiErrorMessage } from "@/lib/api-client";
@@ -409,12 +410,13 @@ export default function DashboardPage() {
                     {t.sourceWeddingName ? ` · saved from ${t.sourceWeddingName}` : ""}
                   </p>
                 </div>
-                <button
-                  onClick={() => onDeleteTemplate(t.id)}
-                  className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950"
-                >
-                  Delete
-                </button>
+                <ConfirmDeleteButton
+                  label="Delete"
+                  ariaLabel={`Delete ${t.name}`}
+                  question={`Delete the template "${t.name}"? Weddings already made from it aren't changed. This can't be undone.`}
+                  confirmLabel="Yes, delete template"
+                  onConfirm={() => onDeleteTemplate(t.id)}
+                />
               </li>
             ))}
           </ul>
