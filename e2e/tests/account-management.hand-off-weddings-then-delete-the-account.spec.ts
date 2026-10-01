@@ -31,9 +31,9 @@ defineQualityTest(
     id: "account-management.hand-off-weddings-then-delete-the-account.wrong-password-blocked-handoff-delete",
     title: "an owner can't delete their account while they own a wedding, can hand it to a collaborator, and can then delete it -- with the wrong password refused and their comments kept",
     objective:
-      "Confirms that deleting an account with the wrong password is refused; that with the right password it's refused while the account owns a wedding, listing that wedding; that Hand off on the Collaborators tab makes the chosen collaborator the owner and leaves the old owner with Edit access and no Hand off section; that the account can then be deleted and can no longer sign in; and that the wedding carries on under its new owner with the deleted account's comment kept as 'Former member'.",
+      "Confirms that no one can delete another person's account (the helper using the owner's password is refused, the owner unaffected); that deleting an account with the wrong password is refused; that with the right password it's refused while the account owns a wedding, listing that wedding; that Hand off on the Collaborators tab makes the chosen collaborator the owner and leaves the old owner with Edit access and no Hand off section; that the account can then be deleted and can no longer sign in; and that the wedding carries on under its new owner with the deleted account's comment kept as 'Former member'.",
     expectedOutcome:
-      "Wrong password: 'That password isn't right.'. Right password while owning: 'Hand off every wedding you own…' with the wedding listed. After hand-off: the old owner's badge reads 'Your access: Edit', the Hand off section is gone, and the new owner's API view shows accessLevel OWNER. After deleting: the 'deleted' heading shows and signing in fails. The new owner still sees the wedding, no longer lists the old owner, and the comment shows 'Former member'.",
+      "Another account using the owner's password: 403, owner unaffected. Wrong password: 'That password isn't right.'. Right password while owning: 'Hand off every wedding you own…' with the wedding listed. After hand-off: the old owner's badge reads 'Your access: Edit', the Hand off section is gone, and the new owner's API view shows accessLevel OWNER. After deleting: the 'deleted' heading shows and signing in fails. The new owner still sees the wedding, no longer lists the old owner, and the comment shows 'Former member'.",
     requirementIds: ["REQ-ACCOUNT-WEDDING-MANAGEMENT"],
     tags: ["@mutating", "@feature:account", "@risk:high", "@suite:regression"],
   },
@@ -62,6 +62,14 @@ defineQualityTest(
 
       const page = await owner.context.newPage();
       const account = new AccountPage(page);
+
+      await test.step("No one can delete someone else's account -- not even with that person's password", async () => {
+        // The endpoint only ever acts on the signed-in account, and checks that account's own password.
+        const res = await helper.request.delete("/api/v1/auth/me", { data: { password: owner.password } });
+        expect(res.status()).toBe(403);
+        const stillThere = await owner.request.get("/api/v1/auth/me");
+        expect(((await stillThere.json()) as { user: { email: string } }).user.email).toBe(owner.email);
+      });
 
       await test.step("Deleting with the wrong password is refused", async () => {
         await account.goto();

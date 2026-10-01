@@ -907,28 +907,16 @@ export class WeddingDataSetup {
   }
 
   /**
-   * Still an explicit unsupported state, but no longer an unbounded leak.
-   *
-   * The application exposes no account-deletion endpoint (there is no `/api/v1/users` or
-   * account-deletion route of any kind), so a test cannot delete its own account through the API
-   * while it runs — that part of DEC-012 is unchanged, and this method still throws rather than
-   * pretending otherwise.
-   *
-   * TS-103 closed the accumulation without adding one: `globalTeardown` purges every account in
-   * the reserved `@example.invalid` domain directly at the end of a run, and
-   * `pnpm db:cleanup-test-users` does the same on demand. So accounts now live for the duration of
-   * a run rather than forever.
-   *
-   * The remaining gap is deliberate and recorded on TS-103: a real, user-facing account-deletion
-   * endpoint is a product decision (what happens to a planner's weddings and to their
-   * collaborators on delete — `Wedding.ownerId` is `onDelete: Cascade` today), not something the
-   * test framework should invent. If that endpoint is ever built, this method should call it.
+   * TS-105 (DEC-041): the app now has a real account-deletion endpoint (`DELETE /api/v1/auth/me`),
+   * so this calls it for the account this request context is signed in as -- an account can only
+   * ever delete itself. It needs the account's password, and the server refuses (409, listing
+   * them) while the account still owns any wedding: hand those off first. Test accounts are still
+   * also swept at the end of every run by globalTeardown (DEC-039).
    */
-  async deleteUserAccount(): Promise<never> {
-    throw new UnsupportedCleanupError(
-      "The application has no account-deletion endpoint, so an account cannot be deleted mid-test. " +
-        "Test accounts are purged at the end of the run by e2e/support/globalTeardown.ts, and on " +
-        "demand by `pnpm db:cleanup-test-users` — see DEC-012 and TS-103.",
-    );
+  async deleteUserAccount(
+    password: string,
+  ): Promise<{ status: number; body: { ok?: boolean; error?: string; ownedWeddings?: { id: string; name: string }[] } }> {
+    const res = await this.request.delete("/api/v1/auth/me", { data: { password } });
+    return { status: res.status(), body: await res.json() };
   }
 }
