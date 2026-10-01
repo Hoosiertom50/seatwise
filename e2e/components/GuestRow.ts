@@ -11,6 +11,7 @@
  */
 
 import { expect, type Locator } from "@playwright/test";
+import { ConfirmDelete } from "./ConfirmDelete.js";
 
 export class GuestRow {
   constructor(private readonly root: Locator) {}
@@ -47,8 +48,19 @@ export class GuestRow {
     return this.root.locator('textarea[aria-label^="Notes for "]');
   }
 
+  // TS-136: the trigger is named "Remove <who/what>", and opens the "Are you sure?" step.
   private removeButton() {
-    return this.root.getByRole("button", { name: "Remove" });
+    return this.root.getByRole("button", { name: /^Remove / });
+  }
+
+  /** TS-136: clicks Remove without answering, leaving the "Are you sure?" question open. */
+  async startRemove(): Promise<void> {
+    await this.removeButton().click();
+  }
+
+  /** TS-136: the "Are you sure?" step for this row. */
+  removeConfirmation(): ConfirmDelete {
+    return new ConfirmDelete(this.root);
   }
 
   /** TS-38: the Lock/Unlock toggle -- its accessible name flips with the guest's own `isLocked`
@@ -168,8 +180,10 @@ export class GuestRow {
     return this.root.getByText(/Link copied|Emailed to|\/rsvp\//);
   }
 
+  /** Removes the guest, answering "Yes" to the TS-136 question. */
   async remove(): Promise<void> {
     await this.removeButton().click();
+    await this.removeConfirmation().confirm();
   }
 
   async expectVisible(): Promise<void> {

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { ConfirmDeleteButton } from "@/components/ConfirmDeleteButton";
 import { api, ApiError } from "@/lib/api-client";
 import type { TimelineEntryDTO } from "@seatwise/shared";
 
@@ -262,12 +263,12 @@ export function TimelineTab({ weddingId, canEdit }: { weddingId: string; canEdit
                         >
                           Edit
                         </button>
-                        <button
-                          onClick={() => onDelete(entry.id)}
-                          className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950"
-                        >
-                          Remove
-                        </button>
+                        <ConfirmDeleteButton
+                          ariaLabel={`Remove ${entry.description}`}
+                          question={`Remove "${entry.description}" from the timeline? This can't be undone.`}
+                          confirmLabel="Yes, remove entry"
+                          onConfirm={() => onDelete(entry.id)}
+                        />
                       </div>
                     )}
                   </>

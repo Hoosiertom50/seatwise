@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { ConfirmDeleteButton } from "@/components/ConfirmDeleteButton";
 import { api, ApiError } from "@/lib/api-client";
 import type {
   GuestDTO,
@@ -931,13 +932,14 @@ export function TablesTab({
                       >
                         Edit
                       </button>
-                      <button
-                        onClick={() => onRemove(t.id)}
-                        aria-label={`Remove ${t.label}`}
-                        className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950"
-                      >
-                        Remove
-                      </button>
+                      {/* TS-136: always asks first. If guests are seated here, the server then asks
+                          again with how many (TS-124) before anyone is unseated. */}
+                      <ConfirmDeleteButton
+                        ariaLabel={`Remove ${t.label}`}
+                        question={`Remove the table "${t.label}"? This can't be undone.`}
+                        confirmLabel="Yes, remove table"
+                        onConfirm={() => onRemove(t.id)}
+                      />
                     </>
                   ) : (
                     t.isAccessible && <span className="text-sm text-neutral-500 dark:text-neutral-400">Accessible</span>

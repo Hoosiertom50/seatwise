@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { ConfirmDeleteButton } from "@/components/ConfirmDeleteButton";
 import { api, ApiError } from "@/lib/api-client";
 import type { GuestDTO, RelationshipDTO, RelationshipTypeValue } from "@seatwise/shared";
 
@@ -200,12 +201,12 @@ export function RulesTab({
                   </p>
                 </div>
                 {canEdit && (
-                  <button
-                    onClick={() => onRemove(r.id)}
-                    className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950"
-                  >
-                    Remove
-                  </button>
+                  <ConfirmDeleteButton
+                    ariaLabel={`Remove the rule for ${r.guestAName} & ${r.guestBName}`}
+                    question={`Remove this rule for ${r.guestAName} & ${r.guestBName}? This can't be undone.`}
+                    confirmLabel="Yes, remove rule"
+                    onConfirm={() => onRemove(r.id)}
+                  />
                 )}
               </li>
             );
