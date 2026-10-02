@@ -180,7 +180,7 @@ export function CollaboratorsTab({
       // A blank box shows what it saved as (Bride/Groom), unless the planner has typed since.
       setTyped((current) => (current.trim() === "" ? updated[field] : current));
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Couldn't save the side labels.");
+      setError(apiErrorMessage(err, [], "Couldn't save the side labels."));
       setTyped(wedding[field]);
     }
   }
@@ -200,7 +200,7 @@ export function CollaboratorsTab({
       setWedding(updated);
       setNote(updated.note ?? "");
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Couldn't save the note.");
+      setError(apiErrorMessage(err, [], "Couldn't save the note."));
       setNote(wedding.note ?? "");
     } finally {
       setSavingNote(false);
@@ -215,7 +215,7 @@ export function CollaboratorsTab({
       await api.post(`/api/v1/weddings/${weddingId}/transfer-ownership`, { collaboratorId: handOffTo });
       window.location.reload();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Couldn't hand off this wedding.");
+      setError(apiErrorMessage(err, [], "Couldn't hand off this wedding."));
     }
   }
 
@@ -242,7 +242,7 @@ export function CollaboratorsTab({
       setLevel("VIEW");
       setRole("COLLABORATOR");
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Couldn't send that invite.");
+      setError(apiErrorMessage(err, [], "Couldn't send that invite."));
     } finally {
       setAdding(false);
     }
@@ -306,7 +306,7 @@ export function CollaboratorsTab({
       setWedding(updated);
       setRsvpCutoffDate(updated.rsvpCutoffDate ?? "");
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Couldn't save the RSVP cutoff.");
+      setError(apiErrorMessage(err, [], "Couldn't save the RSVP cutoff."));
       setRsvpCutoffDate(wedding.rsvpCutoffDate ?? "");
     } finally {
       setSavingRsvpCutoff(false);

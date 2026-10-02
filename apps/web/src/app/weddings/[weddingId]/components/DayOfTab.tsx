@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { api, ApiError } from "@/lib/api-client";
+import { api, ApiError, apiErrorMessage } from "@/lib/api-client";
 import type {
   GuestDTO,
   PlanVersionDTO,
@@ -21,7 +21,7 @@ export function DayOfTab({
 }: {
   weddingId: string;
   guests: GuestDTO[];
-  setGuests: (guests: GuestDTO[]) => void;
+  setGuests: React.Dispatch<React.SetStateAction<GuestDTO[]>>;
   canEdit: boolean;
 }) {
   const [tables, setTables] = useState<SeatingTableDTO[]>([]);
@@ -121,7 +121,7 @@ export function DayOfTab({
           : `${guest.firstName} ${guest.lastName} marked attending again — seat them below.`
       );
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Couldn't update attendance.");
+      setError(apiErrorMessage(err, [], "Couldn't update attendance."));
     } finally {
       setBusyGuestId(null);
     }
@@ -151,7 +151,7 @@ export function DayOfTab({
     } catch (err) {
       const fresh = conflictPlanVersion(err);
       if (fresh) setDetail(fresh);
-      setError(err instanceof ApiError ? err.message : "Couldn't seat that guest.");
+      setError(apiErrorMessage(err, [], "Couldn't seat that guest."));
     } finally {
       setBusyGuestId(null);
     }
@@ -163,6 +163,9 @@ export function DayOfTab({
     setError(null);
     setNotice(null);
     setAddingWalkIn(true);
+    // TS-151: once the guest exists, a failure is only about seating them -- the form clears and
+    // says so, so pressing Add again can't create the same walk-in twice.
+    let added: GuestDTO | null = null;
     try {
       const { guest } = await api.post<{ guest: GuestDTO }>(`/api/v1/weddings/${weddingId}/guests`, {
         firstName: walkInFirst,
@@ -170,7 +173,10 @@ export function DayOfTab({
         headcount: 1,
         dayOfAttendance: "ATTENDING",
       });
-      setGuests([...guests, guest]);
+      added = guest;
+      setGuests((cur) => [...cur, guest]);
+      setWalkInFirst("");
+      setWalkInLast("");
       if (walkInTableId && detail) {
         const res = await api.post<{ planVersion: PlanVersionDetailDTO; warnings: string[] }>(
           `/api/v1/weddings/${weddingId}/plan-versions/${detail.id}/assignments`,
@@ -184,13 +190,16 @@ export function DayOfTab({
       } else {
         setNotice(`Added walk-in ${guest.firstName} ${guest.lastName} — not yet seated.`);
       }
-      setWalkInFirst("");
-      setWalkInLast("");
       setWalkInTableId("");
     } catch (err) {
       const fresh = conflictPlanVersion(err);
       if (fresh) setDetail(fresh);
-      setError(err instanceof ApiError ? err.message : "Couldn't add that walk-in.");
+      if (added) {
+        setNotice(`Added walk-in ${added.firstName} ${added.lastName} — not yet seated.`);
+        setError(apiErrorMessage(err, [], "Couldn't seat them") + " Seat them from the guest list below.");
+      } else {
+        setError(apiErrorMessage(err, ["firstName", "lastName"], "Couldn't add that walk-in."));
+      }
     } finally {
       setAddingWalkIn(false);
     }
@@ -213,7 +222,7 @@ export function DayOfTab({
     } catch (err) {
       const fresh = conflictPlanVersion(err);
       if (fresh) setDetail(fresh);
-      setError(err instanceof ApiError ? err.message : "Couldn't complete that swap.");
+      setError(apiErrorMessage(err, [], "Couldn't complete that swap."));
     } finally {
       setSwapping(false);
     }
@@ -410,7 +419,11 @@ export function DayOfTab({
               aria-label="First guest to swap"
               className="min-h-11 flex-1 rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
               value={swapAId}
-              onChange={(e) => setSwapAId(e.target.value)}
+              onChange={(e) => {
+                setSwapAId(e.target.value);
+                // TS-151: the same guest can't be on both sides of a swap.
+                if (e.target.value === swapBId) setSwapBId("");
+              }}
             >
               <option value="">First guest...</option>
               {attendingSeatedGuests.map((g) => (
