@@ -2,9 +2,25 @@
 // path is ever honoured -- "/weddings/abc" yes; "https://evil.example", "//evil.example" and
 // "/\evil.example" (which browsers treat as protocol-relative) no -- so a crafted login link can't
 // bounce a freshly signed-in user to another site.
+//
+// TS-147: browsers silently drop tabs and line breaks from URLs, so "/<tab>/evil.example" used to
+// pass the prefix checks and then resolve to "//evil.example". Now any control character or
+// backslash anywhere is refused, and the path is resolved against a stand-in origin and only kept
+// if it stays on that origin -- the same resolution the router itself does.
+const PROBE_ORIGIN = "https://seatwise.invalid";
+
 export function safeNextPath(raw: string | null | undefined, fallback = "/dashboard"): string {
-  if (!raw || !raw.startsWith("/") || raw.startsWith("//") || raw.startsWith("/\\")) return fallback;
-  return raw;
+  if (!raw || !raw.startsWith("/") || raw.startsWith("//")) return fallback;
+  // eslint-disable-next-line no-control-regex
+  if (/[\u0000-\u001f\u007f\\]/.test(raw)) return fallback;
+  let url: URL;
+  try {
+    url = new URL(raw, PROBE_ORIGIN);
+  } catch {
+    return fallback;
+  }
+  if (url.origin !== PROBE_ORIGIN) return fallback;
+  return url.pathname + url.search + url.hash;
 }
 
 // TS-122: the other auth page's URL, keeping this page's `?next=` along -- so switching between
