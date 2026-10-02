@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { swapGuestAssignmentsSchema } from "@seatwise/shared";
-import { swapGuestAssignments, SwapError, PlanVersionConflictError } from "@seatwise/db";
+import { swapGuestAssignments, SwapError, PlanVersionConflictError, PlanVersionNotFoundError } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
 import { errorResponse, zodErrorResponse } from "@/lib/api-response";
 import { requireAccess } from "@/lib/access";
@@ -34,6 +34,7 @@ export async function POST(req: NextRequest, { params }: Params) {
     );
     return NextResponse.json({ planVersion, warnings });
   } catch (err) {
+    if (err instanceof PlanVersionNotFoundError) return errorResponse(err.message, 404);
     if (err instanceof PlanVersionConflictError) {
       return NextResponse.json(
         { error: err.message, planVersion: err.planVersion },

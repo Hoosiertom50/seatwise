@@ -58,11 +58,13 @@ defineQualityTest(
       const inviteePage = await invitee.newPage();
       const invitePage = new InviteAcceptPage(inviteePage);
 
-      await test.step("Signed out, the link names the wedding, role and level, and offers sign-up or sign-in", async () => {
+      await test.step("Signed out, the link names the wedding, role and level (not the invited address), and offers sign-up or sign-in", async () => {
         await invitePage.goto(token);
         await expect(invitePage.invitationSummary()).toContainText(managedWedding.name);
         await expect(invitePage.invitationSummary()).toContainText("a collaborator, with comment access");
-        await expect(invitePage.signInPrompt()).toContainText(newPersonEmail);
+        // TS-154 #4: a signed-out visitor isn't told which address the invite was for.
+        await expect(invitePage.signInPrompt()).toContainText("the email address this invite was sent to");
+        await expect(inviteePage.getByText(newPersonEmail)).toHaveCount(0);
         await expect(invitePage.acceptButton()).toHaveCount(0);
       });
 

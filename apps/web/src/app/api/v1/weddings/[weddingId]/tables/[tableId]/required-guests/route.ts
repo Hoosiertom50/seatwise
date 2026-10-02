@@ -34,7 +34,8 @@ export async function PUT(req: NextRequest, { params }: Params) {
     return NextResponse.json({ table, warnings });
   } catch (err) {
     if (err instanceof RestrictedTableError) {
-      return errorResponse(err.message, 409);
+      // TS-148: an unknown table is "not found", not a conflict.
+      return errorResponse(err.message, err.message === "Table not found." ? 404 : 409);
     }
     throw err;
   }

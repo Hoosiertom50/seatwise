@@ -31,7 +31,8 @@ export interface CollaboratorDTO {
   weddingId: string;
   userId: string;
   userName: string;
-  userEmail: string;
+  // TS-148: null unless you're the owner, or it's your own row.
+  userEmail: string | null;
   role: CollaboratorRole;
   permissionLevel: CollaboratorPermission;
   invitedByUserId: string | null;

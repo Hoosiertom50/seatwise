@@ -5,6 +5,7 @@ import {
   unassignGuestFromPlan,
   ManualMoveError,
   PlanVersionConflictError,
+  PlanVersionNotFoundError,
 } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
 import { errorResponse, zodErrorResponse } from "@/lib/api-response";
@@ -54,6 +55,7 @@ export async function POST(req: NextRequest, { params }: Params) {
     // FR-7.7: a stale expectedRevision means someone else's save landed first — the fresh,
     // currently-committed plan version rides along so the client can refresh without a second
     // round-trip, rather than silently reapplying this move on top of what changed.
+    if (err instanceof PlanVersionNotFoundError) return errorResponse(err.message, 404);
     if (err instanceof PlanVersionConflictError) {
       return NextResponse.json(
         { error: err.message, planVersion: err.planVersion },
