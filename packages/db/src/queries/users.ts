@@ -6,6 +6,8 @@ export interface UserRow {
   email: string;
   passwordHash: string;
   name: string;
+  // TS-155
+  sessionVersion: number;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -19,7 +21,7 @@ export async function createUser(input: {
   const { rows } = await pool.query<UserRow>(
     `INSERT INTO "users" (id, email, "passwordHash", name, "updatedAt")
      VALUES ($1, $2, $3, $4, now())
-     RETURNING id, email, "passwordHash", name, "createdAt", "updatedAt"`,
+     RETURNING id, email, "passwordHash", name, "sessionVersion", "createdAt", "updatedAt"`,
     [id, input.email.toLowerCase(), input.passwordHash, input.name]
   );
   return rows[0];
@@ -27,7 +29,7 @@ export async function createUser(input: {
 
 export async function findUserByEmail(email: string): Promise<UserRow | null> {
   const { rows } = await pool.query<UserRow>(
-    `SELECT id, email, "passwordHash", name, "createdAt", "updatedAt"
+    `SELECT id, email, "passwordHash", name, "sessionVersion", "createdAt", "updatedAt"
      FROM "users" WHERE email = $1`,
     [email.toLowerCase()]
   );
@@ -36,9 +38,19 @@ export async function findUserByEmail(email: string): Promise<UserRow | null> {
 
 export async function findUserById(id: string): Promise<UserRow | null> {
   const { rows } = await pool.query<UserRow>(
-    `SELECT id, email, "passwordHash", name, "createdAt", "updatedAt"
+    `SELECT id, email, "passwordHash", name, "sessionVersion", "createdAt", "updatedAt"
      FROM "users" WHERE id = $1`,
     [id]
   );
   return rows[0] ?? null;
+}
+
+// TS-155: ends every session this account has (each token carries the version it was issued
+// with). Returns the new version, for the token that replaces them.
+export async function bumpSessionVersion(id: string): Promise<number | null> {
+  const { rows } = await pool.query<{ sessionVersion: number }>(
+    `UPDATE "users" SET "sessionVersion" = "sessionVersion" + 1 WHERE id = $1 RETURNING "sessionVersion"`,
+    [id]
+  );
+  return rows[0]?.sessionVersion ?? null;
 }

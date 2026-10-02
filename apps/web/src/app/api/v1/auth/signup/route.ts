@@ -18,7 +18,7 @@ export async function POST(req: NextRequest) {
     passwordHash,
     name: parsed.data.name,
   });
-  const token = await signToken({ sub: user.id, email: user.email });
+  const token = await signToken({ sub: user.id, email: user.email, sessionVersion: user.sessionVersion });
 
   const response = NextResponse.json(
     { user: { id: user.id, name: user.name, email: user.email }, token },

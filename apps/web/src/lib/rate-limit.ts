@@ -35,7 +35,9 @@ export const LOGIN_LIMITS = {
   failuresPerAddress: { limit: 30, windowSeconds: 900 },
 };
 
-export const TOO_MANY_SIGN_INS = "Too many sign-in attempts. Please wait a few minutes and try again.";
+// TS-154 (Tom's decision #6): the lock stays, with a way to get in right away.
+export const TOO_MANY_SIGN_INS =
+  "Too many sign-in attempts. Please wait a few minutes and try again, or use \"Forgot password?\" to reset your password and sign in now.";
 
 // TS-113: 429 if `key` has already reached its limit in this window, without counting anything.
 export async function over429(
