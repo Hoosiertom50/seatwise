@@ -34,6 +34,11 @@ export class LoginPage extends BasePage {
     await this.page.goto("/login");
   }
 
+  /** TS-147: opens /login with a raw, already-encoded `?next=` value (e.g. "/%09/evil.example"). */
+  async gotoWithEncodedNext(encodedNext: string): Promise<void> {
+    await this.page.goto(`/login?next=${encodedNext}`);
+  }
+
   /** Business-readable operation: log in and wait for the resulting navigation to settle. */
   async login(email: string, password: string): Promise<void> {
     await this.emailInput().fill(email);
