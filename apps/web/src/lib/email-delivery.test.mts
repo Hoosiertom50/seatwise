@@ -4,7 +4,7 @@
 import { test, afterEach } from "node:test";
 import assert from "node:assert/strict";
 
-const { resolveEmailTransport, sendEmail, emailDelivered, setEmailSenderForTests } = await import("@seatwise/db");
+const { resolveEmailTransport, sendEmail, emailDelivered, setEmailSenderForTests, redactLinkTokens } = await import("@seatwise/db");
 
 afterEach(() => setEmailSenderForTests());
 
@@ -94,4 +94,24 @@ test("only sent and logged count as delivered", () => {
   assert.equal(emailDelivered("logged"), true);
   assert.equal(emailDelivered("failed"), false);
   assert.equal(emailDelivered("not-configured"), false);
+});
+
+// TS-149
+test("links' secret parts are hidden in logged emails from a production build, kept in local development", async () => {
+  const token = "a".repeat(64);
+  const text = `Reset: https://x.example/reset-password/${token}\nRSVP: https://x.example/rsvp/${token}\nInvite: https://x.example/invites/${token}\nVendor: https://x.example/vendor/${token}`;
+  assert.equal(redactLinkTokens(text).includes(token), false);
+  assert.match(redactLinkTokens(text), /\/reset-password\/\[hidden\]/);
+
+  const logged: string[] = [];
+  const original = console.log;
+  console.log = (line: string) => logged.push(line);
+  try {
+    await sendEmail("a@example.invalid", "Hi", text, { NODE_ENV: "production", EMAIL_TRANSPORT: "log" });
+    await sendEmail("a@example.invalid", "Hi", text, { NODE_ENV: "development" });
+  } finally {
+    console.log = original;
+  }
+  assert.equal(logged[0].includes(token), false);
+  assert.equal(logged[1].includes(token), true);
 });
