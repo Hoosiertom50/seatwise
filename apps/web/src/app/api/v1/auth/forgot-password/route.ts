@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { forgotPasswordSchema } from "@seatwise/shared";
-import { createPasswordResetToken, findUserByEmail, sendEmail, PASSWORD_RESET_TTL_MINUTES } from "@seatwise/db";
+import { createPasswordResetToken, findUserByEmail, sendEmail, PASSWORD_RESET_TTL_MINUTES, retireOlderResetTokens, emailDelivered } from "@seatwise/db";
 import { zodErrorResponse } from "@/lib/api-response";
 import { clientAddress, rateLimitOr429, PASSWORD_RESET_LIMITS } from "@/lib/rate-limit";
 import { resetOutcome } from "@/lib/password-reset-outcome";
@@ -31,5 +31,7 @@ export async function POST(req: NextRequest) {
     "Reset your Seatwise password",
     `Hi ${user.name},\n\nSomeone (hopefully you) asked to reset your Seatwise password. Choose a new one here:\n\n${appUrl}/reset-password/${token}\n\nThis link works once, for ${PASSWORD_RESET_TTL_MINUTES} minutes. If you didn't ask for this, you can ignore this email -- your password hasn't changed.`
   );
+  // TS-153: older links are cancelled only once this one has gone out.
+  if (emailDelivered(result)) await retireOlderResetTokens(user.id, token);
   return NextResponse.json(resetOutcome(true, result));
 }

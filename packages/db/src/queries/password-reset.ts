@@ -10,16 +10,16 @@ export function hashResetToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }
 
-/** Issues a new reset token for the user (cancelling older unused ones) and returns it. */
+/**
+ * Issues a new reset token for the user and returns it. TS-153: older links stay valid until the
+ * new one has actually been emailed -- call retireOlderResetTokens then -- so a failed send never
+ * leaves the person with no working link at all.
+ */
 export async function createPasswordResetToken(userId: string): Promise<string> {
   const token = randomBytes(32).toString("hex");
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    await client.query(
-      `UPDATE "password_reset_tokens" SET "usedAt" = now() WHERE "userId" = $1 AND "usedAt" IS NULL`,
-      [userId]
-    );
     await client.query(
       `INSERT INTO "password_reset_tokens" (id, "userId", "tokenHash", "expiresAt")
        VALUES ($1, $2, $3, now() + make_interval(mins => $4))`,
@@ -83,4 +83,13 @@ export async function resetPasswordWithToken(
   } finally {
     client.release();
   }
+}
+
+/** TS-153: once a new link has been emailed, every older unused link for that person stops working. */
+export async function retireOlderResetTokens(userId: string, keepToken: string): Promise<void> {
+  await pool.query(
+    `UPDATE "password_reset_tokens" SET "usedAt" = now()
+     WHERE "userId" = $1 AND "usedAt" IS NULL AND "tokenHash" <> $2`,
+    [userId, hashResetToken(keepToken)]
+  );
 }
