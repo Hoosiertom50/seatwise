@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { submitGuestRsvpSchema, type GuestRsvpPreviewDTO } from "@seatwise/shared";
+import { submitGuestRsvpSchema, type GuestRsvpPreviewDTO, isRsvpCutoffPast } from "@seatwise/shared";
 import { getGuestByRsvpToken, submitGuestRsvp, RsvpSubmissionError, resyncGuestSeat, notifyWeddingCollaborators } from "@seatwise/db";
 import { errorResponse, zodErrorResponse } from "@/lib/api-response";
 import { clientAddress, rateLimitOr429, RSVP_LIMITS } from "@/lib/rate-limit";
@@ -9,9 +9,9 @@ type Params = { params: Promise<{ token: string }> };
 // FR-12.2: the cutoff is a date, not a timestamp -- responses are accepted through the entire
 // cutoff day itself, only actually closing off at the start of the next day. Kept in sync with
 // the identical check in packages/db/src/queries/guests.ts's submitGuestRsvp.
+// TS-153: shared with submitGuestRsvp -- see packages/shared/src/rsvp-cutoff.ts.
 function isPastCutoff(rsvpCutoffDate: string | null): boolean {
-  if (!rsvpCutoffDate) return false;
-  return new Date(`${rsvpCutoffDate}T23:59:59`) < new Date();
+  return isRsvpCutoffPast(rsvpCutoffDate);
 }
 
 // TS-17 (FR-12.1/FR-12.2): no auth required at all -- a guest reaching their own link may not

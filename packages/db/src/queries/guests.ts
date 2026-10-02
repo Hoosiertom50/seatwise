@@ -1,4 +1,5 @@
 import { randomUUID, randomBytes } from "crypto";
+import { isRsvpCutoffPast } from "@seatwise/shared";
 import { pool } from "../pool";
 import { encryptText, decryptText } from "../crypto";
 
@@ -260,19 +261,14 @@ export async function getGuestByRsvpToken(token: string): Promise<GuestRsvpLooku
 // all, so a token is only ever generated the first time someone asks for one. Returns null only
 // if the guest doesn't exist (belongs to a different wedding, or was deleted).
 export async function ensureGuestRsvpToken(guestId: string, weddingId: string): Promise<string | null> {
+  // TS-153: one statement, so an automatic RSVP email and a click on "RSVP link" at the same moment
+  // both get the same link -- before, the second could replace the one just emailed.
   const { rows } = await pool.query(
-    `SELECT "rsvpToken" FROM "guests" WHERE id = $1 AND "weddingId" = $2`,
-    [guestId, weddingId]
+    `UPDATE "guests" SET "rsvpToken" = COALESCE("rsvpToken", $3) WHERE id = $1 AND "weddingId" = $2
+     RETURNING "rsvpToken"`,
+    [guestId, weddingId, randomBytes(32).toString("hex")]
   );
-  if (!rows[0]) return null;
-  if (rows[0].rsvpToken) return rows[0].rsvpToken;
-  const token = randomBytes(32).toString("hex");
-  await pool.query(`UPDATE "guests" SET "rsvpToken" = $1 WHERE id = $2 AND "weddingId" = $3`, [
-    token,
-    guestId,
-    weddingId,
-  ]);
-  return token;
+  return rows[0]?.rsvpToken ?? null;
 }
 
 // FR-12.4: "regenerate" -- always issues a fresh token, invalidating whatever link was out there
@@ -327,7 +323,8 @@ export async function submitGuestRsvp(token: string, input: SubmitGuestRsvpData)
   }
   // FR-12.2: the cutoff is a date, not a timestamp -- responses are accepted through the entire
   // cutoff day itself, only actually closing off at the start of the next day.
-  if (found.rsvpCutoffDate && new Date(`${found.rsvpCutoffDate}T23:59:59`) < new Date()) {
+  // TS-153: the day ends when it has ended everywhere (see @seatwise/shared rsvp-cutoff.ts).
+  if (isRsvpCutoffPast(found.rsvpCutoffDate)) {
     throw new RsvpSubmissionError("RSVP responses have closed for this wedding.", "CLOSED");
   }
 

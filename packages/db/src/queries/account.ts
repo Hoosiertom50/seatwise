@@ -75,6 +75,12 @@ export async function deleteUserAccount(
 ): Promise<{ deleted: true } | { deleted: false; ownedWeddings: OwnedWeddingRow[] }> {
   const owned = await listWeddingsOwnedBy(userId);
   if (owned.length > 0) return { deleted: false, ownedWeddings: owned };
-  await pool.query(`DELETE FROM "users" WHERE id = $1`, [userId]);
+  // TS-153: the "owns nothing" check is repeated inside the delete itself, so a wedding handed to
+  // this person in the moment between the two can never be deleted along with the account.
+  const { rowCount } = await pool.query(
+    `DELETE FROM "users" WHERE id = $1 AND NOT EXISTS (SELECT 1 FROM "weddings" WHERE "ownerId" = $1)`,
+    [userId]
+  );
+  if (!rowCount) return { deleted: false, ownedWeddings: await listWeddingsOwnedBy(userId) };
   return { deleted: true };
 }

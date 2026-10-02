@@ -716,6 +716,10 @@ export async function moveGuestAssignment(
         [randomUUID(), planVersionId, member.id, targetTableId]
       );
     }
+    // TS-153: the move's checks ran before this transaction, so two moves at once (or one sent
+    // without expectedRevision) could both see room at the table. Re-checking it here, as it now
+    // stands, flags anyone who doesn't fit instead of letting the table go over capacity.
+    await resyncSeatsAtTable(client, weddingId, planVersionId, targetTableId);
 
     const { rows: unassignedCountRows } = await client.query(
       `SELECT

@@ -123,8 +123,8 @@ export async function createSeatingTable(
 }
 
 // FR-4.2: create a standard set of same-shape, same-capacity tables in one action (e.g. "12 round
-// tables of 8"). Numbering continues after any tables that already exist, so a repeated
-// quick-create (or one run after tables were added by hand) never collides with earlier labels.
+// tables of 8"). Numbering continues after the highest number already used with that prefix, so a
+// repeated quick-create (or one run after tables were added or deleted) never repeats a label.
 export async function quickCreateSeatingTables(
   weddingId: string,
   input: { count: number; capacity: number; shape: string; labelPrefix: string }
@@ -132,11 +132,28 @@ export async function quickCreateSeatingTables(
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    const { rows: countRows } = await client.query(
-      `SELECT COUNT(*)::int AS count FROM "seating_tables" WHERE "weddingId" = $1`,
+    const { rows: existingRows } = await client.query<{ label: string }>(
+      `SELECT label FROM "seating_tables" WHERE "weddingId" = $1`,
       [weddingId]
     );
-    const startIndex = countRows[0].count as number;
+    // Grid placement continues after however many tables there are.
+    const startIndex = existingRows.length;
+    // TS-153: numbering continues after the highest number already used with this prefix (not
+    // the table count) -- after "Table 2" of five was deleted, the count-based numbering made a
+    // second "Table 5". Labels already taken are skipped either way.
+    const taken = new Set(existingRows.map((r) => r.label.trim().toLowerCase()));
+    const prefix = input.labelPrefix.trim();
+    const numberPattern = new RegExp(`^${prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s+(\\d+)$`, "i");
+    let next =
+      existingRows.reduce((max, r) => {
+        const m = r.label.trim().match(numberPattern);
+        return m ? Math.max(max, Number(m[1])) : max;
+      }, 0) + 1;
+    const labels: string[] = [];
+    while (labels.length < input.count) {
+      const label = `${prefix} ${next++}`;
+      if (!taken.has(label.toLowerCase())) labels.push(label);
+    }
     const created: SeatingTableRow[] = [];
     for (let i = 0; i < input.count; i++) {
       const id = randomUUID();
@@ -148,7 +165,7 @@ export async function quickCreateSeatingTables(
          RETURNING id, "weddingId", label, capacity, "isRestricted", "isAccessible", "isLocked",
                    purpose, "purposeCriterionType", "purposeCriterionValue", "singleSideOnly", shape,
                    "positionX", "positionY", revision, "createdAt", "updatedAt"`,
-        [id, weddingId, `${input.labelPrefix} ${startIndex + i + 1}`, input.capacity, input.shape, x, y]
+        [id, weddingId, labels[i], input.capacity, input.shape, x, y]
       );
       created.push({ ...rows[0], requiredGuestIds: [] });
     }

@@ -209,7 +209,8 @@ export class BudgetConflictError extends Error {
 export async function getBudgetSummaryForWedding(weddingId: string): Promise<BudgetSummaryRow> {
   const { rows } = await pool.query(
     `SELECT w."budgetCents", w."budgetRevision",
-            COALESCE((SELECT SUM(COALESCE(v."costCents", 0)) FROM "vendors" v WHERE v."weddingId" = w.id), 0)::int
+            -- TS-153: bigint -- many large vendor costs overflow a 32-bit int (a 500).
+            COALESCE((SELECT SUM(COALESCE(v."costCents", 0)) FROM "vendors" v WHERE v."weddingId" = w.id), 0)::bigint
               AS "totalCostCents"
      FROM "weddings" w WHERE w.id = $1`,
     [weddingId]
@@ -219,8 +220,9 @@ export async function getBudgetSummaryForWedding(weddingId: string): Promise<Bud
   return {
     budgetRevision: row.budgetRevision,
     budgetCents: row.budgetCents,
-    totalCostCents: row.totalCostCents,
-    remainingCents: row.budgetCents === null ? null : row.budgetCents - row.totalCostCents,
+    // pg returns bigint as text; a wedding's total is far below 2^53, so a JS number is exact.
+    totalCostCents: Number(row.totalCostCents),
+    remainingCents: row.budgetCents === null ? null : row.budgetCents - Number(row.totalCostCents),
   };
 }
 
@@ -248,13 +250,14 @@ export async function setBudgetForWedding(
 // TS-114: a vendor's private read-only link. Same shape as a guest's RSVP link (guests.ts):
 // 32 random bytes, kept only on the row and handed out only by the share-link endpoint.
 export async function ensureVendorShareToken(id: string, weddingId: string): Promise<string | null> {
-  const { rows } = await pool.query(`SELECT "shareToken" FROM "vendors" WHERE id = $1 AND "weddingId" = $2`, [
-    id,
-    weddingId,
-  ]);
-  if (!rows[0]) return null;
-  if (rows[0].shareToken) return rows[0].shareToken;
-  return regenerateVendorShareToken(id, weddingId);
+  // TS-153: one statement, so two requests at once both get the same link (before, each could
+  // write its own and the first link handed out would stop working).
+  const { rows } = await pool.query(
+    `UPDATE "vendors" SET "shareToken" = COALESCE("shareToken", $3) WHERE id = $1 AND "weddingId" = $2
+     RETURNING "shareToken"`,
+    [id, weddingId, randomBytes(32).toString("hex")]
+  );
+  return rows[0]?.shareToken ?? null;
 }
 
 /** A brand-new token -- the previous link (if any) stops working at once. */

@@ -13,11 +13,21 @@ export async function POST(req: NextRequest) {
   if (existing) return errorResponse("An account with that email already exists", 409);
 
   const passwordHash = await hashPassword(parsed.data.password);
-  const user = await createUser({
-    email: parsed.data.email,
-    passwordHash,
-    name: parsed.data.name,
-  });
+  let user;
+  try {
+    user = await createUser({
+      email: parsed.data.email,
+      passwordHash,
+      name: parsed.data.name,
+    });
+  } catch (err) {
+    // TS-153: two sign-ups for the same email at once (a double-click) -- the second loses the
+    // race at the database's unique email rule; answer the same way as the check above.
+    if ((err as { code?: string }).code === "23505") {
+      return errorResponse("An account with that email already exists", 409);
+    }
+    throw err;
+  }
   const token = await signToken({ sub: user.id, email: user.email, sessionVersion: user.sessionVersion });
 
   const response = NextResponse.json(
