@@ -4,6 +4,7 @@ import { listGuestsByWedding } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
 import { errorResponse } from "@/lib/api-response";
 import { requireAccess } from "@/lib/access";
+import { guestForViewer } from "@/lib/guest-privacy";
 
 type Params = { params: Promise<{ weddingId: string }> };
 
@@ -34,7 +35,8 @@ export async function GET(req: NextRequest, { params }: Params) {
   const access = await requireAccess(weddingId, user.id, "VIEW");
   if ("error" in access) return access.error;
 
-  const guests = await listGuestsByWedding(weddingId);
+  // TS-154: the notes columns are blank for View and Comment collaborators.
+  const guests = (await listGuestsByWedding(weddingId)).map((g) => guestForViewer(g, access.accessLevel));
   const rows = guests.map((g) => [
     g.id,
     g.firstName,

@@ -153,6 +153,8 @@ export const notificationTypeEnum = z.enum([
   "GUEST_REMOVED",
   "ATTENDANCE_CHANGED",
   "STATUS_CHANGED",
+  // TS-154
+  "RSVP_RECEIVED",
 ]);
 export type NotificationType = z.infer<typeof notificationTypeEnum>;
 

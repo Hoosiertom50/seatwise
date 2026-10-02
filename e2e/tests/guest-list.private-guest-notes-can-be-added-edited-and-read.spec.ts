@@ -6,7 +6,7 @@
  *
  * Notes are entered in "Add a guest" -> More details, shown and edited inline in the guest's row
  * (saved on blur, with the usual stale-edit refusal and TS-108's put-the-saved-text-back), shown
- * read-only to View collaborators, and carried by the export.
+ * hidden from View collaborators (TS-154), and carried by the owner's export.
  */
 
 import { expect, defineQualityTest, test } from "../fixtures/index.js";
@@ -17,11 +17,11 @@ import { signUpFreshAccountInNewContext } from "../support/auth.js";
 defineQualityTest(
   {
     id: "guest-list.private-guest-notes-can-be-added-edited-and-read.add-edit-stale-view-export",
-    title: "a guest's private notes can be added with the guest, edited inline, are refused when stale, are read-only for View users, and appear in the export",
+    title: "a guest's private notes can be added with the guest, edited inline, are refused when stale, are hidden from View users, and appear in the owner's export",
     objective:
-      "Confirms the add-guest form's Notes field saves a note that then shows in the guest's row, that an inline edit persists across a reload and that emptying it clears the note, that an edit based on a stale guest is refused with a message and the textarea shows the other change, that a View collaborator sees the note as text with no editor, and that the CSV export carries the note.",
+      "Confirms the add-guest form's Notes field saves a note that then shows in the guest's row, that an inline edit persists across a reload and that emptying it clears the note, that an edit based on a stale guest is refused with a message and the textarea shows the other change, that a View collaborator sees neither the note nor an editor, and that the CSV export carries the note.",
     expectedOutcome:
-      "The new row's notes read 'Vegetarian, nut allergy' and the API agrees. After the edit and a reload they read 'Vegan; uses a wheelchair'; after emptying them the API has null. After the conflicting edit the 'was just edited elsewhere' message shows and the textarea reads 'Theirs'. The View user sees 'Notes: Theirs' and no notes textarea. The export contains 'Theirs' in that guest's row.",
+      "The new row's notes read 'Vegetarian, nut allergy' and the API agrees. After the edit and a reload they read 'Vegan; uses a wheelchair'; after emptying them the API has null. After the conflicting edit the 'was just edited elsewhere' message shows and the textarea reads 'Theirs'. The View user sees no note and no notes textarea. The export contains 'Theirs' in that guest's row.",
     requirementIds: ["REQ-GUEST-LIST-MANAGEMENT"],
     tags: ["@mutating", "@feature:guests", "@risk:high", "@suite:regression"],
   },
@@ -64,7 +64,8 @@ defineQualityTest(
       expect(await notesNow()).toBe("Theirs");
     });
 
-    await test.step("A View collaborator sees the note but can't edit it", async () => {
+    // TS-154 (Tom's decision #1): notes are for the owner and Edit collaborators only.
+    await test.step("A View collaborator doesn't see the note at all", async () => {
       const viewer = await signUpFreshAccountInNewContext(browser, testInfo.workerIndex, "viewer");
       try {
         await weddingData.addCollaborator(w, viewer.email, "VIEW");
@@ -72,8 +73,9 @@ defineQualityTest(
         await viewerTab.goto(w);
         await viewerTab.openGuestsTab();
         const row = viewerTab.readOnlyGuestRow(fullName);
-        await expect(row.readOnlyNotes()).toHaveText("Notes: Theirs");
+        await expect(row.readOnlyNotes()).toHaveCount(0);
         await expect(row.notesEditor()).toHaveCount(0);
+        await expect(viewerTab.message("Theirs")).toHaveCount(0);
       } finally {
         await viewer.context.close();
       }

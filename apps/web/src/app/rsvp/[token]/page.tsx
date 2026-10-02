@@ -162,7 +162,7 @@ export default function GuestRsvpPage() {
                   <input
                     type="number"
                     min={1}
-                    max={20}
+                    max={preview?.maxHeadcount ?? 20}
                     value={headcount}
                     onChange={(e) => setHeadcount(Number(e.target.value))}
                     className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"

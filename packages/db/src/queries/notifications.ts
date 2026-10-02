@@ -27,6 +27,7 @@ export async function notifyWeddingCollaborators(
   weddingId: string,
   actorUserId: string | null,
   type:
+    | "RSVP_RECEIVED"
     | "PLAN_SHARED"
     | "COMMENT_REPLY"
     | "TABLE_CHANGED"

@@ -4,6 +4,7 @@ import { createGuest, listGuestsByWedding, getCurrentPlanVersionStatus, notifyWe
 import { getAuthUser } from "@/lib/session";
 import { errorResponse, zodErrorResponse } from "@/lib/api-response";
 import { requireAccess } from "@/lib/access";
+import { guestForViewer } from "@/lib/guest-privacy";
 import { sendGuestRsvpLink } from "@/lib/rsvp-email";
 
 type Params = { params: Promise<{ weddingId: string }> };
@@ -16,7 +17,8 @@ export async function GET(req: NextRequest, { params }: Params) {
   const access = await requireAccess(weddingId, user.id, "VIEW");
   if ("error" in access) return access.error;
 
-  const guests = await listGuestsByWedding(weddingId);
+  // TS-154: private notes only for the owner and Edit collaborators.
+  const guests = (await listGuestsByWedding(weddingId)).map((g) => guestForViewer(g, access.accessLevel));
   return NextResponse.json({ guests });
 }
 

@@ -316,6 +316,7 @@ model Vendor {
 }
 
 enum NotificationType {
+  RSVP_RECEIVED
   PLAN_SHARED
   COMMENT_REPLY
   TABLE_CHANGED
@@ -402,6 +403,8 @@ model Guest {
   lastName                String
   partyName               String?
   headcount               Int        @default(1)
+  // TS-154: the party size the planner allowed; null means "headcount is the limit".
+  partySizeLimit Int?
   tier                    GuestTier  @default(OTHER)
   rsvpStatus              RsvpStatus @default(PENDING)
   requiresAccessibleTable Boolean    @default(false)
