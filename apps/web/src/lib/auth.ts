@@ -37,7 +37,14 @@ export const AUTH_COOKIE_NAME = "seatwise_token";
 // the same "http://localhost:3000" those two routes fall back to), so this resolves to `false`
 // there; a real deployment already sets APP_URL to its own https:// origin for those two routes, so
 // this resolves to `true` there with no new config needed.
+let warnedNoAppUrl = false;
 export function isSecureCookieContext(): boolean {
+  // TS-149: on a real deployment APP_URL must be set, or the cookie quietly loses Secure and
+  // emailed links point at localhost -- say so loudly in the logs.
+  if (!process.env.APP_URL && process.env.NETLIFY && !warnedNoAppUrl) {
+    warnedNoAppUrl = true;
+    console.error("APP_URL is not set: session cookies won't be marked Secure and emailed links will be wrong.");
+  }
   const appUrl = process.env.APP_URL || "http://localhost:3000";
   return appUrl.startsWith("https://");
 }

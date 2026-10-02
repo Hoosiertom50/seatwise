@@ -93,6 +93,10 @@ on:
   pull_request:
     branches: [main]
 
+# TS-149: these jobs only read the code and upload artifacts.
+permissions:
+  contents: read
+
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true

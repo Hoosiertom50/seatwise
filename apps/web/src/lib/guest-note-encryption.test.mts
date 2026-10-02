@@ -59,3 +59,14 @@ test("empty and legacy plain-text notes pass through untouched", () => {
   assert.equal(decryptText(null), null);
   assert.equal(decryptText("written before encryption existed"), "written before encryption existed");
 });
+
+// TS-149
+test("a stored note whose authentication tag has been shortened doesn't decrypt", () => {
+  env.NODE_ENV = "production";
+  env.ENCRYPTION_KEY = randomBytes(32).toString("hex");
+  const stored = encryptText("Allergic to shellfish")!;
+  const [prefix1, prefix2, iv, tag, data] = stored.split(":");
+  const shortTag = Buffer.from(tag, "base64").subarray(0, 4).toString("base64");
+  assert.equal(decryptText([prefix1, prefix2, iv, shortTag, data].join(":")), "[unable to decrypt]");
+  assert.equal(decryptText(stored), "Allergic to shellfish");
+});
