@@ -78,10 +78,13 @@ export function PlanTab({
   weddingId,
   guests,
   canEdit,
+  canApprove,
 }: {
   weddingId: string;
   guests: GuestDTO[];
   canEdit: boolean;
+  /** TS-151: may approve this plan (owner, or a Couple member with Comment/Edit access). */
+  canApprove: boolean;
 }) {
   const [versions, setVersions] = useState<PlanVersionDTO[]>([]);
   const [detail, setDetail] = useState<PlanVersionDetailDTO | null>(null);
@@ -250,10 +253,16 @@ export function PlanTab({
     // against the wrong version later.
     setUndoStack([]);
     setRedoStack([]);
-    const d = await api.get<{ planVersion: PlanVersionDetailDTO }>(
-      `/api/v1/weddings/${weddingId}/plan-versions/${id}`
-    );
-    setDetail(d.planVersion);
+    // TS-151: a version that can't be loaded says so instead of failing silently.
+    try {
+      const d = await api.get<{ planVersion: PlanVersionDetailDTO }>(
+        `/api/v1/weddings/${weddingId}/plan-versions/${id}`
+      );
+      setError(null);
+      setDetail(d.planVersion);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Couldn't open that version.");
+    }
   }
 
   // Returns what happened (error, or warnings) so a caller that wants to show feedback right at
@@ -893,9 +902,9 @@ export function PlanTab({
             </div>
           )}
 
-          {detail.isCurrent && canEdit && (
+          {detail.isCurrent && (canEdit || canApprove) && (
             <div className="mb-6 flex flex-wrap items-center gap-2">
-              {detail.status === "DRAFT" && (
+              {canEdit && detail.status === "DRAFT" && (
                 <button
                   onClick={() => onSetStatus("IN_REVIEW")}
                   disabled={statusUpdating}
@@ -906,29 +915,33 @@ export function PlanTab({
               )}
               {detail.status === "IN_REVIEW" && (
                 <>
-                  <button
-                    onClick={() => onSetStatus("DRAFT")}
-                    disabled={statusUpdating}
-                    className="rounded-md border border-neutral-300 dark:border-neutral-600 min-h-11 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50"
-                  >
-                    Move back to draft
-                  </button>
-                  <button
-                    onClick={() => onSetStatus("APPROVED")}
-                    disabled={statusUpdating || !detail.isComplete}
-                    title={!detail.isComplete ? "Every guest must be seated before a plan can be approved." : undefined}
-                    className="rounded-md bg-green-700 dark:bg-green-600 min-h-11 px-3 py-1.5 text-sm font-medium text-white hover:bg-green-800 dark:hover:bg-green-500 disabled:opacity-50"
-                  >
-                    Approve
-                  </button>
-                  {!detail.isComplete && (
+                  {canEdit && (
+                    <button
+                      onClick={() => onSetStatus("DRAFT")}
+                      disabled={statusUpdating}
+                      className="rounded-md border border-neutral-300 dark:border-neutral-600 min-h-11 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50"
+                    >
+                      Move back to draft
+                    </button>
+                  )}
+                  {canApprove && (
+                    <button
+                      onClick={() => onSetStatus("APPROVED")}
+                      disabled={statusUpdating || !detail.isComplete}
+                      title={!detail.isComplete ? "Every guest must be seated before a plan can be approved." : undefined}
+                      className="rounded-md bg-green-700 dark:bg-green-600 min-h-11 px-3 py-1.5 text-sm font-medium text-white hover:bg-green-800 dark:hover:bg-green-500 disabled:opacity-50"
+                    >
+                      Approve
+                    </button>
+                  )}
+                  {canApprove && !detail.isComplete && (
                     <span className="text-sm text-neutral-500 dark:text-neutral-400">
                       Seat every guest before this can be approved.
                     </span>
                   )}
                 </>
               )}
-              {detail.status === "APPROVED" && (
+              {canEdit && detail.status === "APPROVED" && (
                 <button
                   onClick={() => onSetStatus("IN_REVIEW")}
                   disabled={statusUpdating}

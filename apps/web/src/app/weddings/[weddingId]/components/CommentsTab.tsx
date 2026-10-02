@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useRef } from "react";
 import { api, ApiError } from "@/lib/api-client";
 import type { CommentDTO, GuestDTO, SeatingTableDTO, TimelineEntryDTO } from "@seatwise/shared";
 
@@ -34,6 +34,10 @@ export function CommentsTab({
   const [posting, setPosting] = useState(false);
   const [replyBodies, setReplyBodies] = useState<Record<string, string>>({});
   const [replyingTo, setReplyingTo] = useState<string | null>(null);
+  // TS-151: which reply is being posted, so a double-click can't post it twice.
+  const [postingReply, setPostingReply] = useState<string | null>(null);
+  // Checked synchronously: a second click can land before React re-renders with postingReply set.
+  const postingReplyNow = useRef(false);
 
   useEffect(() => {
     Promise.all([
@@ -102,17 +106,22 @@ export function CommentsTab({
     timelineEntryId: string | null
   ) {
     const text = replyBodies[parentCommentId];
-    if (!text?.trim()) return;
+    if (!text?.trim() || postingReplyNow.current) return;
+    postingReplyNow.current = true;
+    setPostingReply(parentCommentId);
     try {
       const { comment } = await api.post<{ comment: CommentDTO }>(
         `/api/v1/weddings/${weddingId}/comments`,
         { targetType, guestId, tableId, timelineEntryId, body: text, parentCommentId }
       );
-      setComments([...comments, comment]);
-      setReplyBodies({ ...replyBodies, [parentCommentId]: "" });
+      setComments((cur) => [...cur, comment]);
+      setReplyBodies((cur) => ({ ...cur, [parentCommentId]: "" }));
       setReplyingTo(null);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't post that reply.");
+    } finally {
+      postingReplyNow.current = false;
+      setPostingReply(null);
     }
   }
 
@@ -294,9 +303,10 @@ export function CommentsTab({
                           onClick={() =>
                             onReply(root.id, root.targetType, root.guestId, root.tableId, root.timelineEntryId)
                           }
-                          className="rounded-md bg-neutral-900 dark:bg-neutral-100 px-3 py-2 text-sm font-medium text-white dark:text-neutral-900 hover:bg-neutral-700 dark:hover:bg-neutral-300"
+                          disabled={postingReply === root.id}
+                          className="rounded-md bg-neutral-900 dark:bg-neutral-100 px-3 py-2 text-sm font-medium text-white dark:text-neutral-900 hover:bg-neutral-700 dark:hover:bg-neutral-300 disabled:opacity-50"
                         >
-                          Reply
+                          {postingReply === root.id ? "Posting..." : "Reply"}
                         </button>
                       </div>
                     ) : (

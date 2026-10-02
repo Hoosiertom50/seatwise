@@ -77,6 +77,28 @@ export class CommentsTabPage extends BasePage {
     ]);
   }
 
+  /** TS-151: double-clicks Reply and returns how many replies the page sent. Both clicks are
+   * dispatched before the first reply comes back, so counting up to that response is exact. */
+  async doubleClickReply(threadBody: string, text: string): Promise<number> {
+    const thread = this.threadByBody(threadBody).first();
+    await this.replyOpener(threadBody).click();
+    await thread.getByLabel("Reply text", { exact: true }).fill(text);
+    let sent = 0;
+    const count = (r: { method(): string; url(): string }) => {
+      if (r.method() === "POST" && /\/comments$/.test(new URL(r.url()).pathname)) sent++;
+    };
+    this.page.on("request", count);
+    try {
+      await Promise.all([
+        this.page.waitForResponse((r) => r.request().method() === "POST" && /\/comments$/.test(new URL(r.url()).pathname)),
+        thread.getByRole("button", { name: "Reply", exact: true }).dblclick(),
+      ]);
+    } finally {
+      this.page.off("request", count);
+    }
+    return sent;
+  }
+
   async resolve(threadBody: string): Promise<void> {
     await this.threadByBody(threadBody).first().getByRole("button", { name: "Resolve", exact: true }).click();
   }

@@ -123,6 +123,13 @@ export class PlanTabPage extends BasePage {
     await this.reopenForReviewButton().waitFor();
   }
 
+  /** TS-151: approve as someone who can approve but not edit (a Couple member with Comment
+   * access) -- they get no "Reopen for review" button afterwards, so wait for the badge instead. */
+  async approveAsReviewer(): Promise<void> {
+    await this.approveButton().click();
+    await this.statusBadge("Approved").waitFor();
+  }
+
   async reopenForReview(): Promise<void> {
     await this.reopenForReviewButton().click();
     await this.moveBackToDraftButton().waitFor();

@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { ConfirmDeleteButton } from "@/components/ConfirmDeleteButton";
-import { api, ApiError } from "@/lib/api-client";
+import { api, ApiError, apiErrorMessage } from "@/lib/api-client";
 import { formatClockTime } from "@/lib/display-format";
 import { matchVendorSuggestions } from "@/lib/vendor-suggestions";
 import type {
@@ -86,6 +86,9 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editVendor, setEditVendor] = useState<Partial<VendorDTO>>({});
+  // TS-151: the cost exactly as typed while editing -- turned into cents only on save. Reformatting
+  // every keystroke ("1" -> "1.00") made a real cost impossible to type.
+  const [editCostText, setEditCostText] = useState("");
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -193,7 +196,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
       setArrivalTime("");
       setPickedSuggestion(null);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Couldn't add that vendor.");
+      setError(apiErrorMessage(err, ["name", "categoryOther", "contactEmail", "costCents", "arrivalTime", "contractNotes"], "Couldn't add that vendor."));
     } finally {
       setAdding(false);
     }
@@ -202,6 +205,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
   function startEdit(vendor: VendorDTO) {
     setEditingId(vendor.id);
     setEditVendor({ ...vendor });
+    setEditCostText(centsToDollarsString(vendor.costCents));
   }
 
   // FR-7.7, extended to vendors: a stale save (someone else's edit landed first) refreshes this
@@ -227,7 +231,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
           contactName: editVendor.contactName ?? null,
           contactEmail: editVendor.contactEmail ?? null,
           contactPhone: editVendor.contactPhone ?? null,
-          costCents: editVendor.costCents ?? null,
+          costCents: dollarsStringToCents(editCostText),
           contractNotes: editVendor.contractNotes ?? null,
           arrivalTime: editVendor.arrivalTime ?? null,
           expectedRevision,
@@ -245,7 +249,8 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
         setVendors(vendors.map((v) => (v.id === vendorId ? fresh : v)));
         setError(`"${fresh.name}" was just edited elsewhere — showing the latest. Try again if you still want to make this change.`);
       } else {
-        setError(err instanceof ApiError ? err.message : "Couldn't save that vendor.");
+        // TS-151: say which field was refused, not just "Validation failed".
+        setError(apiErrorMessage(err, ["name", "categoryOther", "contactEmail", "costCents", "arrivalTime", "contractNotes"], "Couldn't save that vendor."));
       }
     } finally {
       setSaving(false);
@@ -616,10 +621,8 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
                       step="0.01"
                       placeholder="Cost ($)"
                       className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm"
-                      value={centsToDollarsString(editVendor.costCents ?? null)}
-                      onChange={(e) =>
-                        setEditVendor({ ...editVendor, costCents: dollarsStringToCents(e.target.value) })
-                      }
+                      value={editCostText}
+                      onChange={(e) => setEditCostText(e.target.value)}
                     />
                   </div>
                   <textarea

@@ -341,6 +341,14 @@ export class BudgetTabPage extends BasePage {
   async setEditCategoryOther(label: string): Promise<void> {
     await this.editCategoryOtherInput().fill(label);
   }
+  /** TS-151: types the edit cost one key at a time, the way a person does (fill() sets it at once). */
+  async typeEditCost(dollars: string): Promise<void> {
+    await this.editCostInput().fill("");
+    await this.editCostInput().pressSequentially(dollars);
+  }
+  async editCostValue(): Promise<string> {
+    return this.editCostInput().inputValue();
+  }
   async setEditCost(dollars: string): Promise<void> {
     await this.editCostInput().fill(dollars);
   }
