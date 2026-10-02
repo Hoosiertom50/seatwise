@@ -176,6 +176,12 @@ export class GuestRow {
 
   /** TS-117: the line the row shows after an RSVP-link action: "Link copied…", "Emailed to …", or
    * the bare link when the clipboard isn't available. */
+  /** TS-143: the line shown after the RSVP link was emailed automatically (added with an email, or
+   * given a first email). */
+  autoRsvpResult(): Locator {
+    return this.root.getByText(/^(Emailed RSVP link to |Couldn't email )/);
+  }
+
   rsvpLinkResult(): Locator {
     return this.root.getByText(/Link copied|Emailed to|\/rsvp\//);
   }

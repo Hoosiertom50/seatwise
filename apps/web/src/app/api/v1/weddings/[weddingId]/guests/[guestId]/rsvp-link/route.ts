@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { rsvpLinkActionSchema, type RsvpLinkDTO } from "@seatwise/shared";
-import { getGuestForWedding, ensureGuestRsvpToken, regenerateGuestRsvpToken, sendEmailNotification, emailDelivered } from "@seatwise/db";
+import { getGuestForWedding } from "@seatwise/db";
+import { sendGuestRsvpLink } from "@/lib/rsvp-email";
 import { getAuthUser } from "@/lib/session";
 import { errorResponse, zodErrorResponse } from "@/lib/api-response";
 import { requireAccess } from "@/lib/access";
@@ -26,35 +27,9 @@ export async function POST(req: NextRequest, { params }: Params) {
   const guest = await getGuestForWedding(guestId, weddingId);
   if (!guest) return errorResponse("Guest not found", 404);
 
-  const token = parsed.data.regenerate
-    ? await regenerateGuestRsvpToken(guestId, weddingId)
-    : await ensureGuestRsvpToken(guestId, weddingId);
-  if (!token) return errorResponse("Guest not found", 404);
-
-  const appUrl = process.env.APP_URL || "http://localhost:3000";
-  const url = `${appUrl}/rsvp/${token}`;
-
-  // FR-12.4: "resend" is exactly this -- if the guest has an email on file, deliver (or re-deliver)
-  // the link to it. A guest with no email still gets a usable link back for the planner to copy
-  // and send however they normally would. A failed/unconfigured send never blocks the response
-  // (same "never throws" guarantee as every other notification email in the app).
-  // TS-132: `emailed` is only true when the email really went (or, in dev/CI, was logged) -- a
-  // failed or unconfigured send says so, and the planner shares the link by hand.
-  let emailed = false;
-  let emailFailed = false;
-  if (guest.email) {
-    const cutoffNote = access.wedding.rsvpCutoffDate
-      ? ` Please respond by ${access.wedding.rsvpCutoffDate}.`
-      : "";
-    const result = await sendEmailNotification(
-      guest.email,
-      `RSVP for ${access.wedding.name}`,
-      `Hi ${guest.firstName},\n\nPlease RSVP for "${access.wedding.name}" here: ${url}\n\nIf you've already responded, this same link shows what you submitted and lets you update it.${cutoffNote}`
-    );
-    emailed = emailDelivered(result);
-    emailFailed = !emailed;
-  }
-
-  const link: RsvpLinkDTO = { url, emailed, emailFailed };
+  // TS-143: the same helper sends the automatic email when a guest is added with an address.
+  const sent = await sendGuestRsvpLink(guest, access.wedding, { regenerate: parsed.data.regenerate });
+  if (!sent) return errorResponse("Guest not found", 404);
+  const link: RsvpLinkDTO = sent;
   return NextResponse.json({ rsvp: link });
 }
