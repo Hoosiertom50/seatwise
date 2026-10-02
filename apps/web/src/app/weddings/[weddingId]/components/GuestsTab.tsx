@@ -29,7 +29,12 @@ const AGE_CATEGORIES: AgeCategory[] = ["ADULT", "CHILD", "INFANT"];
 interface RsvpEmailOutcome {
   emailed: boolean;
   emailFailed: boolean;
+  // TS-156
+  emailLimited?: boolean;
 }
+
+// TS-156: shown when the planner has hit the RSVP-email limit.
+const EMAIL_LIMITED_NOTE = "You've sent a lot of RSVP emails in a short time, so this one wasn't sent";
 
 function buildImportFields(
   sideLabel1: string,
@@ -386,7 +391,9 @@ export function GuestsTab({
       ...prev,
       [guestId]: outcome.emailed
         ? `Emailed RSVP link to ${email}`
-        : `Couldn't email ${email} — use "RSVP link" to copy it and send it yourself.`,
+        : outcome.emailLimited
+          ? `${EMAIL_LIMITED_NOTE} — use "RSVP link" later, or copy it and send it yourself.`
+          : `Couldn't email ${email} — use "RSVP link" to copy it and send it yourself.`,
     }));
   }
 
@@ -512,12 +519,16 @@ export function GuestsTab({
     setRsvpLinkBusy(guestId);
     setRsvpLinkResult((prev) => ({ ...prev, [guestId]: "" }));
     try {
-      const { rsvp } = await api.post<{ rsvp: { url: string; emailed: boolean; emailFailed?: boolean } }>(
+      const { rsvp } = await api.post<{ rsvp: { url: string; emailed: boolean; emailFailed?: boolean; emailLimited?: boolean } }>(
         `/api/v1/weddings/${weddingId}/guests/${guestId}/rsvp-link`,
         { regenerate }
       );
       // TS-132: if the email couldn't be sent, say so -- the planner then sends the link themselves.
-      const notEmailed = rsvp.emailFailed ? `Couldn't email ${guestEmail} — send them the link yourself. ` : "";
+      const notEmailed = rsvp.emailLimited
+        ? `${EMAIL_LIMITED_NOTE} — send ${guestEmail} the link yourself. `
+        : rsvp.emailFailed
+          ? `Couldn't email ${guestEmail} — send them the link yourself. `
+          : "";
       try {
         await navigator.clipboard.writeText(rsvp.url);
         setRsvpLinkResult((prev) => ({

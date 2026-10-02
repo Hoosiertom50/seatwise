@@ -26,7 +26,16 @@ export default function SignupPage() {
       router.push(safeNextPath(new URLSearchParams(window.location.search).get("next")));
       router.refresh();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Something went wrong");
+      // TS-156: say which field was refused and why, not just "Validation failed".
+      const field = err instanceof ApiError ? (["name", "email", "password"] as const).find((f) => err.fieldErrors?.[f]?.[0]) : undefined;
+      const label = { name: "Name", email: "Email", password: "Password" } as const;
+      setError(
+        err instanceof ApiError
+          ? field
+            ? `${label[field]}: ${err.fieldErrors![field]![0]}`
+            : err.message
+          : "Something went wrong"
+      );
     } finally {
       setLoading(false);
     }

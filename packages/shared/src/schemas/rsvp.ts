@@ -54,6 +54,8 @@ export type RsvpLinkActionInput = z.infer<typeof rsvpLinkActionSchema>;
 
 export interface RsvpLinkDTO {
   url: string;
+  // TS-156: not emailed because the planner has sent a lot of RSVP emails in a short time.
+  emailLimited?: boolean;
   // TS-132: true only when the email really went out (or, in local dev/CI, was logged) -- lets the
   // UI say "link emailed to X" vs. "link copied".
   emailed: boolean;
