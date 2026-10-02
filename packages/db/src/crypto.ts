@@ -34,16 +34,39 @@ function encryptionKey(): Buffer {
     );
   }
   const source = configured || DEV_ONLY_KEY;
-  if (cached?.source !== source) cached = { source, key: createHash("sha256").update(source).digest() };
+  if (cached?.source !== source) cached = { source, key: keyFromSecret(source) };
   return cached.key;
 }
 
 const PREFIX = "enc:v1:";
 
+function keyFromSecret(secret: string): Buffer {
+  return createHash("sha256").update(secret).digest();
+}
+
 export function encryptText(plain: string | null | undefined): string | null {
+  return encryptWithKey(plain, encryptionKey());
+}
+
+// TS-144: explicit-key versions, for moving notes between environments that use different
+// ENCRYPTION_KEYs (local dev -> production). Same format as encryptText/decryptText.
+export function encryptTextWithSecret(plain: string | null | undefined, secret: string): string | null {
+  return encryptWithKey(plain, keyFromSecret(secret));
+}
+
+export function decryptTextWithSecret(stored: string | null | undefined, secret: string): string | null {
+  return decryptWithKey(stored, keyFromSecret(secret));
+}
+
+/** The key local development uses when ENCRYPTION_KEY isn't set (never valid in production). */
+export function devEncryptionSecret(): string {
+  return DEV_ONLY_KEY;
+}
+
+function encryptWithKey(plain: string | null | undefined, key: Buffer): string | null {
   if (plain === null || plain === undefined) return null;
   const iv = randomBytes(12);
-  const cipher = createCipheriv("aes-256-gcm", encryptionKey(), iv);
+  const cipher = createCipheriv("aes-256-gcm", key, iv);
   const ciphertext = Buffer.concat([cipher.update(plain, "utf8"), cipher.final()]);
   const authTag = cipher.getAuthTag();
   return `${PREFIX}${iv.toString("base64")}:${authTag.toString("base64")}:${ciphertext.toString("base64")}`;
@@ -51,14 +74,19 @@ export function encryptText(plain: string | null | undefined): string | null {
 
 export function decryptText(stored: string | null | undefined): string | null {
   if (stored === null || stored === undefined) return null;
+  if (!stored.startsWith(PREFIX)) return stored;
+  // Outside decryptWithKey's try: a missing production key must fail loudly, not read as
+  // "[unable to decrypt]" for every guest.
+  return decryptWithKey(stored, encryptionKey());
+}
+
+function decryptWithKey(stored: string | null | undefined, key: Buffer): string | null {
+  if (stored === null || stored === undefined) return null;
   if (!stored.startsWith(PREFIX)) {
     // Not our encrypted format — treat as plaintext rather than throwing, so pre-existing rows
     // (or anything written before this migration) still read back instead of breaking the app.
     return stored;
   }
-  // Outside the try below: a missing production key must fail loudly, not read as "[unable to
-  // decrypt]" for every guest.
-  const key = encryptionKey();
   try {
     const [ivB64, authTagB64, dataB64] = stored.slice(PREFIX.length).split(":");
     const iv = Buffer.from(ivB64, "base64");
