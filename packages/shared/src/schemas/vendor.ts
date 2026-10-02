@@ -150,3 +150,14 @@ export interface VendorViewDTO {
   otherVendors: { name: string; category: VendorCategory; categoryOther: string | null; arrivalTime: string | null }[];
   timeline: { time: string; description: string }[];
 }
+
+// TS-97: GET /api/v1/vendor-suggestions -- a vendor from another wedding the planner owns. Only
+// the details that carry over between weddings: never cost, contract notes or arrival time.
+export interface VendorSuggestionDTO {
+  name: string;
+  category: VendorCategory;
+  categoryOther: string | null;
+  contactName: string | null;
+  contactEmail: string | null;
+  contactPhone: string | null;
+}
