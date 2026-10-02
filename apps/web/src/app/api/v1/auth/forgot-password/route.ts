@@ -4,11 +4,14 @@ import { createPasswordResetToken, findUserByEmail, sendEmail, PASSWORD_RESET_TT
 import { zodErrorResponse } from "@/lib/api-response";
 import { clientAddress, rateLimitOr429, PASSWORD_RESET_LIMITS } from "@/lib/rate-limit";
 
-// TS-142: "Forgot password?" -- emails a single-use, 1-hour reset link. Always gives the same
-// answer whether or not the email has an account, so it can't be used to find out who's signed
-// up. Rate-limited per address and per email so it can't be used to flood an inbox.
-const GENERIC_RESET_MESSAGE =
-  "If that email has a Seatwise account, we've sent a link to reset the password. It works for 1 hour.";
+// TS-142: "Forgot password?" -- emails a single-use, 1-hour reset link to an existing account.
+// Tom's decision (2026-10-02): say plainly when there's no account for the email, rather than a
+// vague "if it exists" answer -- sign-up already reveals whether an email is registered, so the
+// vague answer protected nothing and only confused people. Nothing is ever emailed to an address
+// without an account. Rate-limited per address and per email so it can't flood an inbox.
+const SENT_MESSAGE =
+  "We've sent a link to reset your password. It works for 1 hour. Check your spam or junk folder if it doesn't arrive.";
+const NO_ACCOUNT_MESSAGE = "There's no Seatwise account for that email. Check the spelling, or sign up instead.";
 
 export async function POST(req: NextRequest) {
   const limited = await rateLimitOr429(`pw-reset:addr:${clientAddress(req)}`, PASSWORD_RESET_LIMITS.requestsPerAddress);
@@ -22,7 +25,8 @@ export async function POST(req: NextRequest) {
   if (perEmail) return perEmail;
 
   const user = await findUserByEmail(email);
-  if (user) {
+  if (!user) return NextResponse.json({ sent: false, message: NO_ACCOUNT_MESSAGE });
+  {
     const token = await createPasswordResetToken(user.id);
     const appUrl = process.env.APP_URL || "http://localhost:3000";
     await sendEmail(
@@ -31,5 +35,5 @@ export async function POST(req: NextRequest) {
       `Hi ${user.name},\n\nSomeone (hopefully you) asked to reset your Seatwise password. Choose a new one here:\n\n${appUrl}/reset-password/${token}\n\nThis link works once, for ${PASSWORD_RESET_TTL_MINUTES} minutes. If you didn't ask for this, you can ignore this email -- your password hasn't changed.`
     );
   }
-  return NextResponse.json({ message: GENERIC_RESET_MESSAGE });
+  return NextResponse.json({ sent: true, message: SENT_MESSAGE });
 }

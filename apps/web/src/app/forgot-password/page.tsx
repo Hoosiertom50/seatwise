@@ -4,21 +4,24 @@ import { useState } from "react";
 import Link from "next/link";
 import { api, ApiError } from "@/lib/api-client";
 
-// TS-142: ask for a password-reset link. The answer is the same whether or not the email has an
-// account, so this page can't be used to find out who's signed up.
+// TS-142: ask for a password-reset link. Says plainly when there's no account for the email
+// (Tom's decision, 2026-10-02), with a way to sign up instead.
 export default function ForgotPasswordPage() {
   const [email, setEmail] = useState("");
   const [sending, setSending] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [noAccount, setNoAccount] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
+    setNoAccount(null);
     setSending(true);
     try {
-      const res = await api.post<{ message: string }>("/api/v1/auth/forgot-password", { email });
-      setMessage(res.message);
+      const res = await api.post<{ sent: boolean; message: string }>("/api/v1/auth/forgot-password", { email });
+      if (res.sent) setMessage(res.message);
+      else setNoAccount(res.message);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Something went wrong — please try again.");
     } finally {
@@ -33,7 +36,7 @@ export default function ForgotPasswordPage() {
         {message ? (
           <>
             <p role="status" className="mb-4 text-sm text-neutral-700 dark:text-neutral-300">
-              {message} Check your spam or junk folder if it doesn&apos;t arrive.
+              {message}
             </p>
             <Link href="/login" className="text-sm font-medium underline">
               Back to sign in
@@ -58,6 +61,14 @@ export default function ForgotPasswordPage() {
                 required
               />
             </div>
+            {noAccount && (
+              <p role="alert" className="text-sm text-amber-800 dark:text-amber-300">
+                {noAccount}{" "}
+                <Link href="/signup" className="font-medium underline">
+                  Sign up
+                </Link>
+              </p>
+            )}
             {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}
             <button
               type="submit"

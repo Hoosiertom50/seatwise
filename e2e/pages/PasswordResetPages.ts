@@ -38,6 +38,11 @@ export class PasswordResetPages extends BasePage {
     return this.page.getByRole("status");
   }
 
+  /** TS-142: the "no account for that email" message, with its Sign up link. */
+  noAccountMessage() {
+    return this.page.getByRole("alert").filter({ hasText: "There's no Seatwise account for that email." });
+  }
+
   async gotoResetLink(token: string): Promise<void> {
     await this.page.goto(`/reset-password/${token}`);
   }
