@@ -109,10 +109,15 @@ export async function listRelationshipsForWedding(weddingId: string): Promise<Re
   return rows;
 }
 
-export async function deleteRelationshipForWedding(id: string, weddingId: string): Promise<boolean> {
-  const { rowCount } = await pool.query(
-    `DELETE FROM "guest_relationships" WHERE id = $1 AND "weddingId" = $2`,
+// TS-150: returns the two guests the rule was about (null if there was no such rule), so their
+// seats can be re-checked -- a flag the rule caused clears once it's gone.
+export async function deleteRelationshipForWedding(
+  id: string,
+  weddingId: string
+): Promise<{ guestAId: string; guestBId: string } | null> {
+  const { rows } = await pool.query(
+    `DELETE FROM "guest_relationships" WHERE id = $1 AND "weddingId" = $2 RETURNING "guestAId", "guestBId"`,
     [id, weddingId]
   );
-  return (rowCount ?? 0) > 0;
+  return rows[0] ?? null;
 }

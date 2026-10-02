@@ -407,7 +407,14 @@ export function generateSeatingPlan(
     if (g.requiredTableId && unit.pinReason !== "required") {
       unit.pinnedTableId = g.requiredTableId;
       unit.pinReason = "required";
-    } else if (g.isLocked && g.currentTableId && !unit.pinnedTableId) {
+    } else if (
+      g.isLocked &&
+      g.currentTableId &&
+      !unit.pinnedTableId &&
+      // TS-150: a lock never keeps someone at a Restricted table -- if they belong there, their
+      // required-table pin above already does; if they've been taken off its list, they move.
+      !tablesById.get(g.currentTableId)?.isRestricted
+    ) {
       unit.pinnedTableId = g.currentTableId;
       unit.pinReason = "lock";
     }

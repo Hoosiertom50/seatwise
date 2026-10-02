@@ -28,6 +28,8 @@ export function RulesTab({
   const [type, setType] = useState<RelationshipTypeValue>("MUST_SIT_TOGETHER");
   const [adding, setAdding] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // TS-150: who a new rule flags because of where they're seated right now.
+  const [warnings, setWarnings] = useState<string[]>([]);
 
   useEffect(() => {
     api
@@ -40,6 +42,7 @@ export function RulesTab({
   async function onAdd(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
+    setWarnings([]);
     if (!guestAId || !guestBId) {
       setError("Pick two different guests.");
       return;
@@ -50,11 +53,12 @@ export function RulesTab({
     }
     setAdding(true);
     try {
-      const { relationship } = await api.post<{ relationship: RelationshipDTO }>(
+      const { relationship, warnings: flagged } = await api.post<{ relationship: RelationshipDTO; warnings?: string[] }>(
         `/api/v1/weddings/${weddingId}/relationships`,
         { guestAId, guestBId, type }
       );
-      setRelationships([relationship, ...relationships]);
+      setRelationships((cur) => [relationship, ...cur]);
+      setWarnings(flagged ?? []);
       setGuestAId("");
       setGuestBId("");
     } catch (err) {
@@ -173,6 +177,11 @@ export function RulesTab({
 
       {guests.length < 2 && (
         <p className="mb-4 text-sm text-neutral-500 dark:text-neutral-400">Add at least two guests first.</p>
+      )}
+      {warnings.length > 0 && (
+        <p role="status" className="mb-4 rounded-md bg-amber-50 dark:bg-amber-950 px-3 py-2 text-sm text-amber-900 dark:text-amber-200">
+          {warnings.join(" ")}
+        </p>
       )}
         </>
       )}
