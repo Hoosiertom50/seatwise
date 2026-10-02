@@ -19,9 +19,14 @@ export default function ForgotPasswordPage() {
     setNoAccount(null);
     setSending(true);
     try {
-      const res = await api.post<{ sent: boolean; message: string }>("/api/v1/auth/forgot-password", { email });
+      const res = await api.post<{ sent: boolean; noAccount?: boolean; emailFailed?: boolean; message: string }>(
+        "/api/v1/auth/forgot-password",
+        { email }
+      );
       if (res.sent) setMessage(res.message);
-      else setNoAccount(res.message);
+      else if (res.noAccount) setNoAccount(res.message);
+      // TS-145: the email didn't go out -- say so, so they can try again.
+      else setError(res.message);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Something went wrong — please try again.");
     } finally {
