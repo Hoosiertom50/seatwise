@@ -129,4 +129,15 @@ export class CollaboratorsTabPage extends BasePage {
     await this.page.getByRole("button", { name: "Yes, leave", exact: true }).click();
     await this.page.waitForURL((url) => url.pathname === "/dashboard");
   }
+
+  /** TS-154: sets the wedding's date and venue in the owner settings and waits for the save. */
+  async saveDateAndVenue(date: string, venue: string): Promise<void> {
+    await this.page.getByLabel("Wedding date", { exact: true }).fill(date);
+    await this.page.getByLabel("Venue", { exact: true }).fill(venue);
+    await Promise.all([
+      this.page.waitForResponse((r) => r.request().method() === "PATCH" && /\/api\/v1\/weddings\/[^/]+$/.test(new URL(r.url()).pathname)),
+      this.page.getByRole("button", { name: "Save date and venue", exact: true }).click(),
+    ]);
+    await this.page.getByRole("status").filter({ hasText: /^Saved$/ }).waitFor();
+  }
 }

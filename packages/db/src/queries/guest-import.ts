@@ -361,6 +361,8 @@ export async function commitGuestImport(
         if (p.headcount !== undefined) {
           fields.push(`headcount = $${i++}`);
           values.push(p.headcount);
+          // TS-154: the planner's new party size is the guest's new limit.
+          fields.push(`"partySizeLimit" = NULL`);
         }
         if (p.tier !== undefined) {
           fields.push(`tier = $${i++}`);

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { submitGuestRsvpSchema, type GuestRsvpPreviewDTO, isRsvpCutoffPast } from "@seatwise/shared";
-import { getGuestByRsvpToken, submitGuestRsvp, RsvpSubmissionError, resyncGuestSeat } from "@seatwise/db";
+import { getGuestByRsvpToken, submitGuestRsvp, RsvpSubmissionError, resyncGuestSeat, notifyWeddingCollaborators } from "@seatwise/db";
 import { errorResponse, zodErrorResponse } from "@/lib/api-response";
 import { clientAddress, rateLimitOr429, RSVP_LIMITS } from "@/lib/rate-limit";
 
@@ -41,6 +41,7 @@ export async function GET(req: NextRequest, { params }: Params) {
     firstName: guest.firstName,
     lastName: guest.lastName,
     headcount: guest.headcount,
+    maxHeadcount: guest.partySizeLimit,
     rsvpStatus: guest.rsvpStatus as GuestRsvpPreviewDTO["rsvpStatus"],
     plusOneNames: guest.plusOneNames,
     // TS-107: the guest's own RSVP note -- never the planner's private `notes`.
@@ -75,10 +76,18 @@ export async function POST(req: NextRequest, { params }: Params) {
     // table has room for, is flagged Needs Reassignment -- exactly as a planner's own edit would --
     // instead of silently staying where they no longer fit.
     await resyncGuestSeat(guest.weddingId, guest.id);
+    // TS-154 (Tom's decision #2): the planner and collaborators hear about every response.
+    const answer =
+      guest.rsvpStatus === "CONFIRMED"
+        ? `is coming${guest.headcount > 1 ? ` (party of ${guest.headcount})` : ""}`
+        : guest.rsvpStatus === "DECLINED"
+          ? "can't make it"
+          : "updated their RSVP";
+    await notifyWeddingCollaborators(guest.weddingId, null, "RSVP_RECEIVED", `${guest.firstName} ${guest.lastName} ${answer}.`);
     return NextResponse.json({ ok: true });
   } catch (err) {
     if (err instanceof RsvpSubmissionError) {
-      return errorResponse(err.message, err.code === "NOT_FOUND" ? 404 : 409);
+      return errorResponse(err.message, err.code === "NOT_FOUND" ? 404 : err.code === "OVER_PARTY_SIZE" ? 422 : 409);
     }
     throw err;
   }

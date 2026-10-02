@@ -20,6 +20,8 @@ export interface GuestRsvpPreviewDTO {
   firstName?: string;
   lastName?: string;
   headcount?: number;
+  // TS-154: the most people this guest may RSVP for (the party size the planner set).
+  maxHeadcount?: number;
   rsvpStatus?: "PENDING" | "CONFIRMED" | "DECLINED";
   plusOneNames?: string | null;
   // TS-107: the guest's own note (stored as Guest.rsvpNotes). Never the planner's private
