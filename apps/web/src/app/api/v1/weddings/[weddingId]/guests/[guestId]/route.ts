@@ -15,6 +15,7 @@ import {
 import { getAuthUser } from "@/lib/session";
 import { errorResponse, zodErrorResponse } from "@/lib/api-response";
 import { requireAccess } from "@/lib/access";
+import { sendGuestRsvpLink } from "@/lib/rsvp-email";
 
 type Params = { params: Promise<{ weddingId: string; guestId: string }> };
 
@@ -54,6 +55,9 @@ export async function PATCH(req: NextRequest, { params }: Params) {
   if (!parsed.success) return zodErrorResponse(parsed.error);
 
   const { dayOfAttendance, expectedRevision, ...rest } = parsed.data;
+  // TS-143: remember whether the guest had an email before this edit -- giving them their first one
+  // sends their RSVP link, just like adding a guest with an email does.
+  const before = rest.email ? await getGuestForWedding(guestId, weddingId) : null;
 
   try {
     const updated = await updateGuestForWedding(guestId, weddingId, rest, expectedRevision);
@@ -90,7 +94,13 @@ export async function PATCH(req: NextRequest, { params }: Params) {
   }
 
   const guest = await getGuestForWedding(guestId, weddingId);
-  return NextResponse.json({ guest, warnings });
+  const firstEmail = !!guest?.email && !!before && !before.email;
+  const rsvpEmail = firstEmail && guest ? await sendGuestRsvpLink(guest, access.wedding) : null;
+  return NextResponse.json({
+    guest,
+    warnings,
+    ...(rsvpEmail ? { rsvpEmail: { emailed: rsvpEmail.emailed, emailFailed: rsvpEmail.emailFailed } } : {}),
+  });
 }
 
 export async function DELETE(req: NextRequest, { params }: Params) {

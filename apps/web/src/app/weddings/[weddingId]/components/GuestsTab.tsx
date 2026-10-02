@@ -25,6 +25,12 @@ const AGE_CATEGORIES: AgeCategory[] = ["ADULT", "CHILD", "INFANT"];
 // firstName/lastName are the only two that must be mapped before a preview can be requested.
 // FR-1.3a: the "side" field's label uses this wedding's own side names rather than a hardcoded
 // "Bride"/"Groom" -- everything else is fixed.
+// TS-143: what the server reports after emailing a guest their RSVP link automatically.
+interface RsvpEmailOutcome {
+  emailed: boolean;
+  emailFailed: boolean;
+}
+
 function buildImportFields(
   sideLabel1: string,
   sideLabel2: string
@@ -269,7 +275,7 @@ export function GuestsTab({
     setError(null);
     setAdding(true);
     try {
-      const { guest } = await api.post<{ guest: GuestDTO }>(`/api/v1/weddings/${weddingId}/guests`, {
+      const { guest, rsvpEmail } = await api.post<{ guest: GuestDTO; rsvpEmail?: RsvpEmailOutcome }>(`/api/v1/weddings/${weddingId}/guests`, {
         firstName,
         lastName,
         partyName: partyName || null,
@@ -283,6 +289,8 @@ export function GuestsTab({
         notes: notes.trim() || null,
       });
       setGuests([...guests, guest].sort((a, b) => a.lastName.localeCompare(b.lastName)));
+      // TS-143: a guest added with an email was just sent their RSVP link -- say so on their row.
+      if (rsvpEmail && guest.email) showAutoRsvpResult(guest.id, guest.email, rsvpEmail);
       setFirstName("");
       setLastName("");
       setPartyName("");
@@ -372,6 +380,16 @@ export function GuestsTab({
     }
   }
 
+  // TS-143: the line shown under a guest's row after their RSVP link was emailed automatically.
+  function showAutoRsvpResult(guestId: string, email: string, outcome: RsvpEmailOutcome) {
+    setRsvpLinkResult((prev) => ({
+      ...prev,
+      [guestId]: outcome.emailed
+        ? `Emailed RSVP link to ${email}`
+        : `Couldn't email ${email} — use "RSVP link" to copy it and send it yourself.`,
+    }));
+  }
+
   // TS-17 (FR-12.4): inline-editable per row, same optimistic-update-then-reconcile pattern as
   // the other per-guest edit handlers above. TS-93: uncontrolled like the name inputs (TS-108), so a
   // rejected edit writes the committed email back into the input itself.
@@ -382,11 +400,13 @@ export function GuestsTab({
     const normalized = input.value.trim() || null;
     setGuests(prev.map((g) => (g.id === guestId ? { ...g, email: normalized } : g)));
     try {
-      const { guest } = await api.patch<{ guest: GuestDTO }>(
+      const { guest, rsvpEmail } = await api.patch<{ guest: GuestDTO; rsvpEmail?: RsvpEmailOutcome }>(
         `/api/v1/weddings/${weddingId}/guests/${guestId}`,
         { email: normalized, expectedRevision }
       );
       setGuests(prev.map((g) => (g.id === guestId ? guest : g)));
+      // TS-143: giving a guest their first email sends their RSVP link.
+      if (rsvpEmail && guest.email) showAutoRsvpResult(guest.id, guest.email, rsvpEmail);
     } catch (err) {
       const fresh = conflictGuest(err);
       if (fresh) {
@@ -615,7 +635,7 @@ export function GuestsTab({
               id="guest-email"
               type="email"
               className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
-              placeholder="Optional -- lets you send them their own RSVP link"
+              placeholder="Optional -- they're emailed their RSVP link when you add them"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
             />

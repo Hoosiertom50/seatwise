@@ -77,3 +77,16 @@ export async function expireInvite(inviteId: string): Promise<void> {
   );
   if (!rowCount) throw new Error(`testDatabase: no test invite ${inviteId}.`);
 }
+
+/** TS-143: a guest's current RSVP token (null if no link has been made yet), for guests on weddings
+ * owned by a test account only. */
+export async function guestRsvpToken(guestId: string): Promise<string | null> {
+  const { rows } = await testPool().query<{ token: string | null }>(
+    `SELECT g."rsvpToken" AS token FROM "guests" g
+     JOIN "weddings" w ON w.id = g."weddingId" JOIN "users" u ON u.id = w."ownerId"
+     WHERE g.id = $1 AND u.email LIKE $2`,
+    [guestId, TEST_EMAIL_PATTERN],
+  );
+  if (!rows[0]) throw new Error(`testDatabase: no guest ${guestId} on a test wedding.`);
+  return rows[0].token;
+}

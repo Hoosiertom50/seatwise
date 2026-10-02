@@ -4,6 +4,7 @@ import { createGuest, listGuestsByWedding, getCurrentPlanVersionStatus, notifyWe
 import { getAuthUser } from "@/lib/session";
 import { errorResponse, zodErrorResponse } from "@/lib/api-response";
 import { requireAccess } from "@/lib/access";
+import { sendGuestRsvpLink } from "@/lib/rsvp-email";
 
 type Params = { params: Promise<{ weddingId: string }> };
 
@@ -44,5 +45,12 @@ export async function POST(req: NextRequest, { params }: Params) {
     );
   }
 
-  return NextResponse.json({ guest }, { status: 201 });
+  // TS-143 (Tom, 2026-10-02): a guest added with an email gets their RSVP link straight away. (A
+  // CSV import never does -- see guest-import -- so a big import can't email everyone by surprise.)
+  const rsvpEmail = guest.email ? await sendGuestRsvpLink(guest, access.wedding) : null;
+
+  return NextResponse.json(
+    { guest, ...(rsvpEmail ? { rsvpEmail: { emailed: rsvpEmail.emailed, emailFailed: rsvpEmail.emailFailed } } : {}) },
+    { status: 201 }
+  );
 }
