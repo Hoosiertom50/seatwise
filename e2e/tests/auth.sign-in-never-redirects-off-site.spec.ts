@@ -33,7 +33,9 @@ defineQualityTest(
 
     for (const trick of TRICKS) {
       await test.step(`?next=${trick} lands on the dashboard`, async () => {
-        await context.clearCookies();
+        // Leave the signed-in page first, so its own sign-out redirect can't race the next navigation.
+        await page.goto("about:blank");
+      await context.clearCookies();
         await loginPage.gotoWithEncodedNext(trick);
         await loginPage.login(email, password);
         await page.waitForURL((url) => url.pathname === "/dashboard");
@@ -42,6 +44,7 @@ defineQualityTest(
     }
 
     await test.step("?next=/account is still followed", async () => {
+      await page.goto("about:blank");
       await context.clearCookies();
       await loginPage.gotoWithEncodedNext("%2Faccount");
       await loginPage.login(email, password);
