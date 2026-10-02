@@ -178,7 +178,6 @@ export function RulesTab({
       {guests.length < 2 && (
         <p className="mb-4 text-sm text-neutral-500 dark:text-neutral-400">Add at least two guests first.</p>
       )}
-      {error && <p className="mb-4 text-sm text-red-600 dark:text-red-400">{error}</p>}
       {warnings.length > 0 && (
         <p role="status" className="mb-4 rounded-md bg-amber-50 dark:bg-amber-950 px-3 py-2 text-sm text-amber-900 dark:text-amber-200">
           {warnings.join(" ")}
@@ -186,6 +185,8 @@ export function RulesTab({
       )}
         </>
       )}
+      {/* TS-151: shown to everyone -- a View user whose rules failed to load used to see "No seating rules yet." */}
+      {error && <p className="mb-4 text-sm text-red-600 dark:text-red-400">{error}</p>}
 
       <h2 className="mb-3 text-lg font-medium">Rules ({relationships.length})</h2>
       {relationships.length === 0 ? (

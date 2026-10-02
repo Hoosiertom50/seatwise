@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { ConfirmDeleteButton } from "@/components/ConfirmDeleteButton";
-import { api, ApiError } from "@/lib/api-client";
+import { api, ApiError, apiErrorMessage } from "@/lib/api-client";
 import type { TimelineEntryDTO } from "@seatwise/shared";
 
 // TS-18 (Day-Of Timeline / Run-of-Show, FR-13.1/FR-13.2): a per-wedding, chronological schedule of
@@ -46,7 +46,7 @@ export function TimelineTab({ weddingId, canEdit }: { weddingId: string; canEdit
       setTime("");
       setDescription("");
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Couldn't add that timeline entry.");
+      setError(apiErrorMessage(err, [], "Couldn't add that timeline entry."));
     } finally {
       setAdding(false);
     }
@@ -90,7 +90,7 @@ export function TimelineTab({ weddingId, canEdit }: { weddingId: string; canEdit
         );
         setEditingId(null);
       }
-      setError(err instanceof ApiError ? err.message : "Couldn't save that change.");
+      setError(apiErrorMessage(err, [], "Couldn't save that change."));
     } finally {
       setSaving(false);
     }
@@ -124,7 +124,7 @@ export function TimelineTab({ weddingId, canEdit }: { weddingId: string; canEdit
       setEntries(res.entries);
       void entry;
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Couldn't reorder that entry.");
+      setError(apiErrorMessage(err, [], "Couldn't reorder that entry."));
     }
   }
 
