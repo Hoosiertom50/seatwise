@@ -20,3 +20,13 @@ export const PERSON_NAME_MESSAGE =
 export const WEDDING_NAME_PATTERN = /^[\p{L}\p{N}\p{M}][\p{L}\p{N}\p{M} '&,.!-]*$/u;
 export const WEDDING_NAME_MESSAGE =
   "Can only contain letters, numbers, spaces, and common punctuation ( ' & , . ! - )";
+
+// TS-156: names (a planner's own, a wedding's) are put into emails Seatwise sends to other people,
+// so they mustn't read as a web address ("Verify at evil.example"). Two or more letters/digits, a
+// period, then two or more letters is how a domain looks; real names with initials ("J.R. Smith",
+// "Est. 2026", "St. Clair") don't match.
+export const WEB_ADDRESS_LIKE = /[\p{L}\p{N}]{2,}\.\p{L}{2,}/u;
+export const NO_WEB_ADDRESS_MESSAGE = "Can't look like a web address";
+export function looksLikeWebAddress(value: string): boolean {
+  return WEB_ADDRESS_LIKE.test(value);
+}

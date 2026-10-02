@@ -1,7 +1,16 @@
 import { z } from "zod";
+import { PERSON_NAME_PATTERN, PERSON_NAME_MESSAGE, looksLikeWebAddress, NO_WEB_ADDRESS_MESSAGE } from "../validation";
 
 export const signupSchema = z.object({
-  name: z.string().min(1, "Name is required").max(200),
+  // TS-156: the name goes into invite emails, so it's held to the same rule as a guest's name and
+  // can't read as a web address.
+  name: z
+    .string()
+    .trim()
+    .min(1, "Name is required")
+    .max(100)
+    .regex(PERSON_NAME_PATTERN, PERSON_NAME_MESSAGE)
+    .refine((v) => !looksLikeWebAddress(v), NO_WEB_ADDRESS_MESSAGE),
   email: z.string().email("Enter a valid email address"),
   password: z.string().min(8, "Password must be at least 8 characters"),
 });

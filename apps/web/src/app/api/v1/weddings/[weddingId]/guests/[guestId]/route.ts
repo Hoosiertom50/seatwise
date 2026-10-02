@@ -95,11 +95,11 @@ export async function PATCH(req: NextRequest, { params }: Params) {
 
   const guest = await getGuestForWedding(guestId, weddingId);
   const firstEmail = !!guest?.email && !!before && !before.email;
-  const rsvpEmail = firstEmail && guest ? await sendGuestRsvpLink(guest, access.wedding) : null;
+  const rsvpEmail = firstEmail && guest ? await sendGuestRsvpLink(guest, access.wedding, user.id) : null;
   return NextResponse.json({
     guest,
     warnings,
-    ...(rsvpEmail ? { rsvpEmail: { emailed: rsvpEmail.emailed, emailFailed: rsvpEmail.emailFailed } } : {}),
+    ...(rsvpEmail ? { rsvpEmail: { emailed: rsvpEmail.emailed, emailFailed: rsvpEmail.emailFailed, emailLimited: rsvpEmail.emailLimited ?? false } } : {}),
   });
 }
 

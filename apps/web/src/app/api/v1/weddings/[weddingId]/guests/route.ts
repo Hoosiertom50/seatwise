@@ -47,10 +47,10 @@ export async function POST(req: NextRequest, { params }: Params) {
 
   // TS-143 (Tom, 2026-10-02): a guest added with an email gets their RSVP link straight away. (A
   // CSV import never does -- see guest-import -- so a big import can't email everyone by surprise.)
-  const rsvpEmail = guest.email ? await sendGuestRsvpLink(guest, access.wedding) : null;
+  const rsvpEmail = guest.email ? await sendGuestRsvpLink(guest, access.wedding, user.id) : null;
 
   return NextResponse.json(
-    { guest, ...(rsvpEmail ? { rsvpEmail: { emailed: rsvpEmail.emailed, emailFailed: rsvpEmail.emailFailed } } : {}) },
+    { guest, ...(rsvpEmail ? { rsvpEmail: { emailed: rsvpEmail.emailed, emailFailed: rsvpEmail.emailFailed, emailLimited: rsvpEmail.emailLimited ?? false } } : {}) },
     { status: 201 }
   );
 }
