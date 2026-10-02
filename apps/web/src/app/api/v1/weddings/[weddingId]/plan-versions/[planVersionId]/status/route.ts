@@ -5,6 +5,7 @@ import {
   getWeddingAccessDetail,
   PlanVersionStatusError,
   PlanVersionConflictError,
+  PlanVersionNotFoundError,
 } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
 import { errorResponse, zodErrorResponse } from "@/lib/api-response";
@@ -57,6 +58,7 @@ export async function POST(req: NextRequest, { params }: Params) {
     if (!planVersion) return errorResponse("Plan version not found", 404);
     return NextResponse.json({ planVersion });
   } catch (err) {
+    if (err instanceof PlanVersionNotFoundError) return errorResponse(err.message, 404);
     if (err instanceof PlanVersionConflictError) {
       return NextResponse.json(
         { error: err.message, planVersion: err.planVersion },

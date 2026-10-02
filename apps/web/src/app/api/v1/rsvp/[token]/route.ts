@@ -20,6 +20,9 @@ function isPastCutoff(rsvpCutoffDate: string | null): boolean {
 // a bare error) for a valid token past the wedding's cutoff -- either way pre-filled with
 // whatever's already on file, so re-opening the link (open or closed) shows the guest what's
 // currently on record instead of a blank form.
+// TS-149: a guest's name and RSVP details are behind this link; never cached anywhere.
+const NO_STORE = { "Cache-Control": "no-store" };
+
 export async function GET(req: NextRequest, { params }: Params) {
   const { token } = await params;
   // TS-98: this endpoint needs no sign-in, so it's rate-limited per network address.
@@ -29,7 +32,7 @@ export async function GET(req: NextRequest, { params }: Params) {
 
   if (!guest) {
     const preview: GuestRsvpPreviewDTO = { status: "NOT_FOUND" };
-    return NextResponse.json({ rsvp: preview });
+    return NextResponse.json({ rsvp: preview }, { headers: NO_STORE });
   }
 
   const preview: GuestRsvpPreviewDTO = {
@@ -45,7 +48,7 @@ export async function GET(req: NextRequest, { params }: Params) {
     requiresAccessibleTable: guest.requiresAccessibleTable,
     rsvpCutoffDate: guest.rsvpCutoffDate,
   };
-  return NextResponse.json({ rsvp: preview });
+  return NextResponse.json({ rsvp: preview }, { headers: NO_STORE });
 }
 
 // FR-12.1/FR-12.3: writes straight into the guest's own record via submitGuestRsvp (see that

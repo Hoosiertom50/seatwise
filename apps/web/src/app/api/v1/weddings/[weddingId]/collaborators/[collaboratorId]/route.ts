@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { updateCollaboratorSchema } from "@seatwise/shared";
-import { updateCollaboratorPermission, removeCollaborator, CollaboratorError } from "@seatwise/db";
+import { updateCollaboratorPermission, removeCollaborator, getCollaboratorForWedding, CollaboratorError } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
 import { errorResponse, zodErrorResponse } from "@/lib/api-response";
 import { requireAccess } from "@/lib/access";
@@ -28,13 +28,17 @@ export async function PATCH(req: NextRequest, { params }: Params) {
   }
 }
 
+// The owner removes someone; TS-148: or a collaborator removes their own access ("Leave").
 export async function DELETE(req: NextRequest, { params }: Params) {
   const user = await getAuthUser(req);
   if (!user) return errorResponse("Not authenticated", 401);
 
   const { weddingId, collaboratorId } = await params;
-  const access = await requireAccess(weddingId, user.id, "OWNER");
-  if ("error" in access) return access.error;
+  const own = await getCollaboratorForWedding(weddingId, collaboratorId);
+  if (own?.userId !== user.id) {
+    const access = await requireAccess(weddingId, user.id, "OWNER");
+    if ("error" in access) return access.error;
+  }
 
   try {
     await removeCollaborator(weddingId, collaboratorId);

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { ConfirmDeleteButton } from "@/components/ConfirmDeleteButton";
 import { api, ApiError, apiErrorMessage } from "@/lib/api-client";
 import type {
@@ -47,15 +48,19 @@ function inviteStatusLabel(status: WeddingInviteDTO["status"]) {
 export function CollaboratorsTab({
   weddingId,
   isOwner,
+  currentUserId,
   wedding,
   setWedding,
 }: {
   weddingId: string;
   isOwner: boolean;
+  /** TS-148: so a collaborator can leave the wedding from their own row. */
+  currentUserId: string | null;
   wedding: WeddingDTO | null;
   setWedding: (w: WeddingDTO) => void;
 }) {
   const [collaborators, setCollaborators] = useState<CollaboratorDTO[]>([]);
+  const router = useRouter();
   // TS-105: which collaborator the owner is handing the wedding to.
   const [handOffTo, setHandOffTo] = useState("");
   const [invites, setInvites] = useState<WeddingInviteDTO[]>([]);
@@ -570,7 +575,7 @@ export function CollaboratorsTab({
             >
               <div>
                 <p className="font-medium">{c.userName}</p>
-                <p className="text-sm text-neutral-500 dark:text-neutral-400">{c.userEmail}</p>
+                {c.userEmail && <p className="text-sm text-neutral-500 dark:text-neutral-400">{c.userEmail}</p>}
               </div>
               {isOwner ? (
                 <div className="flex flex-wrap items-center gap-2">
@@ -611,6 +616,23 @@ export function CollaboratorsTab({
                     {LEVELS.find((l) => l.value === c.permissionLevel)?.label}
                   </span>
                   <span className="text-xs text-neutral-400 dark:text-neutral-500">{roleLabel(c.role)}</span>
+                  {/* TS-148: anyone can take themselves off a wedding. */}
+                  {c.userId === currentUserId && (
+                    <ConfirmDeleteButton
+                      label="Leave this wedding"
+                      question="Leave this wedding? You'll lose access right away. The owner can invite you again."
+                      confirmLabel="Yes, leave"
+                      busyLabel="Leaving…"
+                      onConfirm={async () => {
+                        try {
+                          await api.delete(`/api/v1/weddings/${weddingId}/collaborators/${c.id}`);
+                          router.push("/dashboard");
+                        } catch (err) {
+                          setError(err instanceof ApiError ? err.message : "Couldn't leave this wedding.");
+                        }
+                      }}
+                    />
+                  )}
                 </div>
               )}
             </li>

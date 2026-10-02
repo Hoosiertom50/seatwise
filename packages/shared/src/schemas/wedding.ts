@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { WEDDING_NAME_PATTERN, WEDDING_NAME_MESSAGE } from "../validation";
+import { WEDDING_NAME_PATTERN, WEDDING_NAME_MESSAGE, looksLikeWebAddress, NO_WEB_ADDRESS_MESSAGE } from "../validation";
 
 // FR-3.4: how much generation weights table composition toward mixing the two sides. Always a
 // soft preference — see packages/shared/src/seating-engine.ts.
@@ -12,7 +12,9 @@ const weddingBaseSchema = z.object({
     .trim()
     .min(1, "Wedding name is required")
     .max(200)
-    .regex(WEDDING_NAME_PATTERN, WEDDING_NAME_MESSAGE),
+    .regex(WEDDING_NAME_PATTERN, WEDDING_NAME_MESSAGE)
+    // TS-156: the wedding name goes into RSVP and invite emails.
+    .refine((v) => !looksLikeWebAddress(v), NO_WEB_ADDRESS_MESSAGE),
   eventDate: z.string().date().optional().nullable(),
   venueName: z.string().max(200).optional().nullable(),
   // FR-1.3: "an optional note" -- always optional, blank is fine (AC: creating with the note left

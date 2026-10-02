@@ -4,14 +4,17 @@ import { listCollaboratorsForWedding, addCollaborator, CollaboratorError } from 
 import { getAuthUser } from "@/lib/session";
 import { errorResponse, zodErrorResponse } from "@/lib/api-response";
 import { requireAccess } from "@/lib/access";
+import { directCollaboratorAddAllowed } from "@/lib/direct-add";
 
 type Params = { params: Promise<{ weddingId: string }> };
 
 // TS-13 (Collaboration & Notifications, FR-10.x): viewing who has access is available to anyone
 // with access; managing collaborators (inviting/removing/changing level) is owner-only.
 // NOTE: this POST directly grants access to an already-registered account -- no invite/acceptance
-// step -- and is used mainly as fast test/setup scaffolding; the Collaborators tab's user-facing
-// "Invite a collaborator" action goes through /invites instead (FR-1.4a).
+// step. TS-148: it exists only as test/setup scaffolding, so the live site refuses it: real people
+// only get access by accepting an invite (FR-1.4a), never by being added without saying yes.
+// Allowed in local development, and in CI where ALLOW_DIRECT_COLLABORATOR_ADD=1 is set.
+
 export async function GET(req: NextRequest, { params }: Params) {
   const user = await getAuthUser(req);
   if (!user) return errorResponse("Not authenticated", 401);
@@ -20,13 +23,17 @@ export async function GET(req: NextRequest, { params }: Params) {
   const access = await requireAccess(weddingId, user.id, "VIEW");
   if ("error" in access) return access.error;
 
-  const collaborators = await listCollaboratorsForWedding(weddingId);
+  // TS-148: only the owner sees everyone's email address; others see their own.
+  const collaborators = (await listCollaboratorsForWedding(weddingId)).map((c) =>
+    access.accessLevel === "OWNER" || c.userId === user.id ? c : { ...c, userEmail: null }
+  );
   return NextResponse.json({ collaborators });
 }
 
 export async function POST(req: NextRequest, { params }: Params) {
   const user = await getAuthUser(req);
   if (!user) return errorResponse("Not authenticated", 401);
+  if (!directCollaboratorAddAllowed(process.env)) return errorResponse("Invite people from the Collaborators tab instead.", 404);
 
   const { weddingId } = await params;
   const access = await requireAccess(weddingId, user.id, "OWNER");

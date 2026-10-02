@@ -37,7 +37,14 @@ export const AUTH_COOKIE_NAME = "seatwise_token";
 // the same "http://localhost:3000" those two routes fall back to), so this resolves to `false`
 // there; a real deployment already sets APP_URL to its own https:// origin for those two routes, so
 // this resolves to `true` there with no new config needed.
+let warnedNoAppUrl = false;
 export function isSecureCookieContext(): boolean {
+  // TS-149: on a real deployment APP_URL must be set, or the cookie quietly loses Secure and
+  // emailed links point at localhost -- say so loudly in the logs.
+  if (!process.env.APP_URL && process.env.NETLIFY && !warnedNoAppUrl) {
+    warnedNoAppUrl = true;
+    console.error("APP_URL is not set: session cookies won't be marked Secure and emailed links will be wrong.");
+  }
   const appUrl = process.env.APP_URL || "http://localhost:3000";
   return appUrl.startsWith("https://");
 }
@@ -49,11 +56,16 @@ export interface TokenPayload {
   // time the token is renewed, so renewal can have an absolute limit. Absent on tokens issued
   // before TS-94 -- treated as their own issue time.
   authTime?: number;
+  // TS-155: the account's session version when this token was issued (claim "sv"). A token whose
+  // version is older than the account's current one has been ended (password reset, log out).
+  // Absent on tokens issued before TS-155 -- treated as 0.
+  sessionVersion?: number;
 }
 
 export interface VerifiedToken extends TokenPayload {
   issuedAt: number;
   authTime: number;
+  sessionVersion: number;
 }
 
 // TS-94: a token is valid for 30 days from when it was *issued*, and an active session keeps being
@@ -72,7 +84,7 @@ export async function verifyPassword(password: string, hash: string): Promise<bo
 
 export async function signToken(payload: TokenPayload): Promise<string> {
   const now = Math.floor(Date.now() / 1000);
-  return new SignJWT({ email: payload.email, authTime: payload.authTime ?? now })
+  return new SignJWT({ email: payload.email, authTime: payload.authTime ?? now, sv: payload.sessionVersion ?? 0 })
     .setProtectedHeader({ alg: "HS256" })
     .setSubject(payload.sub)
     .setIssuedAt(now)
@@ -86,7 +98,8 @@ export async function verifyToken(token: string): Promise<VerifiedToken | null> 
     if (typeof payload.sub !== "string" || typeof payload.email !== "string") return null;
     const issuedAt = typeof payload.iat === "number" ? payload.iat : 0;
     const authTime = typeof payload.authTime === "number" ? payload.authTime : issuedAt;
-    return { sub: payload.sub, email: payload.email, issuedAt, authTime };
+    const sessionVersion = typeof payload.sv === "number" ? payload.sv : 0;
+    return { sub: payload.sub, email: payload.email, issuedAt, authTime, sessionVersion };
   } catch {
     return null;
   }

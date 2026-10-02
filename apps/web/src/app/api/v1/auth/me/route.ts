@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { deleteUserAccount, findUserById } from "@seatwise/db";
+import { deleteUserAccount, findUserById, hitRateLimit, undoRateLimitHit } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
 import { errorResponse, zodErrorResponse } from "@/lib/api-response";
 import { AUTH_COOKIE_NAME, isSecureCookieContext, verifyPassword } from "@/lib/auth";
+import { LOGIN_LIMITS, TOO_MANY_SIGN_INS } from "@/lib/rate-limit";
 
 export async function GET(req: NextRequest) {
   const user = await getAuthUser(req);
@@ -23,10 +24,16 @@ export async function DELETE(req: NextRequest) {
   const parsed = deleteSchema.safeParse(await req.json().catch(() => null));
   if (!parsed.success) return zodErrorResponse(parsed.error);
 
+  // TS-155: wrong passwords here count against the same per-account limit as signing in, so this
+  // can't be used to keep guessing the password.
+  const { limit, windowSeconds } = LOGIN_LIMITS.failuresPerAccount;
+  const accountKey = `login:account:${user.email.toLowerCase()}`;
+  if (!(await hitRateLimit(accountKey, limit, windowSeconds)).allowed) return errorResponse(TOO_MANY_SIGN_INS, 429);
   const record = await findUserById(user.id);
   if (!record || !(await verifyPassword(parsed.data.password, record.passwordHash))) {
     return errorResponse("That password isn't right.", 403);
   }
+  await undoRateLimitHit(accountKey, windowSeconds);
 
   const result = await deleteUserAccount(user.id);
   if (!result.deleted) {

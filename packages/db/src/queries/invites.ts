@@ -1,6 +1,6 @@
 import { randomBytes, randomUUID } from "crypto";
 import { pool } from "../pool";
-import { upsertCollaboratorByUserId, type CollaboratorRole } from "./collaborators";
+import { type CollaboratorRole } from "./collaborators";
 
 // FR-1.4a: a real invite lifecycle. An invite is looked up only by its opaque token (never a
 // weddingId + email pair, so a token can be handed to exactly one person without leaking which
@@ -140,28 +140,47 @@ export async function getInviteByToken(token: string): Promise<InviteLookupRow |
 
 // Accepts an invite on behalf of an already-authenticated user, whose own email must match the
 // invited address (checked by the caller -- this function trusts acceptingUserEmail as already
-// verified). Grants access via the same upsert the direct-add flow uses, so re-accepting (or
-// accepting after a prior direct add) updates role/permission rather than erroring.
+// verified).
+//
+// TS-148: claiming the invite and granting access happen in one transaction, and the claim only
+// succeeds while the invite is still pending and unexpired -- so an invite revoked a moment
+// earlier can't still grant access. Someone who already has access keeps exactly the access they
+// have (an old invite never changes it).
 export async function acceptInvite(
   token: string,
   acceptingUserId: string
-): Promise<{ weddingId: string } | { error: InviteStatus | "NOT_FOUND" }> {
-  const invite = await getInviteByToken(token);
-  if (!invite) return { error: "NOT_FOUND" };
-  if (invite.status !== "PENDING") return { error: invite.status };
-
-  await upsertCollaboratorByUserId(
-    invite.weddingId,
-    acceptingUserId,
-    invite.permissionLevel,
-    invite.role,
-    invite.invitedByUserId
-  );
-
-  await pool.query(
-    `UPDATE "wedding_invites" SET status = 'ACCEPTED', "acceptedAt" = now() WHERE id = $1`,
-    [invite.id]
-  );
-
-  return { weddingId: invite.weddingId };
+): Promise<{ weddingId: string } | { error: InviteStatus | "NOT_FOUND" | "ALREADY_COLLABORATOR" }> {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const { rows } = await client.query(
+      `UPDATE "wedding_invites" SET status = 'ACCEPTED', "acceptedAt" = now()
+       WHERE token = $1 AND status = 'PENDING' AND "expiresAt" > now()
+       RETURNING "weddingId", role, "permissionLevel", "invitedByUserId"`,
+      [token]
+    );
+    const claimed = rows[0];
+    if (!claimed) {
+      await client.query("ROLLBACK");
+      const invite = await getInviteByToken(token);
+      return { error: invite ? invite.status : "NOT_FOUND" };
+    }
+    const { rowCount } = await client.query(
+      `INSERT INTO "wedding_collaborators" (id, "weddingId", "userId", "role", "permissionLevel", "invitedByUserId")
+       VALUES ($1, $2, $3, $4::"CollaboratorRole", $5::"CollaboratorPermission", $6)
+       ON CONFLICT ("weddingId", "userId") DO NOTHING`,
+      [randomUUID(), claimed.weddingId, acceptingUserId, claimed.role, claimed.permissionLevel, claimed.invitedByUserId]
+    );
+    if (!rowCount) {
+      await client.query("ROLLBACK");
+      return { error: "ALREADY_COLLABORATOR" };
+    }
+    await client.query("COMMIT");
+    return { weddingId: claimed.weddingId };
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
 }

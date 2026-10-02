@@ -35,7 +35,9 @@ export const LOGIN_LIMITS = {
   failuresPerAddress: { limit: 30, windowSeconds: 900 },
 };
 
-export const TOO_MANY_SIGN_INS = "Too many sign-in attempts. Please wait a few minutes and try again.";
+// TS-154 (Tom's decision #6): the lock stays, with a way to get in right away.
+export const TOO_MANY_SIGN_INS =
+  "Too many sign-in attempts. Please wait a few minutes and try again, or use \"Forgot password?\" to reset your password and sign in now.";
 
 // TS-113: 429 if `key` has already reached its limit in this window, without counting anything.
 export async function over429(
@@ -67,4 +69,35 @@ export async function rateLimitOr429(
     { error: "Too many attempts from here in a short time. Please wait a few minutes and try again." },
     { status: 429, headers: { "Retry-After": String(result.retryAfterSeconds) } }
   );
+}
+
+// TS-156: how many emails one signed-in person can make Seatwise send to other people. Seatwise
+// sends from one Gmail account; without a ceiling, one account could spam strangers through it
+// and get it suspended, which would stop every email -- password resets included. Real planning
+// stays well under these: a wedding has a few collaborators and ~150 guests, emailed over weeks.
+export const EMAIL_SEND_LIMITS = {
+  invites: [
+    { limit: 20, windowSeconds: 3600 },
+    { limit: 60, windowSeconds: 86_400 },
+  ],
+  rsvpEmails: [
+    { limit: 150, windowSeconds: 3600 },
+    { limit: 500, windowSeconds: 86_400 },
+  ],
+} as const;
+
+export const TOO_MANY_INVITES =
+  "You've sent a lot of invites in a short time. Please wait a while before sending more.";
+
+/**
+ * TS-156: counts one email of `kind` sent by `userId` against every window; false once any window
+ * is over its limit (the email should then not be sent).
+ */
+export async function reserveEmailSend(kind: keyof typeof EMAIL_SEND_LIMITS, userId: string): Promise<boolean> {
+  const results = await Promise.all(
+    EMAIL_SEND_LIMITS[kind].map(({ limit, windowSeconds }) =>
+      hitRateLimit(`email:${kind}:${windowSeconds}:${userId}`, limit, windowSeconds)
+    )
+  );
+  return results.every((r) => r.allowed);
 }

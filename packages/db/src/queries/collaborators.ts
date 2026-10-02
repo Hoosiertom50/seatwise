@@ -108,8 +108,9 @@ export async function addCollaborator(
   permissionLevel: "VIEW" | "COMMENT" | "EDIT",
   role: CollaboratorRole = "COLLABORATOR"
 ): Promise<CollaboratorRow> {
+  // TS-148: emails are stored lowercased (see createUser), so look up the same way.
   const { rows: userRows } = await pool.query(`SELECT id, name, email FROM "users" WHERE email = $1`, [
-    email,
+    email.trim().toLowerCase(),
   ]);
   const user = userRows[0];
   if (!user) {
@@ -137,6 +138,7 @@ export async function addCollaborator(
      VALUES ($1, $2, $3, $4::"CollaboratorRole", $5::"CollaboratorPermission", $6)`,
     [id, weddingId, user.id, role, permissionLevel, invitedByUserId]
   );
+  await revokePendingInvitesForUser(weddingId, user.id);
 
   return {
     id,
@@ -149,25 +151,6 @@ export async function addCollaborator(
     invitedByUserId,
     createdAt: new Date(),
   };
-}
-
-// Upsert used by acceptInvite: if the invited address is already a collaborator (e.g. a re-invite
-// at a different level), this updates their role/permission in place instead of erroring, since
-// accepting an invite should never fail just because a relationship already exists.
-export async function upsertCollaboratorByUserId(
-  weddingId: string,
-  userId: string,
-  permissionLevel: "VIEW" | "COMMENT" | "EDIT",
-  role: CollaboratorRole,
-  invitedByUserId: string
-): Promise<void> {
-  await pool.query(
-    `INSERT INTO "wedding_collaborators" (id, "weddingId", "userId", "role", "permissionLevel", "invitedByUserId")
-     VALUES ($1, $2, $3, $4::"CollaboratorRole", $5::"CollaboratorPermission", $6)
-     ON CONFLICT ("weddingId", "userId")
-     DO UPDATE SET "role" = $4::"CollaboratorRole", "permissionLevel" = $5::"CollaboratorPermission"`,
-    [randomUUID(), weddingId, userId, role, permissionLevel, invitedByUserId]
-  );
 }
 
 export async function updateCollaboratorPermission(
@@ -198,14 +181,49 @@ export async function updateCollaboratorPermission(
   if (!rowCount) {
     throw new CollaboratorError("Collaborator not found.", "NOT_FOUND");
   }
+  const { rows } = await pool.query(`SELECT "userId" FROM "wedding_collaborators" WHERE id = $1`, [collaboratorId]);
+  if (rows[0]) await revokePendingInvitesForUser(weddingId, rows[0].userId);
 }
 
-export async function removeCollaborator(weddingId: string, collaboratorId: string): Promise<void> {
-  const { rowCount } = await pool.query(
-    `DELETE FROM "wedding_collaborators" WHERE id = $1 AND "weddingId" = $2`,
+// TS-148: a collaborator's access row (null when it isn't on this wedding) -- e.g. to let someone
+// remove their own access.
+export async function getCollaboratorForWedding(
+  weddingId: string,
+  collaboratorId: string
+): Promise<{ id: string; userId: string } | null> {
+  const { rows } = await pool.query(
+    `SELECT id, "userId" FROM "wedding_collaborators" WHERE id = $1 AND "weddingId" = $2`,
     [collaboratorId, weddingId]
   );
-  if (!rowCount) {
+  return rows[0] ?? null;
+}
+
+// TS-148: removing someone also cancels any invite still pending for them (accepting an old invite
+// would otherwise bring the access straight back) and clears their notifications about this
+// wedding (they name guests and changes the person may no longer see).
+export async function removeCollaborator(weddingId: string, collaboratorId: string): Promise<void> {
+  const { rows } = await pool.query(
+    `DELETE FROM "wedding_collaborators" WHERE id = $1 AND "weddingId" = $2 RETURNING "userId"`,
+    [collaboratorId, weddingId]
+  );
+  if (!rows[0]) {
     throw new CollaboratorError("Collaborator not found.", "NOT_FOUND");
   }
+  await revokePendingInvitesForUser(weddingId, rows[0].userId);
+  await pool.query(`DELETE FROM "notifications" WHERE "weddingId" = $1 AND "recipientUserId" = $2`, [
+    weddingId,
+    rows[0].userId,
+  ]);
+}
+
+// TS-148: any invite still pending for this person on this wedding is cancelled whenever their
+// access is set directly (added, changed or removed), so an older invite can never quietly undo
+// that change when it's accepted later.
+async function revokePendingInvitesForUser(weddingId: string, userId: string): Promise<void> {
+  await pool.query(
+    `UPDATE "wedding_invites" SET status = 'REVOKED'
+     WHERE "weddingId" = $1 AND status = 'PENDING'
+       AND lower(email) = (SELECT lower(email) FROM "users" WHERE id = $2)`,
+    [weddingId, userId]
+  );
 }

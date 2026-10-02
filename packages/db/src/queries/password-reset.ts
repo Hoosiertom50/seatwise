@@ -51,7 +51,7 @@ export async function isPasswordResetTokenUsable(token: string): Promise<boolean
 export async function resetPasswordWithToken(
   token: string,
   newPasswordHash: string
-): Promise<{ id: string; email: string } | null> {
+): Promise<{ id: string; email: string; sessionVersion: number } | null> {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -69,8 +69,10 @@ export async function resetPasswordWithToken(
     await client.query(`UPDATE "password_reset_tokens" SET "usedAt" = now() WHERE "userId" = $1 AND "usedAt" IS NULL`, [
       row.userId,
     ]);
-    const { rows: users } = await client.query<{ id: string; email: string }>(
-      `UPDATE "users" SET "passwordHash" = $1, "updatedAt" = now() WHERE id = $2 RETURNING id, email`,
+    // TS-155: a new password also ends every existing session.
+    const { rows: users } = await client.query<{ id: string; email: string; sessionVersion: number }>(
+      `UPDATE "users" SET "passwordHash" = $1, "sessionVersion" = "sessionVersion" + 1, "updatedAt" = now()
+       WHERE id = $2 RETURNING id, email, "sessionVersion"`,
       [newPasswordHash, row.userId]
     );
     await client.query("COMMIT");

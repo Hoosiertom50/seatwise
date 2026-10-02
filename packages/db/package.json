@@ -27,7 +27,7 @@
     "@seatwise/shared": "workspace:*",
     "bcryptjs": "^2.4.3",
     "dotenv": "^16.6.1",
-    "nodemailer": "^7.0.13",
+    "nodemailer": "^10.0.13",
     "pg": "^8.23.0",
     "resend": "^6.26.0"
   },

@@ -92,7 +92,9 @@ function decryptWithKey(stored: string | null | undefined, key: Buffer): string 
     const iv = Buffer.from(ivB64, "base64");
     const authTag = Buffer.from(authTagB64, "base64");
     const ciphertext = Buffer.from(dataB64, "base64");
-    const decipher = createDecipheriv("aes-256-gcm", key, iv);
+    // TS-149: only full 16-byte tags (what encryptText writes) are accepted.
+    if (authTag.length !== 16) throw new Error("bad tag length");
+    const decipher = createDecipheriv("aes-256-gcm", key, iv, { authTagLength: 16 });
     decipher.setAuthTag(authTag);
     const plain = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
     return plain.toString("utf8");

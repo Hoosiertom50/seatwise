@@ -117,4 +117,16 @@ export class CollaboratorsTabPage extends BasePage {
   removeButtons() {
     return this.page.getByRole("button", { name: /^Remove / });
   }
+
+  /** TS-148: the whole page, for checking what text is or isn't shown. */
+  root() {
+    return this.page.locator("main");
+  }
+
+  /** TS-148: a collaborator leaves the wedding from their own row; ends back on the dashboard. */
+  async leaveWedding(): Promise<void> {
+    await this.page.getByRole("button", { name: "Leave this wedding", exact: true }).click();
+    await this.page.getByRole("button", { name: "Yes, leave", exact: true }).click();
+    await this.page.waitForURL((url) => url.pathname === "/dashboard");
+  }
 }

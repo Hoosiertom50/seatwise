@@ -46,6 +46,12 @@ export interface ModifiedSinceApproval {
 }
 
 export class PlanVersionStatusError extends Error {}
+// TS-148: the plan version isn't on this wedding at all (as opposed to being an older version).
+export class PlanVersionNotFoundError extends Error {
+  constructor() {
+    super("Plan version not found");
+  }
+}
 export class ManualMoveError extends Error {}
 export class AttendanceError extends Error {}
 export class SwapError extends Error {}
@@ -77,10 +83,12 @@ async function checkPlanVersionRevision(
   expectedRevision: number | undefined
 ): Promise<void> {
   const { rows } = await client.query(
-    `SELECT revision FROM "plan_versions" WHERE id = $1 FOR UPDATE`,
-    [planVersionId]
+    // TS-148: scoped to the wedding, so another wedding's version is never locked or compared.
+    `SELECT revision FROM "plan_versions" WHERE id = $1 AND "weddingId" = $2 FOR UPDATE`,
+    [planVersionId, weddingId]
   );
-  const currentRevision = (rows[0]?.revision as number | undefined) ?? 0;
+  if (!rows[0]) throw new PlanVersionNotFoundError();
+  const currentRevision = rows[0].revision as number;
   if (expectedRevision !== undefined && currentRevision !== expectedRevision) {
     const fresh = await getPlanVersionDetail(planVersionId, weddingId);
     throw new PlanVersionConflictError(
@@ -314,7 +322,8 @@ async function isCurrentVersion(id: string, weddingId: string): Promise<boolean>
     `SELECT "isCurrent" FROM "plan_versions" WHERE id = $1 AND "weddingId" = $2`,
     [id, weddingId]
   );
-  return rows[0]?.isCurrent ?? false;
+  if (!rows[0]) throw new PlanVersionNotFoundError();
+  return rows[0].isCurrent;
 }
 
 // FR-6.4/FR-6.5/FR-6.6: move a plan version's review status. Approving requires a complete plan

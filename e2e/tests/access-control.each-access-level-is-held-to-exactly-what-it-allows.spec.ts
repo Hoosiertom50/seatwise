@@ -101,7 +101,9 @@ defineQualityTest(
         const editPage = await edit.context.newPage();
         const tab = new CollaboratorsTabPage(editPage);
         await tab.goto(managedWedding.id);
-        await expect(tab.person(view.email)).toBeVisible();
+        // TS-148: collaborators see each other by name; only the owner sees email addresses.
+        await expect(tab.person(view.name)).toBeVisible();
+        await expect(tab.person(view.email)).toHaveCount(0);
         await expect(tab.inviteFormHeading()).toHaveCount(0);
         await expect(tab.removeButtons()).toHaveCount(0);
 

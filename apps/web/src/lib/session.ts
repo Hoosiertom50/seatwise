@@ -16,5 +16,9 @@ export async function getAuthUser(req: NextRequest): Promise<UserRow | null> {
   const payload = await verifyToken(token);
   if (!payload) return null;
 
-  return findUserById(payload.sub);
+  const user = await findUserById(payload.sub);
+  // TS-155: a session ended by a password reset or a log out stays ended, even though its token
+  // is still correctly signed and unexpired.
+  if (!user || user.sessionVersion !== payload.sessionVersion) return null;
+  return user;
 }
