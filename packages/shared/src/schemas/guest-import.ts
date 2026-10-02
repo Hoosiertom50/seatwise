@@ -25,7 +25,8 @@ export const guestImportMappingSchema = z.record(guestImportFieldEnum, z.string(
 export type GuestImportMapping = z.infer<typeof guestImportMappingSchema>;
 
 export const guestImportRequestSchema = z.object({
-  csv: z.string().min(1, "The file appears to be empty."),
+  // TS-152: about 2 MB of text -- far more than any guest list (5,000 guests is ~500 KB).
+  csv: z.string().min(1, "The file appears to be empty.").max(2_000_000, "That file is too big — keep it under 2 MB."),
   mapping: guestImportMappingSchema,
   // TS-92: on commit, the revision of every guest the preview showed as an "update" -- so a guest
   // someone else edited between preview and confirm is refused rather than silently overwritten.
