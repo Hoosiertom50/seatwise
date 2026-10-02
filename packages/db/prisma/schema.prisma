@@ -34,6 +34,7 @@ model User {
   // TS-19 (FR-14.x): templates belong to the planner who saved them, reusable across any wedding
   // they can reach -- not scoped to the one wedding they were captured from.
   seatingTemplates SeatingTemplate[]
+  passwordResetTokens PasswordResetToken[]
 
   @@map("users")
 }
@@ -699,4 +700,19 @@ model RateLimitCounter {
   @@id([key, windowStart])
   @@index([windowStart])
   @@map("rate_limit_counters")
+}
+
+// TS-142: a "forgot password" link. Only a SHA-256 hash of the emailed token is stored, so a
+// database leak can't be turned into working reset links. Single use (usedAt), 1-hour expiry.
+model PasswordResetToken {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
+  @@map("password_reset_tokens")
 }

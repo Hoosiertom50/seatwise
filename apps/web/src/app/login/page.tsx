@@ -63,6 +63,10 @@ export default function LoginPage() {
               required
             />
           </div>
+          {/* TS-142 */}
+          <Link href="/forgot-password" className="-mt-2 self-end text-sm underline">
+            Forgot password?
+          </Link>
           {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}
           <button
             type="submit"
