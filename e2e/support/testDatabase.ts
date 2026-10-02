@@ -77,3 +77,30 @@ export async function expireInvite(inviteId: string): Promise<void> {
   );
   if (!rowCount) throw new Error(`testDatabase: no test invite ${inviteId}.`);
 }
+
+/**
+ * TS-142: plants a password-reset token for a *test* account (reserved domain only) and returns the
+ * raw token -- the same thing the emailed link carries. The app only stores a SHA-256 hash, so the
+ * test hashes it the same way. \`expired\` makes it an hour stale.
+ */
+export async function plantPasswordResetToken(email: string, { expired = false } = {}): Promise<string> {
+  const { createHash, randomBytes, randomUUID } = await import("node:crypto");
+  const token = randomBytes(32).toString("hex");
+  const { rowCount } = await testPool().query(
+    `INSERT INTO "password_reset_tokens" (id, "userId", "tokenHash", "expiresAt")
+     SELECT $1, id, $2, now() + ($3 || ' minutes')::interval FROM "users" WHERE email = $4 AND email LIKE $5`,
+    [randomUUID(), createHash("sha256").update(token).digest("hex"), expired ? "-1" : "60", email.toLowerCase(), TEST_EMAIL_PATTERN],
+  );
+  if (!rowCount) throw new Error(`testDatabase: no test account ${email}.`);
+  return token;
+}
+
+/** TS-142: how many still-usable reset links a test account has. */
+export async function usableResetTokenCount(email: string): Promise<number> {
+  const { rows } = await testPool().query<{ n: number }>(
+    `SELECT COUNT(*)::int AS n FROM "password_reset_tokens" t JOIN "users" u ON u.id = t."userId"
+     WHERE u.email = $1 AND u.email LIKE $2 AND t."usedAt" IS NULL AND t."expiresAt" > now()`,
+    [email.toLowerCase(), TEST_EMAIL_PATTERN],
+  );
+  return rows[0].n;
+}
