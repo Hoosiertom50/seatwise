@@ -147,10 +147,15 @@ export class GuestRow {
     return this.emailInput().inputValue();
   }
 
-  /** TS-118: email saves on blur -- replace the text, then Tab away. */
+  /** TS-118: email saves on blur -- replace the text, then Tab away. Waits for the save (or its
+   * refusal) to come back, so a caller never checks the saved value while it's still in flight. */
   async editEmail(value: string): Promise<void> {
     await this.emailInput().fill(value);
-    await this.emailInput().press("Tab");
+    const page = this.root.page();
+    await Promise.all([
+      page.waitForResponse((r) => r.request().method() === "PATCH" && /\/api\/v1\/weddings\/[^/]+\/guests\/[^/]+$/.test(new URL(r.url()).pathname)),
+      this.emailInput().press("Tab"),
+    ]);
   }
 
   async side(): Promise<string> {
