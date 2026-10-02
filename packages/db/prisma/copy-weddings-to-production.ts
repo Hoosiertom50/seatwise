@@ -8,7 +8,8 @@
 //   * Refuses if either wedding already exists on the target, or if the target account doesn't.
 //   * Writes everything in ONE transaction: a failure part-way leaves the target untouched.
 //   * Guest notes are encrypted with different keys locally and on the live site, so they're
-//     decrypted with the local key and re-encrypted with the target's. RSVP and vendor share
+//     decrypted with the local key -- the web app's, from apps/web/.env, or SOURCE_ENCRYPTION_KEY --
+//     and re-encrypted with the target's. If any note can't be read, nothing is copied (TS-146). RSVP and vendor share
 //     links are cleared (made fresh on the target when needed). Comments by anyone other than
 //     the owner become "Former member" -- those accounts don't exist on the target.
 //   * The target's connection string and ENCRYPTION_KEY are read from the environment, never
@@ -21,15 +22,34 @@
 
 import "./load-env";
 
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { Pool } from "pg";
 import { pool as sourcePool } from "../src/index";
-import { devEncryptionSecret } from "../src/crypto";
+import { decryptTextWithSecret, devEncryptionSecret } from "../src/crypto";
 import { WEDDING_COPY_TABLES, transformRowForCopy } from "../src/wedding-copy";
 
 const TARGET_WEDDING_IDS = [
   "5f384ca5-d27c-42d6-b971-4f1d4c0f0453", // "Jim and Melissa"
   "d95acaaa-1974-40c8-bdbf-f91b0c2794f6", // "Chris and Jill"
 ];
+
+// TS-146: the key the *web app* encrypted local notes with -- apps/web/.env, which can differ from
+// packages/db/.env (on Tom's machine it did, and the first copy carried 152 unreadable notes).
+// SOURCE_ENCRYPTION_KEY overrides it.
+function sourceEncryptionSecret(): string {
+  if (process.env.SOURCE_ENCRYPTION_KEY) return process.env.SOURCE_ENCRYPTION_KEY;
+  try {
+    const line = readFileSync(path.join(__dirname, "..", "..", "..", "apps", "web", ".env"), "utf8")
+      .split("\n")
+      .find((l) => l.startsWith("ENCRYPTION_KEY="));
+    const value = line?.slice("ENCRYPTION_KEY=".length).trim().replace(/^"|"$/g, "");
+    if (value) return value;
+  } catch {
+    // no apps/web/.env -- fall through
+  }
+  return process.env.ENCRYPTION_KEY || devEncryptionSecret();
+}
 
 function arg(name: string): string | undefined {
   const i = process.argv.indexOf(name);
@@ -45,7 +65,7 @@ async function main() {
   if (!targetUrl) throw new Error("TARGET_DATABASE_URL is not set.");
   if (!targetSecret || targetSecret.length < 32) throw new Error("TARGET_ENCRYPTION_KEY is missing or shorter than 32 characters.");
   if (targetUrl === process.env.DATABASE_URL) throw new Error("The target is the same database as the source -- refusing.");
-  const sourceSecret = process.env.ENCRYPTION_KEY || devEncryptionSecret();
+  const sourceSecret = sourceEncryptionSecret();
 
   const target = new Pool({ connectionString: targetUrl, max: 1 });
   try {
@@ -68,6 +88,24 @@ async function main() {
     if (!owners[0]) throw new Error(`No account for ${ownerEmail} on the target. Sign up there first.`);
     const { rows: clash } = await target.query(`SELECT id FROM "weddings" WHERE id = ANY($1::text[])`, [TARGET_WEDDING_IDS]);
     if (clash.length > 0) throw new Error("These weddings are already on the target -- nothing copied.");
+
+    // --- TS-146: every note must be readable with the source key, or nothing is copied --
+    // re-encrypting "[unable to decrypt]" would silently replace real notes with that text.
+    const { rows: noted } = await sourcePool.query<{ notes: string | null; rsvpNotes: string | null }>(
+      `SELECT notes, "rsvpNotes" FROM "guests" WHERE "weddingId" = ANY($1::text[]) AND (notes IS NOT NULL OR "rsvpNotes" IS NOT NULL)`,
+      [TARGET_WEDDING_IDS]
+    );
+    const unreadable = noted.filter(
+      (r) =>
+        decryptTextWithSecret(r.notes, sourceSecret) === "[unable to decrypt]" ||
+        decryptTextWithSecret(r.rsvpNotes, sourceSecret) === "[unable to decrypt]"
+    ).length;
+    if (unreadable > 0) {
+      throw new Error(
+        `${unreadable} guest note(s) can't be read with the local key -- set SOURCE_ENCRYPTION_KEY to the key the local app used.`
+      );
+    }
+    console.log(`Guest notes readable with the local key: ${noted.length}/${noted.length}`);
 
     // --- Read and transform.
     const options = { sourceOwnerId, targetOwnerId: owners[0].id, sourceSecret, targetSecret };
