@@ -85,12 +85,32 @@ defineQualityTest(
           const email = `nobody-${i}-${uniqueToken(testInfo.workerIndex)}${TEST_ACCOUNT_EMAIL_DOMAIN}`;
           expect((await flooding.post("/api/v1/auth/login", { data: { email, password: "guess" } })).status(), `failure ${i}`).toBe(401);
         }
-        const probe = { email: `nobody-probe${TEST_ACCOUNT_EMAIL_DOMAIN}`, password: "guess" };
+        // A fresh email each run: a fixed one collects failed tries across runs and browsers.
+        const probe = { email: `nobody-probe-${uniqueToken(testInfo.workerIndex)}${TEST_ACCOUNT_EMAIL_DOMAIN}`, password: "guess" };
         expect((await flooding.post("/api/v1/auth/login", { data: probe })).status()).toBe(429);
         expect((await someoneElse.post("/api/v1/auth/login", { data: probe })).status()).toBe(401);
       } finally {
         await flooding.dispose();
         await someoneElse.dispose();
+      }
+    });
+
+    await test.step("Tries refused because the address is blocked don't use up an account's tries (TS-157)", async () => {
+      const target = await newAccount();
+      const blocked = await client(limitedAddress);
+      const fresh = await client(uniqueAddress());
+      try {
+        for (let i = 1; i <= FAILURES_PER_ACCOUNT + 5; i++) {
+          expect((await blocked.post("/api/v1/auth/login", { data: { email: target.email, password: "wrong-password" } })).status(), `blocked try ${i}`).toBe(429);
+        }
+        // All of the account's tries are still there for a real attempt from elsewhere.
+        for (let i = 1; i <= FAILURES_PER_ACCOUNT - 1; i++) {
+          expect((await fresh.post("/api/v1/auth/login", { data: { email: target.email, password: "wrong-password" } })).status(), `fresh try ${i}`).toBe(401);
+        }
+        expect((await fresh.post("/api/v1/auth/login", { data: target })).status()).toBe(200);
+      } finally {
+        await blocked.dispose();
+        await fresh.dispose();
       }
     });
 
