@@ -13,16 +13,16 @@ import { LoginPage } from "../pages/LoginPage.js";
 
 const SUPPORT_EMAIL = "seatwise.notifications+support@gmail.com";
 const MAILTO = `mailto:${SUPPORT_EMAIL}?subject=Seatwise%20support`;
-const PROMISE = "A real person replies within 1 business day.";
+const PROMISE = "A real person replies within 5 business days.";
 
 defineQualityTest(
   {
     id: "cross-cutting.contact-support-is-on-every-page.footer-and-account-help",
     title: "every page offers a Contact support email link with the reply-time promise, signed in or not, and the Account page has a Get help section",
     objective:
-      "Confirms that the sign-in page (signed out), the dashboard and the Account page each show a footer with a Contact support link to the support address and the 1-business-day promise, and that the Account page's Get help section links to the same address.",
+      "Confirms that the sign-in page (signed out), the dashboard and the Account page each show a footer with a Contact support link to the support address and the 5-business-day promise, and that the Account page's Get help section links to the same address.",
     expectedOutcome:
-      "Each footer's Contact support link points at mailto:seatwise.notifications+support@gmail.com?subject=Seatwise%20support and the footer shows the address and 'A real person replies within 1 business day.' The Account page's Email support link points at the same mailto.",
+      "Each footer's Contact support link points at mailto:seatwise.notifications+support@gmail.com?subject=Seatwise%20support and the footer shows the address and 'A real person replies within 5 business days.' The Account page's Email support link points at the same mailto.",
     requirementIds: ["REQ-NON-FUNCTIONAL"],
     tags: ["@mutating", "@feature:account", "@risk:normal", "@suite:regression"],
   },
