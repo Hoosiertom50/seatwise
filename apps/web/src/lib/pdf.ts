@@ -1,4 +1,5 @@
 import { PDFDocument, StandardFonts, rgb, PDFFont, PDFPage } from "pdf-lib";
+import { toPdfText } from "./pdf-text";
 
 // TS-12 (Export & Print, FR-9.1/9.2/9.3): three PDF exports built from the same
 // (guestName, tableLabel) data every plan-version endpoint already returns. No layout/rendering
@@ -12,6 +13,10 @@ const MARGIN = 54; // 0.75in
 export interface ExportGuestRow {
   guestName: string;
   tableLabel: string;
+}
+
+function safeRow(row: ExportGuestRow): ExportGuestRow {
+  return { guestName: toPdfText(row.guestName), tableLabel: toPdfText(row.tableLabel) };
 }
 
 interface Fonts {
@@ -49,6 +54,9 @@ export async function buildSeatingChartPdf(
   weddingName: string,
   tables: { label: string; guestNames: string[] }[]
 ): Promise<Uint8Array> {
+  // TS-152: only text the PDF font can draw (see pdf-text.ts).
+  weddingName = toPdfText(weddingName);
+  tables = tables.map((t) => ({ label: toPdfText(t.label), guestNames: t.guestNames.map(toPdfText) }));
   const { doc, fonts } = await newDoc();
   let page = doc.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
   drawHeader(page, fonts, "Seating Chart", weddingName);
@@ -96,6 +104,8 @@ export async function buildLookupListPdf(
   weddingName: string,
   rows: ExportGuestRow[]
 ): Promise<Uint8Array> {
+  weddingName = toPdfText(weddingName);
+  rows = rows.map(safeRow);
   const { doc, fonts } = await newDoc();
   let page = doc.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
   drawHeader(page, fonts, "Guest Lookup List", weddingName);
@@ -125,6 +135,7 @@ export async function buildLookupListPdf(
 // FR-9.3: one print-ready place/escort card per guest — name and table, cut lines, several to a
 // page. Sized generously (roughly 3.6in x 2.3in) for readability over cramming the max per page.
 export async function buildPlaceCardsPdf(rows: ExportGuestRow[]): Promise<Uint8Array> {
+  rows = rows.map(safeRow);
   const { doc, fonts } = await newDoc();
   const cols = 2;
   const rowsPerPage = 4;
