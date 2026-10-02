@@ -5,6 +5,7 @@ export * from "./queries/guests";
 export * from "./queries/guest-import";
 export * from "./queries/relationships";
 export * from "./queries/tables";
+export * from "./queries/seat-checks";
 export * from "./queries/plan-versions";
 export * from "./queries/collaborators";
 export * from "./queries/invites";

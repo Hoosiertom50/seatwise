@@ -1,7 +1,7 @@
 import { randomUUID } from "crypto";
 import { pool } from "../pool";
 import { compareTableLabels } from "@seatwise/shared";
-import { checkGuestHardRuleViolation } from "./plan-versions";
+import { resyncSeatsAtTable, refreshPlanCompleteness, currentPlanVersionId, type TableSeatingFlagReason } from "./seat-checks";
 
 export interface SeatingTableRow {
   id: string;
@@ -453,110 +453,21 @@ export async function setRequiredGuestsForTable(
   return updated;
 }
 
-export type TableSeatingFlagReason = "accessible" | "capacity" | "restricted" | "rule";
-
 // FR-4.6 / TS-120: after a table edit that can make its current seating invalid -- accessible
-// switched off, seats lowered, or a restricted table's required list changed -- re-check every
-// guest seated at it in the Current Plan Version and set Needs Reassignment exactly where a hard
-// rule is now broken (checkGuestHardRuleViolation: accessible, restricted, must-not-sit-together),
-// or where the table no longer has room for them. Nobody is ever unseated; the plan just reads as
-// incomplete, with those guests flagged, until the planner moves them. A flag clears again when
-// the edit is undone (seats raised, accessible back on).
-//
-// Who "no longer fits" when seats are lowered: locked guests keep their place first, then guests
-// in the order they were seated there; whoever pushes the headcount past the new capacity is
-// flagged. Keeps isComplete in sync in the same transaction.
+// switched off, seats lowered, or a restricted table's required list changed -- re-check everyone
+// seated at it in the Current Plan Version (see resyncSeatsAtTable in seat-checks.ts for the rules)
+// and keep isComplete in sync, all in one transaction. Nobody is ever unseated.
 export async function resyncTableSeating(
   weddingId: string,
   tableId: string
 ): Promise<{ newlyFlagged: { name: string; reason: TableSeatingFlagReason }[] }> {
-  const { rows: planRows } = await pool.query(
-    `SELECT id FROM "plan_versions" WHERE "weddingId" = $1 AND "isCurrent" LIMIT 1`,
-    [weddingId]
-  );
-  const planVersionId: string | undefined = planRows[0]?.id;
+  const planVersionId = await currentPlanVersionId(pool, weddingId);
   if (!planVersionId) return { newlyFlagged: [] };
-
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    const { rows: tableRows } = await client.query<{ capacity: number; isRestricted: boolean; isAccessible: boolean }>(
-      `SELECT capacity, "isRestricted", "isAccessible" FROM "seating_tables" WHERE id = $1 AND "weddingId" = $2 FOR UPDATE`,
-      [tableId, weddingId]
-    );
-    if (!tableRows[0]) {
-      await client.query("ROLLBACK");
-      return { newlyFlagged: [] };
-    }
-    const { capacity, isRestricted, isAccessible } = tableRows[0];
-    const { rows: requiredRows } = await client.query<{ guestId: string }>(
-      `SELECT "guestId" FROM "restricted_table_guests" WHERE "tableId" = $1`,
-      [tableId]
-    );
-    const required = new Set(requiredRows.map((r) => r.guestId));
-
-    const { rows: seated } = await client.query<{
-      id: string;
-      guestId: string;
-      name: string;
-      headcount: number;
-      requiresAccessibleTable: boolean;
-      needsReassignment: boolean;
-    }>(
-      `SELECT sa.id, sa."guestId", (g."firstName" || ' ' || g."lastName") AS name, g.headcount,
-              g."requiresAccessibleTable", sa."needsReassignment"
-       FROM "seat_assignments" sa JOIN "guests" g ON g.id = sa."guestId"
-       WHERE sa."planVersionId" = $1 AND sa."seatingTableId" = $2
-       ORDER BY g."isLocked" DESC, sa."createdAt", sa.id
-       FOR UPDATE OF sa`,
-      [planVersionId, tableId]
-    );
-
-    const newlyFlagged: { name: string; reason: TableSeatingFlagReason }[] = [];
-    let seatsUsed = 0;
-    for (const a of seated) {
-      const ruleBroken = await checkGuestHardRuleViolation(
-        client,
-        weddingId,
-        planVersionId,
-        a.guestId,
-        tableId,
-        a.requiresAccessibleTable
-      );
-      // A guest already flagged for a broken rule doesn't take up one of the table's seats.
-      const fits = ruleBroken ? true : seatsUsed + a.headcount <= capacity;
-      if (!ruleBroken && fits) seatsUsed += a.headcount;
-      const flag = ruleBroken || !fits;
-      if (flag !== a.needsReassignment) {
-        await client.query(
-          `UPDATE "seat_assignments" SET "needsReassignment" = $1, "updatedAt" = now() WHERE id = $2`,
-          [flag, a.id]
-        );
-        if (flag) {
-          const reason: TableSeatingFlagReason = !fits
-            ? "capacity"
-            : a.requiresAccessibleTable && !isAccessible
-              ? "accessible"
-              : isRestricted && !required.has(a.guestId)
-                ? "restricted"
-                : "rule";
-          newlyFlagged.push({ name: a.name, reason });
-        }
-      }
-    }
-
-    const { rows: countRows } = await client.query(
-      `SELECT
-         (SELECT COUNT(*)::int FROM "guests" g WHERE g."weddingId" = $1 AND g."dayOfAttendance" = 'ATTENDING'
-            AND NOT EXISTS (SELECT 1 FROM "seat_assignments" sa WHERE sa."planVersionId" = $2 AND sa."guestId" = g.id)
-         ) AS "unassignedCount",
-         (SELECT COUNT(*)::int FROM "seat_assignments" WHERE "planVersionId" = $2 AND "needsReassignment" = true)
-           AS "needsReassignmentCount"`,
-      [weddingId, planVersionId]
-    );
-    const isComplete = countRows[0].unassignedCount === 0 && countRows[0].needsReassignmentCount === 0;
-    await client.query(`UPDATE "plan_versions" SET "isComplete" = $1 WHERE id = $2`, [isComplete, planVersionId]);
-
+    const { newlyFlagged, changed } = await resyncSeatsAtTable(client, weddingId, planVersionId, tableId);
+    await refreshPlanCompleteness(client, weddingId, planVersionId, { bumpRevision: changed });
     await client.query("COMMIT");
     return { newlyFlagged };
   } catch (err) {

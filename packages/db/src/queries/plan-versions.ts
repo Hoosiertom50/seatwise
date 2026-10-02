@@ -1,6 +1,7 @@
 import { randomUUID } from "crypto";
 import { pool } from "../pool";
 import { notifyWeddingCollaborators } from "./notifications";
+import { resyncSeatsAtTable, refreshPlanCompleteness } from "./seat-checks";
 import { RULE_WEIGHT_CONFIG, RULE_WEIGHT_CONFIG_VERSION, compareTableLabels } from "@seatwise/shared";
 
 // TS-3 (FR-0.2 AC2): a soft-rule warning must name "the applied weighting-configuration version"
@@ -156,6 +157,9 @@ export async function createPlanVersionWithAssignments(
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
+    // TS-150: one new version at a time per wedding -- two Generate (or Restore) clicks at once
+    // would otherwise both take the same next version number and the second would fail.
+    await client.query(`SELECT id FROM "weddings" WHERE id = $1 FOR UPDATE`, [weddingId]);
 
     const { rows: versionRows } = await client.query(
       `SELECT COALESCE(MAX("versionNumber"), 0) + 1 AS "next" FROM "plan_versions" WHERE "weddingId" = $1`,
@@ -1258,9 +1262,12 @@ export async function swapGuestAssignments(
       );
     }
 
-    await client.query(`UPDATE "plan_versions" SET revision = revision + 1 WHERE id = $1`, [
-      planVersionId,
-    ]);
+    // TS-150: re-check both tables as they now stand and recompute completeness -- a swap that
+    // seats the last flagged guests makes the plan complete (so it can be approved), and anything
+    // the swap breaks is flagged rather than hidden.
+    await resyncSeatsAtTable(client, weddingId, planVersionId, tableAId);
+    await resyncSeatsAtTable(client, weddingId, planVersionId, tableBId);
+    await refreshPlanCompleteness(client, weddingId, planVersionId, { bumpRevision: true });
 
     const description =
       `Swapped ${unitA.map((g) => g.name).join(", ")} (was at "${tableA.label}") with ` +
@@ -1328,10 +1335,18 @@ async function computeRestorePlacement(sourceVersionId: string, weddingId: strin
   const guestsById = new Map(guests.map((g) => [g.id, g]));
 
   const { rows: tables } = await pool.query(
-    `SELECT id, label, capacity, "isAccessible" FROM "seating_tables" WHERE "weddingId" = $1`,
+    `SELECT id, label, capacity, "isAccessible", "isRestricted" FROM "seating_tables" WHERE "weddingId" = $1`,
     [weddingId]
   );
   const tablesById = new Map(tables.map((t) => [t.id, t]));
+  // TS-150: a Restricted table takes only the guests on its required list, and a guest on a list
+  // belongs at that table and no other.
+  const { rows: requiredRows } = await pool.query(
+    `SELECT rtg."tableId", rtg."guestId" FROM "restricted_table_guests" rtg
+     JOIN "seating_tables" st ON st.id = rtg."tableId" WHERE st."weddingId" = $1`,
+    [weddingId]
+  );
+  const requiredTableByGuest = new Map(requiredRows.map((r) => [r.guestId as string, r.tableId as string]));
 
   const { rows: rels } = await pool.query(
     `SELECT "guestAId", "guestBId", type FROM "guest_relationships" WHERE "weddingId" = $1`,
@@ -1368,6 +1383,23 @@ async function computeRestorePlacement(sourceVersionId: string, weddingId: strin
         guestId: guest.id,
         guestName: guest.name,
         reason: "their table no longer exists",
+      });
+      continue;
+    }
+    if (table.isRestricted && requiredTableByGuest.get(guest.id) !== table.id) {
+      droppedGuests.push({
+        guestId: guest.id,
+        guestName: guest.name,
+        reason: `"${table.label}" is now a Restricted table and they aren't on its list`,
+      });
+      continue;
+    }
+    const requiredTableId = requiredTableByGuest.get(guest.id);
+    if (requiredTableId && requiredTableId !== table.id) {
+      droppedGuests.push({
+        guestId: guest.id,
+        guestName: guest.name,
+        reason: `they're now required at "${tablesById.get(requiredTableId)?.label ?? "another table"}"`,
       });
       continue;
     }
@@ -1480,6 +1512,9 @@ export async function restorePlanVersion(
   let newVersionId: string;
   try {
     await client.query("BEGIN");
+    // TS-150: one new version at a time per wedding -- two Generate (or Restore) clicks at once
+    // would otherwise both take the same next version number and the second would fail.
+    await client.query(`SELECT id FROM "weddings" WHERE id = $1 FOR UPDATE`, [weddingId]);
 
     const { rows: versionRows } = await client.query(
       `SELECT COALESCE(MAX("versionNumber"), 0) + 1 AS "next" FROM "plan_versions" WHERE "weddingId" = $1`,
@@ -1506,6 +1541,17 @@ export async function restorePlanVersion(
         [randomUUID(), newVersionId, a.guestId, a.tableId]
       );
     }
+
+    // TS-150: check the restored seating against today's rules table by table (e.g. a must-sit
+    // pair the old version kept apart), so the new version's completeness tells the truth.
+    const { rows: restoredTables } = await client.query(
+      `SELECT DISTINCT "seatingTableId" AS "tableId" FROM "seat_assignments" WHERE "planVersionId" = $1 ORDER BY 1`,
+      [newVersionId]
+    );
+    for (const { tableId } of restoredTables as { tableId: string }[]) {
+      await resyncSeatsAtTable(client, weddingId, newVersionId, tableId);
+    }
+    await refreshPlanCompleteness(client, weddingId, newVersionId, { bumpRevision: false });
 
     const description =
       `Restored from version ${result.sourceVersionNumber}` +
@@ -1681,137 +1727,4 @@ export async function comparePlanVersions(
     guests,
     summary: { movedCount, addedCount, removedCount, unchangedCount },
   };
-}
-
-// FR-2.9/FR-6.1 (generalizing TS-7's FR-4.6 accessible-table-only trigger): a minimal
-// "Queryable" so the same hard-rule check can run either against the shared pool (a standalone
-// guest edit, its own transaction) or against an already-open transaction's client (a bulk
-// import commit, so the check is part of the same all-or-nothing write rather than a second,
-// independently-committed transaction).
-interface Queryable {
-  query: (text: string, params?: unknown[]) => Promise<{ rows: Record<string, unknown>[] }>;
-}
-
-// Re-checks one already-seated guest's current table against every hard rule a guest-level edit
-// can actually affect: requires-accessible-table (FR-3.x), a Restricted table's required-guest
-// list (FR-3.7a), and must-not-sit-together (FR-3.1) against whoever else is currently at that
-// table. Capacity isn't included -- none of FR-2.9's named trigger fields (attendance status,
-// side, tier, household, requires-accessible-table) change how much room the guest's own unit
-// takes up. Side-Mixing and a table's singleSideOnly override are explicitly soft-only
-// preferences (see seating-engine.ts), never hard rules, so a side change alone can never trip
-// this check today -- re-running it for every named trigger field is still correct (and
-// future-proofs against a hard rule ever keying off side/tier/household), it just may honestly
-// find nothing wrong for those fields under today's rule set.
-export async function checkGuestHardRuleViolation(
-  q: Queryable,
-  weddingId: string,
-  planVersionId: string,
-  guestId: string,
-  tableId: string,
-  requiresAccessibleTable: boolean
-): Promise<boolean> {
-  const { rows: tableRows } = await q.query(
-    `SELECT "isAccessible", "isRestricted" FROM "seating_tables" WHERE id = $1`,
-    [tableId]
-  );
-  const table = tableRows[0] as { isAccessible: boolean; isRestricted: boolean } | undefined;
-  if (!table) return false;
-
-  if (requiresAccessibleTable && !table.isAccessible) return true;
-
-  if (table.isRestricted) {
-    const { rows: reqRows } = await q.query(
-      `SELECT 1 FROM "restricted_table_guests" WHERE "tableId" = $1 AND "guestId" = $2`,
-      [tableId, guestId]
-    );
-    if (reqRows.length === 0) return true;
-  }
-
-  const { rows: conflictRows } = await q.query(
-    `SELECT 1
-     FROM "guest_relationships" gr
-     JOIN "seat_assignments" sa2
-       ON sa2."planVersionId" = $1 AND sa2."seatingTableId" = $2 AND sa2."guestId" <> $3
-       AND ((gr."guestAId" = $3 AND gr."guestBId" = sa2."guestId")
-         OR (gr."guestBId" = $3 AND gr."guestAId" = sa2."guestId"))
-     WHERE gr."weddingId" = $4 AND gr.type = 'MUST_NOT_SIT_TOGETHER'
-     LIMIT 1`,
-    [planVersionId, tableId, guestId, weddingId]
-  );
-  return conflictRows.length > 0;
-}
-
-// FR-2.9: called after a guest edit changes side, tier, household (partyName), or
-// requires-accessible-table -- re-checks that guest's *current* seat assignment (if they have
-// one in the Current Plan Version) against hard rules and flags/clears Needs Reassignment
-// accordingly, keeping isComplete in sync the same way TS-7's table-side trigger does. A guest
-// who isn't currently seated (unassigned, or attendance already NOT_ATTENDING) has nothing to
-// re-check and this is a no-op returning null.
-export async function revalidateGuestAssignment(
-  weddingId: string,
-  guestId: string
-): Promise<{ guestName: string; flagged: boolean } | null> {
-  const { rows: planRows } = await pool.query(
-    `SELECT id FROM "plan_versions" WHERE "weddingId" = $1 AND "isCurrent" LIMIT 1`,
-    [weddingId]
-  );
-  const planVersionId: string | undefined = planRows[0]?.id;
-  if (!planVersionId) return null;
-
-  const { rows: guestRows } = await pool.query(
-    `SELECT ("firstName" || ' ' || "lastName") AS name, "requiresAccessibleTable"
-     FROM "guests" WHERE id = $1 AND "weddingId" = $2`,
-    [guestId, weddingId]
-  );
-  const guest = guestRows[0] as { name: string; requiresAccessibleTable: boolean } | undefined;
-  if (!guest) return null;
-
-  const { rows: assignRows } = await pool.query(
-    `SELECT id, "seatingTableId" AS "tableId" FROM "seat_assignments"
-     WHERE "planVersionId" = $1 AND "guestId" = $2`,
-    [planVersionId, guestId]
-  );
-  const assignment = assignRows[0] as { id: string; tableId: string } | undefined;
-  if (!assignment) return null;
-
-  const violated = await checkGuestHardRuleViolation(
-    pool,
-    weddingId,
-    planVersionId,
-    guestId,
-    assignment.tableId,
-    guest.requiresAccessibleTable
-  );
-
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
-    await client.query(
-      `UPDATE "seat_assignments" SET "needsReassignment" = $1, "updatedAt" = now() WHERE id = $2`,
-      [violated, assignment.id]
-    );
-    const { rows: countRows } = await client.query(
-      `SELECT
-         (SELECT COUNT(*)::int FROM "guests" g WHERE g."weddingId" = $1 AND g."dayOfAttendance" = 'ATTENDING'
-            AND NOT EXISTS (SELECT 1 FROM "seat_assignments" sa WHERE sa."planVersionId" = $2 AND sa."guestId" = g.id)
-         ) AS "unassignedCount",
-         (SELECT COUNT(*)::int FROM "seat_assignments" WHERE "planVersionId" = $2 AND "needsReassignment" = true)
-           AS "needsReassignmentCount"`,
-      [weddingId, planVersionId]
-    );
-    const isComplete =
-      countRows[0].unassignedCount === 0 && countRows[0].needsReassignmentCount === 0;
-    await client.query(`UPDATE "plan_versions" SET "isComplete" = $1 WHERE id = $2`, [
-      isComplete,
-      planVersionId,
-    ]);
-    await client.query("COMMIT");
-  } catch (err) {
-    await client.query("ROLLBACK");
-    throw err;
-  } finally {
-    client.release();
-  }
-
-  return { guestName: guest.name, flagged: violated };
 }
