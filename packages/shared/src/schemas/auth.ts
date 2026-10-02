@@ -7,6 +7,13 @@ export const signupSchema = z.object({
 });
 export type SignupInput = z.infer<typeof signupSchema>;
 
+// TS-142
+export const forgotPasswordSchema = z.object({ email: z.string().trim().email("Enter the email you signed up with") });
+export const resetPasswordSchema = z.object({
+  token: z.string().regex(/^[0-9a-f]{64}$/, "This reset link is no longer valid — request a new one."),
+  password: z.string().min(8, "Password must be at least 8 characters"),
+});
+
 export const loginSchema = z.object({
   email: z.string().email("Enter a valid email address"),
   password: z.string().min(1, "Password is required"),
