@@ -89,7 +89,11 @@ export default function InviteAcceptPage() {
               on Seatwise as {preview.role === "COUPLE" ? "a Couple member" : "a collaborator"}, with{" "}
               {preview.permissionLevel?.toLowerCase()} access.
             </p>
-            <p className="mb-6 text-xs text-neutral-400 dark:text-neutral-500">Invited: {preview.invitedEmail}</p>
+            {preview.invitedEmail ? (
+              <p className="mb-6 text-xs text-neutral-400 dark:text-neutral-500">Invited: {preview.invitedEmail}</p>
+            ) : (
+              <div className="mb-6" />
+            )}
 
             {signedIn ? (
               <>
@@ -105,8 +109,8 @@ export default function InviteAcceptPage() {
             ) : (
               <div className="flex flex-col gap-3">
                 <p className="text-sm text-neutral-500 dark:text-neutral-400">
-                  Sign in or create an account with {preview.invitedEmail} to accept. You&apos;ll come
-                  straight back here afterwards.
+                  Sign in or create an account with the email address this invite was sent to, to accept
+                  it. You&apos;ll come straight back here afterwards.
                 </p>
                 <Link
                   href={loginUrlReturningTo(`/invites/${token}`)}

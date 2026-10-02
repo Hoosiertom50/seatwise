@@ -285,6 +285,7 @@ export default function WeddingDetailPage() {
         <CollaboratorsTab
           weddingId={weddingId}
           isOwner={isOwner}
+          currentUserId={currentUserId}
           wedding={wedding}
           setWedding={setWedding}
         />

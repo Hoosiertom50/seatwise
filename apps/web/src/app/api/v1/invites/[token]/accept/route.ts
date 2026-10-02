@@ -35,6 +35,12 @@ export async function POST(req: NextRequest, { params }: Params) {
   }
 
   const result = await acceptInvite(token, user.id);
+  if ("error" in result && result.error === "ALREADY_COLLABORATOR") {
+    return NextResponse.json(
+      { error: "You already have access to this wedding.", status: "ALREADY_COLLABORATOR" },
+      { status: 409 }
+    );
+  }
   if ("error" in result) {
     // A race with someone else resolving this invite between the checks above and here -- rare,
     // but handled rather than assumed away.
