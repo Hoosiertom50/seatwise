@@ -184,6 +184,51 @@ export class BudgetTabPage extends BasePage {
     );
   }
 
+  // --- TS-97: suggestions from the planner's other weddings ---
+
+  /** Types into the vendor name box without submitting, so suggestions can show. */
+  async typeVendorName(text: string): Promise<void> {
+    await this.vendorNameInput().fill(text);
+  }
+
+  /** Every "Use … from your other weddings" suggestion button currently shown. */
+  vendorSuggestions() {
+    return this.page.getByRole("button", { name: / from your other weddings$/ });
+  }
+  vendorSuggestion(name: string) {
+    return this.page.getByRole("button", { name: `Use ${name} from your other weddings`, exact: true });
+  }
+  suggestionFilledNotice() {
+    return this.page.getByRole("status").filter({ hasText: "from your other weddings" });
+  }
+
+  /** What the Add-a-vendor form's fields currently hold (category as its visible label). */
+  async addFormValues(): Promise<Record<string, string>> {
+    return {
+      name: await this.vendorNameInput().inputValue(),
+      category: ((await this.categorySelect().locator("option:checked").textContent()) ?? "").trim(),
+      contactName: await this.contactNameInput().inputValue(),
+      contactEmail: await this.contactEmailInput().inputValue(),
+      contactPhone: await this.contactPhoneInput().inputValue(),
+      cost: await this.costInput().inputValue(),
+      contractNotes: await this.notesInput().inputValue(),
+      arrivalTime: await this.page.locator("#vendor-arrival-time").inputValue(),
+    };
+  }
+
+  /** Submits the form as it stands (e.g. after picking a suggestion), waiting like addVendor. */
+  async submitAddVendor(): Promise<void> {
+    await Promise.all([
+      this.page.waitForResponse(
+        (res) => res.request().method() === "POST" && /\/vendors$/.test(new URL(res.url()).pathname),
+      ),
+      this.addVendorButton().click(),
+    ]);
+    await this.page.waitForFunction(
+      () => (document.querySelector<HTMLInputElement>("#vendor-name")?.value ?? "") === "",
+    );
+  }
+
   // --- Vendor list ---
 
   // TS-114: a vendor's private read-only link.

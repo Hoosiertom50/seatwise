@@ -332,3 +332,35 @@ export async function getVendorViewByToken(token: string): Promise<VendorViewRow
     timeline,
   };
 }
+
+export interface VendorSuggestionRow {
+  name: string;
+  category: string;
+  categoryOther: string | null;
+  contactName: string | null;
+  contactEmail: string | null;
+  contactPhone: string | null;
+}
+
+// TS-97: vendors from the planner's other weddings, offered as suggestions in "Add a vendor"
+// (Tom's decisions, 2026-10-01). Only weddings the planner OWNS -- never ones they only
+// collaborate on, so other planners' contacts aren't exposed. One suggestion per vendor name
+// (case- and space-insensitive), taken from the most recently updated copy. Cost, contract notes
+// and arrival time are per wedding, so they're never read here.
+export async function listVendorSuggestionsForOwner(
+  ownerId: string,
+  excludeWeddingId: string | null
+): Promise<VendorSuggestionRow[]> {
+  const { rows } = await pool.query(
+    `SELECT name, category, "categoryOther", "contactName", "contactEmail", "contactPhone" FROM (
+       SELECT DISTINCT ON (lower(btrim(v.name)))
+              btrim(v.name) AS name, v.category, v."categoryOther", v."contactName", v."contactEmail", v."contactPhone"
+       FROM "vendors" v JOIN "weddings" w ON w.id = v."weddingId"
+       WHERE w."ownerId" = $1 AND ($2::text IS NULL OR v."weddingId" <> $2)
+       ORDER BY lower(btrim(v.name)), v."updatedAt" DESC
+     ) s
+     ORDER BY lower(name)`,
+    [ownerId, excludeWeddingId]
+  );
+  return rows;
+}

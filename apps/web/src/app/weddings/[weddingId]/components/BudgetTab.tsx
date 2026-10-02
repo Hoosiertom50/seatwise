@@ -4,7 +4,14 @@ import { useEffect, useState } from "react";
 import { ConfirmDeleteButton } from "@/components/ConfirmDeleteButton";
 import { api, ApiError } from "@/lib/api-client";
 import { formatClockTime } from "@/lib/display-format";
-import type { VendorDTO, VendorCategory, BudgetSummaryDTO, VendorShareLinkDTO } from "@seatwise/shared";
+import { matchVendorSuggestions } from "@/lib/vendor-suggestions";
+import type {
+  VendorDTO,
+  VendorCategory,
+  BudgetSummaryDTO,
+  VendorShareLinkDTO,
+  VendorSuggestionDTO,
+} from "@seatwise/shared";
 
 // TS-20 (FR-15.1/FR-15.2): a per-wedding vendor list plus the wedding's overall budget figure and
 // a running total/remaining against it. Money is always handled here in whole dollars for
@@ -69,6 +76,9 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
   const [contractNotes, setContractNotes] = useState("");
   const [arrivalTime, setArrivalTime] = useState("");
   const [adding, setAdding] = useState(false);
+  // TS-97: vendors from the planner's other weddings, suggested as they type a name.
+  const [suggestions, setSuggestions] = useState<VendorSuggestionDTO[]>([]);
+  const [pickedSuggestion, setPickedSuggestion] = useState<string | null>(null);
   // TS-114: per-vendor feedback after a share-link action ("Link copied", or the bare link when
   // the clipboard isn't available), keyed by vendor id.
   const [shareResult, setShareResult] = useState<Record<string, string>>({});
@@ -95,6 +105,35 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
       }
     })();
   }, [weddingId]);
+
+  useEffect(() => {
+    if (!canEdit) return;
+    // Suggestions are a convenience: if they can't load, the form works exactly as before.
+    api
+      .get<{ suggestions: VendorSuggestionDTO[] }>(
+        `/api/v1/vendor-suggestions?excludeWeddingId=${encodeURIComponent(weddingId)}`
+      )
+      .then((res) => setSuggestions(res.suggestions))
+      .catch(() => setSuggestions([]));
+  }, [weddingId, canEdit]);
+
+  const matchingSuggestions = matchVendorSuggestions(
+    suggestions,
+    name,
+    vendors.map((v) => v.name)
+  );
+
+  // TS-97: fills in what carries over from another wedding. Cost, contract notes and arrival time
+  // are this wedding's own, so they're left exactly as they are.
+  function pickSuggestion(s: VendorSuggestionDTO) {
+    setName(s.name);
+    setCategory(s.category);
+    setCategoryOther(s.categoryOther ?? "");
+    setContactName(s.contactName ?? "");
+    setContactEmail(s.contactEmail ?? "");
+    setContactPhone(s.contactPhone ?? "");
+    setPickedSuggestion(s.name);
+  }
 
   async function onSaveBudget(e: React.FormEvent) {
     e.preventDefault();
@@ -152,6 +191,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
       setCost("");
       setContractNotes("");
       setArrivalTime("");
+      setPickedSuggestion(null);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't add that vendor.");
     } finally {
@@ -354,9 +394,43 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
                 id="vendor-name"
                 className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
                 value={name}
-                onChange={(e) => setName(e.target.value)}
+                onChange={(e) => {
+                  setName(e.target.value);
+                  setPickedSuggestion(null);
+                }}
+                autoComplete="off"
                 required
               />
+              {matchingSuggestions.length > 0 && (
+                <div className="mt-1 rounded-md border border-neutral-200 dark:border-neutral-700 p-1">
+                  <p id="vendor-suggestions-label" className="px-2 py-1 text-xs text-neutral-500 dark:text-neutral-400">
+                    From your other weddings
+                  </p>
+                  <ul aria-labelledby="vendor-suggestions-label">
+                    {matchingSuggestions.map((s) => (
+                      <li key={s.name}>
+                        <button
+                          type="button"
+                          onClick={() => pickSuggestion(s)}
+                          aria-label={`Use ${s.name} from your other weddings`}
+                          className="w-full rounded px-2 py-1 text-left text-sm hover:bg-neutral-100 dark:hover:bg-neutral-800"
+                        >
+                          {s.name}{" "}
+                          <span className="text-xs text-neutral-500 dark:text-neutral-400">
+                            · {s.category === "OTHER" && s.categoryOther ? s.categoryOther : CATEGORY_LABEL[s.category]}
+                          </span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {pickedSuggestion && (
+                <p role="status" className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
+                  Filled in {pickedSuggestion}&apos;s details from your other weddings. Add this wedding&apos;s cost and
+                  contract details below.
+                </p>
+              )}
             </div>
             <div>
               <label htmlFor="vendor-category" className="mb-1 block text-sm font-medium">
