@@ -23,6 +23,13 @@ export async function POST(req: NextRequest) {
     hitRateLimit(addressKey, LOGIN_LIMITS.failuresPerAddress.limit, LOGIN_LIMITS.failuresPerAddress.windowSeconds),
   ]);
   if (!byAccount.allowed || !byAddress.allowed) {
+    // TS-157: a refused attempt never reaches the password check, so it doesn't count against
+    // either limit -- otherwise flooding from a blocked address would keep lengthening the
+    // account's lockout with tries that were never made against its password.
+    await Promise.all([
+      undoRateLimitHit(accountKey, LOGIN_LIMITS.failuresPerAccount.windowSeconds),
+      undoRateLimitHit(addressKey, LOGIN_LIMITS.failuresPerAddress.windowSeconds),
+    ]);
     const retryAfter = Math.max(byAccount.allowed ? 0 : byAccount.retryAfterSeconds, byAddress.allowed ? 0 : byAddress.retryAfterSeconds);
     return NextResponse.json({ error: TOO_MANY_SIGN_INS }, { status: 429, headers: { "Retry-After": String(retryAfter) } });
   }

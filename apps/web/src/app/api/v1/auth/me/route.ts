@@ -28,7 +28,11 @@ export async function DELETE(req: NextRequest) {
   // can't be used to keep guessing the password.
   const { limit, windowSeconds } = LOGIN_LIMITS.failuresPerAccount;
   const accountKey = `login:account:${user.email.toLowerCase()}`;
-  if (!(await hitRateLimit(accountKey, limit, windowSeconds)).allowed) return errorResponse(TOO_MANY_SIGN_INS, 429);
+  if (!(await hitRateLimit(accountKey, limit, windowSeconds)).allowed) {
+    // TS-157: a refused attempt doesn't count.
+    await undoRateLimitHit(accountKey, windowSeconds);
+    return errorResponse(TOO_MANY_SIGN_INS, 429);
+  }
   const record = await findUserById(user.id);
   if (!record || !(await verifyPassword(parsed.data.password, record.passwordHash))) {
     return errorResponse("That password isn't right.", 403);

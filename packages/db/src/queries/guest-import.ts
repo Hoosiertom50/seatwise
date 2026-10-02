@@ -95,7 +95,9 @@ function parseRow(
 
   const partyName = cellFor("partyName");
   if (partyName !== undefined && partyName !== "") {
-    data.partyName = partyName.toUpperCase() === CLEAR_TOKEN ? null : partyName;
+    // TS-152: the same limit as adding a guest by hand.
+    if (partyName.length > 200) errors.push("Household name can be at most 200 characters.");
+    else data.partyName = partyName.toUpperCase() === CLEAR_TOKEN ? null : partyName;
   }
 
   const headcountRaw = cellFor("headcount");
@@ -168,11 +170,15 @@ function parseRow(
 
   const notes = cellFor("notes");
   if (notes !== undefined && notes !== "") {
-    data.notes = notes.toUpperCase() === CLEAR_TOKEN ? null : notes;
+    if (notes.length > 2000) errors.push("Notes can be at most 2000 characters.");
+    else data.notes = notes.toUpperCase() === CLEAR_TOKEN ? null : notes;
   }
 
   return { errors, data };
 }
+
+/** TS-152: the most guests one import can add or update. */
+export const MAX_IMPORT_ROWS = 5000;
 
 export async function classifyGuestImport(
   weddingId: string,
@@ -183,7 +189,19 @@ export async function classifyGuestImport(
     throw new GuestImportError('Map "First name" and "Last name" to a column before importing.');
   }
 
-  const { headers, rows } = parseCsv(csv);
+  const { headers, rows: allRows } = parseCsv(csv);
+  // TS-152: a completely blank row (a spacer someone left in the spreadsheet) is skipped, not an
+  // error -- row numbers still match the spreadsheet. And one import is capped, so a huge file
+  // can't tie up the database.
+  const numbered = allRows
+    .map((cells, index) => ({ cells, rowNumber: index + 1 }))
+    .filter(({ cells }) => cells.some((c) => c.trim() !== ""));
+  if (numbered.length > MAX_IMPORT_ROWS) {
+    throw new GuestImportError(
+      `That file has ${numbered.length.toLocaleString("en-US")} guests — import at most ${MAX_IMPORT_ROWS.toLocaleString("en-US")} at a time.`
+    );
+  }
+  const rows = numbered.map((r) => r.cells);
 
   const { rows: existingGuests } = await pool.query<{ id: string; revision: number }>(
     `SELECT id, revision FROM "guests" WHERE "weddingId" = $1`,
@@ -203,8 +221,7 @@ export async function classifyGuestImport(
     }
   }
 
-  const classified: GuestImportRow[] = rows.map((cells, index) => {
-    const rowNumber = index + 1;
+  const classified: GuestImportRow[] = numbered.map(({ cells, rowNumber }) => {
     const { errors, data } = parseRow(cells, headers, mapping);
 
     let guestId: string | undefined;
