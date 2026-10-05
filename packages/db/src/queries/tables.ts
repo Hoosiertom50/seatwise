@@ -2,9 +2,9 @@ import { randomUUID } from "crypto";
 import { pool } from "../pool";
 import { compareTableLabels } from "@seatwise/shared";
 import {
-  resyncSeatsAtTable,
+  resyncTables,
   refreshPlanCompleteness,
-  currentPlanVersionId,
+  lockCurrentPlan,
   recordRecheckIfApproved,
   type TableSeatingFlagReason,
 } from "./seat-checks";
@@ -220,7 +220,9 @@ export async function updateSeatingTableForWedding(
   id: string,
   weddingId: string,
   input: Partial<CreateSeatingTableData>,
-  expectedRevision?: number
+  expectedRevision?: number,
+  /** TS-173: the required-guest list this same edit is about to save, if it's saving one. */
+  requiredGuestIdsAfter?: string[]
 ): Promise<boolean> {
   const fields: string[] = [];
   const values: unknown[] = [];
@@ -294,6 +296,29 @@ export async function updateSeatingTableForWedding(
         fresh!
       );
     }
+    // TS-173: a Restricted table can't have fewer seats than its required guests need. Before, the
+    // list was checked against the seats only when the list was saved, so lowering the seats
+    // afterwards left required guests with nowhere they're allowed to sit.
+    if (input.capacity !== undefined && input.isRestricted !== false) {
+      const { rows: needRows } = requiredGuestIdsAfter
+        ? await client.query(
+            `SELECT COALESCE(SUM(headcount), 0)::int AS seats FROM "guests" WHERE id = ANY($1::text[]) AND "weddingId" = $2`,
+            [[...new Set(requiredGuestIdsAfter)], weddingId]
+          )
+        : await client.query(
+            `SELECT COALESCE(SUM(g.headcount), 0)::int AS seats
+             FROM "restricted_table_guests" rtg JOIN "guests" g ON g.id = rtg."guestId"
+             JOIN "seating_tables" t ON t.id = rtg."tableId"
+             WHERE rtg."tableId" = $1 AND t."isRestricted"`,
+            [id]
+          );
+      const seats = needRows[0].seats as number;
+      if (seats > input.capacity) {
+        throw new RestrictedTableError(
+          `This table's required guests need ${seats} seat(s), so it can't have fewer than that. Take guests off its list first.`
+        );
+      }
+    }
     if (fields.length > 0) {
       fields.push(`"updatedAt" = now()`, `revision = revision + 1`);
       values.push(id, weddingId);
@@ -341,6 +366,8 @@ export async function removeSeatingTable(
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
+    // TS-173: the current plan's row first, then the table (see lockCurrentPlan).
+    const currentPlanId = await lockCurrentPlan(client, weddingId);
     const { rows: tableRows } = await client.query<{ label: string }>(
       `SELECT label FROM "seating_tables" WHERE id = $1 AND "weddingId" = $2 FOR UPDATE`,
       [id, weddingId]
@@ -350,12 +377,6 @@ export async function removeSeatingTable(
       return { status: "NOT_FOUND" };
     }
     const label = tableRows[0].label;
-
-    const { rows: planRows } = await client.query<{ id: string }>(
-      `SELECT id FROM "plan_versions" WHERE "weddingId" = $1 AND "isCurrent" FOR UPDATE`,
-      [weddingId]
-    );
-    const currentPlanId = planRows[0]?.id;
     let seatedCount = 0;
     if (currentPlanId) {
       const { rows } = await client.query<{ n: number }>(
@@ -412,10 +433,13 @@ export async function setRequiredGuestsForTable(
   tableId: string,
   weddingId: string,
   guestIds: string[]
-): Promise<SeatingTableRow> {
+): Promise<{ table: SeatingTableRow; newlyFlagged: { name: string; reason: TableSeatingFlagReason }[] }> {
   const client = await pool.connect();
+  let newlyFlagged: { name: string; reason: TableSeatingFlagReason }[] = [];
   try {
     await client.query("BEGIN");
+    // TS-173: the current plan's row first, then the table (see lockCurrentPlan).
+    const planVersionId = await lockCurrentPlan(client, weddingId);
 
     const { rows: tableRows } = await client.query(
       `SELECT id, label, capacity, "isRestricted" FROM "seating_tables" WHERE id = $1 AND "weddingId" = $2 FOR UPDATE`,
@@ -468,14 +492,55 @@ export async function setRequiredGuestsForTable(
           `${c.guestName} is already required at "${c.tableLabel}" — a guest can only be required at one Restricted table.`
         );
       }
+      // TS-173: guests who must sit together go on the list together, or not at all -- otherwise one
+      // of them is required at this table and the other isn't allowed at it, and no seat works.
+      const { rows: partnerRows } = await client.query(
+        `SELECT (ga."firstName" || ' ' || ga."lastName") AS "listed", (gb."firstName" || ' ' || gb."lastName") AS "partner"
+         FROM "guest_relationships" gr
+         JOIN "guests" ga ON ga.id = CASE WHEN gr."guestAId" = ANY($1::text[]) THEN gr."guestAId" ELSE gr."guestBId" END
+         JOIN "guests" gb ON gb.id = CASE WHEN gr."guestAId" = ANY($1::text[]) THEN gr."guestBId" ELSE gr."guestAId" END
+         WHERE gr."weddingId" = $2 AND gr.type = 'MUST_SIT_TOGETHER'
+           AND (gr."guestAId" = ANY($1::text[])) <> (gr."guestBId" = ANY($1::text[]))
+         LIMIT 1`,
+        [uniqueIds, weddingId]
+      );
+      if (partnerRows[0]) {
+        throw new RestrictedTableError(
+          `${partnerRows[0].listed} must sit together with ${partnerRows[0].partner}, so they go on this list together or not at all.`
+        );
+      }
     }
 
+    const { rows: beforeRows } = await client.query(
+      `SELECT "guestId" FROM "restricted_table_guests" WHERE "tableId" = $1`,
+      [tableId]
+    );
+    const before = new Set(beforeRows.map((r) => r.guestId as string));
     await client.query(`DELETE FROM "restricted_table_guests" WHERE "tableId" = $1`, [tableId]);
-    for (const guestId of uniqueIds) {
+    if (uniqueIds.length > 0) {
       await client.query(
-        `INSERT INTO "restricted_table_guests" (id, "tableId", "guestId") VALUES ($1, $2, $3)`,
-        [randomUUID(), tableId, guestId]
+        `INSERT INTO "restricted_table_guests" (id, "tableId", "guestId")
+         SELECT id, $1, "guestId" FROM unnest($2::text[], $3::text[]) AS x(id, "guestId")`,
+        [tableId, uniqueIds.map(() => randomUUID()), uniqueIds]
       );
+    }
+
+    // TS-173: re-check this table and every table where a guest added to or taken off the list is
+    // seated, in the same transaction. Before, only this table was re-checked, so a guest put on the
+    // list while seated somewhere else stayed there unflagged (and an approved plan stayed approved).
+    if (planVersionId) {
+      const changed = [...uniqueIds.filter((id) => !before.has(id)), ...[...before].filter((id) => !uniqueIds.includes(id))];
+      const { rows: seatedAt } = await client.query(
+        `SELECT DISTINCT "seatingTableId" AS "tableId" FROM "seat_assignments"
+         WHERE "planVersionId" = $1 AND "guestId" = ANY($2::text[])`,
+        [planVersionId, changed]
+      );
+      const result = await resyncTables(client, weddingId, planVersionId, [tableId, ...seatedAt.map((r) => r.tableId as string)]);
+      newlyFlagged = result.newlyFlagged;
+      await refreshPlanCompleteness(client, weddingId, planVersionId, { bumpRevision: result.changed });
+      if (result.changed) {
+        await recordRecheckIfApproved(client, planVersionId, `"${table.label}"'s required-guest list changed — some guests' Needs Reassignment flags changed`, null);
+      }
     }
 
     await client.query("COMMIT");
@@ -495,7 +560,7 @@ export async function setRequiredGuestsForTable(
 
   const updated = await getSeatingTableForWedding(tableId, weddingId);
   if (!updated) throw new RestrictedTableError("Table not found after update.");
-  return updated;
+  return { table: updated, newlyFlagged };
 }
 
 // FR-4.6 / TS-120: after a table edit that can make its current seating invalid -- accessible
@@ -504,14 +569,28 @@ export async function setRequiredGuestsForTable(
 // and keep isComplete in sync, all in one transaction. Nobody is ever unseated.
 export async function resyncTableSeating(
   weddingId: string,
-  tableId: string
+  tableId: string,
+  /** TS-173: also re-check the tables these guests are seated at. */
+  alsoGuestIds: string[] = []
 ): Promise<{ newlyFlagged: { name: string; reason: TableSeatingFlagReason }[] }> {
-  const planVersionId = await currentPlanVersionId(pool, weddingId);
-  if (!planVersionId) return { newlyFlagged: [] };
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    const { newlyFlagged, changed } = await resyncSeatsAtTable(client, weddingId, planVersionId, tableId);
+    // TS-173: the current plan's row first, then the table (see lockCurrentPlan).
+    const planVersionId = await lockCurrentPlan(client, weddingId);
+    if (!planVersionId) {
+      await client.query("COMMIT");
+      return { newlyFlagged: [] };
+    }
+    const { rows: seatedAt } = await client.query(
+      `SELECT DISTINCT "seatingTableId" AS "tableId" FROM "seat_assignments"
+       WHERE "planVersionId" = $1 AND "guestId" = ANY($2::text[])`,
+      [planVersionId, alsoGuestIds]
+    );
+    const { newlyFlagged, changed } = await resyncTables(client, weddingId, planVersionId, [
+      tableId,
+      ...seatedAt.map((r) => r.tableId as string),
+    ]);
     await refreshPlanCompleteness(client, weddingId, planVersionId, { bumpRevision: changed });
     if (changed) await recordRecheckIfApproved(client, planVersionId, "Seating re-checked after a change — some guests' Needs Reassignment flags changed", null);
     await client.query("COMMIT");

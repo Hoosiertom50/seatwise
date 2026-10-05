@@ -8,7 +8,7 @@ import {
   PlanVersionNotFoundError,
 } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
-import { errorResponse, zodErrorResponse } from "@/lib/api-response";
+import { errorResponse, zodErrorResponse, concurrentChangeResponse } from "@/lib/api-response";
 import { requireAccess } from "@/lib/access";
 
 type Params = { params: Promise<{ weddingId: string; planVersionId: string }> };
@@ -65,6 +65,8 @@ export async function POST(req: NextRequest, { params }: Params) {
     if (err instanceof ManualMoveError) {
       return errorResponse(err.message, 409);
     }
+    const conflict = concurrentChangeResponse(err);
+    if (conflict) return conflict;
     throw err;
   }
 }

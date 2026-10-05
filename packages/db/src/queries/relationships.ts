@@ -68,6 +68,29 @@ export async function createRelationship(
       }
     }
 
+    // TS-173: two guests who must sit together have to be on the same Restricted table's list (or
+    // neither on one) -- otherwise one is required at a table the other isn't allowed at.
+    if (input.type === "MUST_SIT_TOGETHER") {
+      const { rows: lists } = await client.query(
+        `SELECT g.id, (g."firstName" || ' ' || g."lastName") AS name, t.id AS "tableId", t.label AS "tableLabel"
+         FROM "guests" g
+         LEFT JOIN "restricted_table_guests" rtg ON rtg."guestId" = g.id
+           AND EXISTS (SELECT 1 FROM "seating_tables" st WHERE st.id = rtg."tableId" AND st."isRestricted")
+         LEFT JOIN "seating_tables" t ON t.id = rtg."tableId"
+         WHERE g.id = ANY($1::text[]) AND g."weddingId" = $2`,
+        [[guestAId, guestBId], weddingId]
+      );
+      const [a, b] = lists as { name: string; tableId: string | null; tableLabel: string | null }[];
+      if (a && b && a.tableId !== b.tableId) {
+        const [listed, other] = a.tableId ? [a, b] : [b, a];
+        throw new RelationshipConflictError(
+          other.tableId
+            ? `${a.name} and ${b.name} are required at different Restricted tables, so they can't be required to sit together.`
+            : `${listed.name} is required at "${listed.tableLabel}" and ${other.name} isn't on its list — add them to that list first, or they can't be required to sit together.`
+        );
+      }
+    }
+
     const { rows: exact } = await client.query(
       `SELECT id FROM "guest_relationships"
        WHERE "weddingId" = $1 AND "guestAId" = $2 AND "guestBId" = $3 AND type = $4`,

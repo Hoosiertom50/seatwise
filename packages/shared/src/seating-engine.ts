@@ -168,6 +168,10 @@ interface Unit {
   requiresAccessible: boolean;
   pinnedTableId: string | null;
   pinReason: "lock" | "required" | null;
+  // TS-173: why this unit can't be seated at all, when its members' Restricted-table lists
+  // disagree (one is required at a table another isn't listed for, or two are required at
+  // different tables) -- every table would break a hard rule for someone in it.
+  blockedReason: string | null;
   // FR-3.4: BRIDE/GROOM if every non-BOTH member of the unit agrees; BOTH if the unit is all BOTH
   // guests, or mixes BRIDE and GROOM members (a forced-together group already overrides any
   // side-mixing preference for its own members, so it's neutral for scoring purposes).
@@ -388,6 +392,7 @@ export function generateSeatingPlan(
         requiresAccessible: false,
         pinnedTableId: null,
         pinReason: null,
+        blockedReason: null,
         side: "BOTH",
       };
       unitsByRoot.set(root, unit);
@@ -420,6 +425,21 @@ export function generateSeatingPlan(
     }
   }
   const units = [...unitsByRoot.values()];
+
+  // TS-173: a must-sit-together group goes to a Restricted table only if every member is on that
+  // table's list. Before, one listed member pinned the whole group there, seating the unlisted
+  // members at a table they aren't allowed at (and the planner couldn't move them out, since moves
+  // are blocked both ways). Such a group is left unassigned, with the reason.
+  for (const unit of units) {
+    const required = new Set(unit.guestIds.map((id) => guestById.get(id)?.requiredTableId ?? null));
+    if (unit.pinReason !== "required" || required.size === 1) continue;
+    const listed = [...required]
+      .filter((t): t is string => t !== null)
+      .map((t) => `"${tablesById.get(t)?.label ?? "a Restricted table"}"`);
+    unit.blockedReason = required.has(null)
+      ? `they must sit together, but not all of them are on ${listed.join(" and ")}'s required list`
+      : `they must sit together, but they're required at different tables (${listed.join(" and ")})`;
+  }
 
   // AVOID / PREFER_NEAR / MUST_NOT_SIT_TOGETHER lookups, keyed by guest id -> set of guest ids.
   // MUST_NOT_SIT_TOGETHER is a hard rule: two guests can end up in *different* seating units
@@ -630,6 +650,11 @@ export function generateSeatingPlan(
   const unassignedGuestIds: string[] = [];
 
   for (const unit of pinnedUnits) {
+    if (unit.blockedReason) {
+      unassignedGuestIds.push(...unit.guestIds);
+      warnings.push(`Couldn't seat guests ${unit.guestIds.map(guestName).join(", ")} — ${unit.blockedReason}.`);
+      continue;
+    }
     const target = unit.pinnedTableId ? tablesById.get(unit.pinnedTableId) : undefined;
     // A required-table pin targets its own restricted table directly (attemptPlace doesn't
     // filter by isRestricted -- only the *general* candidateTables pool excludes it), same as a
@@ -637,17 +662,27 @@ export function generateSeatingPlan(
     const placedAt = target ? attemptPlace(unit, [target]) : null;
     if (placedAt) continue;
 
-    // The pin couldn't be honored (table deleted/shrunk, or it would now break a hard rule) —
-    // fall back to normal automatic placement rather than leaving the guest(s) stranded just
-    // because their specific pin is no longer possible. FR-3.7a's own validation (at save time)
-    // means this should be rare for a required-table pin -- it only fires if the table's
-    // capacity was reduced, or another hard rule now conflicts, after the list was saved.
-    const isRequired = unit.pinReason === "required";
+    // The pin couldn't be honored (table deleted/shrunk, or it would now break a hard rule).
+    // TS-173: a guest required at a Restricted table may not sit anywhere else, so a required pin
+    // that can't be honored leaves them unassigned (with the reason) rather than seating them
+    // automatically at a table that would break that rule.
+    if (unit.pinReason === "required") {
+      unassignedGuestIds.push(...unit.guestIds);
+      warnings.push(
+        `Couldn't seat ${unit.guestIds.length === 1 ? "guest" : "guests"} ${unit.guestIds.map(guestName).join(", ")} — ` +
+          (target
+            ? `they're required at "${target.label}", and it has no room for them (or seating them there would break another hard rule).`
+            : "they're required at a table that no longer exists.")
+      );
+      continue;
+    }
+    // A lock is only "keep them where they were", so fall back to normal automatic placement
+    // rather than leaving the guest(s) stranded.
     warnings.push(
       `${unit.guestIds.length === 1 ? "Guest" : "Guests"} ${unit.guestIds
         .map(guestName)
         .join(", ")} ${unit.guestIds.length === 1 ? "is" : "are"} ` +
-        `${isRequired ? "required at" : "locked to"} ` +
+        `locked to ` +
         `${target ? `"${target.label}"` : "a table that no longer exists"}, but that's no ` +
         `longer possible — seated automatically instead.`
     );
