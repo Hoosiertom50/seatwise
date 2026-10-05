@@ -303,15 +303,31 @@ export async function commitGuestImport(
     // silently overwrite that edit. Rows are locked so nothing can change between this check and
     // the writes below.
     const updateIds = preview.rows.filter((r) => r.kind === "update" && r.guestId).map((r) => r.guestId!);
-    if (expectedRevisions && updateIds.length > 0) {
-      const { rows: locked } = await client.query<{ id: string; revision: number; name: string }>(
-        `SELECT id, revision, ("firstName" || ' ' || "lastName") AS name
-         FROM "guests" WHERE "weddingId" = $1 AND id = ANY($2::text[]) FOR UPDATE`,
+    // TS-174: and what each of them is now (read under the same lock), so a row only changes what
+    // it actually changes -- see the party size and attendance rules below.
+    const currentById = new Map<
+      string,
+      { revision: number; name: string; headcount: number; rsvpStatus: string; dayOfAttendance: string }
+    >();
+    if (updateIds.length > 0) {
+      const { rows: locked } = await client.query<{
+        id: string;
+        revision: number;
+        name: string;
+        headcount: number;
+        rsvpStatus: string;
+        dayOfAttendance: string;
+      }>(
+        `SELECT id, revision, ("firstName" || ' ' || "lastName") AS name, headcount, "rsvpStatus", "dayOfAttendance"
+         FROM "guests" WHERE "weddingId" = $1 AND id = ANY($2::text[]) ORDER BY id FOR UPDATE`,
         [weddingId, updateIds]
       );
-      const changed = locked.filter((g) => expectedRevisions[g.id] !== undefined && expectedRevisions[g.id] !== g.revision);
-      if (changed.length > 0) {
-        throw new GuestImportConflictError(changed.map((g) => g.name));
+      for (const g of locked) currentById.set(g.id, g);
+      if (expectedRevisions) {
+        const changed = locked.filter((g) => expectedRevisions[g.id] !== undefined && expectedRevisions[g.id] !== g.revision);
+        if (changed.length > 0) {
+          throw new GuestImportConflictError(changed.map((g) => g.name));
+        }
       }
     }
 
@@ -328,19 +344,37 @@ export async function commitGuestImport(
     // TS-169: whether any seat was freed or any attending guest added (for history and revision).
     let seatsFreed = false;
     let attendingAdded = false;
+    // TS-174: a Declined guest brought back to Attending by this import -- the plan has someone new
+    // to seat, as when the planner does it by hand (which bumps the plan's revision too).
+    let attendanceRestored = false;
 
     for (const row of preview.rows) {
       let p = row.preview;
       // TS-169: a row that makes a guest Declined (and doesn't set attendance itself) marks them Not
       // Attending -- the same rule as everywhere else a guest declines (TS-167). For an existing
       // guest, only when this changes their answer.
+      const current = row.kind === "update" && row.guestId ? currentById.get(row.guestId) : undefined;
       if (p.rsvpStatus === "DECLINED" && p.dayOfAttendance === undefined) {
-        let changes = true;
-        if (row.kind === "update" && row.guestId) {
-          const { rows: prev } = await client.query(`SELECT "rsvpStatus" FROM "guests" WHERE id = $1`, [row.guestId]);
-          changes = prev[0]?.rsvpStatus !== "DECLINED";
-        }
+        const changes = current ? current.rsvpStatus !== "DECLINED" : true;
         if (changes) p = { ...p, dayOfAttendance: "NOT_ATTENDING" };
+      }
+      // TS-174: and the other way round, as editing the guest does (TS-169): a Declined guest the
+      // import sets to Confirmed or Pending (and doesn't set attendance for) is Attending again,
+      // waiting unseated for the planner. Before, they stayed Not Attending.
+      if (
+        current &&
+        p.rsvpStatus !== undefined &&
+        p.rsvpStatus !== "DECLINED" &&
+        current.rsvpStatus === "DECLINED" &&
+        p.dayOfAttendance === undefined
+      ) {
+        p = { ...p, dayOfAttendance: "ATTENDING" };
+      }
+      // TS-174: re-importing an export carries everyone's party size, mostly unchanged -- and an
+      // unchanged party size isn't the planner setting a new one, so it must not wipe the limit a
+      // guest's RSVP is held to (TS-154). Only a real change counts.
+      if (current && p.headcount !== undefined && p.headcount === current.headcount) {
+        p = { ...p, headcount: undefined };
       }
       if (row.kind === "new") {
         await client.query(
@@ -427,6 +461,12 @@ export async function commitGuestImport(
           );
         }
         updatedCount++;
+        // TS-174: brought back to Attending -- counts like a new attending guest (history, and the
+        // plan's revision).
+        if (p.dayOfAttendance === "ATTENDING" && current?.dayOfAttendance === "NOT_ATTENDING") {
+          attendingAdded = true;
+          attendanceRestored = true;
+        }
 
         // FR-2.9: Attendance Status -> Not Attending frees the seat outright (matching FR-8.1's
         // dedicated day-of behavior, not just a flag) regardless of anything else in this row;
@@ -489,8 +529,9 @@ export async function commitGuestImport(
       const isComplete =
         countRows[0].unassignedCount === 0 && countRows[0].needsReassignmentCount === 0;
       // TS-150: a change to who's flagged also bumps the plan's revision. TS-169: so does a freed seat.
+      // TS-174: and a guest brought back to Attending.
       await client.query(
-        `UPDATE "plan_versions" SET "isComplete" = $1${planFlagsChanged || seatsFreed ? ", revision = revision + 1" : ""} WHERE id = $2`,
+        `UPDATE "plan_versions" SET "isComplete" = $1${planFlagsChanged || seatsFreed || attendanceRestored ? ", revision = revision + 1" : ""} WHERE id = $2`,
         [isComplete, planVersionId]
       );
       // TS-169: an import that changes an approved plan (a seat freed, someone new to seat, flags

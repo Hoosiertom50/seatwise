@@ -11,7 +11,7 @@ import { pool } from "../pool";
 // A minimal "Queryable" so a check can run against the shared pool or inside an already-open
 // transaction's client (a bulk import, so the check is part of the same all-or-nothing write).
 export interface Queryable {
-  query: (text: string, params?: unknown[]) => Promise<{ rows: Record<string, unknown>[] }>;
+  query: (text: string, params?: unknown[]) => Promise<{ rows: Record<string, unknown>[]; rowCount?: number | null }>;
 }
 
 // Re-checks one already-seated guest's current table against every hard rule that's about the
@@ -249,6 +249,59 @@ export async function lockCurrentPlan(q: Queryable, weddingId: string): Promise<
     [weddingId]
   );
   return (rows[0]?.id as string | undefined) ?? null;
+}
+
+// FR-8.1 / TS-174: the write half of an attendance change, on the caller's transaction -- which
+// has already taken the wedding lock, then the current plan's row (lockCurrentPlan), then the
+// guest's row, and checked the guest isn't already at `attendance`. Shared by setGuestAttendance
+// and a guest's own RSVP (submitGuestRsvp), so their answer and its effect on the plan are saved
+// together or not at all. Not Attending frees their seat (and re-checks the tables that touches);
+// either way the plan's completeness is recounted, its revision bumped and the change recorded.
+// `seatFreed` says whether they actually had a seat, so a message never claims one was freed.
+export async function applyAttendanceChange(
+  client: Queryable,
+  weddingId: string,
+  planVersionId: string | null,
+  guest: { id: string; name: string },
+  attendance: "ATTENDING" | "NOT_ATTENDING",
+  actorUserId: string | null
+): Promise<{ seatFreed: boolean }> {
+  // TS-165: bumps the guest's revision too, so a planner editing this guest from an older copy
+  // gets a conflict instead of overwriting the attendance change.
+  await client.query(
+    `UPDATE "guests" SET "dayOfAttendance" = $1::"DayOfAttendance", revision = revision + 1, "updatedAt" = now() WHERE id = $2`,
+    [attendance, guest.id]
+  );
+  if (!planVersionId) return { seatFreed: false };
+
+  let seatFreed = false;
+  if (attendance === "NOT_ATTENDING") {
+    // TS-165: the freed seat can make room for someone flagged at that table, and a rule partner's
+    // flag may no longer apply -- re-check those tables.
+    const affected = await tablesAffectedBy(client, weddingId, planVersionId, [guest.id]);
+    const { rowCount } = await client.query(
+      `DELETE FROM "seat_assignments" WHERE "planVersionId" = $1 AND "guestId" = $2`,
+      [planVersionId, guest.id]
+    );
+    seatFreed = (rowCount ?? 0) > 0;
+    await resyncTables(client, weddingId, planVersionId, affected);
+  }
+  // Recompute completeness against the new attendance-filtered denominator -- a guest who just
+  // became Not Attending can no longer make the plan incomplete by being unseated, and one who
+  // just became Attending again can. FR-4.6: other Needs Reassignment flags still count.
+  // TS-165: every other seat change bumps the plan's revision; this one does too.
+  await refreshPlanCompleteness(client, weddingId, planVersionId, { bumpRevision: true });
+
+  const description =
+    attendance === "NOT_ATTENDING"
+      ? `${guest.name} marked not attending${seatFreed ? " — seat freed" : ""}`
+      : `${guest.name} marked attending again — now unassigned`;
+  await client.query(
+    `INSERT INTO "change_history_entries" (id, "planVersionId", action, description, "actorUserId")
+     VALUES ($1, $2, 'ATTENDANCE_CHANGE', $3, $4)`,
+    [randomUUID(), planVersionId, description, actorUserId]
+  );
+  return { seatFreed };
 }
 
 /** The Current Plan Version's id for a wedding, if there is one. */

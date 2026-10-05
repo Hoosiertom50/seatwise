@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { calendarDateField } from "./common";
 import { WEDDING_NAME_PATTERN, WEDDING_NAME_MESSAGE, looksLikeWebAddress, NO_WEB_ADDRESS_MESSAGE } from "../validation";
 
 // TS-168: the rules for a wedding's name, wherever one is given (creating, renaming, copying).
@@ -31,7 +32,8 @@ const weddingBaseSchema = z.object({
     .regex(WEDDING_NAME_PATTERN, WEDDING_NAME_MESSAGE)
     // TS-156: the wedding name goes into RSVP and invite emails.
     .refine((v) => !looksLikeWebAddress(v), NO_WEB_ADDRESS_MESSAGE),
-  eventDate: z.string().date().optional().nullable(),
+  // TS-174: a date the database can store (year 0000 used to be a server error).
+  eventDate: calendarDateField.optional().nullable(),
   venueName: z.string().max(200).optional().nullable(),
   // FR-1.3: "an optional note" -- always optional, blank is fine (AC: creating with the note left
   // blank saves with no error).
@@ -45,7 +47,7 @@ const weddingBaseSchema = z.object({
   // TS-17 (FR-12.2): the cutoff after which a guest's own RSVP link becomes read-only. Optional --
   // omitting it (or explicitly clearing it) means no cutoff at all, matching the FR's "or none"
   // language exactly.
-  rsvpCutoffDate: z.string().date().optional().nullable(),
+  rsvpCutoffDate: calendarDateField.optional().nullable(),
 });
 
 // TS-19 (FR-14.4): "start this new wedding from an existing template" is only ever offered at

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { reorderTimelineEntrySchema } from "@seatwise/shared";
-import { reorderTimelineEntry } from "@seatwise/db";
+import { reorderTimelineEntry, TimelineReorderConflictError } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
 import { errorResponse, zodErrorResponse } from "@/lib/api-response";
 import { requireAccess } from "@/lib/access";
@@ -21,7 +21,14 @@ export async function POST(req: NextRequest, { params }: Params) {
   const parsed = reorderTimelineEntrySchema.safeParse(body);
   if (!parsed.success) return zodErrorResponse(parsed.error);
 
-  const entry = await reorderTimelineEntry(entryId, weddingId, parsed.data.direction);
+  let entry;
+  try {
+    entry = await reorderTimelineEntry(entryId, weddingId, parsed.data.direction);
+  } catch (err) {
+    // TS-174: the entry changed mid-reorder -- "it changed, try again", not a server error.
+    if (err instanceof TimelineReorderConflictError) return errorResponse(err.message, 409);
+    throw err;
+  }
   if (!entry) return errorResponse("Timeline entry not found", 404);
   return NextResponse.json({ entry });
 }

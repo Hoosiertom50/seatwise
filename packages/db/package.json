@@ -16,7 +16,8 @@
     "cleanup-test-users": "tsx prisma/cleanup-test-users.ts",
     "fill-wedding-details": "tsx prisma/fill-wedding-details.ts",
     "backup-real-weddings": "tsx prisma/backup-real-weddings.ts",
-    "copy-weddings": "tsx prisma/copy-weddings-to-production.ts"
+    "copy-weddings": "tsx prisma/copy-weddings-to-production.ts",
+    "encrypt-old-link-tokens": "tsx prisma/encrypt-old-link-tokens.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"

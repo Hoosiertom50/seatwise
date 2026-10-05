@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { expectedRevisionField } from "./common";
 import { guestSideEnum, guestTierEnum, ageCategoryEnum } from "./guest";
 
 // FR-4.1: affects only the floor-plan drawing (FR-4.3), never seating logic.
@@ -77,7 +78,7 @@ export type CreateTableInput = z.infer<typeof tableBaseSchema>;
 
 // FR-7.7, extended to seating tables: every edit accepts the revision the client last saw, so the
 // server can detect a save that landed on top of a newer one instead of silently overwriting it.
-const expectedRevisionField = z.number().int().nonnegative().optional();
+// TS-174: bounded to what the database can store (see ./common).
 
 export const updateTableSchema = tableBaseSchema
   .partial()

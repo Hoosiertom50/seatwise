@@ -10,6 +10,7 @@ import {
   revalidateGuestAssignment,
   recomputeCurrentPlanCompleteness,
   resyncGuestSeat,
+  guestHasRsvpLink,
   GuestConflictError,
 } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
@@ -110,9 +111,13 @@ export async function PATCH(req: NextRequest, { params }: Params) {
   // one stops working, in case it went to the wrong person -- and emails it to the new address.
   const correctedEmail =
     !!guest?.email && !!before?.email && guest.email.trim().toLowerCase() !== before.email.trim().toLowerCase();
+  // TS-174: an address added after the old one was cleared is a correction too -- if the guest
+  // already has a link (it may have gone to the wrong address), they get a fresh one and the old
+  // one stops working. Before, only an address changed in one edit did that.
+  const regenerate = correctedEmail || (firstEmail && (await guestHasRsvpLink(guestId, weddingId)));
   const rsvpEmail =
     (firstEmail || correctedEmail) && guest
-      ? await sendGuestRsvpLink(guest, access.wedding, user, { regenerate: correctedEmail })
+      ? await sendGuestRsvpLink(guest, access.wedding, user, { regenerate })
       : null;
   return NextResponse.json({
     guest,

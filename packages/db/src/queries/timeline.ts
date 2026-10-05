@@ -20,6 +20,19 @@ export interface TimelineEntryRow {
 
 const COLUMNS = `id, "weddingId", time, description, "sortOrder", revision, "createdAt", "updatedAt"`;
 
+// TS-174: the one order entries are shown and reordered in. Ties on sortOrder (left from before
+// TS-153) are broken the same way in both, so "Up" always swaps with the entry shown just above --
+// before, the list and the reorder could break a tie differently and swap the wrong pair.
+const ENTRY_ORDER = `time ASC, "sortOrder" ASC, "createdAt" ASC, id ASC`;
+
+// TS-174: the entry changed (its time moved, or it was removed) while it was being reordered --
+// nothing was reordered; the caller shows the latest and the planner can try again.
+export class TimelineReorderConflictError extends Error {
+  constructor() {
+    super("This timeline entry changed while it was being moved — nothing was reordered. The latest is shown; please try again.");
+  }
+}
+
 // TS-92: thrown instead of applying an edit whose expectedRevision no longer matches -- the fresh
 // entry is attached so the caller can show the latest without another round-trip.
 export class TimelineConflictError extends Error {
@@ -32,7 +45,7 @@ export class TimelineConflictError extends Error {
 
 export async function listTimelineEntriesForWedding(weddingId: string): Promise<TimelineEntryRow[]> {
   const { rows } = await pool.query(
-    `SELECT ${COLUMNS} FROM "timeline_entries" WHERE "weddingId" = $1 ORDER BY time ASC, "sortOrder" ASC`,
+    `SELECT ${COLUMNS} FROM "timeline_entries" WHERE "weddingId" = $1 ORDER BY ${ENTRY_ORDER}`,
     [weddingId]
   );
   return rows;
@@ -168,10 +181,13 @@ export async function reorderTimelineEntry(
     // repairs any ties left from before.
     const { rows: group } = await client.query<{ id: string; sortOrder: number }>(
       `SELECT id, "sortOrder" FROM "timeline_entries" WHERE "weddingId" = $1 AND time = $2
-       ORDER BY "sortOrder", "createdAt", id FOR UPDATE`,
+       ORDER BY ${ENTRY_ORDER} FOR UPDATE`,
       [weddingId, entryRows[0].time]
     );
     const index = group.findIndex((g) => g.id === id);
+    // TS-174: its time was changed (or it was removed) between the two reads above -- before, this
+    // fell through to a TypeError and a server error.
+    if (index === -1) throw new TimelineReorderConflictError();
     const target = direction === "UP" ? index - 1 : index + 1;
     if (target >= 0 && target < group.length) {
       [group[index], group[target]] = [group[target], group[index]];
