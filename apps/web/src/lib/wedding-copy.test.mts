@@ -21,12 +21,14 @@ test("guest notes are re-encrypted for the target key, and the RSVP link is clea
     notes: encryptTextWithSecret("Nut allergy", SOURCE),
     rsvpNotes: encryptTextWithSecret("Bringing a high chair", SOURCE),
     rsvpToken: "a".repeat(64),
+    rsvpTokenHash: "c".repeat(64),
   };
   const out = transformRowForCopy("guests", row, options);
   assert.equal(decryptTextWithSecret(out.notes as string, TARGET), "Nut allergy");
   assert.equal(decryptTextWithSecret(out.rsvpNotes as string, TARGET), "Bringing a high chair");
   assert.equal(decryptTextWithSecret(out.notes as string, SOURCE), "[unable to decrypt]");
   assert.equal(out.rsvpToken, null);
+  assert.equal(out.rsvpTokenHash, null); // TS-160
   assert.equal(row.rsvpToken, "a".repeat(64), "the source row is never changed");
 });
 
@@ -46,7 +48,9 @@ test("comments and history by the owner map to the new owner; anyone else become
 });
 
 test("vendor share links are cleared", () => {
-  assert.equal(transformRowForCopy("vendors", { id: "v1", shareToken: "b".repeat(64) }, options).shareToken, null);
+  const out = transformRowForCopy("vendors", { id: "v1", shareToken: "b".repeat(64), shareTokenHash: "d".repeat(64) }, options);
+  assert.equal(out.shareToken, null);
+  assert.equal(out.shareTokenHash, null); // TS-160
 });
 
 test("tables are copied parent-first", () => {

@@ -73,9 +73,11 @@ export function transformRowForCopy(table: string, row: Row, o: CopyOptions): Ro
       out.rsvpNotes = reencrypt(row.rsvpNotes, o);
       // RSVP links are made fresh on the target when the planner sends them.
       out.rsvpToken = null;
+      out.rsvpTokenHash = null;
       break;
     case "vendors":
       out.shareToken = null;
+      out.shareTokenHash = null;
       break;
     case "comments":
       out.authorUserId = mapUser(row.authorUserId, o);

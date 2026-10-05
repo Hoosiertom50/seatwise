@@ -1,7 +1,8 @@
-import { randomUUID, randomBytes } from "crypto";
+import { randomUUID } from "crypto";
 import { isRsvpCutoffPast } from "@seatwise/shared";
 import { pool } from "../pool";
 import { encryptText, decryptText } from "../crypto";
+import { hashLinkToken, isPlainStoredLinkToken, newLinkToken, readStoredLinkToken } from "../link-tokens";
 
 export interface GuestRow {
   id: string;
@@ -250,8 +251,8 @@ export async function getGuestByRsvpToken(token: string): Promise<GuestRsvpLooku
             g."rsvpStatus", g."plusOneNames", g."rsvpNotes",
             g."requiresAccessibleTable", w."rsvpCutoffDate"::text AS "rsvpCutoffDate"
      FROM "guests" g JOIN "weddings" w ON w.id = g."weddingId"
-     WHERE g."rsvpToken" = $1`,
-    [token]
+     WHERE g."rsvpTokenHash" = $1`,
+    [hashLinkToken(token)]
   );
   if (!rows[0]) return null;
   return { ...rows[0], rsvpNotes: decryptText(rows[0].rsvpNotes) };
@@ -263,23 +264,35 @@ export async function getGuestByRsvpToken(token: string): Promise<GuestRsvpLooku
 export async function ensureGuestRsvpToken(guestId: string, weddingId: string): Promise<string | null> {
   // TS-153: one statement, so an automatic RSVP email and a click on "RSVP link" at the same moment
   // both get the same link -- before, the second could replace the one just emailed.
+  // TS-160: looked up by its hash; the encrypted copy is what lets this show the same link again.
+  const fresh = newLinkToken();
   const { rows } = await pool.query(
-    `UPDATE "guests" SET "rsvpToken" = COALESCE("rsvpToken", $3) WHERE id = $1 AND "weddingId" = $2
+    `UPDATE "guests" SET "rsvpToken" = COALESCE("rsvpToken", $3), "rsvpTokenHash" = COALESCE("rsvpTokenHash", $4)
+     WHERE id = $1 AND "weddingId" = $2
      RETURNING "rsvpToken"`,
-    [guestId, weddingId, randomBytes(32).toString("hex")]
+    [guestId, weddingId, fresh.encrypted, fresh.hash]
   );
-  return rows[0]?.rsvpToken ?? null;
+  const stored: string | null = rows[0]?.rsvpToken ?? null;
+  if (stored && isPlainStoredLinkToken(stored)) {
+    // A link made before TS-160: keep it working, but stop storing it in plain text.
+    await pool.query(`UPDATE "guests" SET "rsvpToken" = $1 WHERE id = $2 AND "rsvpToken" = $3`, [
+      encryptText(stored),
+      guestId,
+      stored,
+    ]);
+  }
+  return readStoredLinkToken(stored);
 }
 
 // FR-12.4: "regenerate" -- always issues a fresh token, invalidating whatever link was out there
 // before (e.g. a planner suspects a link was shared somewhere it shouldn't have been).
 export async function regenerateGuestRsvpToken(guestId: string, weddingId: string): Promise<string | null> {
-  const token = randomBytes(32).toString("hex");
+  const fresh = newLinkToken();
   const { rowCount } = await pool.query(
-    `UPDATE "guests" SET "rsvpToken" = $1 WHERE id = $2 AND "weddingId" = $3`,
-    [token, guestId, weddingId]
+    `UPDATE "guests" SET "rsvpToken" = $1, "rsvpTokenHash" = $2 WHERE id = $3 AND "weddingId" = $4`,
+    [fresh.encrypted, fresh.hash, guestId, weddingId]
   );
-  return (rowCount ?? 0) > 0 ? token : null;
+  return (rowCount ?? 0) > 0 ? fresh.token : null;
 }
 
 // FR-12.1/FR-12.2/FR-12.3: thrown instead of applying a guest's own RSVP submission when their
@@ -314,8 +327,8 @@ export async function submitGuestRsvp(token: string, input: SubmitGuestRsvpData)
     `SELECT g.id AS "guestId", g."weddingId", w."rsvpCutoffDate"::text AS "rsvpCutoffDate",
             COALESCE(g."partySizeLimit", g.headcount) AS "partySizeLimit"
      FROM "guests" g JOIN "weddings" w ON w.id = g."weddingId"
-     WHERE g."rsvpToken" = $1`,
-    [token]
+     WHERE g."rsvpTokenHash" = $1`,
+    [hashLinkToken(token)]
   );
   const found = rows[0];
   if (!found) {
