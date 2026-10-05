@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAuthUser } from "@/lib/session";
 import { errorResponse } from "@/lib/api-response";
-import { EMAIL_VERIFICATION_LIMITS, rateLimitOr429 } from "@/lib/rate-limit";
+import { clientAddress, EMAIL_VERIFICATION_LIMITS, rateLimitOr429 } from "@/lib/rate-limit";
 import { sendVerificationEmail } from "@/lib/email-verification";
 
 // TS-164: "Resend link" -- emails the signed-in account a fresh confirmation link.
@@ -10,7 +10,11 @@ export async function POST(req: NextRequest) {
   if (!user) return errorResponse("Not authenticated", 401);
   if (user.emailVerifiedAt !== null) return NextResponse.json({ sent: false, alreadyVerified: true });
 
-  const limited = await rateLimitOr429(`verify-email:resend:${user.id}`, EMAIL_VERIFICATION_LIMITS.resendsPerAccount);
+  const limited =
+    (await rateLimitOr429(`verify-email:resend:${user.id}`, EMAIL_VERIFICATION_LIMITS.resendsPerAccount)) ??
+    // TS-168: per day too, per account and per network address.
+    (await rateLimitOr429(`verify-email:resend:day:${user.id}`, EMAIL_VERIFICATION_LIMITS.resendsPerAccountDay)) ??
+    (await rateLimitOr429(`verify-email:resend:addr:day:${clientAddress(req)}`, EMAIL_VERIFICATION_LIMITS.resendsPerAddressDay));
   if (limited) return limited;
 
   const sent = await sendVerificationEmail(user);

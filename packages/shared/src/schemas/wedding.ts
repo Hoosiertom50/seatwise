@@ -1,6 +1,22 @@
 import { z } from "zod";
 import { WEDDING_NAME_PATTERN, WEDDING_NAME_MESSAGE, looksLikeWebAddress, NO_WEB_ADDRESS_MESSAGE } from "../validation";
 
+// TS-168: the rules for a wedding's name, wherever one is given (creating, renaming, copying).
+export const weddingNameField = z
+  .string()
+  .trim()
+  .min(1, "Wedding name is required")
+  .max(200)
+  .regex(WEDDING_NAME_PATTERN, WEDDING_NAME_MESSAGE)
+  // TS-156: the wedding name goes into RSVP and invite emails.
+  .refine((v) => !looksLikeWebAddress(v), NO_WEB_ADDRESS_MESSAGE);
+
+/** TS-168: the default name for a copy -- within the length limit and the allowed characters. */
+export function copiedWeddingName(original: string): string {
+  const suffix = " - copy";
+  return `${original.trim().slice(0, 200 - suffix.length).trim()}${suffix}`;
+}
+
 // FR-3.4: how much generation weights table composition toward mixing the two sides. Always a
 // soft preference — see packages/shared/src/seating-engine.ts.
 export const sideMixingEnum = z.enum(["KEEP_SEPARATE", "BALANCED_MIX", "FULLY_MIXED"]);

@@ -140,7 +140,10 @@ export async function createComment(
       weddingId,
       authorUserId,
       "COMMENT_REPLY",
-      `New reply on "${targetLabel}": ${input.body.slice(0, 120)}`
+      `New reply on "${targetLabel}": ${input.body.slice(0, 120)}`,
+      // TS-168: the email doesn't carry the comment itself (text anyone with Comment access typed,
+      // arriving as if from Seatwise) -- it points to the app, where the reply is shown.
+      { emailMessage: `There's a new reply on "${targetLabel}" — open Seatwise to read it.` }
     );
   }
 

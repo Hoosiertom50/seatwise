@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { duplicateWeddingSchema } from "@seatwise/shared";
+import { copiedWeddingName, duplicateWeddingSchema } from "@seatwise/shared";
 import { duplicateWeddingLayout, getWeddingById } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
 import { errorResponse, zodErrorResponse } from "@/lib/api-response";
@@ -24,7 +24,9 @@ export async function POST(req: NextRequest, { params }: Params) {
 
   const source = await getWeddingById(weddingId);
   if (!source) return errorResponse("Wedding not found", 404);
-  const name = parsed.data.name ?? `${source.name} (copy)`;
+  // TS-168: "(copy)" isn't allowed in a wedding name (so emails for the copy fell back to "a
+  // wedding"), and could take a long name past the limit.
+  const name = parsed.data.name ?? copiedWeddingName(source.name);
 
   const newId = await duplicateWeddingLayout(weddingId, user.id, name);
   if (!newId) return errorResponse("Wedding not found", 404);
