@@ -1,11 +1,12 @@
 import { z } from "zod";
+import { expectedRevisionField } from "./common";
 import type { SideMixing } from "./wedding";
 
 export type PlanVersionStatusValue = "DRAFT" | "IN_REVIEW" | "APPROVED";
 
 // FR-7.7: every plan-version write accepts the revision the client last saw, so the server can
 // detect a save that landed on top of a newer one instead of silently overwriting it.
-const expectedRevisionField = z.number().int().nonnegative().optional();
+// TS-174: bounded to what the database can store (see ./common).
 
 export const planVersionStatusSchema = z.object({
   status: z.enum(["DRAFT", "IN_REVIEW", "APPROVED"]),

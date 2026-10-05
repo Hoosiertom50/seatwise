@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { submitGuestRsvpSchema, type GuestRsvpPreviewDTO, isRsvpCutoffPast } from "@seatwise/shared";
-import { getGuestByRsvpToken, hashLinkToken, setGuestAttendance, submitGuestRsvp, RsvpSubmissionError, resyncGuestSeat, notifyWeddingCollaborators } from "@seatwise/db";
+import { getGuestByRsvpToken, hashLinkToken, submitGuestRsvp, RsvpSubmissionError, notifyWeddingCollaborators } from "@seatwise/db";
 import { errorResponse, zodErrorResponse } from "@/lib/api-response";
 import { clientAddress, rateLimitOr429, RSVP_LIMITS } from "@/lib/rate-limit";
 
@@ -70,32 +70,41 @@ export async function POST(req: NextRequest, { params }: Params) {
   const parsed = submitGuestRsvpSchema.safeParse(body);
   if (!parsed.success) return zodErrorResponse(parsed.error);
 
+  let guest: Awaited<ReturnType<typeof submitGuestRsvp>>;
   try {
     const { notes, ...rest } = parsed.data;
-    const guest = await submitGuestRsvp(token, { ...rest, rsvpNotes: notes });
-    // TS-167 (Tom, 2026-10-05): a guest who declines gives up their seat -- they're marked Not
-    // Attending, which frees it and re-checks the table, as on the day. If they confirm again
-    // later, they count as attending again and wait, unseated, for the planner to seat them.
-    // TS-169: only on an actual change of answer. Sending the same answer again (to fix a
-    // plus-one's name, say) leaves alone whatever the planner has set for their attendance.
-    const changedAnswer = guest.previousRsvpStatus !== guest.rsvpStatus;
-    let seatNote = "";
-    if (changedAnswer && guest.rsvpStatus === "DECLINED" && guest.dayOfAttendance === "ATTENDING") {
-      await setGuestAttendance(guest.weddingId, guest.id, "NOT_ATTENDING", null, { notify: false });
-      seatNote = " Their seat has been freed.";
-    } else if (
-      changedAnswer &&
-      guest.previousRsvpStatus === "DECLINED" &&
-      guest.rsvpStatus === "CONFIRMED" &&
-      guest.dayOfAttendance === "NOT_ATTENDING"
-    ) {
-      await setGuestAttendance(guest.weddingId, guest.id, "ATTENDING", null, { notify: false });
-      seatNote = " They need a seat.";
+    // TS-174: the answer, the attendance change a changed answer brings (TS-167/TS-169: declining
+    // gives up the seat, confirming again after declining means waiting for one) and the re-check
+    // of their seat (TS-134) are all one transaction inside submitGuestRsvp -- saved together or
+    // not at all.
+    guest = await submitGuestRsvp(token, { ...rest, rsvpNotes: notes });
+  } catch (err) {
+    if (err instanceof RsvpSubmissionError) {
+      return errorResponse(err.message, err.code === "NOT_FOUND" ? 404 : err.code === "OVER_PARTY_SIZE" ? 422 : 409);
     }
-    // TS-134: a guest who now needs an accessible seat, or is bringing more people than their
-    // table has room for, is flagged Needs Reassignment -- exactly as a planner's own edit would --
-    // instead of silently staying where they no longer fit.
-    await resyncGuestSeat(guest.weddingId, guest.id);
+    // TS-174: lost a race with another change to the same wedding (the database broke a deadlock,
+    // or something it pointed at was removed). It all rolled back, so nothing was saved -- say so
+    // and let the guest send it again, rather than a server error.
+    const code = (err as { code?: string } | null)?.code;
+    if (code === "40P01" || code === "40001" || code === "23503") {
+      return errorResponse("Something changed at the same moment, so your RSVP wasn't saved — nothing was changed. Please send it again.", 409);
+    }
+    throw err;
+  }
+
+  // TS-174: from here on the RSVP is saved. Telling the planner is best effort: a failure is logged,
+  // never reported to the guest as their RSVP failing.
+  try {
+    const changedAnswer = guest.previousRsvpStatus !== guest.rsvpStatus;
+    // TS-174: only say a seat was freed when they actually had one.
+    const seatNote =
+      guest.attendanceChange === "NOT_ATTENDING"
+        ? guest.seatFreed
+          ? " Their seat has been freed."
+          : ""
+        : guest.attendanceChange === "ATTENDING"
+          ? " They need a seat."
+          : "";
     // TS-154 (Tom's decision #2): the planner and collaborators hear about every response.
     const answer =
       guest.rsvpStatus === "CONFIRMED"
@@ -110,11 +119,8 @@ export async function POST(req: NextRequest, { params }: Params) {
     await notifyWeddingCollaborators(guest.weddingId, null, "RSVP_RECEIVED", `${guest.firstName} ${guest.lastName} ${answer}.${seatNote}`, {
       emailOncePer: changedAnswer ? undefined : { key: `email:rsvp-notify:${guest.id}`, windowSeconds: 3600 },
     });
-    return NextResponse.json({ ok: true });
   } catch (err) {
-    if (err instanceof RsvpSubmissionError) {
-      return errorResponse(err.message, err.code === "NOT_FOUND" ? 404 : err.code === "OVER_PARTY_SIZE" ? 422 : 409);
-    }
-    throw err;
+    console.error("RSVP saved, but notifying the planner failed:", err);
   }
+  return NextResponse.json({ ok: true });
 }

@@ -178,12 +178,43 @@ export class GuestRsvpPage extends BasePage {
     if (input.notes !== undefined) {
       await this.notesInput().fill(input.notes);
     }
-    await Promise.all([
+    await this.submitAsShown();
+  }
+
+  /** TS-174: picks attending/declining on its own, for a test that fills the form step by step. */
+  async choose(attending: "CONFIRMED" | "DECLINED"): Promise<void> {
+    await this.setAttending(attending);
+  }
+
+  /** TS-174: types a party size (only shown while attending). */
+  async fillPartySize(headcount: number): Promise<void> {
+    await this.headcountInput().fill(String(headcount));
+  }
+
+  /** TS-174: types who's coming along (only shown while the party is bigger than one). */
+  async fillPlusOneNames(names: string): Promise<void> {
+    await this.plusOneNamesInput().fill(names);
+  }
+
+  /** TS-174: ticks "need an accessible seat" (only shown while attending). */
+  async checkAccessibleSeat(): Promise<void> {
+    await this.accessibleTableCheckbox().check();
+  }
+
+  /** TS-174: the plus-one names field (shown only while the party is bigger than one). */
+  plusOneNamesField() {
+    return this.plusOneNamesInput();
+  }
+
+  /** Submits the form as it stands; TS-174: returns what the page actually sent. */
+  async submitAsShown(): Promise<Record<string, unknown>> {
+    const [response] = await Promise.all([
       this.page.waitForResponse(
         (res) => res.request().method() === "POST" && /\/api\/v1\/rsvp\/[^/]+$/.test(new URL(res.url()).pathname),
       ),
       this.submitButton().click(),
     ]);
+    return response.request().postDataJSON() as Record<string, unknown>;
   }
 
   /** TS-166: shown when the page couldn't load (as opposed to the link not existing). */

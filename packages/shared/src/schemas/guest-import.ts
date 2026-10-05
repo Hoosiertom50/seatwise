@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { revisionNumber } from "./common";
 
 // FR-2.4/2.4a: bulk guest import from a CSV file. Column mapping is explicit -- the client tells
 // the server which CSV header (by name) corresponds to which guest field; a field left unmapped
@@ -31,7 +32,7 @@ export const guestImportRequestSchema = z.object({
   // TS-92: on commit, the revision of every guest the preview showed as an "update" -- so a guest
   // someone else edited between preview and confirm is refused rather than silently overwritten.
   // Keyed by guest ID. Omitted on preview (and by older clients, which get the old behavior).
-  expectedRevisions: z.record(z.string(), z.number().int().nonnegative()).optional(),
+  expectedRevisions: z.record(z.string(), revisionNumber).optional(),
 });
 export type GuestImportRequest = z.infer<typeof guestImportRequestSchema>;
 

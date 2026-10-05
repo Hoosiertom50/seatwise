@@ -2,7 +2,15 @@ import { randomUUID } from "crypto";
 import { isRsvpCutoffPast } from "@seatwise/shared";
 import { pool } from "../pool";
 import { encryptText, decryptText } from "../crypto";
-import { lockCurrentPlan, recordRecheckIfApproved, refreshPlanCompleteness, resyncTables, tablesAffectedBy } from "./seat-checks";
+import {
+  applyAttendanceChange,
+  lockCurrentPlan,
+  recordRecheckIfApproved,
+  refreshPlanCompleteness,
+  resyncTables,
+  tablesAffectedBy,
+  type TableSeatingFlagReason,
+} from "./seat-checks";
 import { hashLinkToken, isPlainStoredLinkToken, newLinkToken, readStoredLinkToken } from "../link-tokens";
 
 export interface GuestRow {
@@ -320,6 +328,15 @@ export async function ensureGuestRsvpToken(guestId: string, weddingId: string): 
   return readStoredLinkToken(stored);
 }
 
+// TS-174: whether this guest has ever been given an RSVP link (a link may be out there).
+export async function guestHasRsvpLink(guestId: string, weddingId: string): Promise<boolean> {
+  const { rows } = await pool.query(
+    `SELECT 1 FROM "guests" WHERE id = $1 AND "weddingId" = $2 AND "rsvpTokenHash" IS NOT NULL`,
+    [guestId, weddingId]
+  );
+  return rows.length > 0;
+}
+
 // FR-12.4: "regenerate" -- always issues a fresh token, invalidating whatever link was out there
 // before (e.g. a planner suspects a link was shared somewhere it shouldn't have been).
 export async function regenerateGuestRsvpToken(guestId: string, weddingId: string): Promise<string | null> {
@@ -352,6 +369,17 @@ export interface SubmitGuestRsvpData {
   requiresAccessibleTable?: boolean;
 }
 
+// TS-174: what a guest's own RSVP did, beyond saving their answer -- for the route's message.
+export interface GuestRsvpResult extends GuestRow {
+  previousRsvpStatus: string;
+  /** Their attendance moved because their answer changed (TS-167/TS-169), or null. */
+  attendanceChange: "ATTENDING" | "NOT_ATTENDING" | null;
+  /** They gave up a seat they actually had (not just "marked not attending"). */
+  seatFreed: boolean;
+  /** Seated guests the answer flagged Needs Reassignment (TS-134). */
+  newlyFlagged: { name: string; reason: TableSeatingFlagReason }[];
+}
+
 // FR-12.1/FR-12.3: writes directly into the guest's own record (never a separate copy) and bumps
 // revision so any planner concurrently viewing this guest gets a correct conflict signal on their
 // own next save -- but deliberately takes no expectedRevision itself: an unauthenticated public
@@ -360,55 +388,147 @@ export interface SubmitGuestRsvpData {
 // a planner's direct edit could also produce.
 // TS-169: also returns the answer they had before this one, so the caller can tell a real change
 // of mind (Declined -> Confirmed) from re-sending the same answer to fix a detail.
-export async function submitGuestRsvp(
-  token: string,
-  input: SubmitGuestRsvpData
-): Promise<GuestRow & { previousRsvpStatus: string }> {
-  const { rows } = await pool.query(
-    `SELECT g.id AS "guestId", g."weddingId", w."rsvpCutoffDate"::text AS "rsvpCutoffDate",
-            COALESCE(g."partySizeLimit", g.headcount) AS "partySizeLimit"
-     FROM "guests" g JOIN "weddings" w ON w.id = g."weddingId"
-     WHERE g."rsvpTokenHash" = $1`,
-    [hashLinkToken(token)]
-  );
-  const found = rows[0];
-  if (!found) {
-    throw new RsvpSubmissionError("This RSVP link isn't valid.", "NOT_FOUND");
-  }
-  // FR-12.2: the cutoff is a date, not a timestamp -- responses are accepted through the entire
-  // cutoff day itself, only actually closing off at the start of the next day.
-  // TS-153: the day ends when it has ended everywhere (see @seatwise/shared rsvp-cutoff.ts).
-  if (isRsvpCutoffPast(found.rsvpCutoffDate)) {
-    throw new RsvpSubmissionError("RSVP responses have closed for this wedding.", "CLOSED");
-  }
-
-  // TS-154 (Tom's decision #2): a guest can answer for at most the party size the planner set.
-  const limit = Number(found.partySizeLimit);
-  if ((input.headcount ?? 1) > limit) {
-    throw new RsvpSubmissionError(
-      `Your invitation is for up to ${limit} ${limit === 1 ? "person" : "people"}. Contact the couple if you need to bring more.`,
-      "OVER_PARTY_SIZE"
+// TS-174: one transaction, all of it. Before, the link, party-size limit and cutoff were read in
+// one statement and the answer written in another by guest id -- so a link regenerated (or a limit
+// lowered) in between still took the answer and put the old limit back, and a guest deleted in
+// between gave a server error. Now the guest's row is locked *by its link* and everything is
+// checked under that lock; and the attendance change a changed answer brings (TS-167/TS-169) and
+// the re-check of their seat (TS-134) are part of the same write. Locks are taken in the usual
+// order (wedding, current plan, guest -- see lockCurrentPlan).
+export async function submitGuestRsvp(token: string, input: SubmitGuestRsvpData): Promise<GuestRsvpResult> {
+  const tokenHash = hashLinkToken(token);
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    // Which wedding to lock -- read without a lock, then checked again under it below.
+    const { rows: found } = await client.query<{ weddingId: string }>(
+      `SELECT "weddingId" FROM "guests" WHERE "rsvpTokenHash" = $1`,
+      [tokenHash]
     );
-  }
+    if (!found[0]) throw new RsvpSubmissionError("This RSVP link isn't valid.", "NOT_FOUND");
+    const weddingId = found[0].weddingId;
+    const { rows: weddingRows } = await client.query<{ rsvpCutoffDate: string | null }>(
+      `SELECT "rsvpCutoffDate"::text AS "rsvpCutoffDate" FROM "weddings" WHERE id = $1 FOR UPDATE`,
+      [weddingId]
+    );
+    if (!weddingRows[0]) throw new RsvpSubmissionError("This RSVP link isn't valid.", "NOT_FOUND");
+    const planVersionId = await lockCurrentPlan(client, weddingId);
+    const { rows: locked } = await client.query<{
+      id: string;
+      name: string;
+      rsvpStatus: string;
+      dayOfAttendance: string;
+      partySizeLimit: number;
+    }>(
+      `SELECT id, ("firstName" || ' ' || "lastName") AS name, "rsvpStatus", "dayOfAttendance",
+              COALESCE("partySizeLimit", headcount) AS "partySizeLimit"
+       FROM "guests" WHERE "rsvpTokenHash" = $1 AND "weddingId" = $2 FOR UPDATE`,
+      [tokenHash, weddingId]
+    );
+    const guest = locked[0];
+    // A new link was made, or the guest removed, while this was on its way.
+    if (!guest) throw new RsvpSubmissionError("This RSVP link isn't valid.", "NOT_FOUND");
 
-  const { rows: updated } = await pool.query<{ previousRsvpStatus: string }>(
-    `UPDATE "guests" g
-     SET "rsvpStatus" = $1, headcount = $2, "plusOneNames" = $3, "rsvpNotes" = $4,
-         "requiresAccessibleTable" = $5, "rsvpRespondedAt" = now(), "updatedAt" = now(),
-         "partySizeLimit" = $7, revision = g.revision + 1
-     FROM (SELECT id, "rsvpStatus" AS prev FROM "guests" WHERE id = $6 FOR UPDATE) old
-     WHERE g.id = old.id
-     RETURNING old.prev AS "previousRsvpStatus"`,
-    [
-      input.rsvpStatus,
-      input.headcount ?? 1,
-      input.plusOneNames ?? null,
-      encryptText(input.rsvpNotes ?? null),
-      input.requiresAccessibleTable ?? false,
-      found.guestId,
-      limit,
-    ]
-  );
-  const guest = await getGuestForWedding(found.guestId, found.weddingId);
-  return { ...guest!, previousRsvpStatus: updated[0].previousRsvpStatus };
+    // FR-12.2: the cutoff is a date, not a timestamp -- responses are accepted through the entire
+    // cutoff day itself, only actually closing off at the start of the next day.
+    // TS-153: the day ends when it has ended everywhere (see @seatwise/shared rsvp-cutoff.ts).
+    if (isRsvpCutoffPast(weddingRows[0].rsvpCutoffDate)) {
+      throw new RsvpSubmissionError("RSVP responses have closed for this wedding.", "CLOSED");
+    }
+
+    // TS-174: only the answers the form actually asks for are saved. Declining hides the party
+    // size, plus-ones and accessible seat, so those stay as they were on file (and a re-confirm
+    // starts from them); a party of one has no plus-ones to name, so any are cleared. This holds
+    // whatever is sent, so the API can't store an answer the form never showed.
+    const confirming = input.rsvpStatus === "CONFIRMED";
+    const headcount = input.headcount ?? 1;
+    // TS-154 (Tom's decision #2): a guest can answer for at most the party size the planner set.
+    const limit = Number(guest.partySizeLimit);
+    if (confirming && headcount > limit) {
+      throw new RsvpSubmissionError(
+        `Your invitation is for up to ${limit} ${limit === 1 ? "person" : "people"}. Contact the couple if you need to bring more.`,
+        "OVER_PARTY_SIZE"
+      );
+    }
+
+    await client.query(
+      confirming
+        ? `UPDATE "guests"
+           SET "rsvpStatus" = $1, "rsvpNotes" = $2, "rsvpRespondedAt" = now(), "updatedAt" = now(),
+               "partySizeLimit" = $3, revision = revision + 1,
+               headcount = $5, "plusOneNames" = $6, "requiresAccessibleTable" = $7
+           WHERE id = $4`
+        : `UPDATE "guests"
+           SET "rsvpStatus" = $1, "rsvpNotes" = $2, "rsvpRespondedAt" = now(), "updatedAt" = now(),
+               "partySizeLimit" = $3, revision = revision + 1
+           WHERE id = $4`,
+      [
+        input.rsvpStatus,
+        encryptText(input.rsvpNotes ?? null),
+        limit,
+        guest.id,
+        ...(confirming
+          ? [headcount, headcount > 1 ? (input.plusOneNames ?? null) : null, input.requiresAccessibleTable ?? false]
+          : []),
+      ]
+    );
+
+    // TS-167 (Tom, 2026-10-05): a guest who declines gives up their seat -- they're marked Not
+    // Attending, which frees it and re-checks the table, as on the day. If they confirm again
+    // later, they count as attending again and wait, unseated, for the planner to seat them.
+    // TS-169: only on an actual change of answer. Sending the same answer again (to fix a
+    // plus-one's name, say) leaves alone whatever the planner has set for their attendance.
+    const changedAnswer = guest.rsvpStatus !== input.rsvpStatus;
+    let attendanceChange: GuestRsvpResult["attendanceChange"] = null;
+    if (changedAnswer && input.rsvpStatus === "DECLINED" && guest.dayOfAttendance === "ATTENDING") {
+      attendanceChange = "NOT_ATTENDING";
+    } else if (changedAnswer && guest.rsvpStatus === "DECLINED" && confirming && guest.dayOfAttendance === "NOT_ATTENDING") {
+      attendanceChange = "ATTENDING";
+    }
+    let seatFreed = false;
+    if (attendanceChange) {
+      ({ seatFreed } = await applyAttendanceChange(
+        client,
+        weddingId,
+        planVersionId,
+        { id: guest.id, name: guest.name },
+        attendanceChange,
+        null
+      ));
+    }
+
+    // TS-134: a guest who now needs an accessible seat, or is bringing more people than their
+    // table has room for, is flagged Needs Reassignment -- exactly as a planner's own edit would --
+    // instead of silently staying where they no longer fit.
+    let newlyFlagged: GuestRsvpResult["newlyFlagged"] = [];
+    if (planVersionId) {
+      const { rows: seatedAt } = await client.query<{ tableId: string }>(
+        `SELECT "seatingTableId" AS "tableId" FROM "seat_assignments" WHERE "planVersionId" = $1 AND "guestId" = $2`,
+        [planVersionId, guest.id]
+      );
+      if (seatedAt.length > 0) {
+        const result = await resyncTables(client, weddingId, planVersionId, seatedAt.map((r) => r.tableId));
+        newlyFlagged = result.newlyFlagged.map(({ name, reason }) => ({ name, reason }));
+        await refreshPlanCompleteness(client, weddingId, planVersionId, { bumpRevision: result.changed });
+        if (result.changed) {
+          await recordRecheckIfApproved(client, planVersionId, "Seating re-checked after a change — some guests' Needs Reassignment flags changed", null);
+        }
+      }
+    }
+
+    const { rows: saved } = await client.query(`SELECT ${COLUMNS} ${FROM_JOINED} WHERE g.id = $1`, [guest.id]);
+    await client.query("COMMIT");
+    return {
+      ...decryptGuestNotes(saved[0] as GuestRow),
+      previousRsvpStatus: guest.rsvpStatus,
+      attendanceChange,
+      seatFreed,
+      newlyFlagged,
+    };
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
 }

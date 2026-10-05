@@ -8,6 +8,7 @@ import {
   recordRecheckIfApproved,
   currentPlanVersionId as currentPlanVersionIdFor,
   lockCurrentPlan,
+  applyAttendanceChange,
 } from "./seat-checks";
 import { RULE_WEIGHT_CONFIG, RULE_WEIGHT_CONFIG_VERSION, compareTableLabels } from "@seatwise/shared";
 
@@ -1061,62 +1062,15 @@ export async function setGuestAttendance(
       `SELECT "dayOfAttendance" FROM "guests" WHERE id = $1 FOR UPDATE`,
       [guestId]
     );
-    if (lockedGuest[0]?.dayOfAttendance === attendance) {
+    // TS-174: removed in the meantime -- nothing to change (before, the history still said they were).
+    if (!lockedGuest[0]) throw new AttendanceError("Guest not found.");
+    if (lockedGuest[0].dayOfAttendance === attendance) {
       await client.query("COMMIT");
       return currentPlanVersionId ? getPlanVersionDetail(currentPlanVersionId, weddingId) : null;
     }
-    // TS-165: bumps the guest's revision too, so a planner editing this guest from an older copy
-    // gets a conflict instead of overwriting the attendance change.
-    await client.query(
-      `UPDATE "guests" SET "dayOfAttendance" = $1::"DayOfAttendance", revision = revision + 1, "updatedAt" = now() WHERE id = $2`,
-      [attendance, guestId]
-    );
-
-    if (currentPlanVersionId) {
-      if (attendance === "NOT_ATTENDING") {
-        // TS-165: the freed seat can make room for someone flagged at that table, and a rule
-        // partner's flag may no longer apply -- re-check those tables.
-        const affected = await tablesAffectedBy(client, weddingId, currentPlanVersionId, [guestId]);
-        await client.query(
-          `DELETE FROM "seat_assignments" WHERE "planVersionId" = $1 AND "guestId" = $2`,
-          [currentPlanVersionId, guestId]
-        );
-        await resyncTables(client, weddingId, currentPlanVersionId, affected);
-      }
-      // Recompute completeness against the new attendance-filtered denominator — a guest who
-      // just became NOT_ATTENDING can no longer make the plan "incomplete" by being unseated,
-      // and one who just became ATTENDING again can.
-      const { rows: unassignedCountRows } = await client.query(
-        `SELECT
-           (SELECT COUNT(*)::int FROM "guests" g WHERE g."weddingId" = $1 AND g."dayOfAttendance" = 'ATTENDING'
-              AND NOT EXISTS (
-                SELECT 1 FROM "seat_assignments" sa WHERE sa."planVersionId" = $2 AND sa."guestId" = g.id
-              )
-           ) AS "count",
-           -- FR-4.6: don't let an attendance change silently clear an unrelated Needs
-           -- Reassignment flag from elsewhere in the plan.
-           (SELECT COUNT(*)::int FROM "seat_assignments" WHERE "planVersionId" = $2 AND "needsReassignment" = true)
-             AS "needsReassignmentCount"`,
-        [weddingId, currentPlanVersionId]
-      );
-      const isComplete =
-        unassignedCountRows[0].count === 0 && unassignedCountRows[0].needsReassignmentCount === 0;
-      // TS-165: every other seat change bumps the plan's revision; this one now does too.
-      await client.query(`UPDATE "plan_versions" SET "isComplete" = $1, revision = revision + 1 WHERE id = $2`, [
-        isComplete,
-        currentPlanVersionId,
-      ]);
-
-      const description =
-        attendance === "NOT_ATTENDING"
-          ? `${guest.name} marked not attending — seat freed`
-          : `${guest.name} marked attending again — now unassigned`;
-      await client.query(
-        `INSERT INTO "change_history_entries" (id, "planVersionId", action, description, "actorUserId")
-         VALUES ($1, $2, 'ATTENDANCE_CHANGE', $3, $4)`,
-        [randomUUID(), currentPlanVersionId, description, actorUserId]
-      );
-    }
+    // TS-174: the change itself is shared with a guest's own RSVP (submitGuestRsvp), which makes it
+    // inside the same transaction as their answer.
+    await applyAttendanceChange(client, weddingId, currentPlanVersionId ?? null, { id: guestId, name: guest.name }, attendance, actorUserId);
 
     await client.query("COMMIT");
   } catch (err) {

@@ -250,18 +250,26 @@ export async function weddingNotificationEmailsThisHour(weddingId: string): Prom
 }
 
 /**
- * TS-171: uses up all but `remaining` of a test network address's daily allowance of account
- * emails (sign-up confirmations, resent links and password resets), so a test can reach the limit
- * without a hundred real sign-ups. Test addresses only (198.18.0.0/15, see uniqueTestAddress).
+ * TS-173: resolves once `count` database sessions are waiting behind the session `pid` -- directly,
+ * or queued behind a request that is (a second request for the same row waits on the first
+ * waiter, not on the holder). Shared by the lock-holding helpers below.
  */
-export async function useUpAccountEmailAllowance(address: string, limit: number, remaining: number): Promise<void> {
-  if (!/^198\.(18|19)\.\d+\.\d+$/.test(address)) throw new Error(`testDatabase: ${address} isn't a test address.`);
-  const day = 86_400_000;
-  await testPool().query(
-    `INSERT INTO "rate_limit_counters" (key, "windowStart", count) VALUES ($1, $2, $3)
-     ON CONFLICT (key, "windowStart") DO UPDATE SET count = $3`,
-    [`account-email:addr:day:${address}`, new Date(Math.floor(Date.now() / day) * day), limit - remaining],
-  );
+async function waitForSessionsBlockedBy(pid: number, count: number, what: string): Promise<void> {
+  const deadline = Date.now() + 15_000;
+  for (;;) {
+    const { rows: waiting } = await testPool().query<{ n: number }>(
+      `WITH RECURSIVE blocked(pid) AS (
+         SELECT pid FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid))
+         UNION
+         SELECT a.pid FROM pg_stat_activity a JOIN blocked b ON b.pid = ANY(pg_blocking_pids(a.pid))
+       )
+       SELECT COUNT(*)::int AS n FROM blocked`,
+      [pid],
+    );
+    if (waiting[0].n >= count) return;
+    if (Date.now() > deadline) throw new Error(`testDatabase: only ${waiting[0].n} of ${count} request(s) reached ${what}.`);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
 }
 
 /** TS-173: a test wedding's row lock, held from outside the app -- see holdWeddingLock. */
@@ -298,23 +306,7 @@ export async function holdWeddingLock(weddingId: string): Promise<HeldWeddingLoc
   const pid = me[0].pid;
   return {
     async waitForWaiters(count: number) {
-      const deadline = Date.now() + 15_000;
-      for (;;) {
-        // Waiting behind this lock directly, or queued behind a request that is (a second request
-        // for the same row waits on the first waiter, not on the holder).
-        const { rows: waiting } = await testPool().query<{ n: number }>(
-          `WITH RECURSIVE blocked(pid) AS (
-             SELECT pid FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid))
-             UNION
-             SELECT a.pid FROM pg_stat_activity a JOIN blocked b ON b.pid = ANY(pg_blocking_pids(a.pid))
-           )
-           SELECT COUNT(*)::int AS n FROM blocked`,
-          [pid],
-        );
-        if (waiting[0].n >= count) return;
-        if (Date.now() > deadline) throw new Error(`testDatabase: only ${waiting[0].n} of ${count} request(s) reached the wedding lock.`);
-        await new Promise((resolve) => setTimeout(resolve, 50));
-      }
+      await waitForSessionsBlockedBy(pid, count, "the wedding lock");
     },
     async release() {
       try {
@@ -324,4 +316,92 @@ export async function holdWeddingLock(weddingId: string): Promise<HeldWeddingLoc
       }
     },
   };
+}
+
+/**
+ * TS-174: makes a test wedding's timeline entries tie on position the way entries saved before
+ * TS-153 could (every one at sortOrder 0), with their creation times in the given order -- the
+ * first id earliest. Lets a test check that the list and "Up"/"Down" break such a tie the same way.
+ */
+export async function plantTimelineTie(weddingId: string, entryIdsInCreatedOrder: string[]): Promise<void> {
+  const { rowCount } = await testPool().query(
+    `UPDATE "timeline_entries" t
+     SET "sortOrder" = 0,
+         "createdAt" = timestamp '2020-01-01' + (array_position($2::text[], t.id) * interval '1 minute')
+     FROM "weddings" w JOIN "users" u ON u.id = w."ownerId"
+     WHERE t."weddingId" = $1 AND t.id = ANY($2::text[]) AND w.id = t."weddingId" AND u.email LIKE $3`,
+    [weddingId, entryIdsInCreatedOrder, TEST_EMAIL_PATTERN],
+  );
+  if (rowCount !== entryIdsInCreatedOrder.length) throw new Error(`testDatabase: not every entry is on test wedding ${weddingId}.`);
+}
+
+/** TS-174: a test timeline entry's row lock, held from outside the app -- see holdTimelineEntry. */
+export interface HeldTimelineEntry {
+  /** Resolves once `count` of the app's own database sessions are waiting on this entry. */
+  waitForWaiters(count: number): Promise<void>;
+  /** Moves the entry to another time and lets the waiting requests carry on. */
+  moveToTimeAndRelease(time: string): Promise<void>;
+  /** Lets the waiting requests carry on without changing anything (cleanup). */
+  release(): Promise<void>;
+}
+
+/**
+ * TS-174: holds a test timeline entry's row lock, so a reorder of it waits exactly where a change
+ * of its time used to slip in; the test then moves it and lets the reorder go. Test weddings only.
+ */
+export async function holdTimelineEntry(entryId: string): Promise<HeldTimelineEntry> {
+  const { Client } = await import("pg");
+  testPool(); // the same production refusal as every other helper here
+  const client = new Client({ connectionString: resolveDatabaseUrl() });
+  await client.connect();
+  await client.query("BEGIN");
+  const { rows } = await client.query(
+    `SELECT t.id FROM "timeline_entries" t JOIN "weddings" w ON w.id = t."weddingId" JOIN "users" u ON u.id = w."ownerId"
+     WHERE t.id = $1 AND u.email LIKE $2 FOR UPDATE OF t`,
+    [entryId, TEST_EMAIL_PATTERN],
+  );
+  if (!rows[0]) {
+    await client.query("ROLLBACK");
+    await client.end();
+    throw new Error(`testDatabase: no timeline entry ${entryId} on a test wedding.`);
+  }
+  const { rows: me } = await client.query<{ pid: number }>(`SELECT pg_backend_pid() AS pid`);
+  const pid = me[0].pid;
+  let open = true;
+  const finish = async (sql: "COMMIT" | "ROLLBACK") => {
+    if (!open) return;
+    open = false;
+    try {
+      await client.query(sql);
+    } finally {
+      await client.end();
+    }
+  };
+  return {
+    async waitForWaiters(count: number) {
+      await waitForSessionsBlockedBy(pid, count, "the timeline entry");
+    },
+    async moveToTimeAndRelease(time: string) {
+      await client.query(`UPDATE "timeline_entries" SET time = $1, "updatedAt" = now() WHERE id = $2`, [time, entryId]);
+      await finish("COMMIT");
+    },
+    async release() {
+      await finish("ROLLBACK");
+    },
+  };
+}
+
+/**
+ * TS-171: uses up all but `remaining` of a test network address's daily allowance of account
+ * emails (sign-up confirmations, resent links and password resets), so a test can reach the limit
+ * without a hundred real sign-ups. Test addresses only (198.18.0.0/15, see uniqueTestAddress).
+ */
+export async function useUpAccountEmailAllowance(address: string, limit: number, remaining: number): Promise<void> {
+  if (!/^198\.(18|19)\.\d+\.\d+$/.test(address)) throw new Error(`testDatabase: ${address} isn't a test address.`);
+  const day = 86_400_000;
+  await testPool().query(
+    `INSERT INTO "rate_limit_counters" (key, "windowStart", count) VALUES ($1, $2, $3)
+     ON CONFLICT (key, "windowStart") DO UPDATE SET count = $3`,
+    [`account-email:addr:day:${address}`, new Date(Math.floor(Date.now() / day) * day), limit - remaining],
+  );
 }
