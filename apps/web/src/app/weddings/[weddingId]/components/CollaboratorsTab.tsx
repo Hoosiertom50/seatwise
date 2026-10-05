@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { ConfirmDeleteButton } from "@/components/ConfirmDeleteButton";
 import { api, ApiError, apiErrorMessage } from "@/lib/api-client";
 import type {
@@ -47,15 +48,19 @@ function inviteStatusLabel(status: WeddingInviteDTO["status"]) {
 export function CollaboratorsTab({
   weddingId,
   isOwner,
+  currentUserId,
   wedding,
   setWedding,
 }: {
   weddingId: string;
   isOwner: boolean;
+  /** TS-148: so a collaborator can leave the wedding from their own row. */
+  currentUserId: string | null;
   wedding: WeddingDTO | null;
   setWedding: (w: WeddingDTO) => void;
 }) {
   const [collaborators, setCollaborators] = useState<CollaboratorDTO[]>([]);
+  const router = useRouter();
   // TS-105: which collaborator the owner is handing the wedding to.
   const [handOffTo, setHandOffTo] = useState("");
   const [invites, setInvites] = useState<WeddingInviteDTO[]>([]);
@@ -72,6 +77,11 @@ export function CollaboratorsTab({
   // local-input-then-save-on-blur pattern as the fields below.
   const [weddingName, setWeddingName] = useState(wedding?.name ?? "");
   const [savingName, setSavingName] = useState(false);
+  // TS-154 (Tom's decision #5): the wedding's date and venue could only be set when it was created.
+  const [eventDate, setEventDate] = useState(wedding?.eventDate ?? "");
+  const [venueName, setVenueName] = useState(wedding?.venueName ?? "");
+  const [savingDetails, setSavingDetails] = useState(false);
+  const [detailsSaved, setDetailsSaved] = useState(false);
   // FR-1.3a: this wedding's own names for its two sides -- edited here, then PATCHed as a pure
   // label rename. Local input state so typing doesn't PATCH on every keystroke; saved on blur.
   const [sideLabel1, setSideLabel1] = useState(wedding?.sideLabel1 ?? "Bride");
@@ -116,6 +126,8 @@ export function CollaboratorsTab({
   useEffect(() => {
     if (wedding) {
       setWeddingName(wedding.name);
+      setEventDate(wedding.eventDate ?? "");
+      setVenueName(wedding.venueName ?? "");
       setSideLabel1(wedding.sideLabel1);
       setSideLabel2(wedding.sideLabel2);
       setNote(wedding.note ?? "");
@@ -152,6 +164,30 @@ export function CollaboratorsTab({
     }
   }
 
+  // TS-154: date and venue are saved together with a Save button (a date picker fires change
+  // events as you go, so saving on every change would send half-picked dates).
+  async function onSaveDetails(e: React.FormEvent) {
+    e.preventDefault();
+    if (!wedding) return;
+    setSavingDetails(true);
+    setDetailsSaved(false);
+    setError(null);
+    try {
+      const { wedding: updated } = await api.patch<{ wedding: WeddingDTO }>(`/api/v1/weddings/${weddingId}`, {
+        eventDate: eventDate || null,
+        venueName: venueName.trim() || null,
+      });
+      setWedding(updated);
+      setEventDate(updated.eventDate ?? "");
+      setVenueName(updated.venueName ?? "");
+      setDetailsSaved(true);
+    } catch (err) {
+      setError(apiErrorMessage(err, ["eventDate", "venueName"], "Couldn't save the date and venue."));
+    } finally {
+      setSavingDetails(false);
+    }
+  }
+
   // TS-137: each box saves only its own label. Saving both from either box let a slow save from
   // leaving Side 1 (carrying Side 2's old value) land after Side 2's own save and undo it, and
   // refilling both boxes from the response wiped out whatever the planner was typing in the other.
@@ -175,7 +211,7 @@ export function CollaboratorsTab({
       // A blank box shows what it saved as (Bride/Groom), unless the planner has typed since.
       setTyped((current) => (current.trim() === "" ? updated[field] : current));
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Couldn't save the side labels.");
+      setError(apiErrorMessage(err, [], "Couldn't save the side labels."));
       setTyped(wedding[field]);
     }
   }
@@ -195,7 +231,7 @@ export function CollaboratorsTab({
       setWedding(updated);
       setNote(updated.note ?? "");
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Couldn't save the note.");
+      setError(apiErrorMessage(err, [], "Couldn't save the note."));
       setNote(wedding.note ?? "");
     } finally {
       setSavingNote(false);
@@ -210,7 +246,7 @@ export function CollaboratorsTab({
       await api.post(`/api/v1/weddings/${weddingId}/transfer-ownership`, { collaboratorId: handOffTo });
       window.location.reload();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Couldn't hand off this wedding.");
+      setError(apiErrorMessage(err, [], "Couldn't hand off this wedding."));
     }
   }
 
@@ -237,7 +273,7 @@ export function CollaboratorsTab({
       setLevel("VIEW");
       setRole("COLLABORATOR");
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Couldn't send that invite.");
+      setError(apiErrorMessage(err, [], "Couldn't send that invite."));
     } finally {
       setAdding(false);
     }
@@ -301,7 +337,7 @@ export function CollaboratorsTab({
       setWedding(updated);
       setRsvpCutoffDate(updated.rsvpCutoffDate ?? "");
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Couldn't save the RSVP cutoff.");
+      setError(apiErrorMessage(err, [], "Couldn't save the RSVP cutoff."));
       setRsvpCutoffDate(wedding.rsvpCutoffDate ?? "");
     } finally {
       setSavingRsvpCutoff(false);
@@ -472,6 +508,67 @@ export function CollaboratorsTab({
           )}
 
           {wedding && (
+            <form
+              onSubmit={onSaveDetails}
+              aria-labelledby="wedding-details-heading"
+              className="mb-8 rounded-lg border border-neutral-200 dark:border-neutral-700 p-4"
+            >
+              <h3 id="wedding-details-heading" className="mb-1 text-sm font-medium">
+                Date and venue
+              </h3>
+              <p className="mb-3 text-sm text-neutral-500 dark:text-neutral-400">
+                Shown on the dashboard, the wedding page and vendors&apos; read-only links. Either can be left blank.
+              </p>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div>
+                  <label htmlFor="wedding-date" className="mb-1 block text-sm font-medium">
+                    Wedding date
+                  </label>
+                  <input
+                    id="wedding-date"
+                    type="date"
+                    className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
+                    value={eventDate}
+                    onChange={(e) => {
+                      setEventDate(e.target.value);
+                      setDetailsSaved(false);
+                    }}
+                  />
+                </div>
+                <div>
+                  <label htmlFor="wedding-venue" className="mb-1 block text-sm font-medium">
+                    Venue
+                  </label>
+                  <input
+                    id="wedding-venue"
+                    className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
+                    value={venueName}
+                    onChange={(e) => {
+                      setVenueName(e.target.value);
+                      setDetailsSaved(false);
+                    }}
+                    maxLength={200}
+                  />
+                </div>
+              </div>
+              <div className="mt-3 flex items-center gap-3">
+                <button
+                  type="submit"
+                  disabled={savingDetails}
+                  className="rounded-md bg-neutral-900 dark:bg-neutral-100 px-4 py-2 text-sm font-medium text-white dark:text-neutral-900 hover:bg-neutral-700 dark:hover:bg-neutral-300 disabled:opacity-50"
+                >
+                  {savingDetails ? "Saving..." : "Save date and venue"}
+                </button>
+                {detailsSaved && (
+                  <span role="status" className="text-sm text-green-700 dark:text-green-400">
+                    Saved
+                  </span>
+                )}
+              </div>
+            </form>
+          )}
+
+          {wedding && (
             <div className="mb-8 rounded-lg border border-neutral-200 dark:border-neutral-700 p-4">
               <h3 className="mb-1 text-sm font-medium">Side labels</h3>
               <p className="mb-3 text-sm text-neutral-500 dark:text-neutral-400">
@@ -570,7 +667,7 @@ export function CollaboratorsTab({
             >
               <div>
                 <p className="font-medium">{c.userName}</p>
-                <p className="text-sm text-neutral-500 dark:text-neutral-400">{c.userEmail}</p>
+                {c.userEmail && <p className="text-sm text-neutral-500 dark:text-neutral-400">{c.userEmail}</p>}
               </div>
               {isOwner ? (
                 <div className="flex flex-wrap items-center gap-2">
@@ -611,6 +708,23 @@ export function CollaboratorsTab({
                     {LEVELS.find((l) => l.value === c.permissionLevel)?.label}
                   </span>
                   <span className="text-xs text-neutral-400 dark:text-neutral-500">{roleLabel(c.role)}</span>
+                  {/* TS-148: anyone can take themselves off a wedding. */}
+                  {c.userId === currentUserId && (
+                    <ConfirmDeleteButton
+                      label="Leave this wedding"
+                      question="Leave this wedding? You'll lose access right away. The owner can invite you again."
+                      confirmLabel="Yes, leave"
+                      busyLabel="Leaving…"
+                      onConfirm={async () => {
+                        try {
+                          await api.delete(`/api/v1/weddings/${weddingId}/collaborators/${c.id}`);
+                          router.push("/dashboard");
+                        } catch (err) {
+                          setError(err instanceof ApiError ? err.message : "Couldn't leave this wedding.");
+                        }
+                      }}
+                    />
+                  )}
                 </div>
               )}
             </li>

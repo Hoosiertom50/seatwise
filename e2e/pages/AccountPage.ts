@@ -21,6 +21,14 @@ export class AccountPage extends BasePage {
     ]);
   }
 
+  /** TS-100: the "Get help" section and its Email support link. */
+  getHelpSection() {
+    return this.page.getByRole("region", { name: "Get help", exact: true });
+  }
+  emailSupportLink() {
+    return this.getHelpSection().getByRole("link", { name: "Email support", exact: true });
+  }
+
   message(text: string | RegExp) {
     return typeof text === "string" ? this.page.getByText(text, { exact: true }) : this.page.getByText(text);
   }

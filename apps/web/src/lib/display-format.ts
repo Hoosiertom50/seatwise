@@ -41,3 +41,18 @@ export function formatEventDate(isoDate: string): string {
     timeZone: "UTC",
   });
 }
+
+// TS-151: a wedding date ("YYYY-MM-DD") in the short local style, e.g. "6/12/2027". Reading the
+// string with new Date() treats it as midnight UTC, which is the evening before anywhere in the
+// Americas -- the date showed a day early on the dashboard and wedding page.
+export function formatShortEventDate(isoDate: string): string {
+  const [y, m, d] = isoDate.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString(undefined, { timeZone: "UTC" });
+}
+
+// TS-151: today's date where the planner is, as "YYYY-MM-DD" (toISOString() gives UTC's date,
+// which is already tomorrow on a US evening).
+export function localTodayIso(now: Date = new Date()): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+}

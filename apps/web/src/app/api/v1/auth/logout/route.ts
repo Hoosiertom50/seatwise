@@ -1,9 +1,14 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
+import { bumpSessionVersion } from "@seatwise/db";
 import { AUTH_COOKIE_NAME, isSecureCookieContext } from "@/lib/auth";
+import { getAuthUser } from "@/lib/session";
 
-// Native clients don't need this — they just discard the token locally. It exists so the
-// web app can clear its httpOnly cookie server-side.
-export async function POST() {
+// Clears the web app's httpOnly cookie server-side. TS-155: also ends the session itself -- and
+// every other session of this account -- so a copy of the token (a shared computer, a token a
+// native client stored) stops working too, rather than staying valid until it expires.
+export async function POST(req: NextRequest) {
+  const user = await getAuthUser(req);
+  if (user) await bumpSessionVersion(user.id);
   const response = NextResponse.json({ ok: true });
   // TS-65: this clearing Set-Cookie must mirror the same httpOnly/secure/sameSite attributes
   // used when the cookie was set at login/signup. Per RFC 6265 a cookie is keyed by

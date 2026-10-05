@@ -31,6 +31,21 @@ import {
   createTimelineEntry,
 } from "../src/index";
 
+// TS-149: the demo account's password is in this file, so the seed only ever runs against a
+// database on this machine (or CI's throwaway one) -- never the live site.
+const SEED_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]", "postgres"]);
+const seedHost = (() => {
+  try {
+    return new URL(process.env.DATABASE_URL ?? "").hostname;
+  } catch {
+    return "";
+  }
+})();
+if (!SEED_HOSTS.has(seedHost)) {
+  console.error(`Refusing to seed: DATABASE_URL points at "${seedHost || "(unset)"}", not a local database.`);
+  process.exit(1);
+}
+
 const DEMO_EMAIL = "demo@seatwise.test";
 const DEMO_PASSWORD = "seatwise-demo";
 const DEMO_NAME = "Demo Planner";

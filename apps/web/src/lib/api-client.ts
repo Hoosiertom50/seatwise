@@ -126,6 +126,9 @@ export function apiErrorMessage(err: unknown, fields: string[], fallback: string
       const msg = err.fieldErrors?.[field]?.[0];
       if (msg) return msg;
     }
+    // TS-151: a 422's own message is only "Validation failed" -- any field's reason says more.
+    const anyField = Object.values(err.fieldErrors ?? {}).find((m) => m?.[0])?.[0];
+    if (anyField) return anyField;
     return err.message;
   }
   return fallback;

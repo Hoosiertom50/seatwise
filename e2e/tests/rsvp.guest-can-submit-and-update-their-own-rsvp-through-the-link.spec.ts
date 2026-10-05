@@ -23,11 +23,9 @@
  * left untouched and is still sent along with the decline.
  *
  * Also confirmed and asserted: submitting an RSVP never touches `dayOfAttendance` (that's Day-Of
- * Mode's own, separate signal) and never produces any planner notification -- there is no
- * RSVP-related NotificationType at all (confirmed directly against
- * packages/db/src/queries/notifications.ts's own union), so a guest's own answer is silent to the
- * planner in-app; the only way the planner learns of it is by revisiting the Guests tab and seeing
- * the "responded" badge (`rsvpRespondedAt`), which this test also confirms flips correctly.
+ * Mode's own, separate signal). TS-154 (Tom's decision #2): each RSVP now notifies the planner and
+ * collaborators ("RSVP_RECEIVED"); the Guests tab's "responded" badge (`rsvpRespondedAt`) still
+ * flips too, which this test also confirms.
  *
  * TS-107: the guest's free-text note is stored in its own `rsvpNotes` field, never in the
  * planner's private `notes`. Before TS-107 the RSVP page read and overwrote `notes` directly, so a
@@ -58,11 +56,11 @@ const PLANNER_NOTE = "Planner-only: keep away from table 3 (ex-partner seated th
 defineQualityTest(
   {
     id: "rsvp.guest-can-submit-and-update-their-own-rsvp-through-the-link.no-account-needed-and-no-lock-after-first-answer",
-    title: "a guest submits and later changes their own RSVP through their unauthenticated link, with no account and no lock after their first answer, and the change is silently reflected on the planner's Guests tab with no notification",
+    title: "a guest submits and later changes their own RSVP through their unauthenticated link, with no account and no lock after their first answer, and the change is reflected on the planner's Guests tab with an RSVP notification each time",
     objective:
-      "Confirms a fresh, cookie-free browser context can open a guest's RSVP link, see their own name and the wedding name, submit an attending response with party details, see it persisted on reload, then revisit the same link and change to declining -- all without any sign-in. Confirms the planner's private note on the guest is never exposed to the guest and never overwritten (TS-107). Confirms the guest record's rsvpStatus/rsvpRespondedAt/revision update accordingly, dayOfAttendance is untouched, no notification is created, and previously-submitted party details survive a switch to declining even though their fields are hidden.",
+      "Confirms a fresh, cookie-free browser context can open a guest's RSVP link, see their own name and the wedding name, submit an attending response with party details, see it persisted on reload, then revisit the same link and change to declining -- all without any sign-in. Confirms the planner's private note on the guest is never exposed to the guest and never overwritten (TS-107). Confirms the guest record's rsvpStatus/rsvpRespondedAt/revision update accordingly, dayOfAttendance is untouched, the planner gets an RSVP notification for each submission, and previously-submitted party details survive a switch to declining even though their fields are hidden.",
     expectedOutcome:
-      "The guest sees their own first name and the wedding's name with no login. Submitting shows the success banner and persists on reload (pre-filled). Revisiting and switching to declining succeeds with no restriction. The planner's own guest record afterward shows rsvpStatus DECLINED, a non-null rsvpRespondedAt, revision bumped by 2, dayOfAttendance still ATTENDING, and the earlier party details (headcount/plusOneNames/requiresAccessibleTable) still on file. The planner's private note is absent from the RSVP API response and page and unchanged afterward, while the guest's own final note is in rsvpNotes. No new notification is created for the planner.",
+      "The guest sees their own first name and the wedding's name with no login. Submitting shows the success banner and persists on reload (pre-filled). Revisiting and switching to declining succeeds with no restriction. The planner's own guest record afterward shows rsvpStatus DECLINED, a non-null rsvpRespondedAt, revision bumped by 2, dayOfAttendance still ATTENDING, and the earlier party details (headcount/plusOneNames/requiresAccessibleTable) still on file. The planner's private note is absent from the RSVP API response and page and unchanged afterward, while the guest's own final note is in rsvpNotes. The planner has two new RSVP notifications.",
     requirementIds: ["REQ-CLIENT-RSVP-COLLECTION"],
     tags: ["@mutating", "@feature:rsvp", "@risk:critical", "@suite:regression"],
   },
@@ -72,7 +70,8 @@ defineQualityTest(
     const guestName = uniquePersonName(testInfo.workerIndex);
 
     await test.step("Arrange: a guest and their RSVP link", async () => {
-      const guest = await weddingData.createGuest(managedWedding.id, { ...guestName, notes: PLANNER_NOTE });
+      // TS-154: invited as a party of 3, since a guest can RSVP for at most what the planner set.
+      const guest = await weddingData.createGuest(managedWedding.id, { ...guestName, notes: PLANNER_NOTE, headcount: 3 });
       guestId = guest.id;
 
       const res = await context.request.post(
@@ -154,10 +153,12 @@ defineQualityTest(
       expect(guest!.requiresAccessibleTable).toBe(true);
     });
 
-    await test.step("Assert: no notification was created for the planner as a result of either RSVP submission", async () => {
+    // TS-154 (Tom's decision #2): the planner hears about each response.
+    await test.step("Assert: the planner got an RSVP notification for each submission", async () => {
       const res = await context.request.get("/api/v1/notifications");
-      const body = (await res.json()) as { notifications: unknown[] };
-      expect(body.notifications.length).toBe(notificationCountBefore);
+      const body = (await res.json()) as { notifications: { type: string }[] };
+      expect(body.notifications.length).toBe(notificationCountBefore + 2);
+      expect(body.notifications.filter((n) => n.type === "RSVP_RECEIVED")).toHaveLength(2);
     });
   },
 );

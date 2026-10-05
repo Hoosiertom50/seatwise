@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { api, ApiError } from "@/lib/api-client";
 import { ConfirmDeleteButton } from "@/components/ConfirmDeleteButton";
+import { SUPPORT_EMAIL, SUPPORT_MAILTO, SUPPORT_PROMISE } from "@/lib/support";
 
 // TS-105: the signed-in planner's account page -- who they're signed in as, and deleting the
 // account. Deleting needs the password, and is refused while they still own any wedding (Tom's
@@ -64,6 +65,20 @@ export default function AccountPage() {
       <p className="mb-8 text-sm text-neutral-600 dark:text-neutral-300">
         Signed in as {user.name} ({user.email})
       </p>
+
+      {/* TS-100 */}
+      <section aria-labelledby="get-help" className="mb-6 rounded-lg border border-neutral-200 dark:border-neutral-700 p-4">
+        <h2 id="get-help" className="mb-1 text-lg font-medium">
+          Get help
+        </h2>
+        <p className="text-sm text-neutral-600 dark:text-neutral-300">
+          Something not working, or a question?{" "}
+          <a href={SUPPORT_MAILTO} className="font-medium underline">
+            Email support
+          </a>{" "}
+          at {SUPPORT_EMAIL}. {SUPPORT_PROMISE}
+        </p>
+      </section>
 
       <section aria-labelledby="delete-account" className="rounded-lg border border-red-200 dark:border-red-900 p-4">
         <h2 id="delete-account" className="mb-1 text-lg font-medium">

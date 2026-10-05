@@ -120,7 +120,10 @@ export async function signUpFreshAccountInNewContext(
   refuseTestAccountsOnProduction();
   const context = await browser.newContext();
   const token = uniqueToken(workerIndex);
-  const name = `Playwright Tester ${label ? `${label} ` : ""}${token}`;
+  // TS-156: a display name may only hold letters (and spaces, ' . -), so any digits in a label like "comment2"
+  // are dropped from the name; the email keeps the label as-is.
+  const nameLabel = label.replace(/[^\p{L} ]/gu, "");
+  const name = `Playwright Tester ${nameLabel ? `${nameLabel} ` : ""}${token}`;
   const email = `pw-tester-${label ? `${label}-` : ""}${token}${TEST_ACCOUNT_EMAIL_DOMAIN}`;
   const password = generateEphemeralPassword();
 

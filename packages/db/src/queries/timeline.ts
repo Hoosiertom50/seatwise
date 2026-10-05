@@ -110,6 +110,17 @@ export async function updateTimelineEntry(
       await client.query("ROLLBACK");
       throw new TimelineConflictError(current[0]);
     }
+    // TS-153: moving an entry to a different time puts it last among that time's entries -- keeping
+    // its old position number could tie with an entry already there, and tied entries could never
+    // be reordered past each other.
+    if (input.time !== undefined && input.time !== current[0].time) {
+      const { rows: maxRows } = await client.query(
+        `SELECT COALESCE(MAX("sortOrder"), -1) AS "maxSortOrder" FROM "timeline_entries"
+         WHERE "weddingId" = $1 AND time = $2 AND id <> $3`,
+        [weddingId, input.time, id]
+      );
+      fields.splice(fields.length - 2, 0, `"sortOrder" = ${maxRows[0].maxSortOrder + 1}`);
+    }
     const { rows } = await client.query(
       `UPDATE "timeline_entries" SET ${fields.join(", ")} WHERE id = $${i++} AND "weddingId" = $${i}
        RETURNING ${COLUMNS}`,
@@ -141,35 +152,40 @@ export async function reorderTimelineEntry(
   weddingId: string,
   direction: "UP" | "DOWN"
 ): Promise<TimelineEntryRow | null> {
-  const entry = await getTimelineEntryForWedding(id, weddingId);
-  if (!entry) return null;
-
-  const { rows: neighborRows } = await pool.query(
-    direction === "UP"
-      ? `SELECT id, "sortOrder" FROM "timeline_entries"
-         WHERE "weddingId" = $1 AND time = $2 AND "sortOrder" < $3
-         ORDER BY "sortOrder" DESC LIMIT 1`
-      : `SELECT id, "sortOrder" FROM "timeline_entries"
-         WHERE "weddingId" = $1 AND time = $2 AND "sortOrder" > $3
-         ORDER BY "sortOrder" ASC LIMIT 1`,
-    [weddingId, entry.time, entry.sortOrder]
-  );
-  const neighbor = neighborRows[0];
-  if (!neighbor) return entry;
-
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    // TS-92: a reorder bumps both entries' revisions, so an edit made from a copy loaded before
-    // the reorder is caught too.
-    await client.query(
-      `UPDATE "timeline_entries" SET "sortOrder" = $1, "updatedAt" = now(), revision = revision + 1 WHERE id = $2`,
-      [neighbor.sortOrder, entry.id]
+    const { rows: entryRows } = await client.query(
+      `SELECT time FROM "timeline_entries" WHERE id = $1 AND "weddingId" = $2`,
+      [id, weddingId]
     );
-    await client.query(
-      `UPDATE "timeline_entries" SET "sortOrder" = $1, "updatedAt" = now(), revision = revision + 1 WHERE id = $2`,
-      [entry.sortOrder, neighbor.id]
+    if (!entryRows[0]) {
+      await client.query("ROLLBACK");
+      return null;
+    }
+    // TS-153: lock the whole same-time group and work from its current order, so two reorders at
+    // once can't both act on a stale picture; and renumber it 0..n-1 as it's saved, which also
+    // repairs any ties left from before.
+    const { rows: group } = await client.query<{ id: string; sortOrder: number }>(
+      `SELECT id, "sortOrder" FROM "timeline_entries" WHERE "weddingId" = $1 AND time = $2
+       ORDER BY "sortOrder", "createdAt", id FOR UPDATE`,
+      [weddingId, entryRows[0].time]
     );
+    const index = group.findIndex((g) => g.id === id);
+    const target = direction === "UP" ? index - 1 : index + 1;
+    if (target >= 0 && target < group.length) {
+      [group[index], group[target]] = [group[target], group[index]];
+    }
+    for (let position = 0; position < group.length; position++) {
+      if (group[position].sortOrder !== position) {
+        // TS-92: a reorder bumps the moved entries' revisions, so an edit made from a copy loaded
+        // before the reorder is caught too.
+        await client.query(
+          `UPDATE "timeline_entries" SET "sortOrder" = $1, "updatedAt" = now(), revision = revision + 1 WHERE id = $2`,
+          [position, group[position].id]
+        );
+      }
+    }
     await client.query("COMMIT");
   } catch (err) {
     await client.query("ROLLBACK");
@@ -177,6 +193,5 @@ export async function reorderTimelineEntry(
   } finally {
     client.release();
   }
-
   return getTimelineEntryForWedding(id, weddingId);
 }

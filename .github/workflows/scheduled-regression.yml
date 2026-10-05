@@ -24,6 +24,8 @@ on:
 env:
   # TS-132: CI never sends real email -- it's printed instead, and the app treats that as sent.
   EMAIL_TRANSPORT: log
+  # TS-148: the tests set up collaborators directly; the live site never allows that.
+  ALLOW_DIRECT_COLLABORATOR_ADD: "1"
   DATABASE_URL: postgresql://postgres:postgres@localhost:5432/seatwise_ci?schema=public
 
 jobs:

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { deleteRelationshipForWedding } from "@seatwise/db";
+import { deleteRelationshipForWedding, resyncGuestsSeats } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
 import { errorResponse } from "@/lib/api-response";
 import { requireAccess } from "@/lib/access";
@@ -17,5 +17,7 @@ export async function DELETE(req: NextRequest, { params }: Params) {
   const deleted = await deleteRelationshipForWedding(relationshipId, weddingId);
   if (!deleted) return errorResponse("Rule not found", 404);
 
+  // TS-150: anyone flagged only because of this rule is cleared.
+  await resyncGuestsSeats(weddingId, [deleted.guestAId, deleted.guestBId]);
   return NextResponse.json({ ok: true });
 }

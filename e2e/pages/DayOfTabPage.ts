@@ -160,6 +160,11 @@ export class DayOfTabPage extends BasePage {
     await this.page.getByRole("button", { name: "Add walk-in", exact: true }).waitFor();
   }
 
+  /** TS-151: what the walk-in first-name box holds (empty once the guest has been added). */
+  async walkInFirstNameValue(): Promise<string> {
+    return this.walkInFirstNameInput().inputValue();
+  }
+
   async swap(firstGuestOption: string, secondGuestOption: string): Promise<void> {
     await this.swapFirstGuestSelect().selectOption({ label: firstGuestOption });
     await this.swapSecondGuestSelect().selectOption({ label: secondGuestOption });

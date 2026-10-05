@@ -34,7 +34,9 @@ export async function GET(req: NextRequest, { params }: Params) {
     weddingName: invite.weddingName,
     role: invite.role,
     permissionLevel: invite.permissionLevel,
-    invitedEmail: invite.email,
+    // TS-154 (Tom's decision #4): the invited address is only shown to someone already signed in
+    // with it, never to a signed-out visitor holding the link.
+    ...(user ? { invitedEmail: invite.email } : {}),
   };
-  return NextResponse.json({ invite: preview });
+  return NextResponse.json({ invite: preview }, { headers: { "Cache-Control": "no-store" } });
 }

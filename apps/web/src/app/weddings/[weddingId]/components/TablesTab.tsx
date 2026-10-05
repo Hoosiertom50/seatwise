@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { ConfirmDeleteButton } from "@/components/ConfirmDeleteButton";
-import { api, ApiError } from "@/lib/api-client";
+import { api, ApiError, apiErrorMessage } from "@/lib/api-client";
 import type {
   GuestDTO,
   PlanVersionDTO,
@@ -229,7 +229,7 @@ export function TablesTab({
       setCriterionValue("");
       setShape("ROUND");
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Couldn't add that table.");
+      setError(apiErrorMessage(err, [], "Couldn't add that table."));
     } finally {
       setAdding(false);
     }
@@ -246,7 +246,7 @@ export function TablesTab({
       );
       setTables([...tables, ...created].sort((a, b) => compareTableLabels(a.label, b.label)));
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Couldn't create those tables.");
+      setError(apiErrorMessage(err, [], "Couldn't create those tables."));
     } finally {
       setQcCreating(false);
     }
@@ -268,7 +268,7 @@ export function TablesTab({
       setSavedTemplate(template);
       setTemplateName("");
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Couldn't save that template.");
+      setError(apiErrorMessage(err, [], "Couldn't save that template."));
     } finally {
       setSavingTemplate(false);
     }
@@ -281,7 +281,7 @@ export function TablesTab({
       setMyTemplates(templates);
       if (templates[0]) setApplyTemplateId(templates[0].id);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Couldn't load your templates.");
+      setError(apiErrorMessage(err, [], "Couldn't load your templates."));
     }
   }
 
@@ -302,7 +302,7 @@ export function TablesTab({
         `Added ${res.addedCount} table${res.addedCount === 1 ? "" : "s"} from “${name}”. Tables already here weren't changed.`
       );
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Couldn't add tables from that template.");
+      setError(apiErrorMessage(err, [], "Couldn't add tables from that template."));
     } finally {
       setApplyingTemplate(false);
     }
@@ -321,7 +321,7 @@ export function TablesTab({
         return;
       }
       setConfirmRemoval(null);
-      setError(err instanceof ApiError ? err.message : "Couldn't remove that table.");
+      setError(apiErrorMessage(err, [], "Couldn't remove that table."));
     }
   }
 
@@ -338,21 +338,22 @@ export function TablesTab({
   async function onToggleLock(id: string, isLocked: boolean) {
     const prev = tables;
     const expectedRevision = prev.find((t) => t.id === id)?.revision;
-    setTables(prev.map((t) => (t.id === id ? { ...t, isLocked } : t)));
+    setTables((cur) => cur.map((t) => (t.id === id ? { ...t, isLocked } : t)));
     try {
       const { table } = await api.patch<{ table: SeatingTableDTO }>(
         `/api/v1/weddings/${weddingId}/tables/${id}`,
         { isLocked, expectedRevision }
       );
-      setTables(prev.map((t) => (t.id === id ? table : t)));
+      setTables((cur) => cur.map((t) => (t.id === id ? table : t)));
     } catch (err) {
       const fresh = conflictTable(err);
       if (fresh) {
-        setTables(prev.map((t) => (t.id === id ? fresh : t)));
+        setTables((cur) => cur.map((t) => (t.id === id ? fresh : t)));
         setError(`"${fresh.label}" was just edited elsewhere — showing the latest. Try again if you still want to make this change.`);
       } else {
-        setTables(prev);
-        setError(err instanceof ApiError ? err.message : "Couldn't update that table's lock.");
+        // TS-151: put back only this table -- other rows may have changed meanwhile.
+        setTables((cur) => cur.map((t) => (t.id === id ? (prev.find((p) => p.id === id) ?? t) : t)));
+        setError(apiErrorMessage(err, [], "Couldn't update that table's lock."));
       }
     }
   }
@@ -363,7 +364,7 @@ export function TablesTab({
   async function onToggleAccessible(id: string, next: boolean) {
     const prev = tables;
     const expectedRevision = prev.find((t) => t.id === id)?.revision;
-    setTables(prev.map((t) => (t.id === id ? { ...t, isAccessible: next } : t)));
+    setTables((cur) => cur.map((t) => (t.id === id ? { ...t, isAccessible: next } : t)));
     try {
       const res = await api.patch<{ table: SeatingTableDTO; warnings: string[] }>(
         `/api/v1/weddings/${weddingId}/tables/${id}`,
@@ -374,11 +375,12 @@ export function TablesTab({
     } catch (err) {
       const fresh = conflictTable(err);
       if (fresh) {
-        setTables(prev.map((t) => (t.id === id ? fresh : t)));
+        setTables((cur) => cur.map((t) => (t.id === id ? fresh : t)));
         setError(`"${fresh.label}" was just edited elsewhere — showing the latest. Try again if you still want to make this change.`);
       } else {
-        setTables(prev);
-        setError(err instanceof ApiError ? err.message : "Couldn't update that table's accessible flag.");
+        // TS-151: put back only this table -- other rows may have changed meanwhile.
+        setTables((cur) => cur.map((t) => (t.id === id ? (prev.find((p) => p.id === id) ?? t) : t)));
+        setError(apiErrorMessage(err, [], "Couldn't update that table's accessible flag."));
       }
     }
   }
@@ -388,21 +390,22 @@ export function TablesTab({
   async function onToggleSingleSideOnly(id: string, next: boolean) {
     const prev = tables;
     const expectedRevision = prev.find((t) => t.id === id)?.revision;
-    setTables(prev.map((t) => (t.id === id ? { ...t, singleSideOnly: next } : t)));
+    setTables((cur) => cur.map((t) => (t.id === id ? { ...t, singleSideOnly: next } : t)));
     try {
       const { table } = await api.patch<{ table: SeatingTableDTO }>(
         `/api/v1/weddings/${weddingId}/tables/${id}`,
         { singleSideOnly: next, expectedRevision }
       );
-      setTables(prev.map((t) => (t.id === id ? table : t)));
+      setTables((cur) => cur.map((t) => (t.id === id ? table : t)));
     } catch (err) {
       const fresh = conflictTable(err);
       if (fresh) {
-        setTables(prev.map((t) => (t.id === id ? fresh : t)));
+        setTables((cur) => cur.map((t) => (t.id === id ? fresh : t)));
         setError(`"${fresh.label}" was just edited elsewhere — showing the latest. Try again if you still want to make this change.`);
       } else {
-        setTables(prev);
-        setError(err instanceof ApiError ? err.message : "Couldn't update that table's Single-Side-Only setting.");
+        // TS-151: put back only this table -- other rows may have changed meanwhile.
+        setTables((cur) => cur.map((t) => (t.id === id ? (prev.find((p) => p.id === id) ?? t) : t)));
+        setError(apiErrorMessage(err, [], "Couldn't update that table's Single-Side-Only setting."));
       }
     }
   }
@@ -433,7 +436,7 @@ export function TablesTab({
         // TS-110: put the table back where the server still has it -- leaving it at the dropped
         // position would show a layout that was never saved.
         if (before) setTables((cur) => cur.map((t) => (t.id === id ? before : t)));
-        setError(err instanceof ApiError ? err.message : "Couldn't save that table's position.");
+        setError(apiErrorMessage(err, [], "Couldn't save that table's position."));
       }
     }
   }
@@ -1262,7 +1265,7 @@ function TableEditForm({
         onConflict(err.data.table as SeatingTableDTO, err.status === 422 ? err.message : undefined);
         return;
       }
-      setError(err instanceof ApiError ? err.message : "Couldn't save that table.");
+      setError(apiErrorMessage(err, [], "Couldn't save that table."));
     } finally {
       setSaving(false);
     }

@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createInviteSchema } from "@seatwise/shared";
+import { createInviteSchema, PERSON_NAME_PATTERN, looksLikeWebAddress } from "@seatwise/shared";
 import { createInvite, listInvitesForWedding, sendEmailNotification, emailDelivered, InviteError } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
 import { errorResponse, zodErrorResponse } from "@/lib/api-response";
 import { requireAccess } from "@/lib/access";
+import { reserveEmailSend, TOO_MANY_INVITES } from "@/lib/rate-limit";
 
 type Params = { params: Promise<{ weddingId: string }> };
 
@@ -34,6 +35,9 @@ export async function POST(req: NextRequest, { params }: Params) {
   const parsed = createInviteSchema.safeParse(body);
   if (!parsed.success) return zodErrorResponse(parsed.error);
 
+  // TS-156: every invite sends an email, so invites are capped per sender.
+  if (!(await reserveEmailSend("invites", user.id))) return errorResponse(TOO_MANY_INVITES, 429);
+
   try {
     const invite = await createInvite(
       weddingId,
@@ -49,10 +53,17 @@ export async function POST(req: NextRequest, { params }: Params) {
     const appUrl = process.env.APP_URL || "http://localhost:3000";
     const acceptUrl = `${appUrl}/invites/${invite.token}`;
     const roleLabel = invite.role === "COUPLE" ? "a Couple member" : "a collaborator";
+    // TS-156: the inviter's own name only goes into the email if it reads as a name -- accounts
+    // made before the signup rule tightened could hold anything.
+    const inviterName = user.name.trim();
+    const safeInviter =
+      inviterName.length <= 100 && PERSON_NAME_PATTERN.test(inviterName) && !looksLikeWebAddress(inviterName)
+        ? inviterName
+        : null;
     const sent = await sendEmailNotification(
       invite.email,
       `You've been invited to plan a wedding on Seatwise`,
-      `${access.wedding.name ? `${user.name} invited you` : "You've been invited"} to join "${access.wedding.name}" on Seatwise as ${roleLabel} with ${invite.permissionLevel.toLowerCase()} access.\n\nAccept the invite: ${acceptUrl}\n\nThis link expires in 7 days. If you weren't expecting this, you can ignore it.`
+      `${safeInviter ? `${safeInviter} invited you` : "You've been invited"} to join "${access.wedding.name}" on Seatwise as ${roleLabel} with ${invite.permissionLevel.toLowerCase()} access.\n\nAccept the invite: ${acceptUrl}\n\nThis link expires in 7 days. If you weren't expecting this, you can ignore it.`
     );
 
     const { token: _token, ...invitePublic } = invite;

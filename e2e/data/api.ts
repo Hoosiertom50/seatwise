@@ -28,6 +28,8 @@ export type SideMixing = "KEEP_SEPARATE" | "BALANCED_MIX" | "FULLY_MIXED";
 // accepts alongside the base wedding fields, plus sideMixing itself (settable at creation, distinct
 // from applyTemplateRules overriding it afterward).
 export interface CreateWeddingOptions {
+  /** TS-151: "YYYY-MM-DD". */
+  eventDate?: string;
   sideMixing?: SideMixing;
   templateId?: string;
   applyTemplateTables?: boolean;

@@ -5,6 +5,7 @@ import { ConfirmDeleteButton } from "@/components/ConfirmDeleteButton";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { api, ApiError, apiErrorMessage } from "@/lib/api-client";
+import { formatShortEventDate, localTodayIso } from "@/lib/display-format";
 import type { WeddingSummaryDTO, SeatingTemplateDTO } from "@seatwise/shared";
 import { NotificationsBell } from "@/components/NotificationsBell";
 
@@ -133,7 +134,7 @@ export default function DashboardPage() {
 
     const sorted = [...filtered];
     if (sortKey === "urgency") {
-      const todayIso = new Date().toISOString().slice(0, 10);
+      const todayIso = localTodayIso();
       sorted.sort((a, b) => compareUrgency(a, b, todayIso));
     } else if (sortKey === "name") {
       sorted.sort((a, b) => a.name.localeCompare(b.name));
@@ -512,7 +513,7 @@ export default function DashboardPage() {
                         </span>
                       </p>
                       <p className="text-sm text-neutral-500 dark:text-neutral-400">
-                        {w.eventDate ? new Date(w.eventDate).toLocaleDateString() : "No date set"}
+                        {w.eventDate ? formatShortEventDate(w.eventDate) : "No date set"}
                         {w.venueName ? ` · ${w.venueName}` : ""}
                       </p>
                     </div>

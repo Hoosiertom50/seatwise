@@ -117,4 +117,27 @@ export class CollaboratorsTabPage extends BasePage {
   removeButtons() {
     return this.page.getByRole("button", { name: /^Remove / });
   }
+
+  /** TS-148: the whole page, for checking what text is or isn't shown. */
+  root() {
+    return this.page.locator("main");
+  }
+
+  /** TS-148: a collaborator leaves the wedding from their own row; ends back on the dashboard. */
+  async leaveWedding(): Promise<void> {
+    await this.page.getByRole("button", { name: "Leave this wedding", exact: true }).click();
+    await this.page.getByRole("button", { name: "Yes, leave", exact: true }).click();
+    await this.page.waitForURL((url) => url.pathname === "/dashboard");
+  }
+
+  /** TS-154: sets the wedding's date and venue in the owner settings and waits for the save. */
+  async saveDateAndVenue(date: string, venue: string): Promise<void> {
+    await this.page.getByLabel("Wedding date", { exact: true }).fill(date);
+    await this.page.getByLabel("Venue", { exact: true }).fill(venue);
+    await Promise.all([
+      this.page.waitForResponse((r) => r.request().method() === "PATCH" && /\/api\/v1\/weddings\/[^/]+$/.test(new URL(r.url()).pathname)),
+      this.page.getByRole("button", { name: "Save date and venue", exact: true }).click(),
+    ]);
+    await this.page.getByRole("status").filter({ hasText: /^Saved$/ }).waitFor();
+  }
 }

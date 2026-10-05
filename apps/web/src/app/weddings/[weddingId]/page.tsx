@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { api, ApiError } from "@/lib/api-client";
+import { formatShortEventDate } from "@/lib/display-format";
 import { loginUrlReturningTo } from "@/lib/safe-next";
 import type { WeddingDTO, GuestDTO } from "@seatwise/shared";
 import { GuestsTab } from "./components/GuestsTab";
@@ -59,6 +60,8 @@ export default function WeddingDetailPage() {
   const [wedding, setWedding] = useState<WeddingDTO | null>(null);
   const [guests, setGuests] = useState<GuestDTO[]>([]);
   const [accessLevel, setAccessLevel] = useState<AccessLevel | null>(null);
+  // TS-151: "COUPLE" or "COLLABORATOR" for a collaborator, null for the owner.
+  const [role, setRole] = useState<string | null>(null);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -77,7 +80,7 @@ export default function WeddingDetailPage() {
     (async () => {
       try {
         const [w, g, me, counts] = await Promise.all([
-          api.get<{ wedding: WeddingDTO; accessLevel: AccessLevel }>(`/api/v1/weddings/${weddingId}`),
+          api.get<{ wedding: WeddingDTO; accessLevel: AccessLevel; role: string | null }>(`/api/v1/weddings/${weddingId}`),
           api.get<{ guests: GuestDTO[] }>(`/api/v1/weddings/${weddingId}/guests`),
           api.get<{ user: { id: string } }>("/api/v1/auth/me"),
           // TS-115: loaded with the page, not after it, so the Getting started strip never
@@ -86,6 +89,7 @@ export default function WeddingDetailPage() {
         ]);
         setWedding(w.wedding);
         setAccessLevel(w.accessLevel);
+        setRole(w.role ?? null);
         accessLevelRef.current = w.accessLevel;
         setGuests(g.guests);
         setCurrentUserId(me.user.id);
@@ -215,7 +219,7 @@ export default function WeddingDetailPage() {
       )}
       <h1 className="mt-2 mb-1 text-2xl font-semibold">{wedding?.name}</h1>
       <p className="mb-6 text-sm text-neutral-500 dark:text-neutral-400">
-        {wedding?.eventDate ? new Date(wedding.eventDate).toLocaleDateString() : "No date set"}
+        {wedding?.eventDate ? formatShortEventDate(wedding.eventDate) : "No date set"}
         {wedding?.venueName ? ` · ${wedding.venueName}` : ""}
         {accessLevel && accessLevel !== "OWNER" && (
           <span className="ml-2 rounded-full bg-neutral-100 dark:bg-neutral-800 px-2 py-0.5 text-xs text-neutral-500 dark:text-neutral-400">
@@ -265,7 +269,16 @@ export default function WeddingDetailPage() {
       {tab === "tables" && (
         <TablesTab weddingId={weddingId} wedding={wedding} guests={guests} canEdit={canEdit} />
       )}
-      {tab === "plan" && <PlanTab weddingId={weddingId} guests={guests} canEdit={canEdit} />}
+      {tab === "plan" && (
+        <PlanTab
+          weddingId={weddingId}
+          guests={guests}
+          canEdit={canEdit}
+          // TS-151: the same rule the status route applies -- the owner, or a Couple member with
+          // Comment or Edit access.
+          canApprove={accessLevel === "OWNER" || (role === "COUPLE" && (accessLevel === "COMMENT" || accessLevel === "EDIT"))}
+        />
+      )}
       {tab === "dayof" && (
         <DayOfTab weddingId={weddingId} guests={guests} setGuests={setGuests} canEdit={canEdit} />
       )}
@@ -285,6 +298,7 @@ export default function WeddingDetailPage() {
         <CollaboratorsTab
           weddingId={weddingId}
           isOwner={isOwner}
+          currentUserId={currentUserId}
           wedding={wedding}
           setWedding={setWedding}
         />

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createRelationshipSchema } from "@seatwise/shared";
 import {
+  resyncGuestsSeats,
   getGuestForWedding,
   createRelationship,
   listRelationshipsForWedding,
@@ -46,7 +47,13 @@ export async function POST(req: NextRequest, { params }: Params) {
 
   try {
     const relationship = await createRelationship(weddingId, parsed.data);
-    return NextResponse.json({ relationship }, { status: 201 });
+    // TS-150: a new rule is checked against how people are seated right now -- two guests who
+    // must not sit together but already do (or must, but don't) are flagged Needs Reassignment.
+    const { newlyFlagged } = await resyncGuestsSeats(weddingId, [parsed.data.guestAId, parsed.data.guestBId]);
+    const warnings = newlyFlagged.map(
+      (f) => `${f.name}'s current seat breaks this rule — flagged as Needs Reassignment.`
+    );
+    return NextResponse.json({ relationship, warnings }, { status: 201 });
   } catch (err) {
     if (err instanceof RelationshipConflictError) {
       return errorResponse(err.message, 409);

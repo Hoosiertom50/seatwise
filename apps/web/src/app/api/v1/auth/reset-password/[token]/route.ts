@@ -31,6 +31,6 @@ export async function POST(req: NextRequest, { params }: Params) {
   if (!user) return errorResponse(NO_LONGER_VALID, 400);
 
   const response = NextResponse.json({ ok: true });
-  setAuthCookie(response, await signToken({ sub: user.id, email: user.email }));
+  setAuthCookie(response, await signToken({ sub: user.id, email: user.email, sessionVersion: user.sessionVersion }));
   return response;
 }

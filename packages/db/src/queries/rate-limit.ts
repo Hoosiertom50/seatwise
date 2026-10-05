@@ -50,3 +50,15 @@ export async function peekRateLimit(key: string, limit: number, windowSeconds: n
     retryAfterSeconds: Math.max(1, Math.ceil((windowStart.getTime() + windowMs - nowMs) / 1000)),
   };
 }
+
+// TS-155: takes back one hit counted by hitRateLimit in the current window -- used where an attempt
+// is counted *before* it's checked (so parallel attempts can't all slip past the limit) and then
+// turns out to be one that shouldn't count, such as a correct password.
+export async function undoRateLimitHit(key: string, windowSeconds: number): Promise<void> {
+  const windowMs = windowSeconds * 1000;
+  const windowStart = new Date(Math.floor(Date.now() / windowMs) * windowMs);
+  await pool.query(
+    `UPDATE "rate_limit_counters" SET count = GREATEST(count - 1, 0) WHERE key = $1 AND "windowStart" = $2`,
+    [key, windowStart]
+  );
+}

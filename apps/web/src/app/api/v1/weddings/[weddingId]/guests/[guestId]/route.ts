@@ -15,6 +15,7 @@ import {
 import { getAuthUser } from "@/lib/session";
 import { errorResponse, zodErrorResponse } from "@/lib/api-response";
 import { requireAccess } from "@/lib/access";
+import { guestForViewer } from "@/lib/guest-privacy";
 import { sendGuestRsvpLink } from "@/lib/rsvp-email";
 
 type Params = { params: Promise<{ weddingId: string; guestId: string }> };
@@ -30,7 +31,8 @@ export async function GET(req: NextRequest, { params }: Params) {
   const guest = await getGuestForWedding(guestId, weddingId);
   if (!guest) return errorResponse("Guest not found", 404);
 
-  return NextResponse.json({ guest });
+  // TS-154: private notes only for the owner and Edit collaborators.
+  return NextResponse.json({ guest: guestForViewer(guest, access.accessLevel) });
 }
 
 // FR-2.9: editing a guest's Attendance Status, Side, Relationship Tier, household (partyName),
@@ -56,7 +58,8 @@ export async function PATCH(req: NextRequest, { params }: Params) {
 
   const { dayOfAttendance, expectedRevision, ...rest } = parsed.data;
   // TS-143: remember whether the guest had an email before this edit -- giving them their first one
-  // sends their RSVP link, just like adding a guest with an email does.
+  // sends their RSVP link, just like adding a guest with an email does (and TS-154: so does
+  // correcting it).
   const before = rest.email ? await getGuestForWedding(guestId, weddingId) : null;
 
   try {
@@ -95,11 +98,18 @@ export async function PATCH(req: NextRequest, { params }: Params) {
 
   const guest = await getGuestForWedding(guestId, weddingId);
   const firstEmail = !!guest?.email && !!before && !before.email;
-  const rsvpEmail = firstEmail && guest ? await sendGuestRsvpLink(guest, access.wedding) : null;
+  // TS-154 (Tom's decision #3): correcting one address to another makes a fresh link -- the old
+  // one stops working, in case it went to the wrong person -- and emails it to the new address.
+  const correctedEmail =
+    !!guest?.email && !!before?.email && guest.email.trim().toLowerCase() !== before.email.trim().toLowerCase();
+  const rsvpEmail =
+    (firstEmail || correctedEmail) && guest
+      ? await sendGuestRsvpLink(guest, access.wedding, user.id, { regenerate: correctedEmail })
+      : null;
   return NextResponse.json({
     guest,
     warnings,
-    ...(rsvpEmail ? { rsvpEmail: { emailed: rsvpEmail.emailed, emailFailed: rsvpEmail.emailFailed } } : {}),
+    ...(rsvpEmail ? { rsvpEmail: { emailed: rsvpEmail.emailed, emailFailed: rsvpEmail.emailFailed, emailLimited: rsvpEmail.emailLimited ?? false } } : {}),
   });
 }
 

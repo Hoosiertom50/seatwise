@@ -29,7 +29,12 @@ const AGE_CATEGORIES: AgeCategory[] = ["ADULT", "CHILD", "INFANT"];
 interface RsvpEmailOutcome {
   emailed: boolean;
   emailFailed: boolean;
+  // TS-156
+  emailLimited?: boolean;
 }
+
+// TS-156: shown when the planner has hit the RSVP-email limit.
+const EMAIL_LIMITED_NOTE = "You've sent a lot of RSVP emails in a short time, so this one wasn't sent";
 
 function buildImportFields(
   sideLabel1: string,
@@ -90,7 +95,7 @@ export function GuestsTab({
   weddingId: string;
   wedding: WeddingDTO | null;
   guests: GuestDTO[];
-  setGuests: (guests: GuestDTO[]) => void;
+  setGuests: React.Dispatch<React.SetStateAction<GuestDTO[]>>;
   canEdit: boolean;
 }) {
   const sideLabel1 = wedding?.sideLabel1 ?? "Bride";
@@ -123,6 +128,8 @@ export function GuestsTab({
   const [notes, setNotes] = useState("");
   const [adding, setAdding] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // TS-151: what a save changed elsewhere (e.g. a guest flagged Needs Reassignment).
+  const [warning, setWarning] = useState<string | null>(null);
   // TS-17 (FR-12.4): which guest's RSVP-link action is in flight, and the last result shown for
   // that guest (a copy-to-clipboard confirmation or "emailed to ...") -- keyed by guestId so
   // multiple rows can each show their own status independently.
@@ -330,25 +337,62 @@ export function GuestsTab({
     return null;
   }
 
+  // TS-151: one save at a time per guest, each sent with the newest revision the server has
+  // confirmed, and each result applied to just that guest's row of the *current* list. Before,
+  // every handler rebuilt the whole list from a snapshot taken when it started (undoing any other
+  // row changed meanwhile), and two quick edits to one guest sent the same revision, so the second
+  // got a false "edited elsewhere" and was dropped.
+  const guestsNow = useRef(guests);
+  guestsNow.current = guests;
+  const confirmedRevision = useRef(new Map<string, number>());
+  const saveChain = useRef(new Map<string, Promise<unknown>>());
+
+  function revisionFor(guestId: string): number | undefined {
+    const listed = guestsNow.current.find((g) => g.id === guestId)?.revision;
+    const confirmed = confirmedRevision.current.get(guestId);
+    if (listed === undefined || confirmed === undefined) return listed ?? confirmed;
+    return Math.max(listed, confirmed);
+  }
+  function putGuest(guest: GuestDTO) {
+    confirmedRevision.current.set(guest.id, guest.revision);
+    setGuests((cur) => cur.map((g) => (g.id === guest.id ? guest : g)));
+  }
+  function patchRow(guestId: string, changes: Partial<GuestDTO>) {
+    setGuests((cur) => cur.map((g) => (g.id === guestId ? { ...g, ...changes } : g)));
+  }
+  type GuestSaveResult = { guest: GuestDTO; rsvpEmail?: RsvpEmailOutcome; warnings?: string[] };
+  function saveGuest(guestId: string, changes: Record<string, unknown>): Promise<GuestSaveResult> {
+    const run = async () => {
+      const result = await api.patch<GuestSaveResult>(`/api/v1/weddings/${weddingId}/guests/${guestId}`, {
+        ...changes,
+        expectedRevision: revisionFor(guestId),
+      });
+      putGuest(result.guest);
+      // TS-151: say when the change knocked the guest out of their seat.
+      setWarning(result.warnings?.length ? result.warnings.join(" ") : null);
+      return result;
+    };
+    const next = (saveChain.current.get(guestId) ?? Promise.resolve()).catch(() => {}).then(run);
+    saveChain.current.set(guestId, next);
+    return next;
+  }
+  function showConflict(fresh: GuestDTO) {
+    putGuest(fresh);
+    setError(
+      `${fresh.firstName} ${fresh.lastName} was just edited elsewhere — showing the latest. Try again if you still want to make this change.`
+    );
+  }
+
   async function onUpdateRsvp(guestId: string, newStatus: RsvpStatus) {
-    const prev = guests;
-    const expectedRevision = prev.find((g) => g.id === guestId)?.revision;
-    setGuests(prev.map((g) => (g.id === guestId ? { ...g, rsvpStatus: newStatus } : g)));
+    const before = guests.find((g) => g.id === guestId);
+    patchRow(guestId, { rsvpStatus: newStatus });
     try {
-      const { guest } = await api.patch<{ guest: GuestDTO }>(
-        `/api/v1/weddings/${weddingId}/guests/${guestId}`,
-        { rsvpStatus: newStatus, expectedRevision }
-      );
-      setGuests(prev.map((g) => (g.id === guestId ? guest : g)));
+      await saveGuest(guestId, { rsvpStatus: newStatus });
     } catch (err) {
       const fresh = conflictGuest(err);
-      if (fresh) {
-        setGuests(prev.map((g) => (g.id === guestId ? fresh : g)));
-        setError(
-          `${fresh.firstName} ${fresh.lastName} was just edited elsewhere — showing the latest. Try again if you still want to make this change.`
-        );
-      } else {
-        setGuests(prev);
+      if (fresh) showConflict(fresh);
+      else {
+        if (before) patchRow(guestId, { rsvpStatus: before.rsvpStatus });
         setError(err instanceof ApiError ? err.message : "Couldn't update RSVP status.");
       }
     }
@@ -357,24 +401,15 @@ export function GuestsTab({
   // FR-1.3a/FR-3.4: only the BRIDE/GROOM/BOTH value is ever written here -- this wedding's side
   // labels only affect how that value is displayed (see SIDE_OPTIONS above).
   async function onUpdateSide(guestId: string, newSide: GuestSide) {
-    const prev = guests;
-    const expectedRevision = prev.find((g) => g.id === guestId)?.revision;
-    setGuests(prev.map((g) => (g.id === guestId ? { ...g, side: newSide } : g)));
+    const before = guests.find((g) => g.id === guestId);
+    patchRow(guestId, { side: newSide });
     try {
-      const { guest } = await api.patch<{ guest: GuestDTO }>(
-        `/api/v1/weddings/${weddingId}/guests/${guestId}`,
-        { side: newSide, expectedRevision }
-      );
-      setGuests(prev.map((g) => (g.id === guestId ? guest : g)));
+      await saveGuest(guestId, { side: newSide });
     } catch (err) {
       const fresh = conflictGuest(err);
-      if (fresh) {
-        setGuests(prev.map((g) => (g.id === guestId ? fresh : g)));
-        setError(
-          `${fresh.firstName} ${fresh.lastName} was just edited elsewhere — showing the latest. Try again if you still want to make this change.`
-        );
-      } else {
-        setGuests(prev);
+      if (fresh) showConflict(fresh);
+      else {
+        if (before) patchRow(guestId, { side: before.side });
         setError(err instanceof ApiError ? err.message : "Couldn't update that guest's side.");
       }
     }
@@ -386,7 +421,9 @@ export function GuestsTab({
       ...prev,
       [guestId]: outcome.emailed
         ? `Emailed RSVP link to ${email}`
-        : `Couldn't email ${email} — use "RSVP link" to copy it and send it yourself.`,
+        : outcome.emailLimited
+          ? `${EMAIL_LIMITED_NOTE} — use "RSVP link" later, or copy it and send it yourself.`
+          : `Couldn't email ${email} — use "RSVP link" to copy it and send it yourself.`,
     }));
   }
 
@@ -394,29 +431,20 @@ export function GuestsTab({
   // the other per-guest edit handlers above. TS-93: uncontrolled like the name inputs (TS-108), so a
   // rejected edit writes the committed email back into the input itself.
   async function onUpdateEmail(guestId: string, input: HTMLInputElement) {
-    const prev = guests;
-    const current = prev.find((g) => g.id === guestId);
-    const expectedRevision = current?.revision;
+    const current = guests.find((g) => g.id === guestId);
     const normalized = input.value.trim() || null;
-    setGuests(prev.map((g) => (g.id === guestId ? { ...g, email: normalized } : g)));
+    patchRow(guestId, { email: normalized });
     try {
-      const { guest, rsvpEmail } = await api.patch<{ guest: GuestDTO; rsvpEmail?: RsvpEmailOutcome }>(
-        `/api/v1/weddings/${weddingId}/guests/${guestId}`,
-        { email: normalized, expectedRevision }
-      );
-      setGuests(prev.map((g) => (g.id === guestId ? guest : g)));
+      const { guest, rsvpEmail } = await saveGuest(guestId, { email: normalized });
       // TS-143: giving a guest their first email sends their RSVP link.
       if (rsvpEmail && guest.email) showAutoRsvpResult(guest.id, guest.email, rsvpEmail);
     } catch (err) {
       const fresh = conflictGuest(err);
       if (fresh) {
-        setGuests(prev.map((g) => (g.id === guestId ? fresh : g)));
+        showConflict(fresh);
         input.value = fresh.email ?? "";
-        setError(
-          `${fresh.firstName} ${fresh.lastName} was just edited elsewhere — showing the latest. Try again if you still want to make this change.`
-        );
       } else {
-        setGuests(prev);
+        patchRow(guestId, { email: current?.email ?? null });
         input.value = current?.email ?? "";
         // TS-135: a 422's top-level message is just "Validation failed" -- show the field's own reason.
         setError(apiErrorMessage(err, ["email"], "Couldn't update that guest's email."));
@@ -428,28 +456,19 @@ export function GuestsTab({
   // inline-editable like the email above and uncontrolled for the same reason (TS-108): every path
   // that doesn't keep the planner's text writes the committed note back into the textarea itself.
   async function onUpdateNotes(guestId: string, input: HTMLTextAreaElement) {
-    const prev = guests;
-    const current = prev.find((g) => g.id === guestId);
+    const current = guests.find((g) => g.id === guestId);
     const normalized = input.value.trim() || null;
     if (!current || normalized === (current.notes ?? null)) return;
-    const expectedRevision = current.revision;
-    setGuests(prev.map((g) => (g.id === guestId ? { ...g, notes: normalized } : g)));
+    patchRow(guestId, { notes: normalized });
     try {
-      const { guest } = await api.patch<{ guest: GuestDTO }>(
-        `/api/v1/weddings/${weddingId}/guests/${guestId}`,
-        { notes: normalized, expectedRevision }
-      );
-      setGuests(prev.map((g) => (g.id === guestId ? guest : g)));
+      await saveGuest(guestId, { notes: normalized });
     } catch (err) {
       const fresh = conflictGuest(err);
       if (fresh) {
-        setGuests(prev.map((g) => (g.id === guestId ? fresh : g)));
+        showConflict(fresh);
         input.value = fresh.notes ?? "";
-        setError(
-          `${fresh.firstName} ${fresh.lastName} was just edited elsewhere — showing the latest. Try again if you still want to make this change.`
-        );
       } else {
-        setGuests(prev);
+        patchRow(guestId, { notes: current.notes });
         input.value = current.notes ?? "";
         setError(apiErrorMessage(err, ["notes"], "Couldn't update that guest's notes."));
       }
@@ -467,32 +486,23 @@ export function GuestsTab({
   // into the input element itself.
   async function onUpdateName(guestId: string, field: "firstName" | "lastName", input: HTMLInputElement) {
     const trimmed = input.value.trim();
-    const prev = guests;
-    const current = prev.find((g) => g.id === guestId);
+    const current = guests.find((g) => g.id === guestId);
     if (!current || trimmed === current[field]) return;
     if (trimmed === "") {
       setError(field === "firstName" ? "First name can't be blank." : "Last name can't be blank.");
       input.value = current[field];
       return;
     }
-    const expectedRevision = current.revision;
-    setGuests(prev.map((g) => (g.id === guestId ? { ...g, [field]: trimmed } : g)));
+    patchRow(guestId, { [field]: trimmed });
     try {
-      const { guest } = await api.patch<{ guest: GuestDTO }>(
-        `/api/v1/weddings/${weddingId}/guests/${guestId}`,
-        { [field]: trimmed, expectedRevision }
-      );
-      setGuests(prev.map((g) => (g.id === guestId ? guest : g)));
+      await saveGuest(guestId, { [field]: trimmed });
     } catch (err) {
       const fresh = conflictGuest(err);
       if (fresh) {
-        setGuests(prev.map((g) => (g.id === guestId ? fresh : g)));
+        showConflict(fresh);
         input.value = fresh[field];
-        setError(
-          `${fresh.firstName} ${fresh.lastName} was just edited elsewhere — showing the latest. Try again if you still want to make this change.`
-        );
       } else {
-        setGuests(prev);
+        patchRow(guestId, { [field]: current[field] });
         input.value = current[field];
         setError(
           apiErrorMessage(
@@ -512,12 +522,16 @@ export function GuestsTab({
     setRsvpLinkBusy(guestId);
     setRsvpLinkResult((prev) => ({ ...prev, [guestId]: "" }));
     try {
-      const { rsvp } = await api.post<{ rsvp: { url: string; emailed: boolean; emailFailed?: boolean } }>(
+      const { rsvp } = await api.post<{ rsvp: { url: string; emailed: boolean; emailFailed?: boolean; emailLimited?: boolean } }>(
         `/api/v1/weddings/${weddingId}/guests/${guestId}/rsvp-link`,
         { regenerate }
       );
       // TS-132: if the email couldn't be sent, say so -- the planner then sends the link themselves.
-      const notEmailed = rsvp.emailFailed ? `Couldn't email ${guestEmail} — send them the link yourself. ` : "";
+      const notEmailed = rsvp.emailLimited
+        ? `${EMAIL_LIMITED_NOTE} — send ${guestEmail} the link yourself. `
+        : rsvp.emailFailed
+          ? `Couldn't email ${guestEmail} — send them the link yourself. `
+          : "";
       try {
         await navigator.clipboard.writeText(rsvp.url);
         setRsvpLinkResult((prev) => ({
@@ -538,24 +552,15 @@ export function GuestsTab({
   }
 
   async function onToggleLock(guestId: string, isLocked: boolean) {
-    const prev = guests;
-    const expectedRevision = prev.find((g) => g.id === guestId)?.revision;
-    setGuests(prev.map((g) => (g.id === guestId ? { ...g, isLocked } : g)));
+    const before = guests.find((g) => g.id === guestId);
+    patchRow(guestId, { isLocked });
     try {
-      const { guest } = await api.patch<{ guest: GuestDTO }>(
-        `/api/v1/weddings/${weddingId}/guests/${guestId}`,
-        { isLocked, expectedRevision }
-      );
-      setGuests(prev.map((g) => (g.id === guestId ? guest : g)));
+      await saveGuest(guestId, { isLocked });
     } catch (err) {
       const fresh = conflictGuest(err);
-      if (fresh) {
-        setGuests(prev.map((g) => (g.id === guestId ? fresh : g)));
-        setError(
-          `${fresh.firstName} ${fresh.lastName} was just edited elsewhere — showing the latest. Try again if you still want to make this change.`
-        );
-      } else {
-        setGuests(prev);
+      if (fresh) showConflict(fresh);
+      else {
+        if (before) patchRow(guestId, { isLocked: before.isLocked });
         setError(err instanceof ApiError ? err.message : "Couldn't update that guest's lock.");
       }
     }
@@ -765,6 +770,11 @@ export function GuestsTab({
       </form>
 
       {error && <p className="mb-4 text-sm text-red-600 dark:text-red-400">{error}</p>}
+      {warning && (
+        <p role="status" className="mb-4 rounded-md bg-amber-50 dark:bg-amber-950 px-3 py-2 text-sm text-amber-900 dark:text-amber-200">
+          {warning}
+        </p>
+      )}
 
       <div className="mb-8 rounded-lg border border-neutral-200 dark:border-neutral-700 p-4">
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
@@ -998,6 +1008,7 @@ export function GuestsTab({
                       <input
                         aria-label={`First name for ${g.firstName} ${g.lastName}`}
                         className="w-24 rounded-md border border-transparent px-1 py-0.5 font-medium hover:border-neutral-200 dark:hover:border-neutral-700 focus:border-neutral-300 dark:focus:border-neutral-600 focus:outline-none"
+                        key={`${g.id}-first-${g.firstName}`}
                         defaultValue={g.firstName}
                         onBlur={(e) => onUpdateName(g.id, "firstName", e.currentTarget)}
                         maxLength={100}
@@ -1005,6 +1016,7 @@ export function GuestsTab({
                       <input
                         aria-label={`Last name for ${g.firstName} ${g.lastName}`}
                         className="w-28 rounded-md border border-transparent px-1 py-0.5 font-medium hover:border-neutral-200 dark:hover:border-neutral-700 focus:border-neutral-300 dark:focus:border-neutral-600 focus:outline-none"
+                        key={`${g.id}-last-${g.lastName}`}
                         defaultValue={g.lastName}
                         onBlur={(e) => onUpdateName(g.id, "lastName", e.currentTarget)}
                         maxLength={100}
@@ -1082,6 +1094,7 @@ export function GuestsTab({
                     maxLength={2000}
                     className="mt-1 block w-72 max-w-full rounded-md border border-neutral-200 dark:border-neutral-700 px-2 py-1 text-xs"
                     placeholder="Private notes (dietary, accessibility…)"
+                    key={`${g.id}-notes-${g.notes ?? ""}`}
                     defaultValue={g.notes ?? ""}
                     onBlur={(e) => onUpdateNotes(g.id, e.currentTarget)}
                   />
@@ -1098,6 +1111,7 @@ export function GuestsTab({
                     aria-label={`Email for ${g.firstName} ${g.lastName}`}
                     className="mt-1 w-56 rounded-md border border-neutral-200 dark:border-neutral-700 px-2 py-1 text-xs"
                     placeholder="Email (for their RSVP link)"
+                    key={`${g.id}-email-${g.email ?? ""}`}
                     defaultValue={g.email ?? ""}
                     onBlur={(e) => {
                       if (e.target.value !== (g.email ?? "")) onUpdateEmail(g.id, e.currentTarget);

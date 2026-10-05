@@ -31,7 +31,8 @@ export interface CollaboratorDTO {
   weddingId: string;
   userId: string;
   userName: string;
-  userEmail: string;
+  // TS-148: null unless you're the owner, or it's your own row.
+  userEmail: string | null;
   role: CollaboratorRole;
   permissionLevel: CollaboratorPermission;
   invitedByUserId: string | null;
@@ -152,6 +153,8 @@ export const notificationTypeEnum = z.enum([
   "GUEST_REMOVED",
   "ATTENDANCE_CHANGED",
   "STATUS_CHANGED",
+  // TS-154
+  "RSVP_RECEIVED",
 ]);
 export type NotificationType = z.infer<typeof notificationTypeEnum>;
 

@@ -1,7 +1,7 @@
 import { randomUUID } from "crypto";
 import { pool } from "../pool";
 import { encryptText } from "../crypto";
-import { checkGuestHardRuleViolation } from "./plan-versions";
+import { resyncSeatsAtTable } from "./seat-checks";
 import {
   parseCsv,
   guestTierEnum,
@@ -95,7 +95,9 @@ function parseRow(
 
   const partyName = cellFor("partyName");
   if (partyName !== undefined && partyName !== "") {
-    data.partyName = partyName.toUpperCase() === CLEAR_TOKEN ? null : partyName;
+    // TS-152: the same limit as adding a guest by hand.
+    if (partyName.length > 200) errors.push("Household name can be at most 200 characters.");
+    else data.partyName = partyName.toUpperCase() === CLEAR_TOKEN ? null : partyName;
   }
 
   const headcountRaw = cellFor("headcount");
@@ -168,11 +170,15 @@ function parseRow(
 
   const notes = cellFor("notes");
   if (notes !== undefined && notes !== "") {
-    data.notes = notes.toUpperCase() === CLEAR_TOKEN ? null : notes;
+    if (notes.length > 2000) errors.push("Notes can be at most 2000 characters.");
+    else data.notes = notes.toUpperCase() === CLEAR_TOKEN ? null : notes;
   }
 
   return { errors, data };
 }
+
+/** TS-152: the most guests one import can add or update. */
+export const MAX_IMPORT_ROWS = 5000;
 
 export async function classifyGuestImport(
   weddingId: string,
@@ -183,7 +189,19 @@ export async function classifyGuestImport(
     throw new GuestImportError('Map "First name" and "Last name" to a column before importing.');
   }
 
-  const { headers, rows } = parseCsv(csv);
+  const { headers, rows: allRows } = parseCsv(csv);
+  // TS-152: a completely blank row (a spacer someone left in the spreadsheet) is skipped, not an
+  // error -- row numbers still match the spreadsheet. And one import is capped, so a huge file
+  // can't tie up the database.
+  const numbered = allRows
+    .map((cells, index) => ({ cells, rowNumber: index + 1 }))
+    .filter(({ cells }) => cells.some((c) => c.trim() !== ""));
+  if (numbered.length > MAX_IMPORT_ROWS) {
+    throw new GuestImportError(
+      `That file has ${numbered.length.toLocaleString("en-US")} guests — import at most ${MAX_IMPORT_ROWS.toLocaleString("en-US")} at a time.`
+    );
+  }
+  const rows = numbered.map((r) => r.cells);
 
   const { rows: existingGuests } = await pool.query<{ id: string; revision: number }>(
     `SELECT id, revision FROM "guests" WHERE "weddingId" = $1`,
@@ -203,8 +221,7 @@ export async function classifyGuestImport(
     }
   }
 
-  const classified: GuestImportRow[] = rows.map((cells, index) => {
-    const rowNumber = index + 1;
+  const classified: GuestImportRow[] = numbered.map(({ cells, rowNumber }) => {
     const { errors, data } = parseRow(cells, headers, mapping);
 
     let guestId: string | undefined;
@@ -296,6 +313,9 @@ export async function commitGuestImport(
     // FR-2.9: names of guests whose current assignment was flagged Needs Reassignment by this
     // import, surfaced to the caller the same way TS-7's table-side re-check surfaces warnings.
     const reassignmentWarnings: string[] = [];
+    // TS-150: seated guests whose table needs re-checking once every row is written.
+    const recheckGuestIds = new Set<string>();
+    let planFlagsChanged = false;
 
     for (const row of preview.rows) {
       const p = row.preview;
@@ -341,6 +361,8 @@ export async function commitGuestImport(
         if (p.headcount !== undefined) {
           fields.push(`headcount = $${i++}`);
           values.push(p.headcount);
+          // TS-154: the planner's new party size is the guest's new limit.
+          fields.push(`"partySizeLimit" = NULL`);
         }
         if (p.tier !== undefined) {
           fields.push(`tier = $${i++}`);
@@ -396,39 +418,32 @@ export async function commitGuestImport(
           (p.side !== undefined ||
             p.tier !== undefined ||
             "partyName" in p ||
-            p.requiresAccessibleTable !== undefined)
+            p.requiresAccessibleTable !== undefined ||
+            // TS-150: a bigger party can push their table over capacity.
+            p.headcount !== undefined)
         ) {
-          const { rows: assignRows } = await client.query(
-            `SELECT id, "seatingTableId" AS "tableId" FROM "seat_assignments"
-             WHERE "planVersionId" = $1 AND "guestId" = $2`,
-            [planVersionId, row.guestId]
+          recheckGuestIds.add(row.guestId);
+        }
+      }
+    }
+
+    // TS-150: re-check every table an updated guest sits at -- rules *and* room -- inside this
+    // same transaction, so a capacity flag is never cleared by mistake and a bigger party is caught.
+    if (planVersionId && recheckGuestIds.size > 0) {
+      const { rows: tableRows } = await client.query(
+        `SELECT DISTINCT "seatingTableId" AS "tableId" FROM "seat_assignments"
+         WHERE "planVersionId" = $1 AND "guestId" = ANY($2::text[]) ORDER BY 1`,
+        [planVersionId, [...recheckGuestIds]]
+      );
+      for (const { tableId } of tableRows as { tableId: string }[]) {
+        const { newlyFlagged, changed } = await resyncSeatsAtTable(client, weddingId, planVersionId, tableId);
+        if (changed) planFlagsChanged = true;
+        for (const f of newlyFlagged) {
+          reassignmentWarnings.push(
+            f.reason === "capacity"
+              ? `${f.name} no longer fits at their table — flagged as Needs Reassignment.`
+              : `${f.name}'s current table no longer fits a hard rule for them — flagged as Needs Reassignment.`
           );
-          const assignment = assignRows[0] as { id: string; tableId: string } | undefined;
-          if (assignment) {
-            const { rows: guestRows } = await client.query(
-              `SELECT ("firstName" || ' ' || "lastName") AS name, "requiresAccessibleTable"
-               FROM "guests" WHERE id = $1`,
-              [row.guestId]
-            );
-            const guest = guestRows[0] as { name: string; requiresAccessibleTable: boolean };
-            const violated = await checkGuestHardRuleViolation(
-              client,
-              weddingId,
-              planVersionId,
-              row.guestId,
-              assignment.tableId,
-              guest.requiresAccessibleTable
-            );
-            await client.query(
-              `UPDATE "seat_assignments" SET "needsReassignment" = $1, "updatedAt" = now() WHERE id = $2`,
-              [violated, assignment.id]
-            );
-            if (violated) {
-              reassignmentWarnings.push(
-                `${guest.name}'s current table no longer fits a hard rule for them — flagged as Needs Reassignment.`
-              );
-            }
-          }
         }
       }
     }
@@ -445,10 +460,11 @@ export async function commitGuestImport(
       );
       const isComplete =
         countRows[0].unassignedCount === 0 && countRows[0].needsReassignmentCount === 0;
-      await client.query(`UPDATE "plan_versions" SET "isComplete" = $1 WHERE id = $2`, [
-        isComplete,
-        planVersionId,
-      ]);
+      // TS-150: a change to who's flagged also bumps the plan's revision.
+      await client.query(
+        `UPDATE "plan_versions" SET "isComplete" = $1${planFlagsChanged ? ", revision = revision + 1" : ""} WHERE id = $2`,
+        [isComplete, planVersionId]
+      );
     }
 
     await client.query("COMMIT");

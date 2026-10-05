@@ -1,4 +1,5 @@
 import { randomUUID, randomBytes } from "crypto";
+import { isRsvpCutoffPast } from "@seatwise/shared";
 import { pool } from "../pool";
 import { encryptText, decryptText } from "../crypto";
 
@@ -172,6 +173,8 @@ export async function updateGuestForWedding(
       values.push(key === "notes" ? encryptText(value as string | null) : value);
     }
   }
+  // TS-154: a planner setting the party size makes that the guest's new limit.
+  if (input.headcount !== undefined) fields.push(`"partySizeLimit" = NULL`);
 
   const client = await pool.connect();
   try {
@@ -228,6 +231,8 @@ export interface GuestRsvpLookupRow {
   firstName: string;
   lastName: string;
   headcount: number;
+  // TS-154: the most people this guest may RSVP for.
+  partySizeLimit: number;
   rsvpStatus: string;
   plusOneNames: string | null;
   // TS-107: the guest's own RSVP note only. The planner's private `notes` is deliberately never
@@ -241,7 +246,8 @@ export interface GuestRsvpLookupRow {
 export async function getGuestByRsvpToken(token: string): Promise<GuestRsvpLookupRow | null> {
   const { rows } = await pool.query(
     `SELECT g.id, g."weddingId", w.name AS "weddingName", g."firstName", g."lastName",
-            g.headcount, g."rsvpStatus", g."plusOneNames", g."rsvpNotes",
+            g.headcount, COALESCE(g."partySizeLimit", g.headcount) AS "partySizeLimit",
+            g."rsvpStatus", g."plusOneNames", g."rsvpNotes",
             g."requiresAccessibleTable", w."rsvpCutoffDate"::text AS "rsvpCutoffDate"
      FROM "guests" g JOIN "weddings" w ON w.id = g."weddingId"
      WHERE g."rsvpToken" = $1`,
@@ -255,19 +261,14 @@ export async function getGuestByRsvpToken(token: string): Promise<GuestRsvpLooku
 // all, so a token is only ever generated the first time someone asks for one. Returns null only
 // if the guest doesn't exist (belongs to a different wedding, or was deleted).
 export async function ensureGuestRsvpToken(guestId: string, weddingId: string): Promise<string | null> {
+  // TS-153: one statement, so an automatic RSVP email and a click on "RSVP link" at the same moment
+  // both get the same link -- before, the second could replace the one just emailed.
   const { rows } = await pool.query(
-    `SELECT "rsvpToken" FROM "guests" WHERE id = $1 AND "weddingId" = $2`,
-    [guestId, weddingId]
+    `UPDATE "guests" SET "rsvpToken" = COALESCE("rsvpToken", $3) WHERE id = $1 AND "weddingId" = $2
+     RETURNING "rsvpToken"`,
+    [guestId, weddingId, randomBytes(32).toString("hex")]
   );
-  if (!rows[0]) return null;
-  if (rows[0].rsvpToken) return rows[0].rsvpToken;
-  const token = randomBytes(32).toString("hex");
-  await pool.query(`UPDATE "guests" SET "rsvpToken" = $1 WHERE id = $2 AND "weddingId" = $3`, [
-    token,
-    guestId,
-    weddingId,
-  ]);
-  return token;
+  return rows[0]?.rsvpToken ?? null;
 }
 
 // FR-12.4: "regenerate" -- always issues a fresh token, invalidating whatever link was out there
@@ -286,7 +287,7 @@ export async function regenerateGuestRsvpToken(guestId: string, weddingId: strin
 export class RsvpSubmissionError extends Error {
   constructor(
     message: string,
-    public code: "NOT_FOUND" | "CLOSED"
+    public code: "NOT_FOUND" | "CLOSED" | "OVER_PARTY_SIZE"
   ) {
     super(message);
     this.name = "RsvpSubmissionError";
@@ -310,7 +311,8 @@ export interface SubmitGuestRsvpData {
 // a planner's direct edit could also produce.
 export async function submitGuestRsvp(token: string, input: SubmitGuestRsvpData): Promise<GuestRow> {
   const { rows } = await pool.query(
-    `SELECT g.id AS "guestId", g."weddingId", w."rsvpCutoffDate"::text AS "rsvpCutoffDate"
+    `SELECT g.id AS "guestId", g."weddingId", w."rsvpCutoffDate"::text AS "rsvpCutoffDate",
+            COALESCE(g."partySizeLimit", g.headcount) AS "partySizeLimit"
      FROM "guests" g JOIN "weddings" w ON w.id = g."weddingId"
      WHERE g."rsvpToken" = $1`,
     [token]
@@ -321,15 +323,25 @@ export async function submitGuestRsvp(token: string, input: SubmitGuestRsvpData)
   }
   // FR-12.2: the cutoff is a date, not a timestamp -- responses are accepted through the entire
   // cutoff day itself, only actually closing off at the start of the next day.
-  if (found.rsvpCutoffDate && new Date(`${found.rsvpCutoffDate}T23:59:59`) < new Date()) {
+  // TS-153: the day ends when it has ended everywhere (see @seatwise/shared rsvp-cutoff.ts).
+  if (isRsvpCutoffPast(found.rsvpCutoffDate)) {
     throw new RsvpSubmissionError("RSVP responses have closed for this wedding.", "CLOSED");
+  }
+
+  // TS-154 (Tom's decision #2): a guest can answer for at most the party size the planner set.
+  const limit = Number(found.partySizeLimit);
+  if ((input.headcount ?? 1) > limit) {
+    throw new RsvpSubmissionError(
+      `Your invitation is for up to ${limit} ${limit === 1 ? "person" : "people"}. Contact the couple if you need to bring more.`,
+      "OVER_PARTY_SIZE"
+    );
   }
 
   await pool.query(
     `UPDATE "guests"
      SET "rsvpStatus" = $1, headcount = $2, "plusOneNames" = $3, "rsvpNotes" = $4,
          "requiresAccessibleTable" = $5, "rsvpRespondedAt" = now(), "updatedAt" = now(),
-         revision = revision + 1
+         "partySizeLimit" = $7, revision = revision + 1
      WHERE id = $6`,
     [
       input.rsvpStatus,
@@ -338,6 +350,7 @@ export async function submitGuestRsvp(token: string, input: SubmitGuestRsvpData)
       encryptText(input.rsvpNotes ?? null),
       input.requiresAccessibleTable ?? false,
       found.guestId,
+      limit,
     ]
   );
   const guest = await getGuestForWedding(found.guestId, found.weddingId);

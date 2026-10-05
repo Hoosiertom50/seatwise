@@ -28,7 +28,7 @@ export async function POST(req: NextRequest, { params }: Params) {
   if (!guest) return errorResponse("Guest not found", 404);
 
   // TS-143: the same helper sends the automatic email when a guest is added with an address.
-  const sent = await sendGuestRsvpLink(guest, access.wedding, { regenerate: parsed.data.regenerate });
+  const sent = await sendGuestRsvpLink(guest, access.wedding, user.id, { regenerate: parsed.data.regenerate });
   if (!sent) return errorResponse("Guest not found", 404);
   const link: RsvpLinkDTO = sent;
   return NextResponse.json({ rsvp: link });

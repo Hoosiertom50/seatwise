@@ -4,6 +4,7 @@ import { createGuest, listGuestsByWedding, getCurrentPlanVersionStatus, notifyWe
 import { getAuthUser } from "@/lib/session";
 import { errorResponse, zodErrorResponse } from "@/lib/api-response";
 import { requireAccess } from "@/lib/access";
+import { guestForViewer } from "@/lib/guest-privacy";
 import { sendGuestRsvpLink } from "@/lib/rsvp-email";
 
 type Params = { params: Promise<{ weddingId: string }> };
@@ -16,7 +17,8 @@ export async function GET(req: NextRequest, { params }: Params) {
   const access = await requireAccess(weddingId, user.id, "VIEW");
   if ("error" in access) return access.error;
 
-  const guests = await listGuestsByWedding(weddingId);
+  // TS-154: private notes only for the owner and Edit collaborators.
+  const guests = (await listGuestsByWedding(weddingId)).map((g) => guestForViewer(g, access.accessLevel));
   return NextResponse.json({ guests });
 }
 
@@ -47,10 +49,10 @@ export async function POST(req: NextRequest, { params }: Params) {
 
   // TS-143 (Tom, 2026-10-02): a guest added with an email gets their RSVP link straight away. (A
   // CSV import never does -- see guest-import -- so a big import can't email everyone by surprise.)
-  const rsvpEmail = guest.email ? await sendGuestRsvpLink(guest, access.wedding) : null;
+  const rsvpEmail = guest.email ? await sendGuestRsvpLink(guest, access.wedding, user.id) : null;
 
   return NextResponse.json(
-    { guest, ...(rsvpEmail ? { rsvpEmail: { emailed: rsvpEmail.emailed, emailFailed: rsvpEmail.emailFailed } } : {}) },
+    { guest, ...(rsvpEmail ? { rsvpEmail: { emailed: rsvpEmail.emailed, emailFailed: rsvpEmail.emailFailed, emailLimited: rsvpEmail.emailLimited ?? false } } : {}) },
     { status: 201 }
   );
 }
