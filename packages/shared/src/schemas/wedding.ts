@@ -1,6 +1,13 @@
 import { z } from "zod";
 import { calendarDateField } from "./common";
-import { WEDDING_NAME_PATTERN, WEDDING_NAME_MESSAGE, looksLikeWebAddress, NO_WEB_ADDRESS_MESSAGE } from "../validation";
+import {
+  WEDDING_NAME_PATTERN,
+  WEDDING_NAME_MESSAGE,
+  looksLikeWebAddress,
+  NO_WEB_ADDRESS_MESSAGE,
+  looksLikePhoneNumber,
+  NO_PHONE_NUMBER_MESSAGE,
+} from "../validation";
 
 // TS-168: the rules for a wedding's name, wherever one is given (creating, renaming, copying).
 export const weddingNameField = z
@@ -10,7 +17,9 @@ export const weddingNameField = z
   .max(200)
   .regex(WEDDING_NAME_PATTERN, WEDDING_NAME_MESSAGE)
   // TS-156: the wedding name goes into RSVP and invite emails.
-  .refine((v) => !looksLikeWebAddress(v), NO_WEB_ADDRESS_MESSAGE);
+  .refine((v) => !looksLikeWebAddress(v), NO_WEB_ADDRESS_MESSAGE)
+  // TS-171: nor can it carry a phone number.
+  .refine((v) => !looksLikePhoneNumber(v), NO_PHONE_NUMBER_MESSAGE);
 
 /** TS-168: the default name for a copy -- within the length limit and the allowed characters. */
 export function copiedWeddingName(original: string): string {
@@ -24,14 +33,8 @@ export const sideMixingEnum = z.enum(["KEEP_SEPARATE", "BALANCED_MIX", "FULLY_MI
 export type SideMixing = z.infer<typeof sideMixingEnum>;
 
 const weddingBaseSchema = z.object({
-  name: z
-    .string()
-    .trim()
-    .min(1, "Wedding name is required")
-    .max(200)
-    .regex(WEDDING_NAME_PATTERN, WEDDING_NAME_MESSAGE)
-    // TS-156: the wedding name goes into RSVP and invite emails.
-    .refine((v) => !looksLikeWebAddress(v), NO_WEB_ADDRESS_MESSAGE),
+  // TS-171: the same rules as everywhere else a wedding is named (see weddingNameField).
+  name: weddingNameField,
   // TS-174: a date the database can store (year 0000 used to be a server error).
   eventDate: calendarDateField.optional().nullable(),
   venueName: z.string().max(200).optional().nullable(),

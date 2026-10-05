@@ -68,7 +68,7 @@ export async function POST(req: NextRequest, { params }: Params) {
   const rsvpEmail = guest.email ? await sendGuestRsvpLink(guest, access.wedding, user) : null;
 
   return NextResponse.json(
-    { guest, ...(rsvpEmail ? { rsvpEmail: { emailed: rsvpEmail.emailed, emailFailed: rsvpEmail.emailFailed, emailLimited: rsvpEmail.emailLimited ?? false, confirmEmailFirst: rsvpEmail.confirmEmailFirst ?? false } } : {}) },
+    { guest, ...(rsvpEmail ? { rsvpEmail: { emailed: rsvpEmail.emailed, emailFailed: rsvpEmail.emailFailed, emailLimited: rsvpEmail.emailLimited ?? false, confirmEmailFirst: rsvpEmail.confirmEmailFirst ?? false, recentlyEmailed: rsvpEmail.recentlyEmailed ?? false, recipientLimited: rsvpEmail.recipientLimited ?? false } } : {}) },
     { status: 201 }
   );
 }

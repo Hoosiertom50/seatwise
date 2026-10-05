@@ -92,9 +92,10 @@ export function isTestDataName(name: string): boolean {
 }
 
 /** A unique, human-readable title for data that allows digits (e.g. wedding names), carrying the
- * TS-102 cleanup marker. */
+ * TS-102 cleanup marker. TS-171: the timestamp is written in letters -- a wedding name can't hold
+ * 7 or more digits in a row (they'd read as a phone number), and a millisecond timestamp has 13. */
 export function uniqueTitle(workerIndex: number, label: string): string {
-  return tagTestName(`${label} ${workerIndex}-${Date.now()}-${counter++}`);
+  return tagTestName(`${label} ${workerIndex}-${numberToLetters(Date.now())}-${counter++}`);
 }
 
 /**

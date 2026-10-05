@@ -4,7 +4,7 @@
  * emails a single-use link, valid for 1 hour, to choose a new password.
  *
  * An email with no account gets a plain "no account for that email" message (Tom's decision,
- * 2026-10-02) and nothing is created or sent for it. Asking again cancels older links. A used, expired or made-up link says so. Requests for one
+ * 2026-10-02) and nothing is created or sent for it. Asking again while a link still works sends nothing new (TS-171). A used, expired or made-up link says so. Requests for one
  * email are rate-limited. Tests never send real email: CI and local dev only log it, and the link
  * a test opens is planted in the test database (only its hash is stored, as the app does).
  */
@@ -22,9 +22,9 @@ defineQualityTest(
     id: "authentication.forgot-password-resets-with-a-single-use-emailed-link.request-reset-reuse-expiry-limits",
     title: "a forgotten password can be reset from the sign-in page with a single-use, 1-hour emailed link; an email with no account is told so",
     objective:
-      "Confirms the sign-in page links to Forgot password; that requesting a reset for a registered email says the link was sent and creates one usable link, while an unknown email is told there's no account (with a Sign up link) and nothing is created; that asking again cancels the older link; that the link sets a new password and signs the person in, after which the old password fails, the new one works and the link can't be used again; that mismatched passwords are caught; that an expired or made-up link says it's no longer valid; and that a fourth request for one email within 15 minutes is refused.",
+      "Confirms the sign-in page links to Forgot password; that requesting a reset for a registered email says the link was sent and creates one usable link, while an unknown email is told there's no account (with a Sign up link) and nothing is created; that asking again while a link still works says it was sent but creates or cancels nothing; that the link sets a new password and signs the person in, after which the old password fails, the new one works and the link can't be used again; that mismatched passwords are caught; that an expired or made-up link says it's no longer valid; and that a fourth request for one email within 15 minutes is refused.",
     expectedOutcome:
-      "The registered email shows the sent message and has exactly 1 usable link; the unknown one shows the no-account message and an older planted one stops working. The link lands on the dashboard; the old password's login fails and the new one's succeeds; reopening the link, an expired link and a made-up link each show 'This reset link is no longer valid — request a new one.'. Mismatched passwords show 'The two passwords don't match.'. The fourth request returns 429.",
+      "The registered email shows the sent message and has exactly 1 usable link; the unknown one shows the no-account message. Asking again with a planted second link still says sent, and both links still work (2 usable). The link lands on the dashboard; the old password's login fails and the new one's succeeds; reopening the link, an expired link and a made-up link each show 'This reset link is no longer valid — request a new one.'. Mismatched passwords show 'The two passwords don't match.'. The fourth request for an email with no account returns 429.",
     requirementIds: ["REQ-ACCOUNT-WEDDING-MANAGEMENT"],
     tags: ["@mutating", "@feature:authentication", "@risk:high", "@suite:regression"],
   },
@@ -61,14 +61,15 @@ defineQualityTest(
       });
 
       let link = "";
-      await test.step("Asking again cancels the older link", async () => {
-        const older = await plantPasswordResetToken(email);
+      // TS-171: asking again while a link still works sends nothing new and cancels nothing (it
+      // used to cancel the older link, which let anyone keep killing someone's link).
+      await test.step("Asking again while a link still works says it was sent, and cancels nothing", async () => {
+        link = await plantPasswordResetToken(email);
+        expect(await usableResetTokenCount(email)).toBe(2);
         const again = await visitor.request.post("/api/v1/auth/forgot-password", { data: { email } });
         expect(again.ok()).toBe(true);
-        expect(await usableResetTokenCount(email)).toBe(1);
-        await pages.gotoResetLink(older);
-        await expect(pages.noLongerValid()).toBeVisible();
-        link = await plantPasswordResetToken(email);
+        expect(((await again.json()) as { sent: boolean }).sent).toBe(true);
+        expect(await usableResetTokenCount(email)).toBe(2);
       });
 
       await test.step("Mismatched passwords are caught", async () => {

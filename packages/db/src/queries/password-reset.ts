@@ -45,6 +45,28 @@ export async function isPasswordResetTokenUsable(token: string): Promise<boolean
 }
 
 /**
+ * TS-171: a link whose email didn't go out is cancelled, so it never counts as "already sent"
+ * (see hasUsablePasswordResetToken) -- the person can ask again straight away.
+ */
+export async function discardPasswordResetToken(token: string): Promise<void> {
+  await pool.query(`UPDATE "password_reset_tokens" SET "usedAt" = now() WHERE "tokenHash" = $1 AND "usedAt" IS NULL`, [
+    hashResetToken(token),
+  ]);
+}
+
+/**
+ * TS-171: whether the person already has a reset link that still works (unused, and issued within
+ * the last hour, which is how long a link lasts).
+ */
+export async function hasUsablePasswordResetToken(userId: string): Promise<boolean> {
+  const { rows } = await pool.query(
+    `SELECT 1 FROM "password_reset_tokens" WHERE "userId" = $1 AND "usedAt" IS NULL AND "expiresAt" > now() LIMIT 1`,
+    [userId]
+  );
+  return rows.length > 0;
+}
+
+/**
  * Uses the token to set a new password. Returns the user, or null if the token is unknown, used or
  * expired. Atomic: two simultaneous uses of the same link can't both succeed.
  */

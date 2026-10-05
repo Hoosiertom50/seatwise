@@ -15,7 +15,8 @@ import { hitRateLimitCount, undoRateLimitHit } from "./queries/rate-limit";
 //
 // Sending never throws: a failed email must never block the action that triggered it.
 
-export type EmailResult = "sent" | "logged" | "not-configured" | "failed" | "limited";
+// TS-171: "recipient-limited" -- this address has already had its share of Seatwise email today.
+export type EmailResult = "sent" | "logged" | "not-configured" | "failed" | "limited" | "recipient-limited";
 
 type EmailEnv = Record<string, string | undefined>;
 
@@ -91,6 +92,10 @@ let sender: Sender = realSender;
 // (TS-156) can be got round with many accounts; this can't. Password-reset emails ("essential")
 // get extra headroom above the everyday ceiling, so they still go out on a busy day. Only real
 // sends count -- the "log" transport used locally and in CI never touches this.
+//
+// TS-171: the headroom is for password resets only. Email-confirmation links used to share it,
+// and anyone can sign up with someone else's address -- so a few sources could use it all up and
+// stop everyone's password resets. Confirmations now come out of the everyday allowance.
 const DAILY_WINDOW_SECONDS = 86_400;
 const DAILY_KEY = "email:global:day";
 const ESSENTIAL_HEADROOM = 80;
@@ -108,6 +113,33 @@ const realDailyCounter: DailyCounter = {
 };
 let dailyCounter: DailyCounter = realDailyCounter;
 
+// TS-171: at most a few emails a day to any one address, however they're asked for and by however
+// many accounts -- so nobody can use Seatwise to fill a stranger's inbox. Password resets have
+// their own per-address limits (see the forgot-password route), and notifications only go to
+// confirmed members of a wedding who can turn them off, so neither counts here. Unlike the daily
+// ceiling this also counts with the "log" transport, so it behaves the same locally and in CI.
+export const EMAILS_PER_RECIPIENT_PER_DAY = 5;
+const recipientKey = (to: string) => `email:to:day:${to.trim().toLowerCase()}`;
+
+type RecipientCounter = { hit: (to: string) => Promise<number>; undo: (to: string) => Promise<void> };
+const realRecipientCounter: RecipientCounter = {
+  hit: (to) => hitRateLimitCount(recipientKey(to), DAILY_WINDOW_SECONDS),
+  undo: (to) => undoRateLimitHit(recipientKey(to), DAILY_WINDOW_SECONDS),
+};
+let recipientCounter: RecipientCounter = realRecipientCounter;
+
+/** Tests only: replace the per-recipient email counter (pass nothing to restore it). */
+export function setRecipientEmailCounterForTests(fake?: RecipientCounter): void {
+  recipientCounter = fake ?? realRecipientCounter;
+}
+
+// TS-171: every email one signed-in account can make Seatwise send in a day, of every kind
+// (invites, RSVP emails, notifications its actions set off), counted together. Without it, the
+// separate per-kind limits added up to more than the whole day's allowance, so one account could
+// stop email for everyone.
+export const ACCOUNT_EMAILS_PER_DAY = { limit: 100, windowSeconds: DAILY_WINDOW_SECONDS } as const;
+export const accountDailyEmailKey = (userId: string) => `email:account:day:${userId}`;
+
 /** Tests only: replace the daily email counter (pass nothing to restore it). */
 export function setDailyEmailCounterForTests(fake?: DailyCounter): void {
   dailyCounter = fake ?? realDailyCounter;
@@ -123,9 +155,28 @@ export async function sendEmail(
   subject: string,
   text: string,
   env: EmailEnv = process.env,
-  { essential = false }: { essential?: boolean } = {}
+  {
+    essential = false,
+    toWeddingMember = false,
+  }: {
+    /** A password reset: may use the reserved headroom, and has its own per-address limits. */
+    essential?: boolean;
+    /** TS-171: a notification to a confirmed member of the wedding -- not a stranger. */
+    toWeddingMember?: boolean;
+  } = {}
 ): Promise<EmailResult> {
   const config = resolveEmailTransport(env);
+  if (config.kind === "none") {
+    console.warn(`[email] not sent to ${to}: no email service is configured (set SMTP_USER and SMTP_PASSWORD).`);
+    return "not-configured";
+  }
+  const recipientCapped = !essential && !toWeddingMember;
+  if (recipientCapped && (await recipientCounter.hit(to)) > EMAILS_PER_RECIPIENT_PER_DAY) {
+    // Taken back, so refused attempts don't pile up on the count.
+    await recipientCounter.undo(to);
+    console.warn(`[email] not sent to ${to}: this address has had ${EMAILS_PER_RECIPIENT_PER_DAY} emails from Seatwise today.`);
+    return "recipient-limited";
+  }
   if (config.kind === "log") {
     // TS-149: in a production build (CI's e2e server, or the live site if someone set
     // EMAIL_TRANSPORT=log) the links' secret parts are hidden, so the logs never hold a working
@@ -135,15 +186,12 @@ export async function sendEmail(
     console.log(`[email-log] to=${to} subject="${subject}" body="${body}"`);
     return "logged";
   }
-  if (config.kind === "none") {
-    console.warn(`[email] not sent to ${to}: no email service is configured (set SMTP_USER and SMTP_PASSWORD).`);
-    return "not-configured";
-  }
   const limits = dailyEmailLimits(env);
   const sentToday = await dailyCounter.hit();
   if (sentToday > (essential ? limits.essential : limits.everyday)) {
     // Taken back, so refused everyday emails don't eat into the password-reset headroom.
     await dailyCounter.undo();
+    if (recipientCapped) await recipientCounter.undo(to);
     console.warn(`[email] not sent to ${to}: today's limit of ${limits.everyday} emails has been reached.`);
     return "limited";
   }

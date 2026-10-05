@@ -1,5 +1,5 @@
 import { randomUUID } from "crypto";
-import { sendEmail, type EmailResult } from "../email";
+import { ACCOUNT_EMAILS_PER_DAY, accountDailyEmailKey, sendEmail, type EmailResult } from "../email";
 import { pool } from "../pool";
 import { hitRateLimit } from "./rate-limit";
 import { emailSafeWeddingName, looksLikeWebAddress } from "@seatwise/shared";
@@ -37,11 +37,13 @@ export function emailSafeNotificationText(message: string): string {
 }
 
 async function actorMayEmail(actorUserId: string): Promise<boolean> {
-  const results = await Promise.all(
-    NOTIFICATION_EMAILS_PER_ACTOR.map(({ limit, windowSeconds }) =>
+  const results = await Promise.all([
+    ...NOTIFICATION_EMAILS_PER_ACTOR.map(({ limit, windowSeconds }) =>
       hitRateLimit(`email:notify:${windowSeconds}:${actorUserId}`, limit, windowSeconds)
-    )
-  );
+    ),
+    // TS-171: these count toward the account's one daily allowance for every kind of email.
+    hitRateLimit(accountDailyEmailKey(actorUserId), ACCOUNT_EMAILS_PER_DAY.limit, ACCOUNT_EMAILS_PER_DAY.windowSeconds),
+  ]);
   return results.every((r) => r.allowed);
 }
 
@@ -59,8 +61,13 @@ export interface NotificationRow {
 // FR-10.2 / TS-132: email goes through ../email.ts, which picks Gmail SMTP, Resend, a log line
 // (local dev and CI) or nothing (production with no email service set up) -- and never throws.
 // Returns what happened, so a caller can tell the planner when an email didn't go out.
-export async function sendEmailNotification(toEmail: string, subject: string, body: string): Promise<EmailResult> {
-  return sendEmail(toEmail, subject, body);
+export async function sendEmailNotification(
+  toEmail: string,
+  subject: string,
+  body: string,
+  options: { toWeddingMember?: boolean } = {}
+): Promise<EmailResult> {
+  return sendEmail(toEmail, subject, body, process.env, options);
 }
 
 // Every collaborator (and the wedding's owner) except whoever caused the event gets an in-app
@@ -131,7 +138,9 @@ export async function notifyWeddingCollaborators(
       await sendEmailNotification(
         recipient.email,
         weddingName ? `Seatwise: ${weddingName}` : "Seatwise: an update on your wedding",
-        emailSafeNotificationText(emailMessage ?? message)
+        emailSafeNotificationText(emailMessage ?? message),
+        // TS-171: a confirmed member of this wedding, so not held to the per-address daily cap.
+        { toWeddingMember: true }
       );
     }
   }

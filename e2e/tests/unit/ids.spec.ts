@@ -25,6 +25,8 @@ const PERSON_NAME_PATTERN = /^[\p{L}\p{M}][\p{L}\p{M} '.-]*$/u;
 
 // Mirrors packages/shared/src/validation.ts's WEDDING_NAME_PATTERN, for the same reason as above.
 const WEDDING_NAME_PATTERN = /^[\p{L}\p{N}\p{M}][\p{L}\p{N}\p{M} '&,.!-]*$/u;
+// TS-171: mirrors validation.ts's PHONE_NUMBER_LIKE (a wedding name can't contain one).
+const PHONE_NUMBER_LIKE = /\p{Nd}(?:[ .-]*\p{Nd}){6,}/u;
 
 test.describe("numberToLetters", () => {
   test("encodes the spreadsheet-column boundary cases", () => {
@@ -134,6 +136,8 @@ test.describe("TS-102 cleanup marker", () => {
     expect(WEDDING_NAME_PATTERN.test(uniqueTitle(0, "Wedding A"))).toBe(true);
     expect(WEDDING_NAME_PATTERN.test(tagTestName("Alpha abc"))).toBe(true);
     expect(uniqueTitle(0, "Wedding A").length).toBeLessThanOrEqual(200);
+    // TS-171: and never holds a phone-number-like run of 7+ digits, which the app refuses.
+    expect(PHONE_NUMBER_LIKE.test(uniqueTitle(0, "Wedding A"))).toBe(false);
   });
 
   test("tagTestName is idempotent -- re-tagging never doubles the marker", () => {

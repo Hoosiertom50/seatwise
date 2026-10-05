@@ -1,8 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
 import { emailSafePersonName, forgotPasswordSchema } from "@seatwise/shared";
-import { createPasswordResetToken, findUserByEmail, sendEmail, PASSWORD_RESET_TTL_MINUTES, retireOlderResetTokens, emailDelivered } from "@seatwise/db";
+import {
+  createPasswordResetToken,
+  discardPasswordResetToken,
+  findUserByEmail,
+  hasUsablePasswordResetToken,
+  sendEmail,
+  PASSWORD_RESET_TTL_MINUTES,
+  retireOlderResetTokens,
+  emailDelivered,
+} from "@seatwise/db";
 import { zodErrorResponse } from "@/lib/api-response";
-import { clientAddress, rateLimitOr429, PASSWORD_RESET_LIMITS } from "@/lib/rate-limit";
+import { accountEmailAddressKey, ACCOUNT_EMAIL_LIMITS, clientAddress, rateLimitOr429, PASSWORD_RESET_LIMITS } from "@/lib/rate-limit";
 import { resetOutcome } from "@/lib/password-reset-outcome";
 
 // TS-142: "Forgot password?" -- emails a single-use, 1-hour reset link to an existing account.
@@ -21,6 +30,12 @@ export async function POST(req: NextRequest) {
   const parsed = forgotPasswordSchema.safeParse(await req.json().catch(() => null));
   if (!parsed.success) return zodErrorResponse(parsed.error);
   const email = parsed.data.email;
+  const user = await findUserByEmail(email);
+
+  // TS-171: while the last link sent still works (it lasts an hour), asking again sends nothing
+  // new and cancels nothing -- the answer is the same as when it was sent. Otherwise anyone could
+  // use up the person's resets for the day (each new link used to cancel the one before).
+  if (user && (await hasUsablePasswordResetToken(user.id))) return NextResponse.json(resetOutcome(true, "sent"));
 
   const perEmail =
     (await rateLimitOr429(`pw-reset:email:${email.toLowerCase()}`, PASSWORD_RESET_LIMITS.requestsPerEmail)) ??
@@ -28,8 +43,12 @@ export async function POST(req: NextRequest) {
     (await rateLimitOr429(`pw-reset:email:day:${email.toLowerCase()}`, PASSWORD_RESET_LIMITS.requestsPerEmailDay));
   if (perEmail) return perEmail;
 
-  const user = await findUserByEmail(email);
   if (!user) return NextResponse.json(resetOutcome(false, null));
+
+  // TS-171: counted with sign-ups and "Resend link" from the same address -- only when an email
+  // is really about to go out.
+  const perAddressEmails = await rateLimitOr429(accountEmailAddressKey(address), ACCOUNT_EMAIL_LIMITS.perAddressDay);
+  if (perAddressEmails) return perAddressEmails;
 
   const token = await createPasswordResetToken(user.id);
   const appUrl = process.env.APP_URL || "http://localhost:3000";
@@ -46,5 +65,7 @@ export async function POST(req: NextRequest) {
   );
   // TS-153: older links are cancelled only once this one has gone out.
   if (emailDelivered(result)) await retireOlderResetTokens(user.id, token);
+  // TS-171: one that never went out is cancelled, so asking again isn't answered "already sent".
+  else await discardPasswordResetToken(token);
   return NextResponse.json(resetOutcome(true, result));
 }
