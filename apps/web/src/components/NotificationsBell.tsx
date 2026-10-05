@@ -50,12 +50,25 @@ export function NotificationsBell({
     return () => clearInterval(interval);
   }, []);
 
+  // TS-175: closes on a tap outside (pointerdown -- iPhone taps don't always send mousedown) and
+  // on Escape, which returns focus to the bell.
+  const buttonRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
-    function onClickOutside(e: MouseEvent) {
+    function onPointerOutside(e: PointerEvent) {
       if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
     }
-    document.addEventListener("mousedown", onClickOutside);
-    return () => document.removeEventListener("mousedown", onClickOutside);
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape" && ref.current?.contains(document.activeElement)) {
+        setOpen(false);
+        buttonRef.current?.focus();
+      }
+    }
+    document.addEventListener("pointerdown", onPointerOutside);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerOutside);
+      document.removeEventListener("keydown", onKey);
+    };
   }, []);
 
   async function onMarkAllRead() {
@@ -81,7 +94,9 @@ export function NotificationsBell({
   return (
     <div ref={ref} className="relative">
       <button
+        ref={buttonRef}
         onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
         aria-label={`Notifications${unreadCount > 0 ? ` (${unreadCount} unread)` : ""}`}
         className="relative flex h-11 w-11 items-center justify-center rounded-md border border-neutral-300 dark:border-neutral-600 text-lg hover:bg-neutral-50 dark:hover:bg-neutral-800"
       >
@@ -94,7 +109,8 @@ export function NotificationsBell({
       </button>
 
       {open && (
-        <div className="absolute right-0 z-20 mt-2 w-80 rounded-lg border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 shadow-lg">
+        // TS-175: never wider than the screen (it was cut off on phones).
+        <div className="absolute right-0 z-20 mt-2 w-80 max-w-[calc(100vw-2rem)] rounded-lg border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 shadow-lg">
           <div className="flex items-center justify-between border-b border-neutral-100 dark:border-neutral-800 px-4 py-2">
             <p className="text-sm font-medium">Notifications</p>
             {unreadCount > 0 && (
@@ -112,7 +128,8 @@ export function NotificationsBell({
                   key={n.id}
                   onClick={() => onMarkOneRead(n.id)}
                   className={`flex w-full flex-col items-start gap-0.5 border-b border-neutral-50 px-4 py-3 text-left last:border-0 hover:bg-neutral-50 dark:hover:bg-neutral-800 ${
-                    n.isRead ? "" : "bg-blue-50/50"
+                    // TS-175: a dark-mode shade too -- the light one made unread rows unreadable.
+                    n.isRead ? "" : "bg-blue-50/50 dark:bg-blue-950/60"
                   }`}
                 >
                   <div className="flex w-full items-center justify-between gap-2">

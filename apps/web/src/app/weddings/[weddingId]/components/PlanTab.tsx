@@ -125,7 +125,10 @@ export function PlanTab({
   const [restorePreview, setRestorePreview] = useState<RestorePreviewDTO | null>(null);
   const [previewingRestore, setPreviewingRestore] = useState(false);
   const [restoring, setRestoring] = useState(false);
-  const [editingLabel, setEditingLabel] = useState(false);
+  // TS-175: the version whose nickname is being typed. Switching to another version closes the box
+  // (a nickname typed for one version used to be saved onto the next one opened).
+  const [labelVersionId, setLabelVersionId] = useState<string | null>(null);
+  const editingLabel = labelVersionId !== null && labelVersionId === detail?.id;
   const [labelInput, setLabelInput] = useState("");
   // TS-166: a version label being typed counts as unsaved input (TS-159).
   useUnsavedChanges("plan-label", editingLabel && labelInput.trim() !== (detail?.label ?? ""));
@@ -350,67 +353,59 @@ export function PlanTab({
   // instead of blindly overwriting that newer change, and the current state is shown instead.
   async function onUndo() {
     if (undoStack.length === 0 || !detail || undoRedoBusy) return;
-    const entry = undoStack[undoStack.length - 1];
-    setError(null);
-    setUndoRedoBusy(true);
-    try {
-      const fresh = await api.get<{ planVersion: PlanVersionDetailDTO }>(
-        `/api/v1/weddings/${weddingId}/plan-versions/${detail.id}`
-      );
-      const currentTableId = fresh.planVersion.assignments.find((a) => a.guestId === entry.guestId)?.tableId ?? null;
-      if (currentTableId !== entry.toTableId) {
-        setDetail(fresh.planVersion);
-        setUndoStack((s) => s.slice(0, -1));
-        setError(
-          `Can't undo that — ${guestName(entry.guestId)}'s seat has changed since then (possibly by another collaborator).`
-        );
-        return;
-      }
-      const res = await api.post<{ planVersion: PlanVersionDetailDTO; warnings: string[] }>(
-        `/api/v1/weddings/${weddingId}/plan-versions/${detail.id}/assignments`,
-        { guestId: entry.guestId, tableId: entry.priorTableId }
-      );
-      setDetail(res.planVersion);
-      setVersions((vs) => vs.map((v) => (v.id === res.planVersion.id ? res.planVersion : v)));
-      setMoveWarnings(res.warnings);
-      setUndoStack((s) => s.slice(0, -1));
-      setRedoStack((r) => [...r, entry]);
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Couldn't undo that move.");
-    } finally {
-      setUndoRedoBusy(false);
-    }
+    await replay(undoStack[undoStack.length - 1], "undo");
   }
 
   async function onRedo() {
     if (redoStack.length === 0 || !detail || undoRedoBusy) return;
-    const entry = redoStack[redoStack.length - 1];
+    await replay(redoStack[redoStack.length - 1], "redo");
+  }
+
+  // TS-175: undo and redo go through the same queue as moves and status changes, and send the
+  // plan's revision. They used to run alongside it and never updated the copy the queue works
+  // from, so the move (or "Move to review") right after an undo was refused as a stale change.
+  async function replay(entry: UndoEntry, kind: "undo" | "redo") {
+    const [expectedAt, target] = kind === "undo" ? [entry.toTableId, entry.priorTableId] : [entry.priorTableId, entry.toTableId];
+    const dropEntry = () => (kind === "undo" ? setUndoStack((s) => s.slice(0, -1)) : setRedoStack((s) => s.slice(0, -1)));
     setError(null);
     setUndoRedoBusy(true);
     try {
-      const fresh = await api.get<{ planVersion: PlanVersionDetailDTO }>(
-        `/api/v1/weddings/${weddingId}/plan-versions/${detail.id}`
-      );
-      const currentTableId = fresh.planVersion.assignments.find((a) => a.guestId === entry.guestId)?.tableId ?? null;
-      if (currentTableId !== entry.priorTableId) {
-        setDetail(fresh.planVersion);
-        setRedoStack((s) => s.slice(0, -1));
-        setError(
-          `Can't redo that — ${guestName(entry.guestId)}'s seat has changed since then (possibly by another collaborator).`
+      await queueMove(async () => {
+        const current = detailRef.current;
+        if (!current) return;
+        const fresh = await api.get<{ planVersion: PlanVersionDetailDTO }>(
+          `/api/v1/weddings/${weddingId}/plan-versions/${current.id}`
         );
-        return;
-      }
-      const res = await api.post<{ planVersion: PlanVersionDetailDTO; warnings: string[] }>(
-        `/api/v1/weddings/${weddingId}/plan-versions/${detail.id}/assignments`,
-        { guestId: entry.guestId, tableId: entry.toTableId }
-      );
-      setDetail(res.planVersion);
-      setVersions((vs) => vs.map((v) => (v.id === res.planVersion.id ? res.planVersion : v)));
-      setMoveWarnings(res.warnings);
-      setRedoStack((s) => s.slice(0, -1));
-      setUndoStack((u) => [...u, entry]);
+        const currentTableId = fresh.planVersion.assignments.find((a) => a.guestId === entry.guestId)?.tableId ?? null;
+        if (currentTableId !== expectedAt) {
+          detailRef.current = fresh.planVersion;
+          setDetail(fresh.planVersion);
+          dropEntry();
+          setError(
+            `Can't ${kind} that — ${guestName(entry.guestId)}'s seat has changed since then (possibly by another collaborator).`
+          );
+          return;
+        }
+        const res = await api.post<{ planVersion: PlanVersionDetailDTO; warnings: string[] }>(
+          `/api/v1/weddings/${weddingId}/plan-versions/${current.id}/assignments`,
+          { guestId: entry.guestId, tableId: target, expectedRevision: fresh.planVersion.revision }
+        );
+        detailRef.current = res.planVersion;
+        setDetail(res.planVersion);
+        setVersions((vs) => vs.map((v) => (v.id === res.planVersion.id ? res.planVersion : v)));
+        setMoveWarnings(res.warnings);
+        dropEntry();
+        if (kind === "undo") setRedoStack((r) => [...r, entry]);
+        else setUndoStack((u) => [...u, entry]);
+      });
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Couldn't redo that move.");
+      const fresh = conflictPlanVersion(err);
+      if (fresh) {
+        detailRef.current = fresh;
+        setDetail(fresh);
+        setVersions((vs) => vs.map((v) => (v.id === fresh.id ? fresh : v)));
+      }
+      setError(err instanceof ApiError ? err.message : `Couldn't ${kind} that move.`);
     } finally {
       setUndoRedoBusy(false);
     }
@@ -488,8 +483,10 @@ export function PlanTab({
     try {
       // TS-170: queued like a move (see onSetStatus).
       const label = labelInput;
+      const versionId = labelVersionId;
       const res = await queueMove(() => {
         const current = detailRef.current!;
+        if (current.id !== versionId) throw new Error("That version isn't open any more — nothing was saved.");
         return api.patch<{ planVersion: PlanVersionDetailDTO }>(
           `/api/v1/weddings/${weddingId}/plan-versions/${current.id}`,
           { label, expectedRevision: current.revision }
@@ -498,7 +495,7 @@ export function PlanTab({
       detailRef.current = res.planVersion;
       setDetail(res.planVersion);
       setVersions((vs) => vs.map((v) => (v.id === res.planVersion.id ? res.planVersion : v)));
-      setEditingLabel(false);
+      setLabelVersionId(null);
     } catch (err) {
       const fresh = conflictPlanVersion(err);
       if (fresh) {
@@ -610,7 +607,7 @@ export function PlanTab({
           </ul>
         </div>
       )}
-      {error && <p className="mb-4 text-sm text-red-600 dark:text-red-400">{error}</p>}
+      {error && <p role="alert" className="mb-4 text-sm text-red-600 dark:text-red-400">{error}</p>}
 
       {/* FR-5.3: shown once, right after the generation run that produced it -- not persisted, so
           reloading or switching versions clears it, same as the moveWarnings/conflicts above. */}
@@ -623,6 +620,7 @@ export function PlanTab({
             </p>
             <button
               onClick={() => setShowScoreDetail((s) => !s)}
+              aria-expanded={showScoreDetail}
               className="shrink-0 text-xs font-medium text-blue-700 dark:text-blue-400 hover:underline"
             >
               {showScoreDetail ? "Hide calculation" : "How is this calculated?"}
@@ -693,6 +691,7 @@ export function PlanTab({
       {versions.length > 1 && (
         <div className="mb-6 rounded-lg border border-neutral-200 dark:border-neutral-700 p-4">
           <button
+            aria-expanded={showCompare}
             onClick={() => {
               setShowCompare((s) => !s);
               if (!showCompare) {
@@ -749,7 +748,7 @@ export function PlanTab({
                   {comparing ? "Comparing..." : "Compare"}
                 </button>
               </div>
-              {compareError && <p className="mb-2 text-sm text-red-600 dark:text-red-400">{compareError}</p>}
+              {compareError && <p role="alert" className="mb-2 text-sm text-red-600 dark:text-red-400">{compareError}</p>}
               {comparison && (
                 <div>
                   <p className="mb-2 text-sm text-neutral-600 dark:text-neutral-300">
@@ -837,7 +836,7 @@ export function PlanTab({
                   {savingLabel ? "Saving..." : "Save"}
                 </button>
                 <button
-                  onClick={() => setEditingLabel(false)}
+                  onClick={() => setLabelVersionId(null)}
                   disabled={savingLabel}
                   className="min-h-11 rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-xs font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50"
                 >
@@ -848,7 +847,7 @@ export function PlanTab({
               <button
                 onClick={() => {
                   setLabelInput(detail.label ?? "");
-                  setEditingLabel(true);
+                  setLabelVersionId(detail.id);
                 }}
                 className="text-sm text-neutral-500 dark:text-neutral-400 underline hover:text-neutral-700 dark:hover:text-neutral-300"
               >
@@ -1150,12 +1149,14 @@ export function PlanTab({
             <div className="flex gap-1 rounded-md border border-neutral-300 dark:border-neutral-600 p-0.5 text-sm">
               <button
                 onClick={() => setPlanView("list")}
+                aria-pressed={planView === "list"}
                 className={`rounded px-2 py-1 ${planView === "list" ? "bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900" : "hover:bg-neutral-50 dark:hover:bg-neutral-800"}`}
               >
                 List
               </button>
               <button
                 onClick={() => setPlanView("floorplan")}
+                aria-pressed={planView === "floorplan"}
                 className={`rounded px-2 py-1 ${planView === "floorplan" ? "bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900" : "hover:bg-neutral-50 dark:hover:bg-neutral-800"}`}
               >
                 Floor plan
@@ -1324,6 +1325,11 @@ function PlanFloorPlan({
     } else {
       setDropFeedback((cur) => (cur?.tableId === tableId ? null : cur));
     }
+    // TS-175: keep a keyboard user's place -- focus the guest where they now are. The table they
+    // were put at re-draws, and focus used to fall back to the top of the page.
+    requestAnimationFrame(() =>
+      document.querySelector<HTMLElement>(`[data-guest-id="${CSS.escape(guestId)}"]`)?.focus()
+    );
   }
 
   function onGuestDragStart(e: React.DragEvent<HTMLSpanElement>, guestId: string) {

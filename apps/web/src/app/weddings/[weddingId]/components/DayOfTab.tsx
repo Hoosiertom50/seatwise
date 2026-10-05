@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError, apiErrorMessage } from "@/lib/api-client";
 import { useSerialTasks } from "@/lib/serial-tasks";
 import { useUnsavedChanges } from "@/lib/unsaved-changes";
@@ -30,7 +30,17 @@ export function DayOfTab({
   const [detail, setDetail] = useState<PlanVersionDetailDTO | null>(null);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
-  const [error, setError] = useState<string | null>(null);
+  const [error, setErrorText] = useState<string | null>(null);
+  // TS-175: the guest a message is about, when it's about one -- shown (and announced) in their row.
+  const [errorGuestId, setErrorGuestId] = useState<string | null>(null);
+  const setError = useCallback((message: string | null) => {
+    setErrorText(message);
+    setErrorGuestId(null);
+  }, []);
+  const setRowError = useCallback((guestId: string, message: string) => {
+    setErrorText(message);
+    setErrorGuestId(guestId);
+  }, []);
   const [notice, setNotice] = useState<string | null>(null);
   // TS-170: every guest with a change queued or on its way (one value used to stand for all).
   const [busyIds, setBusyIds] = useState<ReadonlySet<string>>(new Set());
@@ -143,13 +153,15 @@ export function DayOfTab({
     setError(null);
     setNotice(null);
     try {
-      const res = await api.post<{ planVersion: PlanVersionDetailDTO | null }>(
+      const res = await api.post<{ planVersion: PlanVersionDetailDTO | null; guest: GuestDTO | null }>(
         `/api/v1/weddings/${weddingId}/guests/${guest.id}/attendance`,
         { attendance: nextAttendance }
       );
       // Functional update: built from the list as it is now, not as it was when this was clicked.
-      guestsRef.current = guestsRef.current.map((g) => (g.id === guest.id ? { ...g, dayOfAttendance: nextAttendance } : g));
-      setGuests((cur) => cur.map((g) => (g.id === guest.id ? { ...g, dayOfAttendance: nextAttendance } : g)));
+      // TS-175: the whole guest as saved (with their new revision), not just the attendance.
+      const saved = (g: GuestDTO): GuestDTO => res.guest ?? { ...g, dayOfAttendance: nextAttendance };
+      guestsRef.current = guestsRef.current.map((g) => (g.id === guest.id ? saved(g) : g));
+      setGuests((cur) => cur.map((g) => (g.id === guest.id ? saved(g) : g)));
       if (res.planVersion) applyDetail(res.planVersion);
       setNotice(
         nextAttendance === "NOT_ATTENDING"
@@ -157,7 +169,7 @@ export function DayOfTab({
           : `${guest.firstName} ${guest.lastName} marked attending again — seat them below.`
       );
     } catch (err) {
-      setError(apiErrorMessage(err, [], "Couldn't update attendance."));
+      setRowError(guest.id, apiErrorMessage(err, [], "Couldn't update attendance."));
     } finally {
       markBusy(guest.id, false);
     }
@@ -193,7 +205,7 @@ export function DayOfTab({
     } catch (err) {
       const fresh = conflictPlanVersion(err);
       if (fresh) applyDetail(fresh);
-      setError(apiErrorMessage(err, [], "Couldn't seat that guest."));
+      setRowError(guestId, apiErrorMessage(err, [], "Couldn't seat that guest."));
     } finally {
       markBusy(guestId, false);
     }
@@ -295,7 +307,11 @@ export function DayOfTab({
           swaps are turned off. You can still search and see where everyone's seated.
         </p>
       )}
-      {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}
+      {error && !errorGuestId && (
+        <p role="alert" className="text-sm text-red-600 dark:text-red-400">
+          {error}
+        </p>
+      )}
       {notice && (
         <p className="rounded-lg border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-950 p-3 text-sm text-blue-800 dark:text-blue-300">
           {notice}
@@ -397,6 +413,11 @@ export function DayOfTab({
                     {notAttending ? "Mark attending" : "Mark not attending"}
                   </button>
                 </div>
+              )}
+              {error && errorGuestId === g.id && (
+                <p role="alert" className="basis-full text-sm text-red-600 dark:text-red-400">
+                  {error}
+                </p>
               )}
             </li>
           );

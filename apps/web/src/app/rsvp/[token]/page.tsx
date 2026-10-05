@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { api, ApiError, apiErrorMessage } from "@/lib/api-client";
+import { formatEventDate } from "@/lib/display-format";
 import type { GuestRsvpPreviewDTO } from "@seatwise/shared";
 
 // TS-17 (FR-12.1/FR-12.2/FR-12.3): the guest's own RSVP page, reached via their unique
@@ -139,7 +140,8 @@ export default function GuestRsvpPage() {
         {closed && (
           <p className="mb-6 rounded-md bg-neutral-100 dark:bg-neutral-800 px-3 py-2 text-sm text-neutral-600 dark:text-neutral-300">
             RSVP responses have closed
-            {preview.rsvpCutoffDate ? ` (the deadline was ${preview.rsvpCutoffDate})` : ""}. Shown
+            {/* TS-175: written out ("Saturday, June 12, 2027"), not as 2027-06-12. */}
+            {preview.rsvpCutoffDate ? ` (the deadline was ${formatEventDate(preview.rsvpCutoffDate)})` : ""}. Shown
             below is what&apos;s currently on file — contact the couple directly if anything needs
             to change.
           </p>
@@ -156,6 +158,8 @@ export default function GuestRsvpPage() {
               <button
                 type="button"
                 onClick={() => setAttending("CONFIRMED")}
+                // TS-175: screen readers hear which answer is chosen.
+                aria-pressed={attending === "CONFIRMED"}
                 className={`flex-1 rounded-md border px-3 py-2 text-sm font-medium ${
                   attending === "CONFIRMED"
                     ? "border-neutral-900 dark:border-neutral-100 bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900"
@@ -167,6 +171,7 @@ export default function GuestRsvpPage() {
               <button
                 type="button"
                 onClick={() => setAttending("DECLINED")}
+                aria-pressed={attending === "DECLINED"}
                 className={`flex-1 rounded-md border px-3 py-2 text-sm font-medium ${
                   attending === "DECLINED"
                     ? "border-neutral-900 dark:border-neutral-100 bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900"
@@ -227,7 +232,7 @@ export default function GuestRsvpPage() {
               />
             </label>
 
-            {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}
+            {error && <p role="alert" className="text-sm text-red-600 dark:text-red-400">{error}</p>}
 
             <button
               type="submit"

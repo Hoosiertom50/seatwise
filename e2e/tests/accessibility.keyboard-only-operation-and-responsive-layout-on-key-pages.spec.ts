@@ -114,13 +114,30 @@ defineQualityTest(
     });
 
     async function assertNoHorizontalOverflow(viewName: string): Promise<void> {
-      const { scrollWidth, clientWidth } = await page.evaluate(() => ({
-        scrollWidth: document.documentElement.scrollWidth,
-        clientWidth: document.documentElement.clientWidth,
-      }));
+      // TS-175: on a failure, also name what sticks out past the right edge (inside a sideways-
+      // scrolling box doesn't count), so the cause is in the message rather than a guess.
+      const { scrollWidth, clientWidth, culprits } = await page.evaluate(() => {
+        const width = document.documentElement.clientWidth;
+        const scrollsSideways = (el: Element | null): boolean => {
+          for (let p = el?.parentElement; p && p !== document.body; p = p.parentElement) {
+            const overflowX = getComputedStyle(p).overflowX;
+            if (overflowX === "auto" || overflowX === "scroll" || overflowX === "hidden") return true;
+          }
+          return false;
+        };
+        const culprits = Array.from(document.querySelectorAll("body *"))
+          .filter((el) => el.getBoundingClientRect().right > width + 1 && !scrollsSideways(el))
+          .slice(0, 5)
+          .map((el) => {
+            const r = el.getBoundingClientRect();
+            const label = el.getAttribute("aria-label") ?? el.getAttribute("type") ?? (el.textContent ?? "").trim().slice(0, 30);
+            return `<${el.tagName.toLowerCase()} "${label}"> right=${Math.round(r.right)} width=${Math.round(r.width)}`;
+          });
+        return { scrollWidth: document.documentElement.scrollWidth, clientWidth: width, culprits };
+      });
       expect(
         scrollWidth,
-        `${viewName} should not force horizontal scrolling (scrollWidth ${scrollWidth} vs clientWidth ${clientWidth})`,
+        `${viewName} should not force horizontal scrolling (scrollWidth ${scrollWidth} vs clientWidth ${clientWidth}); sticking out: ${culprits.join("; ") || "none found"}`,
       ).toBeLessThanOrEqual(clientWidth + 1);
     }
 

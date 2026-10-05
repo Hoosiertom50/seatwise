@@ -15,7 +15,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Seatwise",
+  // TS-175: each page names itself ("Sign in · Seatwise").
+  title: { template: "%s · Seatwise", default: "Seatwise" },
   description: "Wedding seating & table assignment planner",
 };
 

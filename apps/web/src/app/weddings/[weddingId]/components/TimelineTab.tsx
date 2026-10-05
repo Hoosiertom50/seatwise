@@ -24,7 +24,10 @@ export function TimelineTab({ weddingId, canEdit }: { weddingId: string; canEdit
   const [editDescription, setEditDescription] = useState("");
   // TS-159: tell the page this tab has input that leaving it would lose.
   // TS-166: a time picked for a new entry counts too.
-  useUnsavedChanges("timeline", !!(time || description.trim() || editingId));
+  // TS-175: an open edit box counts only once something in it has changed.
+  const editingEntry = entries.find((e) => e.id === editingId);
+  const editChanged = !!editingEntry && (editTime !== editingEntry.time || editDescription !== editingEntry.description);
+  useUnsavedChanges("timeline", !!(time || description.trim() || editChanged));
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -197,7 +200,7 @@ export function TimelineTab({ weddingId, canEdit }: { weddingId: string; canEdit
         </>
       )}
 
-      {error && <p className="mb-4 text-sm text-red-600 dark:text-red-400">{error}</p>}
+      {error && <p role="alert" className="mb-4 text-sm text-red-600 dark:text-red-400">{error}</p>}
 
       <h2 className="mb-3 text-lg font-medium">Run of show ({entries.length})</h2>
       {entries.length === 0 ? (
@@ -252,6 +255,8 @@ export function TimelineTab({ weddingId, canEdit }: { weddingId: string; canEdit
                         <button
                           onClick={() => onReorder(entry.id, "UP")}
                           disabled={!sameTimeAbove}
+                          // TS-175: names that say which entry, for screen readers ("↑" alone said nothing).
+                          aria-label={`Move ${entry.description} earlier`}
                           title="Move earlier among entries at this same time"
                           className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-30"
                         >
@@ -260,6 +265,7 @@ export function TimelineTab({ weddingId, canEdit }: { weddingId: string; canEdit
                         <button
                           onClick={() => onReorder(entry.id, "DOWN")}
                           disabled={!sameTimeBelow}
+                          aria-label={`Move ${entry.description} later`}
                           title="Move later among entries at this same time"
                           className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-30"
                         >
@@ -267,6 +273,7 @@ export function TimelineTab({ weddingId, canEdit }: { weddingId: string; canEdit
                         </button>
                         <button
                           onClick={() => startEdit(entry)}
+                          aria-label={`Edit ${entry.description}`}
                           className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800"
                         >
                           Edit

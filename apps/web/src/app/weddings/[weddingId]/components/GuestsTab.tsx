@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { ConfirmDeleteButton } from "@/components/ConfirmDeleteButton";
 import { api, ApiError, apiErrorMessage } from "@/lib/api-client";
 import type {
@@ -132,7 +132,18 @@ export function GuestsTab({
   const [email, setEmail] = useState("");
   const [notes, setNotes] = useState("");
   const [adding, setAdding] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setErrorText] = useState<string | null>(null);
+  // TS-175: the guest a message is about, when it's about one -- it's then shown in that guest's
+  // row (and announced), not at the top of a long list where it went unseen.
+  const [errorGuestId, setErrorGuestId] = useState<string | null>(null);
+  const setError = useCallback((message: string | null) => {
+    setErrorText(message);
+    setErrorGuestId(null);
+  }, []);
+  const setRowError = useCallback((guestId: string, message: string) => {
+    setErrorText(message);
+    setErrorGuestId(guestId);
+  }, []);
   // TS-151: what a save changed elsewhere (e.g. a guest flagged Needs Reassignment).
   const [warning, setWarning] = useState<string | null>(null);
   // TS-17 (FR-12.4): which guest's RSVP-link action is in flight, and the last result shown for
@@ -154,7 +165,9 @@ export function GuestsTab({
   const [committing, setCommitting] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
   // TS-159: tell the page this tab has input that leaving it would lose.
-  useUnsavedChanges("guests", !!(firstName.trim() || lastName.trim() || partyName.trim() || email.trim() || notes.trim() || csvText));
+  // TS-175: only while the form is there -- once access drops to View it's hidden, and its leftover
+  // text used to keep the page asking "you have unsaved changes".
+  useUnsavedChanges("guests", canEdit && !!(firstName.trim() || lastName.trim() || partyName.trim() || email.trim() || notes.trim() || csvText));
   const [importResult, setImportResult] = useState<{
     createdCount: number;
     updatedCount: number;
@@ -203,14 +216,19 @@ export function GuestsTab({
       setCsvHeaders(headers);
       // Best-effort auto-mapping: a column whose header matches a field name/label loosely.
       const guess: Partial<Record<GuestImportField, string>> = {};
+      // TS-175: the label is cut at "(" before it's normalized (it was normalized first, so the "("
+      // was already gone and labels like "Attendance (Attending/Not Attending)" never matched), and
+      // a few everyday names are accepted too -- the example file's own "Accessible Table?" and
+      // "Attendance" columns weren't picked up.
+      const squash = (text: string) => text.toLowerCase().replace(/[^a-z]/g, "");
+      const aliases: Partial<Record<GuestImportField, string[]>> = {
+        requiresAccessibleTable: ["accessibletable", "accessible"],
+        dayOfAttendance: ["attendance"],
+        partyName: ["partyhousehold", "party", "household"],
+      };
       for (const { field, label } of IMPORT_FIELDS) {
-        const match = headers.find((h) => {
-          const normalized = h.trim().toLowerCase().replace(/[^a-z]/g, "");
-          return (
-            normalized === field.toLowerCase() ||
-            normalized === label.toLowerCase().replace(/[^a-z]/g, "").split("(")[0]
-          );
-        });
+        const names = [squash(field), squash(label.split("(")[0]), ...(aliases[field] ?? [])];
+        const match = headers.find((h) => names.includes(squash(h)));
         if (match) guess[field] = match;
       }
       setMapping(guess);
@@ -389,7 +407,7 @@ export function GuestsTab({
   }
   function showConflict(fresh: GuestDTO) {
     putGuest(fresh);
-    setError(
+    setRowError(fresh.id, 
       `${fresh.firstName} ${fresh.lastName} was just edited elsewhere — showing the latest. Try again if you still want to make this change.`
     );
   }
@@ -404,7 +422,7 @@ export function GuestsTab({
       if (fresh) showConflict(fresh);
       else {
         if (before) patchRow(guestId, { rsvpStatus: before.rsvpStatus });
-        setError(err instanceof ApiError ? err.message : "Couldn't update RSVP status.");
+        setRowError(guestId, err instanceof ApiError ? err.message : "Couldn't update RSVP status.");
       }
     }
   }
@@ -421,7 +439,7 @@ export function GuestsTab({
       if (fresh) showConflict(fresh);
       else {
         if (before) patchRow(guestId, { side: before.side });
-        setError(err instanceof ApiError ? err.message : "Couldn't update that guest's side.");
+        setRowError(guestId, err instanceof ApiError ? err.message : "Couldn't update that guest's side.");
       }
     }
   }
@@ -460,7 +478,7 @@ export function GuestsTab({
         patchRow(guestId, { email: current?.email ?? null });
         input.value = current?.email ?? "";
         // TS-135: a 422's top-level message is just "Validation failed" -- show the field's own reason.
-        setError(apiErrorMessage(err, ["email"], "Couldn't update that guest's email."));
+        setRowError(guestId, apiErrorMessage(err, ["email"], "Couldn't update that guest's email."));
       }
     }
   }
@@ -483,7 +501,7 @@ export function GuestsTab({
       } else {
         patchRow(guestId, { notes: current.notes });
         input.value = current.notes ?? "";
-        setError(apiErrorMessage(err, ["notes"], "Couldn't update that guest's notes."));
+        setRowError(guestId, apiErrorMessage(err, ["notes"], "Couldn't update that guest's notes."));
       }
     }
   }
@@ -502,7 +520,7 @@ export function GuestsTab({
     const current = guests.find((g) => g.id === guestId);
     if (!current || trimmed === current[field]) return;
     if (trimmed === "") {
-      setError(field === "firstName" ? "First name can't be blank." : "Last name can't be blank.");
+      setRowError(guestId, field === "firstName" ? "First name can't be blank." : "Last name can't be blank.");
       input.value = current[field];
       return;
     }
@@ -517,7 +535,7 @@ export function GuestsTab({
       } else {
         patchRow(guestId, { [field]: current[field] });
         input.value = current[field];
-        setError(
+        setRowError(guestId, 
           apiErrorMessage(
             err,
             [field],
@@ -562,7 +580,7 @@ export function GuestsTab({
         }));
       }
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Couldn't get that guest's RSVP link.");
+      setRowError(guestId, err instanceof ApiError ? err.message : "Couldn't get that guest's RSVP link.");
     } finally {
       setRsvpLinkBusy(null);
     }
@@ -578,7 +596,7 @@ export function GuestsTab({
       if (fresh) showConflict(fresh);
       else {
         if (before) patchRow(guestId, { isLocked: before.isLocked });
-        setError(err instanceof ApiError ? err.message : "Couldn't update that guest's lock.");
+        setRowError(guestId, err instanceof ApiError ? err.message : "Couldn't update that guest's lock.");
       }
     }
   }
@@ -786,7 +804,11 @@ export function GuestsTab({
         </button>
       </form>
 
-      {error && <p className="mb-4 text-sm text-red-600 dark:text-red-400">{error}</p>}
+      {error && !errorGuestId && (
+        <p role="alert" className="mb-4 text-sm text-red-600 dark:text-red-400">
+          {error}
+        </p>
+      )}
       {warning && (
         <p role="status" className="mb-4 rounded-md bg-amber-50 dark:bg-amber-950 px-3 py-2 text-sm text-amber-900 dark:text-amber-200">
           {warning}
@@ -809,6 +831,7 @@ export function GuestsTab({
           <button
             type="button"
             onClick={() => setShowImportExample((v) => !v)}
+            aria-expanded={showImportExample}
             className="text-sm text-neutral-600 dark:text-neutral-300 underline hover:text-neutral-900 dark:hover:text-neutral-100"
           >
             {showImportExample ? "Hide example" : "See an example"}
@@ -866,7 +889,8 @@ export function GuestsTab({
           type="file"
           accept=".csv,text/csv"
           onChange={onFileSelected}
-          className="mb-3 block text-sm"
+          // TS-175: never wider than the space it is in (with Linux fonts it ran 6px off a phone screen).
+          className="mb-3 block w-full max-w-full text-sm"
           // TS-53 (AC-079): no visible <label> wraps this input (the paragraph/button above it are
           // instructions and a download link, not a label element) -- axe-core's WCAG 2.1 AA "label"
           // rule flagged it as critical (no accessible name at all). Same sr-only-name fix shape as
@@ -921,7 +945,7 @@ export function GuestsTab({
           </div>
         )}
 
-        {importError && <p className="mb-3 text-sm text-red-600 dark:text-red-400">{importError}</p>}
+        {importError && <p role="alert" className="mb-3 text-sm text-red-600 dark:text-red-400">{importError}</p>}
         {importResult && (
           <div className="mb-3">
             <p className="text-sm text-green-700 dark:text-green-400">
@@ -1211,6 +1235,11 @@ export function GuestsTab({
                   <span className="text-sm text-neutral-500 dark:text-neutral-400">{RSVP_STATUS_LABELS[g.rsvpStatus]}</span>
                 )}
               </div>
+              {error && errorGuestId === g.id && (
+                <p role="alert" className="basis-full text-sm text-red-600 dark:text-red-400">
+                  {error}
+                </p>
+              )}
             </li>
           ))}
         </ul>

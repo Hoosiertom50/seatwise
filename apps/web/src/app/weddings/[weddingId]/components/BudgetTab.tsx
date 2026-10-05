@@ -42,12 +42,21 @@ function centsToDollarsString(cents: number | null): string {
 
 // Returns null for a blank string (meaning "not set" for a vendor's cost, or "no budget" for the
 // budget figure) rather than 0 -- an empty field is never silently treated as "free"/"$0 budget".
+// TS-175: "$1,500.50" is read as 1500.50 -- dollar signs, commas and spaces are dropped first. It
+// used to be read as no amount at all ("1,500" became "not set" without a word).
 function dollarsStringToCents(value: string): number | null {
-  const trimmed = value.trim();
-  if (!trimmed) return null;
-  const dollars = Number(trimmed);
+  const cleaned = value.replace(/[$,\s]/g, "");
+  if (!cleaned) return null;
+  const dollars = Number(cleaned);
   if (!Number.isFinite(dollars)) return null;
   return Math.round(dollars * 100);
+}
+
+/** TS-175: why an amount box can't be saved as typed, or null when it can (blank is fine). */
+function amountProblem(value: string, what: string): string | null {
+  const cleaned = value.replace(/[$,\s]/g, "");
+  if (!cleaned || /^(\d+(\.\d{0,2})?|\.\d{1,2})$/.test(cleaned)) return null;
+  return `${what} must be an amount in dollars, like 1500 or 1,500.50.`;
 }
 
 function formatCents(cents: number): string {
@@ -97,9 +106,15 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
   useEffect(() => {
     budgetEditedRef.current = budgetEdited;
   }, [budgetEdited]);
+  // TS-175: an open edit box counts only once something in it has changed.
+  const editingVendor = vendors.find((v) => v.id === editingId);
+  const editChanged =
+    !!editingVendor &&
+    (editCostText !== centsToDollarsString(editingVendor.costCents) ||
+      (Object.keys(editVendor) as (keyof VendorDTO)[]).some((k) => (editVendor[k] ?? null) !== (editingVendor[k] ?? null)));
   useUnsavedChanges(
     "budget",
-    !!(name.trim() || contactName.trim() || contactEmail.trim() || contactPhone.trim() || cost || contractNotes.trim() || arrivalTime || editingId || budgetEdited)
+    !!(name.trim() || contactName.trim() || contactEmail.trim() || contactPhone.trim() || cost || contractNotes.trim() || arrivalTime || editChanged || budgetEdited)
   );
   const [saving, setSaving] = useState(false);
 
@@ -175,6 +190,8 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
   async function onSaveBudget(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
+    const problem = amountProblem(budgetInput, "The budget");
+    if (problem) return setError(problem);
     setSavingBudget(true);
     try {
       const { summary: updated } = await api.patch<{ summary: BudgetSummaryDTO }>(
@@ -201,6 +218,8 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
   async function onAdd(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
+    const problem = amountProblem(cost, "Cost");
+    if (problem) return setError(problem);
     setAdding(true);
     try {
       const { vendor } = await api.post<{ vendor: VendorDTO }>(`/api/v1/weddings/${weddingId}/vendors`, {
@@ -249,8 +268,10 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
   }
 
   async function onSaveEdit(vendorId: string) {
-    setSaving(true);
     setError(null);
+    const problem = amountProblem(editCostText, "Cost");
+    if (problem) return setError(problem);
+    setSaving(true);
     const expectedRevision = vendors.find((v) => v.id === vendorId)?.revision;
     try {
       const { vendor } = await api.patch<{ vendor: VendorDTO }>(
@@ -275,6 +296,9 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
       const fresh = conflictVendor(err);
       if (fresh) {
         setVendors((cur) => cur.map((v) => (v.id === vendorId ? fresh : v)));
+        // TS-175: close the editor, as Timeline does. It used to stay open with the old values,
+        // and a second Save then wrote them over the other person's change.
+        setEditingId(null);
         setError(`"${fresh.name}" was just edited elsewhere — showing the latest. Try again if you still want to make this change.`);
       } else {
         // TS-151: say which field was refused, not just "Validation failed".
@@ -364,9 +388,9 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
               </label>
               <input
                 id="budget-total"
-                type="number"
-                min={0}
-                step="0.01"
+                // TS-175: a text box, not a number box -- a number box reports "1,500" as empty.
+                type="text"
+                inputMode="decimal"
                 placeholder="e.g. 30000"
                 className="w-40 rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1.5 text-sm"
                 value={budgetInput}
@@ -508,9 +532,8 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
               </label>
               <input
                 id="vendor-cost"
-                type="number"
-                min={0}
-                step="0.01"
+                type="text"
+                inputMode="decimal"
                 className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
                 value={cost}
                 onChange={(e) => setCost(e.target.value)}
@@ -575,7 +598,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
         </>
       )}
 
-      {error && <p className="mb-4 text-sm text-red-600 dark:text-red-400">{error}</p>}
+      {error && <p role="alert" className="mb-4 text-sm text-red-600 dark:text-red-400">{error}</p>}
 
       <h2 className="mb-3 text-lg font-medium">Vendors ({vendors.length})</h2>
       {vendors.length === 0 ? (
@@ -643,9 +666,8 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
                     />
                     <input
                       aria-label="Edit cost"
-                      type="number"
-                      min={0}
-                      step="0.01"
+                      type="text"
+                      inputMode="decimal"
                       placeholder="Cost ($)"
                       className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm"
                       value={editCostText}
@@ -732,6 +754,8 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
                         )}
                         <button
                           onClick={() => startEdit(v)}
+                          // TS-175: says which vendor, for screen readers.
+                          aria-label={`Edit ${v.name}`}
                           className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800"
                         >
                           Edit

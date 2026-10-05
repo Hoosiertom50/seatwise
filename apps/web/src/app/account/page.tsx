@@ -18,12 +18,22 @@ export default function AccountPage() {
   const [ownedWeddings, setOwnedWeddings] = useState<{ id: string; name: string }[]>([]);
   const [deleted, setDeleted] = useState(false);
 
+  // TS-175: only "not signed in" goes to the sign-in page; any other failure says so, with Try
+  // again (it used to send every error -- a dropped connection, say -- to sign-in).
+  const [loadFailed, setLoadFailed] = useState(false);
+  const [loadAttempt, setLoadAttempt] = useState(0);
   useEffect(() => {
     api
       .get<{ user: { name: string; email: string } }>("/api/v1/auth/me")
-      .then((res) => setUser(res.user))
-      .catch(() => router.replace("/login?next=/account"));
-  }, [router]);
+      .then((res) => {
+        setUser(res.user);
+        setLoadFailed(false);
+      })
+      .catch((err) => {
+        if (err instanceof ApiError && err.status === 401) router.replace("/login?next=/account");
+        else setLoadFailed(true);
+      });
+  }, [router, loadAttempt]);
 
   async function onDelete() {
     setError(null);
@@ -54,7 +64,23 @@ export default function AccountPage() {
     );
   }
 
-  if (!user) return <main className="mx-auto max-w-xl px-4 py-12 text-sm text-neutral-500">Loading…</main>;
+  if (!user && loadFailed) {
+    return (
+      <main className="mx-auto flex max-w-xl flex-wrap items-center gap-3 px-4 py-12 text-sm">
+        <p role="alert" className="text-red-600 dark:text-red-400">
+          Couldn&apos;t load your account.
+        </p>
+        <button
+          type="button"
+          onClick={() => setLoadAttempt((n) => n + 1)}
+          className="rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 hover:bg-neutral-50 dark:hover:bg-neutral-800"
+        >
+          Try again
+        </button>
+      </main>
+    );
+  }
+  if (!user) return <main className="mx-auto max-w-xl px-4 py-12 text-sm text-neutral-500 dark:text-neutral-400">Loading…</main>;
 
   return (
     <main className="mx-auto max-w-xl px-4 py-10">
@@ -111,7 +137,7 @@ export default function AccountPage() {
             onConfirm={onDelete}
           />
         </div>
-        {error && <p className="mt-3 text-sm text-red-600 dark:text-red-400">{error}</p>}
+        {error && <p role="alert" className="mt-3 text-sm text-red-600 dark:text-red-400">{error}</p>}
         {ownedWeddings.length > 0 && (
           <ul className="mt-2 list-inside list-disc text-sm">
             {ownedWeddings.map((w) => (
