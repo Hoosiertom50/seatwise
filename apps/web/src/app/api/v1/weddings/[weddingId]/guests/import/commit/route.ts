@@ -27,7 +27,8 @@ export async function POST(req: NextRequest, { params }: Params) {
       weddingId,
       parsed.data.csv,
       parsed.data.mapping,
-      parsed.data.expectedRevisions
+      parsed.data.expectedRevisions,
+      user.id
     );
     const guests = await listGuestsByWedding(weddingId);
     return NextResponse.json({ result, guests });

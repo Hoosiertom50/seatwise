@@ -2,7 +2,7 @@ import { randomUUID } from "crypto";
 import { isRsvpCutoffPast } from "@seatwise/shared";
 import { pool } from "../pool";
 import { encryptText, decryptText } from "../crypto";
-import { currentPlanVersionId, refreshPlanCompleteness, resyncTables, tablesAffectedBy } from "./seat-checks";
+import { currentPlanVersionId, recordRecheckIfApproved, refreshPlanCompleteness, resyncTables, tablesAffectedBy } from "./seat-checks";
 import { hashLinkToken, isPlainStoredLinkToken, newLinkToken, readStoredLinkToken } from "../link-tokens";
 
 export interface GuestRow {
@@ -217,7 +217,7 @@ export async function updateGuestForWedding(
   }
 }
 
-export async function deleteGuestForWedding(id: string, weddingId: string): Promise<boolean> {
+export async function deleteGuestForWedding(id: string, weddingId: string, actorUserId?: string): Promise<boolean> {
   // TS-165: their seat and seating rules go with them, which can clear flags on other guests -- a
   // must-sit-together partner now seated alone, a table that now has room. Re-check those tables
   // in the same transaction (the caller already recounts completeness).
@@ -226,6 +226,14 @@ export async function deleteGuestForWedding(id: string, weddingId: string): Prom
     await client.query("BEGIN");
     const planVersionId = await currentPlanVersionId(client, weddingId);
     const affected = planVersionId ? await tablesAffectedBy(client, weddingId, planVersionId, [id]) : [];
+    // TS-169: whether they had a seat, and their name, for the plan's history (read before the delete).
+    const { rows: seated } = planVersionId
+      ? await client.query(
+          `SELECT (g."firstName" || ' ' || g."lastName") AS name FROM "seat_assignments" sa JOIN "guests" g ON g.id = sa."guestId"
+           WHERE sa."planVersionId" = $1 AND sa."guestId" = $2`,
+          [planVersionId, id]
+        )
+      : { rows: [] as { name: string }[] };
     const { rowCount } = await client.query(`DELETE FROM "guests" WHERE id = $1 AND "weddingId" = $2`, [
       id,
       weddingId,
@@ -233,7 +241,11 @@ export async function deleteGuestForWedding(id: string, weddingId: string): Prom
     const deleted = (rowCount ?? 0) > 0;
     if (deleted && planVersionId && affected.length > 0) {
       const { changed } = await resyncTables(client, weddingId, planVersionId, affected);
-      await refreshPlanCompleteness(client, weddingId, planVersionId, { bumpRevision: changed });
+      await refreshPlanCompleteness(client, weddingId, planVersionId, { bumpRevision: changed || seated.length > 0 });
+    }
+    // TS-169: removing a seated guest changes an approved plan -- it shows "Modified since approval".
+    if (deleted && planVersionId && seated[0]) {
+      await recordRecheckIfApproved(client, planVersionId, `${seated[0].name} was removed from the guest list (and their seat)`, actorUserId ?? null);
     }
     await client.query("COMMIT");
     return deleted;
@@ -345,7 +357,12 @@ export interface SubmitGuestRsvpData {
 // form has no "last loaded revision" of its own to send back. rsvpRespondedAt is set here and only
 // here, which is what makes it mean "responded via their own link" (FR-12.4) rather than anything
 // a planner's direct edit could also produce.
-export async function submitGuestRsvp(token: string, input: SubmitGuestRsvpData): Promise<GuestRow> {
+// TS-169: also returns the answer they had before this one, so the caller can tell a real change
+// of mind (Declined -> Confirmed) from re-sending the same answer to fix a detail.
+export async function submitGuestRsvp(
+  token: string,
+  input: SubmitGuestRsvpData
+): Promise<GuestRow & { previousRsvpStatus: string }> {
   const { rows } = await pool.query(
     `SELECT g.id AS "guestId", g."weddingId", w."rsvpCutoffDate"::text AS "rsvpCutoffDate",
             COALESCE(g."partySizeLimit", g.headcount) AS "partySizeLimit"
@@ -373,12 +390,14 @@ export async function submitGuestRsvp(token: string, input: SubmitGuestRsvpData)
     );
   }
 
-  await pool.query(
-    `UPDATE "guests"
+  const { rows: updated } = await pool.query<{ previousRsvpStatus: string }>(
+    `UPDATE "guests" g
      SET "rsvpStatus" = $1, headcount = $2, "plusOneNames" = $3, "rsvpNotes" = $4,
          "requiresAccessibleTable" = $5, "rsvpRespondedAt" = now(), "updatedAt" = now(),
-         "partySizeLimit" = $7, revision = revision + 1
-     WHERE id = $6`,
+         "partySizeLimit" = $7, revision = g.revision + 1
+     FROM (SELECT id, "rsvpStatus" AS prev FROM "guests" WHERE id = $6 FOR UPDATE) old
+     WHERE g.id = old.id
+     RETURNING old.prev AS "previousRsvpStatus"`,
     [
       input.rsvpStatus,
       input.headcount ?? 1,
@@ -390,5 +409,5 @@ export async function submitGuestRsvp(token: string, input: SubmitGuestRsvpData)
     ]
   );
   const guest = await getGuestForWedding(found.guestId, found.weddingId);
-  return guest!;
+  return { ...guest!, previousRsvpStatus: updated[0].previousRsvpStatus };
 }

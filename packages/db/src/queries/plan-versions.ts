@@ -224,6 +224,15 @@ export async function createPlanVersionWithAssignments(
         [randomUUID(), planVersionId, a.guestId, a.tableId]
       );
     }
+    // TS-169: the plan was worked out from the guest list as it was before this transaction; a
+    // guest who declined (or was marked Not Attending) since then doesn't keep a seat in it.
+    // Attendance changes take the same wedding lock, so they land either before this or after it.
+    const { rowCount: dropped } = await client.query(
+      `DELETE FROM "seat_assignments" WHERE "planVersionId" = $1
+         AND "guestId" IN (SELECT id FROM "guests" WHERE "weddingId" = $2 AND "dayOfAttendance" <> 'ATTENDING')`,
+      [planVersionId, weddingId]
+    );
+    if (dropped) await refreshPlanCompleteness(client, weddingId, planVersionId, { bumpRevision: false });
 
     const draftSuffix = makeCurrent ? "" : " (saved as a comparison draft, not made Current)";
     const description =
@@ -757,6 +766,14 @@ export async function moveGuestAssignment(
     await checkPlanVersionRevision(client, planVersionId, weddingId, expectedRevision, () => new ManualMoveError("Only the current plan version can be manually edited — this one has been superseded."));
     // TS-165: the tables this move can affect, as things stand before it.
     const unitIds = unit.map((member) => member.id);
+    // TS-169: attendance checked again inside the transaction -- a guest who declined by link a
+    // moment ago (after the check above) isn't seated by a move that was already on its way.
+    const { rows: absent } = await client.query(
+      `SELECT ("firstName" || ' ' || "lastName") AS name FROM "guests"
+       WHERE id = ANY($1::text[]) AND "dayOfAttendance" <> 'ATTENDING' FOR SHARE`,
+      [unitIds]
+    );
+    if (absent[0]) throw new ManualMoveError(`${absent[0].name} is marked Not Attending, so they can't be seated.`);
     const affectedBefore = await tablesAffectedBy(client, weddingId, planVersionId, unitIds);
     for (const member of unit) {
       await client.query(
@@ -983,7 +1000,7 @@ export async function setGuestAttendance(
     `SELECT id FROM "plan_versions" WHERE "weddingId" = $1 AND "isCurrent" LIMIT 1`,
     [weddingId]
   );
-  const currentPlanVersionId: string | undefined = currentRows[0]?.id;
+  let currentPlanVersionId: string | undefined = currentRows[0]?.id;
 
   if (guest.dayOfAttendance === attendance) {
     // Already at the requested attendance — no-op, just return current state.
@@ -993,6 +1010,23 @@ export async function setGuestAttendance(
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
+    // TS-169: the same wedding lock Generate and Restore take, then the guest's row -- and the
+    // current version and their attendance read again under them. Before, a guest declining by
+    // link while a plan was being generated (or the planner moved them) could keep their seat.
+    await client.query(`SELECT id FROM "weddings" WHERE id = $1 FOR UPDATE`, [weddingId]);
+    const { rows: lockedGuest } = await client.query(
+      `SELECT "dayOfAttendance" FROM "guests" WHERE id = $1 FOR UPDATE`,
+      [guestId]
+    );
+    const { rows: lockedCurrent } = await client.query(
+      `SELECT id FROM "plan_versions" WHERE "weddingId" = $1 AND "isCurrent" LIMIT 1`,
+      [weddingId]
+    );
+    currentPlanVersionId = lockedCurrent[0]?.id;
+    if (lockedGuest[0]?.dayOfAttendance === attendance) {
+      await client.query("COMMIT");
+      return currentPlanVersionId ? getPlanVersionDetail(currentPlanVersionId, weddingId) : null;
+    }
     // TS-165: bumps the guest's revision too, so a planner editing this guest from an older copy
     // gets a conflict instead of overwriting the attendance change.
     await client.query(
