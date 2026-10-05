@@ -2,6 +2,8 @@
 
 import { useEffect, useRef, useState } from "react";
 import { api, ApiError } from "@/lib/api-client";
+import { useSerialTasks } from "@/lib/serial-tasks";
+import { useUnsavedChanges } from "@/lib/unsaved-changes";
 import { RULE_WEIGHT_CONFIG, compareTableLabels } from "@seatwise/shared";
 import type {
   GuestDTO,
@@ -101,6 +103,13 @@ export function PlanTab({
   const [showScoreDetail, setShowScoreDetail] = useState(false);
   const [statusUpdating, setStatusUpdating] = useState(false);
   const [movingGuestId, setMovingGuestId] = useState<string | null>(null);
+  // TS-166: moves run one at a time, each against the plan as the previous one left it (see
+  // serial-tasks.ts); detailRef is that latest copy, updated as soon as a move comes back.
+  const queueMove = useSerialTasks();
+  const detailRef = useRef<PlanVersionDetailDTO | null>(null);
+  useEffect(() => {
+    detailRef.current = detail;
+  }, [detail]);
   const [error, setError] = useState<string | null>(null);
   const [moveWarnings, setMoveWarnings] = useState<string[]>([]);
   const [conflicts, setConflicts] = useState<string[]>([]);
@@ -109,6 +118,8 @@ export function PlanTab({
   const [restoring, setRestoring] = useState(false);
   const [editingLabel, setEditingLabel] = useState(false);
   const [labelInput, setLabelInput] = useState("");
+  // TS-166: a version label being typed counts as unsaved input (TS-159).
+  useUnsavedChanges("plan-label", editingLabel && labelInput.trim() !== (detail?.label ?? ""));
   const [savingLabel, setSavingLabel] = useState(false);
   const [showCompare, setShowCompare] = useState(false);
   const [compareFromId, setCompareFromId] = useState("");
@@ -191,11 +202,15 @@ export function PlanTab({
         const res = await api.get<{ planVersion: PlanVersionDetailDTO }>(
           `/api/v1/weddings/${weddingId}/plan-versions/${planVersionId}`
         );
+        // TS-166: a poll that set off before a move can come back after it -- only ever take a
+        // newer copy, never an older one (the moved guest used to snap back).
         setDetail((cur) => {
-          if (!cur || cur.id !== planVersionId || cur.revision === res.planVersion.revision) return cur;
+          if (!cur || cur.id !== planVersionId || cur.revision >= res.planVersion.revision) return cur;
           return res.planVersion;
         });
-        setVersions((vs) => vs.map((v) => (v.id === res.planVersion.id ? res.planVersion : v)));
+        setVersions((vs) =>
+          vs.map((v) => (v.id === res.planVersion.id && v.revision < res.planVersion.revision ? res.planVersion : v))
+        );
       } catch {
         // Best-effort background sync -- a transient failure here isn't worth surfacing as an
         // error; the next tick tries again.
@@ -268,17 +283,25 @@ export function PlanTab({
   // Returns what happened (error, or warnings) so a caller that wants to show feedback right at
   // the point of interaction -- the floor plan's drag-and-drop, see PlanFloorPlan below -- can do
   // so without forcing the user back up to the top-of-tab banner this also still populates.
-  async function onMoveGuest(guestId: string, tableId: string): Promise<MoveGuestResult> {
-    if (!detail || !tableId) return {};
+  function onMoveGuest(guestId: string, tableId: string): Promise<MoveGuestResult> {
+    if (!detail || !tableId) return Promise.resolve({});
+    setMovingGuestId(guestId);
+    return queueMove(() => moveGuest(guestId, tableId));
+  }
+
+  async function moveGuest(guestId: string, tableId: string): Promise<MoveGuestResult> {
+    const current = detailRef.current;
+    if (!current) return {};
     setError(null);
     setMoveWarnings([]);
     setMovingGuestId(guestId);
-    const priorTableId = detail.assignments.find((a) => a.guestId === guestId)?.tableId ?? null;
+    const priorTableId = current.assignments.find((a) => a.guestId === guestId)?.tableId ?? null;
     try {
       const res = await api.post<{ planVersion: PlanVersionDetailDTO; warnings: string[] }>(
-        `/api/v1/weddings/${weddingId}/plan-versions/${detail.id}/assignments`,
-        { guestId, tableId, expectedRevision: detail.revision }
+        `/api/v1/weddings/${weddingId}/plan-versions/${current.id}/assignments`,
+        { guestId, tableId, expectedRevision: current.revision }
       );
+      detailRef.current = res.planVersion;
       setDetail(res.planVersion);
       setVersions((vs) => vs.map((v) => (v.id === res.planVersion.id ? res.planVersion : v)));
       setMoveWarnings(res.warnings);
@@ -300,6 +323,7 @@ export function PlanTab({
       // stale, and don't record an undo entry for a move that never actually applied.
       const fresh = conflictPlanVersion(err);
       if (fresh) {
+        detailRef.current = fresh;
         setDetail(fresh);
         setVersions((vs) => vs.map((v) => (v.id === fresh.id ? fresh : v)));
       }
@@ -307,7 +331,7 @@ export function PlanTab({
       setError(message);
       return { error: message };
     } finally {
-      setMovingGuestId(null);
+      setMovingGuestId((cur) => (cur === guestId ? null : cur));
     }
   }
 
@@ -547,7 +571,10 @@ export function PlanTab({
       </div>
       {!canEdit && (
         <p className="mb-4 rounded-md bg-neutral-100 dark:bg-neutral-800 px-3 py-2 text-sm text-neutral-600 dark:text-neutral-300">
-          You have view-only access to this wedding's seating plan.
+          {/* TS-166: a Couple member with Comment access can still approve -- don't call that view-only. */}
+          {canApprove
+            ? "You can review and approve this seating plan, but not change who sits where."
+            : "You have view-only access to this wedding's seating plan."}
         </p>
       )}
 

@@ -18,7 +18,15 @@ const TYPE_LABELS: Record<string, string> = {
 
 // TS-13/FR-10.2: a lightweight bell + dropdown, polled rather than pushed (no websocket in this
 // app) — good enough for "check back and see what changed" without adding real-time infrastructure.
-export function NotificationsBell() {
+export function NotificationsBell({
+  onLeave,
+}: {
+  /**
+   * TS-166: asked before following the bell's "Back to dashboard" link. Returning false stops it
+   * (the wedding page uses this to ask first when a tab has unsaved input).
+   */
+  onLeave?: (href: string) => boolean;
+} = {}) {
   const [notifications, setNotifications] = useState<NotificationDTO[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [open, setOpen] = useState(false);
@@ -122,7 +130,13 @@ export function NotificationsBell() {
             )}
           </div>
           <div className="border-t border-neutral-100 dark:border-neutral-800 px-4 py-2 text-center">
-            <Link href="/dashboard" className="text-xs text-neutral-500 dark:text-neutral-400 hover:underline">
+            <Link
+              href="/dashboard"
+              onClick={(e) => {
+                if (onLeave && !onLeave("/dashboard")) e.preventDefault();
+              }}
+              className="text-xs text-neutral-500 dark:text-neutral-400 hover:underline"
+            >
               Back to dashboard
             </Link>
           </div>

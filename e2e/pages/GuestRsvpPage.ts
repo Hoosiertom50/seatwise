@@ -185,4 +185,9 @@ export class GuestRsvpPage extends BasePage {
       this.submitButton().click(),
     ]);
   }
+
+  /** TS-166: shown when the page couldn't load (as opposed to the link not existing). */
+  tryAgainButton() {
+    return this.page.getByRole("button", { name: "Try again", exact: true });
+  }
 }

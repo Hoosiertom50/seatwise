@@ -1,7 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError, apiErrorMessage } from "@/lib/api-client";
+import { useSerialTasks } from "@/lib/serial-tasks";
+import { useUnsavedChanges } from "@/lib/unsaved-changes";
 import type {
   GuestDTO,
   PlanVersionDTO,
@@ -40,6 +42,20 @@ export function DayOfTab({
   const [swapAId, setSwapAId] = useState("");
   const [swapBId, setSwapBId] = useState("");
   const [swapping, setSwapping] = useState(false);
+  // TS-166: seat, swap and attendance changes run one at a time, each against the plan as the one
+  // before left it (see serial-tasks.ts) -- quick clicks used to undo each other on screen, or be
+  // refused as if someone else had changed the plan.
+  const queuePlanChange = useSerialTasks();
+  const detailRef = useRef<PlanVersionDetailDTO | null>(null);
+  useEffect(() => {
+    detailRef.current = detail;
+  }, [detail]);
+  function applyDetail(d: PlanVersionDetailDTO) {
+    detailRef.current = d;
+    setDetail(d);
+  }
+  // TS-166: a half-typed walk-in counts as unsaved input (TS-159).
+  useUnsavedChanges("day-of-walk-in", walkInFirst.trim() !== "" || walkInLast.trim() !== "");
 
   async function load() {
     const [{ tables: tableList }, { planVersions }] = await Promise.all([
@@ -101,7 +117,12 @@ export function DayOfTab({
       .sort((a, b) => a.name.localeCompare(b.name));
   }, [detail]);
 
-  async function onToggleAttendance(guest: GuestDTO) {
+  function onToggleAttendance(guest: GuestDTO) {
+    setBusyGuestId(guest.id);
+    return queuePlanChange(() => toggleAttendance(guest));
+  }
+
+  async function toggleAttendance(guest: GuestDTO) {
     const nextAttendance = guest.dayOfAttendance === "ATTENDING" ? "NOT_ATTENDING" : "ATTENDING";
     setError(null);
     setNotice(null);
@@ -111,10 +132,9 @@ export function DayOfTab({
         `/api/v1/weddings/${weddingId}/guests/${guest.id}/attendance`,
         { attendance: nextAttendance }
       );
-      setGuests(
-        guests.map((g) => (g.id === guest.id ? { ...g, dayOfAttendance: nextAttendance } : g))
-      );
-      if (res.planVersion) setDetail(res.planVersion);
+      // Functional update: built from the list as it is now, not as it was when this was clicked.
+      setGuests((cur) => cur.map((g) => (g.id === guest.id ? { ...g, dayOfAttendance: nextAttendance } : g)));
+      if (res.planVersion) applyDetail(res.planVersion);
       setNotice(
         nextAttendance === "NOT_ATTENDING"
           ? `${guest.firstName} ${guest.lastName} marked not attending — their seat is now free.`
@@ -123,7 +143,7 @@ export function DayOfTab({
     } catch (err) {
       setError(apiErrorMessage(err, [], "Couldn't update attendance."));
     } finally {
-      setBusyGuestId(null);
+      setBusyGuestId((cur) => (cur === guest.id ? null : cur));
     }
   }
 
@@ -136,24 +156,31 @@ export function DayOfTab({
     return null;
   }
 
-  async function onSeatGuest(guestId: string, tableId: string) {
+  function onSeatGuest(guestId: string, tableId: string) {
     if (!detail || !tableId) return;
+    setBusyGuestId(guestId);
+    return queuePlanChange(() => seatGuest(guestId, tableId));
+  }
+
+  async function seatGuest(guestId: string, tableId: string) {
+    const current = detailRef.current;
+    if (!current) return;
     setError(null);
     setNotice(null);
     setBusyGuestId(guestId);
     try {
       const res = await api.post<{ planVersion: PlanVersionDetailDTO; warnings: string[] }>(
-        `/api/v1/weddings/${weddingId}/plan-versions/${detail.id}/assignments`,
-        { guestId, tableId, expectedRevision: detail.revision }
+        `/api/v1/weddings/${weddingId}/plan-versions/${current.id}/assignments`,
+        { guestId, tableId, expectedRevision: current.revision }
       );
-      setDetail(res.planVersion);
+      applyDetail(res.planVersion);
       if (res.warnings.length > 0) setNotice(res.warnings.join(" "));
     } catch (err) {
       const fresh = conflictPlanVersion(err);
-      if (fresh) setDetail(fresh);
+      if (fresh) applyDetail(fresh);
       setError(apiErrorMessage(err, [], "Couldn't seat that guest."));
     } finally {
-      setBusyGuestId(null);
+      setBusyGuestId((cur) => (cur === guestId ? null : cur));
     }
   }
 
@@ -178,11 +205,15 @@ export function DayOfTab({
       setWalkInFirst("");
       setWalkInLast("");
       if (walkInTableId && detail) {
-        const res = await api.post<{ planVersion: PlanVersionDetailDTO; warnings: string[] }>(
-          `/api/v1/weddings/${weddingId}/plan-versions/${detail.id}/assignments`,
-          { guestId: guest.id, tableId: walkInTableId, expectedRevision: detail.revision }
-        );
-        setDetail(res.planVersion);
+        const tableId = walkInTableId;
+        const res = await queuePlanChange(() => {
+          const current = detailRef.current!;
+          return api.post<{ planVersion: PlanVersionDetailDTO; warnings: string[] }>(
+            `/api/v1/weddings/${weddingId}/plan-versions/${current.id}/assignments`,
+            { guestId: guest.id, tableId, expectedRevision: current.revision }
+          );
+        });
+        applyDetail(res.planVersion);
         setNotice(
           `Added walk-in ${guest.firstName} ${guest.lastName} and seated them` +
             (res.warnings.length > 0 ? ` — ${res.warnings.join(" ")}` : ".")
@@ -211,17 +242,20 @@ export function DayOfTab({
     setNotice(null);
     setSwapping(true);
     try {
-      const res = await api.post<{ planVersion: PlanVersionDetailDTO; warnings: string[] }>(
-        `/api/v1/weddings/${weddingId}/plan-versions/${detail.id}/assignments/swap`,
-        { guestAId: swapAId, guestBId: swapBId, expectedRevision: detail.revision }
-      );
-      setDetail(res.planVersion);
+      const res = await queuePlanChange(() => {
+        const current = detailRef.current!;
+        return api.post<{ planVersion: PlanVersionDetailDTO; warnings: string[] }>(
+          `/api/v1/weddings/${weddingId}/plan-versions/${current.id}/assignments/swap`,
+          { guestAId: swapAId, guestBId: swapBId, expectedRevision: current.revision }
+        );
+      });
+      applyDetail(res.planVersion);
       setNotice("Swapped." + (res.warnings.length > 0 ? ` ${res.warnings.join(" ")}` : ""));
       setSwapAId("");
       setSwapBId("");
     } catch (err) {
       const fresh = conflictPlanVersion(err);
-      if (fresh) setDetail(fresh);
+      if (fresh) applyDetail(fresh);
       setError(apiErrorMessage(err, [], "Couldn't complete that swap."));
     } finally {
       setSwapping(false);

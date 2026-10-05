@@ -136,4 +136,9 @@ export class WeddingDetailPage extends BasePage {
   async leaveTabWithoutSaving(): Promise<void> {
     await this.unsavedChangesPrompt().getByRole("button", { name: "Leave without saving", exact: true }).click();
   }
+
+  /** TS-166: the page's own "Back to dashboard" link. */
+  backToDashboardLink() {
+    return this.page.getByRole("link", { name: /Back to dashboard/ }).first();
+  }
 }

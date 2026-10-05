@@ -91,9 +91,11 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
   // every keystroke ("1" -> "1.00") made a real cost impossible to type.
   const [editCostText, setEditCostText] = useState("");
   // TS-159: tell the page this tab has input that leaving it would lose.
+  // TS-166: including a budget figure typed but not yet saved.
+  const budgetEdited = summary !== null && budgetInput !== centsToDollarsString(summary.budgetCents);
   useUnsavedChanges(
     "budget",
-    !!(name.trim() || contactName.trim() || contactEmail.trim() || contactPhone.trim() || cost || contractNotes.trim() || arrivalTime || editingId)
+    !!(name.trim() || contactName.trim() || contactEmail.trim() || contactPhone.trim() || cost || contractNotes.trim() || arrivalTime || editingId || budgetEdited)
   );
   const [saving, setSaving] = useState(false);
 
@@ -144,6 +146,21 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
     setPickedSuggestion(s.name);
   }
 
+  // TS-166: the totals are refreshed after a vendor change on their own -- if only this refresh
+  // fails, the change itself still worked. It used to share the save's error handling, so a
+  // vendor that was added showed "Couldn't add" (and the form stayed filled, inviting a
+  // duplicate), and a vendor that was removed was put back on screen.
+  async function refreshSummary() {
+    try {
+      const { summary: updated } = await api.get<{ summary: BudgetSummaryDTO }>(
+        `/api/v1/weddings/${weddingId}/budget`
+      );
+      setSummary(updated);
+    } catch {
+      setError("Saved — but the budget totals couldn't be refreshed. Reload the page to see them.");
+    }
+  }
+
   async function onSaveBudget(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
@@ -186,11 +203,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
         contractNotes: contractNotes || null,
         arrivalTime: arrivalTime || null,
       });
-      setVendors([...vendors, vendor].sort((a, b) => a.name.localeCompare(b.name)));
-      const { summary: updated } = await api.get<{ summary: BudgetSummaryDTO }>(
-        `/api/v1/weddings/${weddingId}/budget`
-      );
-      setSummary(updated);
+      setVendors((cur) => [...cur, vendor].sort((a, b) => a.name.localeCompare(b.name)));
       setName("");
       setCategory("CATERING");
       setCategoryOther("");
@@ -201,6 +214,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
       setContractNotes("");
       setArrivalTime("");
       setPickedSuggestion(null);
+      await refreshSummary();
     } catch (err) {
       setError(apiErrorMessage(err, ["name", "categoryOther", "contactEmail", "costCents", "arrivalTime", "contractNotes"], "Couldn't add that vendor."));
     } finally {
@@ -243,16 +257,13 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
           expectedRevision,
         }
       );
-      setVendors(vendors.map((v) => (v.id === vendorId ? vendor : v)).sort((a, b) => a.name.localeCompare(b.name)));
-      const { summary: updated } = await api.get<{ summary: BudgetSummaryDTO }>(
-        `/api/v1/weddings/${weddingId}/budget`
-      );
-      setSummary(updated);
+      setVendors((cur) => cur.map((v) => (v.id === vendorId ? vendor : v)).sort((a, b) => a.name.localeCompare(b.name)));
       setEditingId(null);
+      await refreshSummary();
     } catch (err) {
       const fresh = conflictVendor(err);
       if (fresh) {
-        setVendors(vendors.map((v) => (v.id === vendorId ? fresh : v)));
+        setVendors((cur) => cur.map((v) => (v.id === vendorId ? fresh : v)));
         setError(`"${fresh.name}" was just edited elsewhere — showing the latest. Try again if you still want to make this change.`);
       } else {
         // TS-151: say which field was refused, not just "Validation failed".
@@ -303,18 +314,17 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
   }
 
   async function onRemove(id: string) {
-    const prev = vendors;
-    setVendors(vendors.filter((v) => v.id !== id));
+    const removed = vendors.find((v) => v.id === id);
+    setVendors((cur) => cur.filter((v) => v.id !== id));
     try {
       await api.delete(`/api/v1/weddings/${weddingId}/vendors/${id}`);
-      const { summary: updated } = await api.get<{ summary: BudgetSummaryDTO }>(
-        `/api/v1/weddings/${weddingId}/budget`
-      );
-      setSummary(updated);
     } catch {
-      setVendors(prev);
+      // Put just this vendor back (not an older copy of the whole list).
+      if (removed) setVendors((cur) => [...cur, removed].sort((a, b) => a.name.localeCompare(b.name)));
       setError("Couldn't remove that vendor.");
+      return;
     }
+    await refreshSummary();
   }
 
   if (loading) return <p className="text-sm text-neutral-500 dark:text-neutral-400">Loading budget & vendors...</p>;

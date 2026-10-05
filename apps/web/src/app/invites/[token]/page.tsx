@@ -20,6 +20,9 @@ export default function InviteAcceptPage() {
   const [loading, setLoading] = useState(true);
   const [accepting, setAccepting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // TS-166: the invite couldn't be loaded (as opposed to not existing) -- shown with a Try again.
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [loadAttempt, setLoadAttempt] = useState(0);
 
   useEffect(() => {
     (async () => {
@@ -30,14 +33,19 @@ export default function InviteAcceptPage() {
         ]);
         setPreview(previewRes.invite);
         setCurrentUserEmail(meRes ? meRes.user.email : null);
-      } catch {
-        setPreview({ status: "NOT_FOUND" });
-        setCurrentUserEmail(null);
+      } catch (err) {
+        // TS-166: a link that doesn't exist comes back as status NOT_FOUND, never an error -- an
+        // error here is a failed load (connection, server, too many attempts), not a dead link.
+        setLoadError(
+          err instanceof ApiError && err.status !== 0
+            ? err.message
+            : "We couldn't load this invite just now. Check your connection and try again."
+        );
       } finally {
         setLoading(false);
       }
     })();
-  }, [token]);
+  }, [token, loadAttempt]);
 
   async function onAccept() {
     setError(null);
@@ -49,6 +57,28 @@ export default function InviteAcceptPage() {
       setError(err instanceof ApiError ? err.message : "Couldn't accept this invite.");
       setAccepting(false);
     }
+  }
+
+  if (loadError) {
+    return (
+      <main className="flex flex-1 items-center justify-center px-6">
+        <div className="w-full max-w-sm text-center">
+          <h1 className="mb-4 text-2xl font-semibold">Wedding invite</h1>
+          <p className="text-sm text-neutral-600 dark:text-neutral-300">{loadError}</p>
+          <button
+            type="button"
+            onClick={() => {
+              setLoadError(null);
+              setLoading(true);
+              setLoadAttempt((n) => n + 1);
+            }}
+            className="mt-4 rounded-md border border-neutral-300 dark:border-neutral-600 px-4 py-2 text-sm font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800"
+          >
+            Try again
+          </button>
+        </div>
+      </main>
+    );
   }
 
   if (loading || !preview) {
