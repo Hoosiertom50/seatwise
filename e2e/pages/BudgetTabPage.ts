@@ -241,13 +241,16 @@ export class BudgetTabPage extends BasePage {
   /** Clicks Share link (or New link) and returns the link the row then shows. */
   async getShareLink(vendorName: string, fresh = false): Promise<string> {
     const button = fresh ? this.newLinkButton(vendorName) : this.shareLinkButton(vendorName);
-    await Promise.all([
+    const [response] = await Promise.all([
       this.page.waitForResponse((r) => r.request().method() === "POST" && /\/share-link$/.test(new URL(r.url()).pathname)),
       button.click(),
     ]);
-    const line = this.vendorRow(vendorName).getByText(/\/vendor\/[0-9a-f]{64}/);
-    const text = (await line.textContent()) ?? "";
-    return text.match(/https?:\/\/\S+\/vendor\/[0-9a-f]{64}/)![0];
+    // TS-176: the link comes from the server's answer, and the row is waited on until it shows
+    // that link -- reading the row straight after the answer sometimes caught the old link before
+    // the screen had redrawn (a flaky "new link is the same as the old one").
+    const url = ((await response.json()) as { link: { url: string } }).link.url;
+    await expect(this.vendorRow(vendorName).getByText(url)).toBeVisible();
+    return url;
   }
   async turnOffShareLink(vendorName: string): Promise<void> {
     await this.page.getByRole("button", { name: `Turn off the link for ${vendorName}`, exact: true }).click();
