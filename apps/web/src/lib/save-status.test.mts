@@ -27,11 +27,14 @@ test("a request with no answer gives up after the time limit", async () => {
     new Promise((_resolve, reject) => {
       init?.signal?.addEventListener("abort", () => reject(new Error("aborted")));
     })) as typeof fetch;
+  // Node 22 doesn't let the time limit's own timer keep the test process alive -- this does.
+  const keepAlive = setTimeout(() => {}, 5000);
   try {
     const started = Date.now();
     await assert.rejects(fetchWithRetry("/api/v1/x", { method: "POST" }, 50), (err: { status?: number }) => err.status === NETWORK_ERROR_STATUS);
     assert.ok(Date.now() - started < 2000);
   } finally {
+    clearTimeout(keepAlive);
     globalThis.fetch = realFetch;
   }
 });
