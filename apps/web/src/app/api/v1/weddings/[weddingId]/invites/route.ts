@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createInviteSchema, PERSON_NAME_PATTERN, looksLikeWebAddress } from "@seatwise/shared";
+import { createInviteSchema } from "@seatwise/shared";
+import { emailSafePersonName, emailSafeWeddingName } from "@/lib/email-safe-names";
 import { createInvite, listInvitesForWedding, sendEmailNotification, emailDelivered, InviteError } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
 import { errorResponse, zodErrorResponse } from "@/lib/api-response";
@@ -55,15 +56,14 @@ export async function POST(req: NextRequest, { params }: Params) {
     const roleLabel = invite.role === "COUPLE" ? "a Couple member" : "a collaborator";
     // TS-156: the inviter's own name only goes into the email if it reads as a name -- accounts
     // made before the signup rule tightened could hold anything.
-    const inviterName = user.name.trim();
-    const safeInviter =
-      inviterName.length <= 100 && PERSON_NAME_PATTERN.test(inviterName) && !looksLikeWebAddress(inviterName)
-        ? inviterName
-        : null;
+    const safeInviter = emailSafePersonName(user.name);
+    // TS-163: the same for the wedding's name -- weddings named before TS-156 could hold anything.
+    const weddingName = emailSafeWeddingName(access.wedding.name);
+    const safeWedding = weddingName ? `"${weddingName}"` : "a wedding";
     const sent = await sendEmailNotification(
       invite.email,
       `You've been invited to plan a wedding on Seatwise`,
-      `${safeInviter ? `${safeInviter} invited you` : "You've been invited"} to join "${access.wedding.name}" on Seatwise as ${roleLabel} with ${invite.permissionLevel.toLowerCase()} access.\n\nAccept the invite: ${acceptUrl}\n\nThis link expires in 7 days. If you weren't expecting this, you can ignore it.`
+      `${safeInviter ? `${safeInviter} invited you` : "You've been invited"} to join ${safeWedding} on Seatwise as ${roleLabel} with ${invite.permissionLevel.toLowerCase()} access.\n\nAccept the invite: ${acceptUrl}\n\nThis link expires in 7 days. If you weren't expecting this, you can ignore it.`
     );
 
     const { token: _token, ...invitePublic } = invite;

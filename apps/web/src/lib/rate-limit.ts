@@ -17,6 +17,19 @@ export const VENDOR_LINK_LIMITS = {
   perAddress: { limit: 100, windowSeconds: 600 },
 };
 
+// TS-163: invite links need no sign-in to look up either -- same per-address ceiling.
+export const INVITE_LINK_LIMITS = {
+  perAddress: { limit: 100, windowSeconds: 600 },
+};
+
+// TS-163: new accounts from one network address. Each account comes with its own email allowance
+// (EMAIL_SEND_LIMITS), so unlimited sign-ups would get round it. Roomy enough for a team signing
+// up together from one office connection.
+export const SIGNUP_LIMITS = {
+  perAddressHour: { limit: 30, windowSeconds: 3600 },
+  perAddressDay: { limit: 100, windowSeconds: 86_400 },
+};
+
 // TS-142: "forgot password" -- requests per address and per email (the per-email cap is what keeps
 // one inbox from being flooded), and attempts to use a link per address. Links are 64 random hex
 // characters, so guessing one isn't feasible; that limit only stops abuse, hence generous.

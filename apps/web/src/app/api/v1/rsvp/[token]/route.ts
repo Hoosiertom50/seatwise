@@ -84,7 +84,11 @@ export async function POST(req: NextRequest, { params }: Params) {
         : guest.rsvpStatus === "DECLINED"
           ? "can't make it"
           : "updated their RSVP";
-    await notifyWeddingCollaborators(guest.weddingId, null, "RSVP_RECEIVED", `${guest.firstName} ${guest.lastName} ${answer}.`);
+    // TS-163: everyone is emailed about a guest's response at most once an hour, however often
+    // their link is submitted; each response still shows in the app.
+    await notifyWeddingCollaborators(guest.weddingId, null, "RSVP_RECEIVED", `${guest.firstName} ${guest.lastName} ${answer}.`, {
+      emailOncePer: { key: `email:rsvp-notify:${guest.id}`, windowSeconds: 3600 },
+    });
     return NextResponse.json({ ok: true });
   } catch (err) {
     if (err instanceof RsvpSubmissionError) {

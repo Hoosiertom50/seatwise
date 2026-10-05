@@ -14,7 +14,7 @@
 
 import type { APIRequestContext, Browser, BrowserContext } from "@playwright/test";
 import { randomBytes } from "node:crypto";
-import { uniqueToken } from "../data/ids.js";
+import { uniqueTestAddress, uniqueToken } from "../data/ids.js";
 import { getEnv } from "./env.js";
 import { resolveIsProduction } from "./productionGuard.js";
 
@@ -118,7 +118,8 @@ export async function signUpFreshAccountInNewContext(
   label = "",
 ): Promise<SignedUpBrowserSession> {
   refuseTestAccountsOnProduction();
-  const context = await browser.newContext();
+  // TS-163: its own made-up address, like every test (see uniqueTestAddress).
+  const context = await browser.newContext({ extraHTTPHeaders: { "x-forwarded-for": uniqueTestAddress() } });
   const token = uniqueToken(workerIndex);
   // TS-156: a display name may only hold letters (and spaces, ' . -), so any digits in a label like "comment2"
   // are dropped from the name; the email keeps the label as-is.

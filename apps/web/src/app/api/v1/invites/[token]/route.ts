@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import type { InvitePreviewDTO } from "@seatwise/shared";
 import { getInviteByToken } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
+import { clientAddress, INVITE_LINK_LIMITS, rateLimitOr429 } from "@/lib/rate-limit";
 
 type Params = { params: Promise<{ token: string }> };
 
@@ -10,6 +11,8 @@ type Params = { params: Promise<{ token: string }> };
 // PENDING, address-matching invite: an expired, revoked, already-accepted, or mismatched-account
 // invite reveals only its status, never the wedding's name or anything else about it.
 export async function GET(req: NextRequest, { params }: Params) {
+  const limited = await rateLimitOr429(`invite-link:addr:${clientAddress(req)}`, INVITE_LINK_LIMITS.perAddress);
+  if (limited) return limited;
   const { token } = await params;
   const invite = await getInviteByToken(token);
 
