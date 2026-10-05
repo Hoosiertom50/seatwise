@@ -1,6 +1,25 @@
 import { randomUUID } from "crypto";
 import { sendEmail, type EmailResult } from "../email";
 import { pool } from "../pool";
+import { hitRateLimit } from "./rate-limit";
+
+// TS-163: how many notification emails one person's actions can set off (each recipient counts).
+// Generous for real planning -- approving a plan emails a handful of collaborators -- but a loop of
+// comment replies, or adding a hundred guests after approval, stops emailing everyone well before
+// it becomes a flood. In-app notifications are never limited.
+export const NOTIFICATION_EMAILS_PER_ACTOR = [
+  { limit: 60, windowSeconds: 3600 },
+  { limit: 200, windowSeconds: 86_400 },
+] as const;
+
+async function actorMayEmail(actorUserId: string): Promise<boolean> {
+  const results = await Promise.all(
+    NOTIFICATION_EMAILS_PER_ACTOR.map(({ limit, windowSeconds }) =>
+      hitRateLimit(`email:notify:${windowSeconds}:${actorUserId}`, limit, windowSeconds)
+    )
+  );
+  return results.every((r) => r.allowed);
+}
 
 export interface NotificationRow {
   id: string;
@@ -35,7 +54,17 @@ export async function notifyWeddingCollaborators(
     | "GUEST_REMOVED"
     | "ATTENDANCE_CHANGED"
     | "STATUS_CHANGED",
-  message: string
+  message: string,
+  {
+    emailOncePer,
+  }: {
+    /**
+     * TS-163: for events nobody signed in caused (a guest's RSVP): email at most once per
+     * `windowSeconds` for this `key`, so one guest link submitted over and over can't flood
+     * everyone's inbox. The in-app notification is still written every time.
+     */
+    emailOncePer?: { key: string; windowSeconds: number };
+  } = {}
 ): Promise<void> {
   const { rows: weddingRows } = await pool.query(
     `SELECT "ownerId", name, "emailNotificationsEnabled" FROM "weddings" WHERE id = $1`,
@@ -53,6 +82,11 @@ export async function notifyWeddingCollaborators(
     [wedding.ownerId, weddingId]
   );
 
+  let mayEmail: boolean = wedding.emailNotificationsEnabled;
+  if (mayEmail && emailOncePer) {
+    mayEmail = (await hitRateLimit(emailOncePer.key, 1, emailOncePer.windowSeconds)).allowed;
+  }
+
   for (const recipient of recipients) {
     if (recipient.id === actorUserId) continue;
     await pool.query(
@@ -60,7 +94,8 @@ export async function notifyWeddingCollaborators(
        VALUES ($1, $2, $3, $4::"NotificationType", $5)`,
       [randomUUID(), weddingId, recipient.id, type, message]
     );
-    if (wedding.emailNotificationsEnabled) {
+    if (mayEmail && actorUserId && !(await actorMayEmail(actorUserId))) mayEmail = false;
+    if (mayEmail) {
       await sendEmailNotification(recipient.email, `Seatwise: ${wedding.name}`, message);
     }
   }

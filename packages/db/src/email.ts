@@ -1,5 +1,6 @@
 import nodemailer from "nodemailer";
 import { Resend } from "resend";
+import { hitRateLimitCount, undoRateLimitHit } from "./queries/rate-limit";
 
 // TS-132: how Seatwise sends email, chosen from the environment:
 //
@@ -14,7 +15,7 @@ import { Resend } from "resend";
 //
 // Sending never throws: a failed email must never block the action that triggered it.
 
-export type EmailResult = "sent" | "logged" | "not-configured" | "failed";
+export type EmailResult = "sent" | "logged" | "not-configured" | "failed" | "limited";
 
 type EmailEnv = Record<string, string | undefined>;
 
@@ -81,12 +82,46 @@ const realSender: Sender = async (config, message) => {
 
 let sender: Sender = realSender;
 
+// TS-163: a ceiling on how many emails Seatwise sends in a day, whoever triggers them. Everything
+// goes out through one Gmail account (about 500 recipients a day); hitting Gmail's own limit gets
+// the account throttled or suspended, which would stop password resets too. Per-person limits
+// (TS-156) can be got round with many accounts; this can't. Password-reset emails ("essential")
+// get extra headroom above the everyday ceiling, so they still go out on a busy day. Only real
+// sends count -- the "log" transport used locally and in CI never touches this.
+const DAILY_WINDOW_SECONDS = 86_400;
+const DAILY_KEY = "email:global:day";
+const ESSENTIAL_HEADROOM = 80;
+
+export function dailyEmailLimits(env: EmailEnv = process.env): { everyday: number; essential: number } {
+  const configured = Number(env.EMAIL_DAILY_LIMIT);
+  const everyday = Number.isInteger(configured) && configured > 0 ? configured : 400;
+  return { everyday, essential: everyday + ESSENTIAL_HEADROOM };
+}
+
+type DailyCounter = { hit: () => Promise<number>; undo: () => Promise<void> };
+const realDailyCounter: DailyCounter = {
+  hit: () => hitRateLimitCount(DAILY_KEY, DAILY_WINDOW_SECONDS),
+  undo: () => undoRateLimitHit(DAILY_KEY, DAILY_WINDOW_SECONDS),
+};
+let dailyCounter: DailyCounter = realDailyCounter;
+
+/** Tests only: replace the daily email counter (pass nothing to restore it). */
+export function setDailyEmailCounterForTests(fake?: DailyCounter): void {
+  dailyCounter = fake ?? realDailyCounter;
+}
+
 /** Tests only: replace the real SMTP/Resend sender (pass nothing to restore it). */
 export function setEmailSenderForTests(fake?: Sender): void {
   sender = fake ?? realSender;
 }
 
-export async function sendEmail(to: string, subject: string, text: string, env: EmailEnv = process.env): Promise<EmailResult> {
+export async function sendEmail(
+  to: string,
+  subject: string,
+  text: string,
+  env: EmailEnv = process.env,
+  { essential = false }: { essential?: boolean } = {}
+): Promise<EmailResult> {
   const config = resolveEmailTransport(env);
   if (config.kind === "log") {
     // TS-149: in a production build (CI's e2e server, or the live site if someone set
@@ -100,6 +135,14 @@ export async function sendEmail(to: string, subject: string, text: string, env: 
   if (config.kind === "none") {
     console.warn(`[email] not sent to ${to}: no email service is configured (set SMTP_USER and SMTP_PASSWORD).`);
     return "not-configured";
+  }
+  const limits = dailyEmailLimits(env);
+  const sentToday = await dailyCounter.hit();
+  if (sentToday > (essential ? limits.essential : limits.everyday)) {
+    // Taken back, so refused everyday emails don't eat into the password-reset headroom.
+    await dailyCounter.undo();
+    console.warn(`[email] not sent to ${to}: today's limit of ${limits.everyday} emails has been reached.`);
+    return "limited";
   }
   try {
     await sender(config, { to, subject, text });

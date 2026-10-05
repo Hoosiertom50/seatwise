@@ -25,7 +25,7 @@ import { LoginPage } from "../pages/LoginPage.js";
 import { SignupPage } from "../pages/SignupPage.js";
 import { WeddingGuestsPage } from "../pages/WeddingGuestsPage.js";
 import { WeddingDataSetup, type CreatedWedding } from "../data/api.js";
-import { uniqueTitle } from "../data/ids.js";
+import { uniqueTestAddress, uniqueTitle } from "../data/ids.js";
 import { signUpFreshAccount, type SignedUpAccount } from "../support/auth.js";
 import { captureSuccessCheckpoint, attachFailureDiagnostics } from "../support/evidence.js";
 import { createDefineQualityTest } from "../../playwright-framework/metadata/defineQualityTest.js";
@@ -48,6 +48,12 @@ interface QualityFixtures {
 }
 
 export const test = base.extend<QualityFixtures>({
+  // TS-163: each test is its own visitor as far as the app's per-address limits go (see
+  // uniqueTestAddress). A test that sets its own x-forwarded-for on a request still wins.
+  extraHTTPHeaders: async ({ extraHTTPHeaders }, use) => {
+    await use({ "x-forwarded-for": uniqueTestAddress(), ...extraHTTPHeaders });
+  },
+
   account: async ({ context }, use, testInfo: TestInfo) => {
     const account = await signUpFreshAccount(context.request, testInfo.workerIndex);
     await use(account);

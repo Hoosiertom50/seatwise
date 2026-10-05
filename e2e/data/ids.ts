@@ -96,3 +96,15 @@ export function isTestDataName(name: string): boolean {
 export function uniqueTitle(workerIndex: number, label: string): string {
   return tagTestName(`${label} ${workerIndex}-${Date.now()}-${counter++}`);
 }
+
+/**
+ * TS-163: a made-up network address (from 198.18.0.0/15, reserved for testing) for the
+ * `x-forwarded-for` header. The app's per-address limits (sign-up, RSVP and invite links, sign-in)
+ * then treat each test as its own visitor, so a full run from one machine never trips them --
+ * just as many separate people wouldn't. Only honoured off Netlify; on Netlify the real address
+ * always wins (see apps/web/src/lib/client-address.ts).
+ */
+export function uniqueTestAddress(): string {
+  const n = Math.floor(Math.random() * 2 ** 17);
+  return `198.${18 + (n >> 16)}.${(n >> 8) & 255}.${n & 255}`;
+}

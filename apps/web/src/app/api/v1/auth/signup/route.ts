@@ -3,8 +3,16 @@ import { signupSchema } from "@seatwise/shared";
 import { createUser, findUserByEmail } from "@seatwise/db";
 import { hashPassword, signToken, setAuthCookie } from "@/lib/auth";
 import { errorResponse, zodErrorResponse } from "@/lib/api-response";
+import { clientAddress, rateLimitOr429, SIGNUP_LIMITS } from "@/lib/rate-limit";
 
 export async function POST(req: NextRequest) {
+  // TS-163: counted before anything else (including the password hash, the expensive part).
+  const address = clientAddress(req);
+  const limited =
+    (await rateLimitOr429(`signup:addr:hour:${address}`, SIGNUP_LIMITS.perAddressHour)) ??
+    (await rateLimitOr429(`signup:addr:day:${address}`, SIGNUP_LIMITS.perAddressDay));
+  if (limited) return limited;
+
   const body = await req.json().catch(() => null);
   const parsed = signupSchema.safeParse(body);
   if (!parsed.success) return zodErrorResponse(parsed.error);
