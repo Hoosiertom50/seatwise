@@ -27,7 +27,7 @@
  * check, indistinguishable from a real, meaningful pass. This script is the belt-and-suspenders
  * mechanical check Playwright's own exit code does not provide.
  *
- * A "flaky" pass (`counts.retryPass > 0`) is NOT treated as a hard failure here -- Playwright's own
+ * A "flaky" pass (`counts.retryPass > 0`) is NOT treated as a hard failure here (unless FAIL_ON_FLAKY=1, TS-176) -- Playwright's own
  * retry mechanism already decided the test is passing, and a CI provider's own job-level pass/fail
  * is Playwright's exit code, which this script does not override for that case. What this script
  * adds is VISIBILITY: an ordinary clean pass and a pass that only succeeded after a retry look
@@ -93,6 +93,14 @@ function main(): void {
   }
 
   if (result.isZeroTestRun) {
+    process.exit(1);
+  }
+
+  // TS-176: opt-in -- with FAIL_ON_FLAKY=1 a pass that needed a retry fails the job too, so a test
+  // that's sometimes wrong can't hide behind a green check (the warning above was easy to miss).
+  const retryPasses = targetReport.counts.retryPass;
+  if (process.env.FAIL_ON_FLAKY === "1" && retryPasses > 0) {
+    console.error(`ci-summary: ${retryPasses} test(s) passed only after a retry, and FAIL_ON_FLAKY is set -- failing so it gets looked at.`);
     process.exit(1);
   }
 }

@@ -150,6 +150,18 @@ jobs:
       - name: Lint tests (authoring-standards static checks)
         run: pnpm pw:lint-tests
 
+      # TS-176: the root typecheck above covers the framework and e2e sources only, and the web
+      # build doesn't run eslint -- so the web app's lint, and the mobile app and packages
+      # (including the database maintenance scripts), were never checked.
+      - name: Lint the web app
+        run: pnpm --filter @seatwise/web lint
+
+      - name: Typecheck the mobile app and shared/db packages
+        run: |
+          pnpm --filter @seatwise/mobile exec tsc --noEmit -p .
+          pnpm --filter @seatwise/shared exec tsc --noEmit -p .
+          pnpm --filter @seatwise/db exec tsc --noEmit -p .
+
       - name: Run framework unit tests (schemas, scoring, hooks, CLIs, and a few real-browser HTML-report render checks)
         run: pnpm exec playwright test --project=framework-unit
 
@@ -295,6 +307,9 @@ jobs:
         # Runs even when the step above failed (a real test failure must still get a summary), but
         # never overrides a real failure's own non-zero exit code -- see the CLI's own doc comment.
         if: always()
+        # TS-176: a test that only passed on its retry fails the check (it's shown, not hidden).
+        env:
+          FAIL_ON_FLAKY: "1"
         run: pnpm exec tsx playwright-framework/cli/ci-summary.ts
 
       - name: Upload blob report (for merging into one combined HTML report)
@@ -403,6 +418,9 @@ jobs:
 
       - name: CI status gate -- fail on a zero-test shard, surface flaky/quarantined results
         if: always()
+        # TS-176: a test that only passed on its retry fails the check (it's shown, not hidden).
+        env:
+          FAIL_ON_FLAKY: "1"
         run: pnpm exec tsx playwright-framework/cli/ci-summary.ts
 
       - name: Upload blob report (for merging into one combined HTML report)
@@ -511,6 +529,9 @@ jobs:
 
       - name: CI status gate -- fail on a zero-test shard, surface flaky/quarantined results
         if: always()
+        # TS-176: a test that only passed on its retry fails the check (it's shown, not hidden).
+        env:
+          FAIL_ON_FLAKY: "1"
         run: pnpm exec tsx playwright-framework/cli/ci-summary.ts
 
       - name: Upload blob report (for merging into one combined HTML report)
@@ -613,6 +634,9 @@ jobs:
 
       - name: CI status gate -- fail on a zero-test shard, surface flaky/quarantined results
         if: always()
+        # TS-176: a test that only passed on its retry fails the check (it's shown, not hidden).
+        env:
+          FAIL_ON_FLAKY: "1"
         run: pnpm exec tsx playwright-framework/cli/ci-summary.ts
 
       - name: Upload blob report (for merging into one combined HTML report)

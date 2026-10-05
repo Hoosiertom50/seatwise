@@ -467,7 +467,7 @@ export function TablesTab({
     <div>
       {!canEdit && (
         <p className="mb-4 rounded-md bg-neutral-100 dark:bg-neutral-800 px-3 py-2 text-sm text-neutral-600 dark:text-neutral-300">
-          You have view-only access to this wedding's tables — adding, editing, and moving tables
+          You have view-only access to this wedding&apos;s tables — adding, editing, and moving tables
           is turned off.
         </p>
       )}
@@ -971,7 +971,6 @@ export function TablesTab({
                     onDirtyChange={setEditDirty}
                     guests={guests}
                     sideValues={SIDE_VALUES}
-                    weddingId={weddingId}
                     onSaved={(saved, warnings) => {
                       setTables((current) => current.map((x) => (x.id === saved.id ? saved : x)));
                       setTableWarnings(warnings);
@@ -1231,7 +1230,6 @@ function TableEditForm({
   onDirtyChange,
   guests,
   sideValues,
-  weddingId,
   onSaved,
   onConflict,
   onCancel,
@@ -1242,7 +1240,6 @@ function TableEditForm({
   onDirtyChange: (dirty: boolean) => void;
   guests: GuestDTO[];
   sideValues: { value: string; label: string }[];
-  weddingId: string;
   onSaved: (table: SeatingTableDTO, warnings: string[]) => void;
   // A 409 (someone else's edit landed first) or a 422 partial save (the table saved, its guest
   // list didn't): either way the row shows the table as it now is, with the server's message.

@@ -101,6 +101,7 @@ export function DayOfTab({
   }
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- TS-176: loads the day-of data when the tab opens.
     load()
       .catch(() => setError("Couldn't load day-of data."))
       .finally(() => setLoading(false));
@@ -304,7 +305,7 @@ export function DayOfTab({
       {!canEdit && (
         <p className="rounded-md bg-neutral-100 dark:bg-neutral-800 px-3 py-2 text-sm text-neutral-600 dark:text-neutral-300">
           You have view-only access to this wedding — marking attendance, seating, walk-ins, and
-          swaps are turned off. You can still search and see where everyone's seated.
+          swaps are turned off. You can still search and see where everyone&apos;s seated.
         </p>
       )}
       {error && !errorGuestId && (

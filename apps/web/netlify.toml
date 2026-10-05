@@ -17,10 +17,11 @@
   # Credits: every production deploy costs 15 of the free plan's 300 a month. Skip the build
   # (exit 0 = skip) when nothing the web app is built from changed -- e.g. a commit that only
   # touches tests, the mobile app, docs or CI. $CACHED_COMMIT_REF is the last deployed commit.
-  ignore = "git diff --quiet $CACHED_COMMIT_REF $COMMIT_REF -- apps/web packages package.json pnpm-lock.yaml pnpm-workspace.yaml"
+  # TS-176: .npmrc and .nvmrc change how it installs and builds too.
+  ignore = "git diff --quiet $CACHED_COMMIT_REF $COMMIT_REF -- apps/web packages package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc .nvmrc"
 
 [build.environment]
-  # Same major version CI builds and tests with (.github/workflows/ci.yml).
+  # Same major version CI builds and tests with (.github/workflows/ci.yml), and .nvmrc.
   NODE_VERSION = "22"
   # Build without Next.js telemetry.
   NEXT_TELEMETRY_DISABLED = "1"

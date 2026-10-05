@@ -132,6 +132,7 @@ export function CollaboratorsTab({
 
   useEffect(() => {
     if (wedding) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- TS-176: fills the settings form from the wedding once it has loaded.
       setWeddingName(wedding.name);
       setEventDate(wedding.eventDate ?? "");
       setVenueName(wedding.venueName ?? "");

@@ -45,6 +45,7 @@ export function NotificationsBell({
   }
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- TS-176: loads notifications on open, then every 30 seconds.
     load();
     const interval = setInterval(load, 30000);
     return () => clearInterval(interval);

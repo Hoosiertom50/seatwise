@@ -152,7 +152,7 @@ export function TimelineTab({ weddingId, canEdit }: { weddingId: string; canEdit
     <div>
       {!canEdit && (
         <p className="mb-4 rounded-md bg-neutral-100 dark:bg-neutral-800 px-3 py-2 text-sm text-neutral-600 dark:text-neutral-300">
-          You have view-only access to this wedding's timeline — adding, editing, and reordering
+          You have view-only access to this wedding&apos;s timeline — adding, editing, and reordering
           entries is turned off.
         </p>
       )}
