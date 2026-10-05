@@ -140,4 +140,30 @@ export class CollaboratorsTabPage extends BasePage {
     ]);
     await this.page.getByRole("status").filter({ hasText: /^Saved$/ }).waitFor();
   }
+
+  // TS-161: the owner-only "Delete this wedding" section.
+  deleteWeddingConfirmInput() {
+    return this.page.getByLabel(/Type the wedding.s name/);
+  }
+
+  deleteWeddingButton() {
+    return this.page.getByRole("button", { name: "Delete wedding", exact: true });
+  }
+
+  /** The error shown inside the delete section when a delete fails. */
+  deleteWeddingError() {
+    return this.page.getByRole("heading", { name: "Delete this wedding", exact: true }).locator("..").getByRole("alert");
+  }
+
+  async confirmDelete(): Promise<void> {
+    await new ConfirmDelete(this.page).confirm();
+  }
+
+  /** Types the name, clicks Delete wedding, confirms, and waits for the dashboard. */
+  async deleteWedding(name: string): Promise<void> {
+    await this.deleteWeddingConfirmInput().fill(name);
+    await this.deleteWeddingButton().click();
+    await new ConfirmDelete(this.page).confirm();
+    await this.page.waitForURL(/\/dashboard$/);
+  }
 }

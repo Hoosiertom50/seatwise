@@ -257,6 +257,20 @@ export function CollaboratorsTab({
     }
   }
 
+  // TS-161: the owner deletes the wedding for everyone, then goes back to the dashboard.
+  const [deleteConfirmName, setDeleteConfirmName] = useState("");
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  async function onDeleteWedding() {
+    setDeleteError(null);
+    try {
+      await api.delete(`/api/v1/weddings/${weddingId}`);
+      router.push("/dashboard");
+    } catch (err) {
+      // Shown inside the delete section, next to the button the owner just used.
+      setDeleteError(apiErrorMessage(err, [], "Couldn't delete this wedding."));
+    }
+  }
+
   // FR-1.4/FR-1.4a: sends a real invite (token, pending, no guest data) rather than granting
   // access immediately -- the person needs to accept it, signed in with this exact address.
   async function onAdd(e: React.FormEvent) {
@@ -772,6 +786,43 @@ export function CollaboratorsTab({
               onConfirm={onHandOff}
             />
           </div>
+        </div>
+      )}
+
+      {/* TS-161: owner only. Typing the wedding's name first makes it hard to do by accident. */}
+      {isOwner && wedding && (
+        <div className="mt-8 rounded-lg border border-red-300 dark:border-red-800 p-4">
+          <h3 className="mb-1 text-sm font-medium">Delete this wedding</h3>
+          <p className="mb-3 text-sm text-neutral-500 dark:text-neutral-400">
+            Deletes the wedding for everyone: its guests, tables, seating plans, comments, timeline,
+            budget and every RSVP and vendor link. This can&apos;t be undone.
+          </p>
+          <label className="mb-1 block text-sm" htmlFor="delete-wedding-confirm">
+            Type the wedding&apos;s name, <span className="font-medium">{wedding.name}</span>, to confirm
+          </label>
+          <div className="flex flex-wrap items-center gap-2">
+            <input
+              id="delete-wedding-confirm"
+              className="min-w-0 flex-1 rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 text-sm"
+              value={deleteConfirmName}
+              onChange={(e) => setDeleteConfirmName(e.target.value)}
+              autoComplete="off"
+            />
+            <ConfirmDeleteButton
+              label="Delete wedding"
+              disabled={deleteConfirmName.trim() !== wedding.name.trim()}
+              question={`Delete "${wedding.name}" for everyone? This can't be undone.`}
+              confirmLabel="Yes, delete wedding"
+              busyLabel="Deleting…"
+              className="rounded-md border border-red-300 dark:border-red-700 px-3 py-1.5 text-sm font-medium text-red-700 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950 disabled:opacity-50"
+              onConfirm={onDeleteWedding}
+            />
+          </div>
+          {deleteError && (
+            <p role="alert" className="mt-2 text-sm text-red-600 dark:text-red-400">
+              {deleteError}
+            </p>
+          )}
         </div>
       )}
     </div>
