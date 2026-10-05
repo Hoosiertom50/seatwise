@@ -173,6 +173,7 @@ model WeddingInvite {
   email           String
   role            CollaboratorRole
   permissionLevel CollaboratorPermission
+  // TS-160: the SHA-256 hash of the emailed token (the token itself is never stored).
   token           String                 @unique
   status          WeddingInviteStatus    @default(PENDING)
   invitedByUserId String
@@ -303,7 +304,9 @@ model Vendor {
   arrivalTime    String?
   // TS-114: the vendor's private read-only link (/vendor/<token>). Null = no link, or turned off.
   // Never returned by the normal vendor read path -- only by the share-link endpoint.
+  // TS-160: shareToken is an encrypted copy; links are looked up by shareTokenHash.
   shareToken     String?         @unique
+  shareTokenHash String?         @unique
   createdAt      DateTime        @default(now())
   updatedAt      DateTime        @updatedAt
   // FR-7.7, extended to vendors (per Tom's own stated wish for concurrent-edit protection on
@@ -428,7 +431,9 @@ model Guest {
   plusOneNames            String?
   // TS-17 (FR-12.1/FR-12.4): generated lazily (see ensureGuestRsvpToken) -- most guests, especially
   // bulk-imported ones, may never need a link at all, so nothing pre-populates this at creation.
+  // TS-160: rsvpToken is an encrypted copy; links are looked up by rsvpTokenHash.
   rsvpToken               String?    @unique
+  rsvpTokenHash           String?    @unique
   // TS-17 (FR-12.4): set only by the guest's own public submission (submitGuestRsvp), never by a
   // planner editing the guest directly -- this is what "responded via their link" means.
   rsvpRespondedAt         DateTime?

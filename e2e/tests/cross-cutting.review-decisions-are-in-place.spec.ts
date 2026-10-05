@@ -15,7 +15,7 @@ import { uniquePersonName } from "../data/ids.js";
 import { CollaboratorsTabPage } from "../pages/CollaboratorsTabPage.js";
 import { DashboardPage } from "../pages/DashboardPage.js";
 import { signUpFreshAccountInNewContext } from "../support/auth.js";
-import { guestRsvpToken } from "../support/testDatabase.js";
+import { guestRsvpLinkFingerprint } from "../support/testDatabase.js";
 
 test.use({ timezoneId: "America/Chicago", locale: "en-US" });
 
@@ -34,6 +34,11 @@ defineQualityTest(
     test.setTimeout(120_000);
     const w = managedWedding.id;
     const api = (path: string) => `/api/v1/weddings/${w}/${path}`;
+    // The guest's current RSVP link token, as the planner's "RSVP link" button shows it.
+    const rsvpTokenOf = async (guestId: string) => {
+      const res = await context.request.post(api(`guests/${guestId}/rsvp-link`), { data: {} });
+      return ((await res.json()) as { rsvp: { url: string } }).rsvp.url.split("/").pop()!;
+    };
 
     await test.step("Private notes are only for the owner and Edit collaborators", async () => {
       const guest = await weddingData.createGuest(w, { ...uniquePersonName(testInfo.workerIndex), notes: "Nut allergy" });
@@ -63,8 +68,7 @@ defineQualityTest(
 
     await test.step("RSVPs are capped at the planner's party size, and the planner is notified", async () => {
       const guest = await weddingData.createGuest(w, { ...uniquePersonName(testInfo.workerIndex), headcount: 2 });
-      await context.request.post(api(`guests/${guest.id}/rsvp-link`), { data: {} });
-      const token = (await guestRsvpToken(guest.id))!;
+      const token = await rsvpTokenOf(guest.id);
       const visitor = await browser.newContext();
       try {
         const rsvp = (headcount: number) =>
@@ -96,8 +100,11 @@ defineQualityTest(
         ...uniquePersonName(testInfo.workerIndex),
         email: `pw-guest-typo-${Date.now()}@example.invalid`,
       });
-      const oldToken = (await guestRsvpToken(guest.id))!;
-      expect(oldToken).toBeTruthy();
+      // Emailed automatically when the guest was added with an address.
+      const oldFingerprint = await guestRsvpLinkFingerprint(guest.id);
+      expect(oldFingerprint).toBeTruthy();
+      const oldToken = await rsvpTokenOf(guest.id);
+      expect(await guestRsvpLinkFingerprint(guest.id)).toBe(oldFingerprint);
       const current = ((await (await context.request.get(api(`guests/${guest.id}`))).json()) as { guest: { revision: number } }).guest;
       const res = await context.request.patch(api(`guests/${guest.id}`), {
         data: { email: `pw-guest-fixed-${Date.now()}@example.invalid`, expectedRevision: current.revision },
@@ -105,7 +112,8 @@ defineQualityTest(
       expect(res.status()).toBe(200);
       const body = (await res.json()) as { rsvpEmail?: { emailed: boolean } };
       expect(body.rsvpEmail?.emailed).toBe(true);
-      const newToken = (await guestRsvpToken(guest.id))!;
+      expect(await guestRsvpLinkFingerprint(guest.id)).not.toBe(oldFingerprint);
+      const newToken = await rsvpTokenOf(guest.id);
       expect(newToken).not.toBe(oldToken);
       const oldLink = (await (await context.request.get(`/api/v1/rsvp/${oldToken}`)).json()) as { rsvp: { status: string } };
       expect(oldLink.rsvp.status).toBe("NOT_FOUND");

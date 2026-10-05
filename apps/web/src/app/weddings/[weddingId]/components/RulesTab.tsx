@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { ConfirmDeleteButton } from "@/components/ConfirmDeleteButton";
 import { api, ApiError } from "@/lib/api-client";
 import type { GuestDTO, RelationshipDTO, RelationshipTypeValue } from "@seatwise/shared";
+import { useUnsavedChanges } from "@/lib/unsaved-changes";
 
 const TYPES: { value: RelationshipTypeValue; label: string; hard: boolean }[] = [
   { value: "MUST_SIT_TOGETHER", label: "Must sit together", hard: true },
@@ -30,6 +31,8 @@ export function RulesTab({
   const [error, setError] = useState<string | null>(null);
   // TS-150: who a new rule flags because of where they're seated right now.
   const [warnings, setWarnings] = useState<string[]>([]);
+  // TS-159: tell the page this tab has input that leaving it would lose.
+  useUnsavedChanges("rules", !!(guestAId || guestBId));
 
   useEffect(() => {
     api
