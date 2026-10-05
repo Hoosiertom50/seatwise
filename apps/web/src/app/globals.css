@@ -36,7 +36,7 @@ body {
 /* TS-175: an iPhone zooms the whole page in when a form field under 16px is focused, and every
    field here was 14px -- including the guest's RSVP page. Phone-width screens get 16px fields. */
 @media (max-width: 640px) {
-  /* (Not file pickers: nothing is typed into them, and at 16px they no longer fit.) */
+  /* (Not file pickers: nothing is typed into them, and they size themselves from their own text.) */
   input:not([type="file"]),
   select,
   textarea {
