@@ -38,3 +38,24 @@ test("a request with no answer gives up after the time limit", async () => {
     globalThis.fetch = realFetch;
   }
 });
+
+// TS-175: a delete whose first try got no answer, retried and told "not found", did happen.
+test("a retried delete that finds nothing counts as deleted; a first-try 404 is still an error", async () => {
+  const { api, ApiError } = await import("./api-client");
+  const realFetch = globalThis.fetch;
+  try {
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls++;
+      if (calls === 1) throw new Error("connection dropped");
+      return new Response(JSON.stringify({ error: "Guest not found" }), { status: 404 });
+    }) as typeof fetch;
+    assert.deepEqual(await api.delete("/api/v1/weddings/w1/guests/g1"), {});
+    assert.equal(calls, 2);
+
+    globalThis.fetch = (async () => new Response(JSON.stringify({ error: "Guest not found" }), { status: 404 })) as typeof fetch;
+    await assert.rejects(api.delete("/api/v1/weddings/w1/guests/g1"), (err) => err instanceof ApiError && err.status === 404);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});

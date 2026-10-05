@@ -162,6 +162,9 @@ export function TablesTab({
   const [tableWarnings, setTableWarnings] = useState<string[]>([]);
   // TS-120: the one table (if any) whose row is open for editing.
   const [editingId, setEditingId] = useState<string | null>(null);
+  // TS-175: whether the open edit form has actually been changed -- just opening it isn't unsaved
+  // input (it used to bring up "you have unsaved changes" on its own).
+  const [editDirty, setEditDirty] = useState(false);
 
   // FR-4.2: quick-create a standard set of tables in one action.
   const [qcCount, setQcCount] = useState(12);
@@ -176,7 +179,7 @@ export function TablesTab({
   const [savingTemplate, setSavingTemplate] = useState(false);
   const [savedTemplate, setSavedTemplate] = useState<SeatingTemplateDTO | null>(null);
   // TS-159: tell the page this tab has input that leaving it would lose.
-  useUnsavedChanges("tables", !!(label.trim() || purpose.trim() || templateName.trim() || editingId));
+  useUnsavedChanges("tables", !!(label.trim() || purpose.trim() || templateName.trim() || (editingId && editDirty)));
 
   // TS-91: add a saved template's tables to this existing wedding (additive -- nothing already
   // here changes). The template list loads the first time the section is opened.
@@ -785,7 +788,7 @@ export function TablesTab({
         </>
       )}
 
-      {error && <p className="mb-4 text-sm text-red-600 dark:text-red-400">{error}</p>}
+      {error && <p role="alert" className="mb-4 text-sm text-red-600 dark:text-red-400">{error}</p>}
       {tableWarnings.length > 0 && (
         <div className="mb-4 rounded-md border border-amber-200 bg-amber-50 dark:bg-amber-950 p-3 text-sm text-amber-800 dark:text-amber-300">
           {tableWarnings.map((w, i) => (
@@ -831,12 +834,14 @@ export function TablesTab({
         <div className="flex gap-1 rounded-md border border-neutral-300 dark:border-neutral-600 p-0.5 text-sm">
           <button
             onClick={() => setView("list")}
+            aria-pressed={view === "list"}
             className={`rounded px-2 py-1 ${view === "list" ? "bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900" : "hover:bg-neutral-50 dark:hover:bg-neutral-800"}`}
           >
             List
           </button>
           <button
             onClick={() => setView("floorplan")}
+            aria-pressed={view === "floorplan"}
             className={`rounded px-2 py-1 ${view === "floorplan" ? "bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900" : "hover:bg-neutral-50 dark:hover:bg-neutral-800"}`}
           >
             Floor plan
@@ -938,6 +943,7 @@ export function TablesTab({
                         onClick={() => {
                           setError(null);
                           setEditingId(editingId === t.id ? null : t.id);
+                          setEditDirty(false);
                         }}
                         aria-label={`Edit ${t.label}`}
                         aria-expanded={editingId === t.id}
@@ -961,6 +967,8 @@ export function TablesTab({
                 {editingId === t.id && (
                   <TableEditForm
                     table={t}
+                    save={(body) => patchTable<{ table: SeatingTableDTO; warnings?: string[] }>(t.id, body)}
+                    onDirtyChange={setEditDirty}
                     guests={guests}
                     sideValues={SIDE_VALUES}
                     weddingId={weddingId}
@@ -1061,6 +1069,7 @@ function FloorPlan({
     let y = e.clientY - containerRect.top - dragOffset.current.y;
     x = Math.max(0, Math.min(x, containerRect.width - dragSize.current.width));
     y = Math.max(0, Math.min(y, containerRect.height - dragSize.current.height));
+    // (containerRect is the whole canvas, not the visible part -- see the canvas below.)
     setLocalPositions((prev) => ({ ...prev, [dragId.current!]: { x, y } }));
   }
 
@@ -1127,6 +1136,8 @@ function FloorPlan({
     if (!d) return;
     e.preventDefault();
     const size = sizeForShape(t.shape);
+    // TS-175: kept within the canvas, not the visible part of it -- on a phone a table beyond the
+    // screen's width used to jump back into view on the first arrow press.
     const bounds = containerRef.current.getBoundingClientRect();
     const from = positionFor(t);
     const to = {
@@ -1150,13 +1161,19 @@ function FloorPlan({
           ? "Drag a table to arrange the room, or select it with Tab and move it with the arrow keys (Shift for bigger steps). Position is saved automatically and never affects seating rules or generation."
           : "View-only — dragging tables to rearrange the room is turned off for your access level."}
       </p>
+      {/* TS-175: the room scrolls inside its box (as on the Plan tab) instead of being cut off at
+          the screen's edge, so on a phone every table can still be reached. */}
+      <div
+        style={{ width: "100%", maxWidth: width }}
+        className="overflow-auto rounded-lg border border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-900"
+      >
       <div
         ref={containerRef}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
         onPointerCancel={onPointerCancel}
-        style={{ width: "100%", height, maxWidth: width }}
-        className="relative overflow-hidden rounded-lg border border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-900"
+        style={{ width, height }}
+        className="relative"
       >
         {tables.map((t) => {
           const pos = positionFor(t);
@@ -1194,6 +1211,7 @@ function FloorPlan({
           );
         })}
       </div>
+      </div>
       <p aria-live="polite" className="sr-only">
         {announcement}
       </p>
@@ -1209,6 +1227,8 @@ function FloorPlan({
 // flagged Needs Reassignment. Nobody is unseated by an edit.
 function TableEditForm({
   table,
+  save,
+  onDirtyChange,
   guests,
   sideValues,
   weddingId,
@@ -1217,6 +1237,9 @@ function TableEditForm({
   onCancel,
 }: {
   table: SeatingTableDTO;
+  /** TS-175: saves through the tab's table queue, so it can't race the row's quick saves. */
+  save: (body: Record<string, unknown>) => Promise<{ table: SeatingTableDTO; warnings?: string[] }>;
+  onDirtyChange: (dirty: boolean) => void;
   guests: GuestDTO[];
   sideValues: { value: string; label: string }[];
   weddingId: string;
@@ -1237,6 +1260,21 @@ function TableEditForm({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const idBase = `edit-table-${table.id}`;
+  const listDiffers =
+    requiredGuestIds.length !== table.requiredGuestIds.length ||
+    requiredGuestIds.some((id) => !table.requiredGuestIds.includes(id));
+  const dirty =
+    label !== table.label ||
+    capacity !== table.capacity ||
+    shape !== table.shape ||
+    purpose !== (table.purpose ?? "") ||
+    criterionType !== (table.purposeCriterionType ?? "") ||
+    criterionValue !== (table.purposeCriterionValue ?? "") ||
+    isRestricted !== table.isRestricted ||
+    listDiffers;
+  useEffect(() => {
+    onDirtyChange(dirty);
+  }, [dirty, onDirtyChange]);
 
   const criterionOptions =
     criterionType === "SIDE"
@@ -1250,12 +1288,8 @@ function TableEditForm({
     setError(null);
     setSaving(true);
     try {
-      const listChanged =
-        isRestricted &&
-        (requiredGuestIds.length !== table.requiredGuestIds.length ||
-          requiredGuestIds.some((id) => !table.requiredGuestIds.includes(id)));
-      const { table: saved, warnings } = await api.patch<{ table: SeatingTableDTO; warnings?: string[] }>(
-        `/api/v1/weddings/${weddingId}/tables/${table.id}`,
+      const listChanged = isRestricted && listDiffers;
+      const { table: saved, warnings } = await save(
         {
           label: label.trim(),
           capacity,
@@ -1265,7 +1299,6 @@ function TableEditForm({
           purposeCriterionValue: criterionType ? criterionValue || criterionOptions[0]?.value || null : null,
           isRestricted,
           ...(listChanged ? { requiredGuestIds } : {}),
-          expectedRevision: table.revision,
         }
       );
       const allWarnings = warnings ?? [];
@@ -1383,7 +1416,7 @@ function TableEditForm({
           </div>
         )}
       </div>
-      {error && <p className="text-sm text-red-600 dark:text-red-400 sm:col-span-2">{error}</p>}
+      {error && <p role="alert" className="text-sm text-red-600 dark:text-red-400 sm:col-span-2">{error}</p>}
       <div className="flex gap-2 sm:col-span-2">
         <button
           type="submit"

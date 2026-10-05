@@ -344,7 +344,13 @@ export function CollaboratorsTab({
 
   // FR-12.2: the RSVP cutoff -- same save-on-blur pattern as the note above. An empty input
   // clears it back to null (no cutoff at all), matching the FR's "or none" language.
-  async function onSaveRsvpCutoff() {
+  async function onSaveRsvpCutoff(input: HTMLInputElement) {
+    // TS-175: a half-typed date reads as empty, which used to clear the cutoff. Leave it alone
+    // and say so; only a box that's really empty clears it.
+    if (input.validity.badInput) {
+      setError("Finish typing the RSVP cutoff date (or clear the box) — it hasn't been changed.");
+      return;
+    }
     if (!wedding) return;
     const trimmed = rsvpCutoffDate.trim();
     if (trimmed === (wedding.rsvpCutoffDate ?? "")) return;
@@ -664,7 +670,7 @@ export function CollaboratorsTab({
                 className="w-full max-w-xs rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm disabled:opacity-50"
                 value={rsvpCutoffDate}
                 onChange={(e) => setRsvpCutoffDate(e.target.value)}
-                onBlur={onSaveRsvpCutoff}
+                onBlur={(e) => void onSaveRsvpCutoff(e.currentTarget)}
                 disabled={savingRsvpCutoff}
               />
             </div>
@@ -672,7 +678,7 @@ export function CollaboratorsTab({
         </>
       )}
 
-      {error && <p className="mb-4 text-sm text-red-600 dark:text-red-400">{error}</p>}
+      {error && <p role="alert" className="mb-4 text-sm text-red-600 dark:text-red-400">{error}</p>}
 
       <h2 className="mb-3 text-lg font-medium">People with access ({collaborators.length})</h2>
       {collaborators.length === 0 ? (
