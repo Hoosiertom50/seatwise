@@ -1,7 +1,7 @@
 import { randomUUID } from "crypto";
 import { pool } from "../pool";
 import { encryptText } from "../crypto";
-import { resyncSeatsAtTable, tablesAffectedBy } from "./seat-checks";
+import { recordRecheckIfApproved, resyncSeatsAtTable, tablesAffectedBy } from "./seat-checks";
 import {
   parseCsv,
   guestTierEnum,
@@ -273,7 +273,9 @@ export async function commitGuestImport(
   weddingId: string,
   csv: string,
   mapping: GuestImportMapping,
-  expectedRevisions?: Record<string, number>
+  expectedRevisions?: Record<string, number>,
+  /** TS-169: who ran the import, for the plan's history. */
+  actorUserId?: string
 ): Promise<GuestImportCommitResult> {
   const preview = await classifyGuestImport(weddingId, csv, mapping);
   if (preview.summary.totalRows === 0) {
@@ -325,9 +327,23 @@ export async function commitGuestImport(
     // TS-165: tables left by guests marked Not Attending in this import.
     const recheckTableIds = new Set<string>();
     let planFlagsChanged = false;
+    // TS-169: whether any seat was freed or any attending guest added (for history and revision).
+    let seatsFreed = false;
+    let attendingAdded = false;
 
     for (const row of preview.rows) {
-      const p = row.preview;
+      let p = row.preview;
+      // TS-169: a row that makes a guest Declined (and doesn't set attendance itself) marks them Not
+      // Attending -- the same rule as everywhere else a guest declines (TS-167). For an existing
+      // guest, only when this changes their answer.
+      if (p.rsvpStatus === "DECLINED" && p.dayOfAttendance === undefined) {
+        let changes = true;
+        if (row.kind === "update" && row.guestId) {
+          const { rows: prev } = await client.query(`SELECT "rsvpStatus" FROM "guests" WHERE id = $1`, [row.guestId]);
+          changes = prev[0]?.rsvpStatus !== "DECLINED";
+        }
+        if (changes) p = { ...p, dayOfAttendance: "NOT_ATTENDING" };
+      }
       if (row.kind === "new") {
         await client.query(
           `INSERT INTO "guests"
@@ -351,6 +367,7 @@ export async function commitGuestImport(
           ]
         );
         createdCount++;
+        if ((p.dayOfAttendance ?? "ATTENDING") === "ATTENDING") attendingAdded = true;
       } else if (row.kind === "update" && row.guestId) {
         const fields: string[] = [];
         const values: unknown[] = [];
@@ -420,10 +437,11 @@ export async function commitGuestImport(
         if (p.dayOfAttendance === "NOT_ATTENDING" && planVersionId) {
           // TS-165: the table they leave (and their rule partners' tables) is re-checked below.
           for (const t of await tablesAffectedBy(client, weddingId, planVersionId, [row.guestId])) recheckTableIds.add(t);
-          await client.query(
+          const { rowCount: freed } = await client.query(
             `DELETE FROM "seat_assignments" WHERE "planVersionId" = $1 AND "guestId" = $2`,
             [planVersionId, row.guestId]
           );
+          if (freed) seatsFreed = true;
         } else if (
           planVersionId &&
           (p.side !== undefined ||
@@ -472,11 +490,21 @@ export async function commitGuestImport(
       );
       const isComplete =
         countRows[0].unassignedCount === 0 && countRows[0].needsReassignmentCount === 0;
-      // TS-150: a change to who's flagged also bumps the plan's revision.
+      // TS-150: a change to who's flagged also bumps the plan's revision. TS-169: so does a freed seat.
       await client.query(
-        `UPDATE "plan_versions" SET "isComplete" = $1${planFlagsChanged ? ", revision = revision + 1" : ""} WHERE id = $2`,
+        `UPDATE "plan_versions" SET "isComplete" = $1${planFlagsChanged || seatsFreed ? ", revision = revision + 1" : ""} WHERE id = $2`,
         [isComplete, planVersionId]
       );
+      // TS-169: an import that changes an approved plan (a seat freed, someone new to seat, flags
+      // changed) shows on it as "Modified since approval", like any other change.
+      if (planFlagsChanged || seatsFreed || attendingAdded) {
+        await recordRecheckIfApproved(
+          client,
+          planVersionId,
+          `Guest import: ${createdCount} added, ${updatedCount} updated — seating re-checked`,
+          actorUserId ?? null
+        );
+      }
     }
 
     await client.query("COMMIT");

@@ -76,11 +76,19 @@ export async function POST(req: NextRequest, { params }: Params) {
     // TS-167 (Tom, 2026-10-05): a guest who declines gives up their seat -- they're marked Not
     // Attending, which frees it and re-checks the table, as on the day. If they confirm again
     // later, they count as attending again and wait, unseated, for the planner to seat them.
+    // TS-169: only on an actual change of answer. Sending the same answer again (to fix a
+    // plus-one's name, say) leaves alone whatever the planner has set for their attendance.
+    const changedAnswer = guest.previousRsvpStatus !== guest.rsvpStatus;
     let seatNote = "";
-    if (guest.rsvpStatus === "DECLINED" && guest.dayOfAttendance === "ATTENDING") {
+    if (changedAnswer && guest.rsvpStatus === "DECLINED" && guest.dayOfAttendance === "ATTENDING") {
       await setGuestAttendance(guest.weddingId, guest.id, "NOT_ATTENDING", null, { notify: false });
       seatNote = " Their seat has been freed.";
-    } else if (guest.rsvpStatus === "CONFIRMED" && guest.dayOfAttendance === "NOT_ATTENDING") {
+    } else if (
+      changedAnswer &&
+      guest.previousRsvpStatus === "DECLINED" &&
+      guest.rsvpStatus === "CONFIRMED" &&
+      guest.dayOfAttendance === "NOT_ATTENDING"
+    ) {
       await setGuestAttendance(guest.weddingId, guest.id, "ATTENDING", null, { notify: false });
       seatNote = " They need a seat.";
     }
@@ -97,8 +105,10 @@ export async function POST(req: NextRequest, { params }: Params) {
           : "updated their RSVP";
     // TS-163: everyone is emailed about a guest's response at most once an hour, however often
     // their link is submitted; each response still shows in the app.
+    // TS-169: a changed answer is always emailed (the once-an-hour key only holds back repeats),
+    // so the planner's inbox never shows "coming" when they've since declined.
     await notifyWeddingCollaborators(guest.weddingId, null, "RSVP_RECEIVED", `${guest.firstName} ${guest.lastName} ${answer}.${seatNote}`, {
-      emailOncePer: { key: `email:rsvp-notify:${guest.id}`, windowSeconds: 3600 },
+      emailOncePer: changedAnswer ? undefined : { key: `email:rsvp-notify:${guest.id}`, windowSeconds: 3600 },
     });
     return NextResponse.json({ ok: true });
   } catch (err) {

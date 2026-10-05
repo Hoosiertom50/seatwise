@@ -40,7 +40,13 @@ export async function POST(req: NextRequest, { params }: Params) {
   const parsed = createGuestSchema.safeParse(body);
   if (!parsed.success) return zodErrorResponse(parsed.error);
 
-  const guest = await createGuest(weddingId, parsed.data);
+  // TS-169: a guest added as Declined isn't coming, so they're Not Attending and get no seat --
+  // the same rule as when a guest declines (TS-167) -- unless attendance was given explicitly.
+  const explicitAttendance = (body as { dayOfAttendance?: unknown } | null)?.dayOfAttendance !== undefined;
+  const guest = await createGuest(weddingId, {
+    ...parsed.data,
+    ...(parsed.data.rsvpStatus === "DECLINED" && !explicitAttendance ? { dayOfAttendance: "NOT_ATTENDING" as const } : {}),
+  });
   // TS-165: a new attending guest makes the current plan incomplete until they're seated.
   if (guest.dayOfAttendance === "ATTENDING") {
     await refreshPlanAfterGuestAdded(weddingId, `${guest.firstName} ${guest.lastName}`, user.id);
