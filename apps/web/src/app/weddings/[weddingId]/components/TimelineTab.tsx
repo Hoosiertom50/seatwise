@@ -23,7 +23,8 @@ export function TimelineTab({ weddingId, canEdit }: { weddingId: string; canEdit
   const [editTime, setEditTime] = useState("");
   const [editDescription, setEditDescription] = useState("");
   // TS-159: tell the page this tab has input that leaving it would lose.
-  useUnsavedChanges("timeline", !!(description.trim() || editingId));
+  // TS-166: a time picked for a new entry counts too.
+  useUnsavedChanges("timeline", !!(time || description.trim() || editingId));
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -43,8 +44,9 @@ export function TimelineTab({ weddingId, canEdit }: { weddingId: string; canEdit
         `/api/v1/weddings/${weddingId}/timeline-entries`,
         { time, description }
       );
-      setEntries(
-        [...entries, entry].sort((a, b) => a.time.localeCompare(b.time) || a.sortOrder - b.sortOrder)
+      // TS-166: built from the list as it is now, so another change made meanwhile isn't lost.
+      setEntries((cur) =>
+        [...cur, entry].sort((a, b) => a.time.localeCompare(b.time) || a.sortOrder - b.sortOrder)
       );
       setTime("");
       setDescription("");
@@ -100,12 +102,15 @@ export function TimelineTab({ weddingId, canEdit }: { weddingId: string; canEdit
   }
 
   async function onDelete(entryId: string) {
-    const prev = entries;
-    setEntries(entries.filter((e) => e.id !== entryId));
+    const removed = entries.find((e) => e.id === entryId);
+    setEntries((cur) => cur.filter((e) => e.id !== entryId));
     try {
       await api.delete(`/api/v1/weddings/${weddingId}/timeline-entries/${entryId}`);
     } catch {
-      setEntries(prev);
+      if (removed)
+        setEntries((cur) =>
+          [...cur, removed].sort((a, b) => a.time.localeCompare(b.time) || a.sortOrder - b.sortOrder)
+        );
       setError("Couldn't remove that timeline entry.");
     }
   }

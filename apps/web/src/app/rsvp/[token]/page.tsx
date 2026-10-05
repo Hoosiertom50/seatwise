@@ -40,14 +40,26 @@ export default function GuestRsvpPage() {
         setRequiresAccessibleTable(res.rsvp.requiresAccessibleTable ?? false);
       }
     } catch (err) {
-      if (err instanceof ApiError && err.status === 429) {
-        setLoadError(err.message);
-      } else {
-        setPreview({ status: "NOT_FOUND" });
-      }
+      // TS-166: the server answers a link that doesn't exist with status NOT_FOUND (handled above),
+      // so anything that lands here is a failure to load -- a weak phone signal, a server hiccup,
+      // too many attempts. It used to be shown as "This RSVP link doesn't exist", telling a guest
+      // their real link was dead. Now they see what happened and can try again; and if the form is
+      // already showing (the reload right after submitting), it stays put.
+      const message =
+        err instanceof ApiError && err.status !== 0
+          ? err.message
+          : "We couldn't load your RSVP just now. Check your connection and try again.";
+      if (preview) setError(message);
+      else setLoadError(message);
     } finally {
       setLoading(false);
     }
+  }
+
+  function retryLoad() {
+    setLoadError(null);
+    setLoading(true);
+    load();
   }
 
   useEffect(() => {
@@ -82,6 +94,13 @@ export default function GuestRsvpPage() {
         <div className="w-full max-w-sm text-center">
           <h1 className="mb-4 text-2xl font-semibold">RSVP</h1>
           <p className="text-sm text-neutral-600 dark:text-neutral-300">{loadError}</p>
+          <button
+            type="button"
+            onClick={retryLoad}
+            className="mt-4 rounded-md border border-neutral-300 dark:border-neutral-600 px-4 py-2 text-sm font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800"
+          >
+            Try again
+          </button>
         </div>
       </main>
     );

@@ -70,16 +70,36 @@ export default function WeddingDetailPage() {
   // TS-159: a tab change waiting on "you have unsaved changes" -- see goToTab.
   const unsaved = useUnsavedChangesProvider();
   const [pendingTab, setPendingTab] = useState<Tab | null>(null);
+  // TS-166: leaving the wedding page itself ("Back to dashboard") asks the same question; the
+  // browser's own prompt only covers closing or reloading the page, not links inside the app.
+  const [pendingHref, setPendingHref] = useState<string | null>(null);
   function goToTab(next: Tab) {
     if (next === tab) return;
     if (unsaved.hasUnsaved()) setPendingTab(next);
     else setTab(next);
   }
+  /** True to follow the link now; false when the question is being asked first. */
+  function requestLeavePage(href: string): boolean {
+    if (!unsaved.hasUnsaved()) return true;
+    setPendingHref(href);
+    return false;
+  }
   function leaveTab() {
+    if (pendingHref) {
+      unsaved.clear();
+      const href = pendingHref;
+      setPendingHref(null);
+      router.push(href);
+      return;
+    }
     if (!pendingTab) return;
     unsaved.clear();
     setTab(pendingTab);
     setPendingTab(null);
+  }
+  function stayOnTab() {
+    setPendingTab(null);
+    setPendingHref(null);
   }
   const [startCounts, setStartCounts] = useState<GettingStartedCounts | null>(null);
   // FR-1.6: "a change [to a collaborator's access] takes effect within five seconds, even for a
@@ -133,6 +153,7 @@ export default function WeddingDetailPage() {
   // to poll for) or the page errored out on initial load.
   useEffect(() => {
     if (error) return;
+    let redirectTimer: ReturnType<typeof setTimeout> | undefined;
     const interval = setInterval(async () => {
       try {
         const res = await api.get<{ wedding: WeddingDTO; accessLevel: AccessLevel }>(
@@ -160,7 +181,9 @@ export default function WeddingDetailPage() {
           setAccessRevoked(true);
           setAccessNotice("Your access to this wedding has been removed.");
           clearInterval(interval);
-          setTimeout(() => router.push("/dashboard"), 3000);
+          // TS-166: cancelled if the planner leaves first (e.g. "Go now", then opens another
+          // wedding) -- it used to fire anyway and pull them back to the dashboard.
+          redirectTimer = setTimeout(() => router.push("/dashboard"), 3000);
         }
         // TS-109: a 401 is an expired session, not revoked access -- the app-wide
         // SessionExpiredNotice (fired from api-client) says so and offers sign-in, and this page
@@ -169,7 +192,10 @@ export default function WeddingDetailPage() {
         // ignored -- the next tick tries again.
       }
     }, 4000);
-    return () => clearInterval(interval);
+    return () => {
+      clearInterval(interval);
+      if (redirectTimer) clearTimeout(redirectTimer);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [weddingId, error]);
 
@@ -210,12 +236,18 @@ export default function WeddingDetailPage() {
   return (
     <main className="mx-auto w-full max-w-[1600px] flex-1 px-6 py-10">
       <div className="flex items-center justify-between">
-        <Link href="/dashboard" className="text-sm text-neutral-500 dark:text-neutral-400 hover:underline">
+        <Link
+          href="/dashboard"
+          onClick={(e) => {
+            if (!requestLeavePage("/dashboard")) e.preventDefault();
+          }}
+          className="text-sm text-neutral-500 dark:text-neutral-400 hover:underline"
+        >
           &larr; Back to dashboard
         </Link>
         <div className="flex items-center gap-4">
           <SaveStatusIndicator />
-          <NotificationsBell />
+          <NotificationsBell onLeave={requestLeavePage} />
         </div>
       </div>
       {accessNotice && !accessRevoked && (
@@ -272,7 +304,7 @@ export default function WeddingDetailPage() {
       </div>
 
       {/* TS-159 */}
-      {pendingTab && (
+      {(pendingTab || pendingHref) && (
         <div
           role="alertdialog"
           aria-labelledby="unsaved-question"
@@ -284,7 +316,7 @@ export default function WeddingDetailPage() {
           <button
             type="button"
             autoFocus
-            onClick={() => setPendingTab(null)}
+            onClick={stayOnTab}
             className="rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800"
           >
             Stay on this tab

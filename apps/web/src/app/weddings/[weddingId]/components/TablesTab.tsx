@@ -15,6 +15,7 @@ import type {
 } from "@seatwise/shared";
 import { compareTableLabels, GUEST_TIER_LABELS, type GuestTier } from "@seatwise/shared";
 import { useUnsavedChanges } from "@/lib/unsaved-changes";
+import { useSerialTasks } from "@/lib/serial-tasks";
 
 const SHAPES: TableShape[] = ["ROUND", "RECTANGULAR", "SQUARE", "OVAL", "OTHER"];
 
@@ -120,6 +121,27 @@ export function TablesTab({
   ];
 
   const [tables, setTables] = useState<SeatingTableDTO[]>([]);
+  // TS-166: a table's quick saves (lock, accessible, single-side, position) run one at a time, each
+  // with the table's latest confirmed revision -- ticking two boxes quickly used to send the same
+  // revision twice, and the second was refused as "edited elsewhere".
+  const queueTableSave = useSerialTasks();
+  const tableRevisions = useRef(new Map<string, number>());
+  useEffect(() => {
+    for (const t of tables) {
+      const known = tableRevisions.current.get(t.id);
+      if (known === undefined || t.revision > known) tableRevisions.current.set(t.id, t.revision);
+    }
+  }, [tables]);
+  function patchTable<T extends { table: SeatingTableDTO }>(id: string, body: Record<string, unknown>): Promise<T> {
+    return queueTableSave(async () => {
+      const res = await api.patch<T>(`/api/v1/weddings/${weddingId}/tables/${id}`, {
+        ...body,
+        expectedRevision: tableRevisions.current.get(id),
+      });
+      tableRevisions.current.set(id, res.table.revision);
+      return res;
+    });
+  }
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState<"list" | "floorplan">("list");
 
@@ -221,7 +243,8 @@ export function TablesTab({
           shape,
         }
       );
-      setTables([...tables, table].sort((a, b) => compareTableLabels(a.label, b.label)));
+      // TS-166: built from the list as it is now, so another change made meanwhile isn't lost.
+      setTables((cur) => [...cur, table].sort((a, b) => compareTableLabels(a.label, b.label)));
       setLabel("");
       setCapacity(8);
       setPurpose("");
@@ -247,7 +270,7 @@ export function TablesTab({
         `/api/v1/weddings/${weddingId}/tables/quick-create`,
         { count: qcCount, capacity: qcCapacity, shape: qcShape, labelPrefix: qcPrefix }
       );
-      setTables([...tables, ...created].sort((a, b) => compareTableLabels(a.label, b.label)));
+      setTables((cur) => [...cur, ...created].sort((a, b) => compareTableLabels(a.label, b.label)));
     } catch (err) {
       setError(apiErrorMessage(err, [], "Couldn't create those tables."));
     } finally {
@@ -340,13 +363,9 @@ export function TablesTab({
 
   async function onToggleLock(id: string, isLocked: boolean) {
     const prev = tables;
-    const expectedRevision = prev.find((t) => t.id === id)?.revision;
     setTables((cur) => cur.map((t) => (t.id === id ? { ...t, isLocked } : t)));
     try {
-      const { table } = await api.patch<{ table: SeatingTableDTO }>(
-        `/api/v1/weddings/${weddingId}/tables/${id}`,
-        { isLocked, expectedRevision }
-      );
+      const { table } = await patchTable<{ table: SeatingTableDTO }>(id, { isLocked });
       setTables((cur) => cur.map((t) => (t.id === id ? table : t)));
     } catch (err) {
       const fresh = conflictTable(err);
@@ -366,13 +385,9 @@ export function TablesTab({
   // this just surfaces whatever warning message came back.
   async function onToggleAccessible(id: string, next: boolean) {
     const prev = tables;
-    const expectedRevision = prev.find((t) => t.id === id)?.revision;
     setTables((cur) => cur.map((t) => (t.id === id ? { ...t, isAccessible: next } : t)));
     try {
-      const res = await api.patch<{ table: SeatingTableDTO; warnings: string[] }>(
-        `/api/v1/weddings/${weddingId}/tables/${id}`,
-        { isAccessible: next, expectedRevision }
-      );
+      const res = await patchTable<{ table: SeatingTableDTO; warnings: string[] }>(id, { isAccessible: next });
       setTables((cur) => cur.map((t) => (t.id === id ? res.table : t)));
       setTableWarnings(res.warnings ?? []);
     } catch (err) {
@@ -392,13 +407,9 @@ export function TablesTab({
   // a hard-rule reassignment side effect, so there's nothing else to surface here.
   async function onToggleSingleSideOnly(id: string, next: boolean) {
     const prev = tables;
-    const expectedRevision = prev.find((t) => t.id === id)?.revision;
     setTables((cur) => cur.map((t) => (t.id === id ? { ...t, singleSideOnly: next } : t)));
     try {
-      const { table } = await api.patch<{ table: SeatingTableDTO }>(
-        `/api/v1/weddings/${weddingId}/tables/${id}`,
-        { singleSideOnly: next, expectedRevision }
-      );
+      const { table } = await patchTable<{ table: SeatingTableDTO }>(id, { singleSideOnly: next });
       setTables((cur) => cur.map((t) => (t.id === id ? table : t)));
     } catch (err) {
       const fresh = conflictTable(err);
@@ -415,13 +426,9 @@ export function TablesTab({
 
   async function onMove(id: string, x: number, y: number) {
     const before = tables.find((t) => t.id === id);
-    const expectedRevision = before?.revision;
     setTables((cur) => cur.map((t) => (t.id === id ? { ...t, positionX: x, positionY: y } : t)));
     try {
-      const { table } = await api.patch<{ table: SeatingTableDTO }>(
-        `/api/v1/weddings/${weddingId}/tables/${id}`,
-        { positionX: x, positionY: y, expectedRevision }
-      );
+      const { table } = await patchTable<{ table: SeatingTableDTO }>(id, { positionX: x, positionY: y });
       // FR-7.7: sync the server's incremented revision back so the *next* drag's expectedRevision
       // is still accurate -- without this, every move after the first would be rejected as stale.
       setTables((cur) => cur.map((t) => (t.id === id ? table : t)));

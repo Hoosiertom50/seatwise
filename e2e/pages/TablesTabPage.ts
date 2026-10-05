@@ -269,4 +269,23 @@ export class TablesTabPage extends BasePage {
     await this.saveAsTemplateButton().click();
     await expect(this.page.getByText(`Saved “${name}”`, { exact: false })).toBeVisible();
   }
+
+  /** TS-166: a table's row in the list (found by its Remove button). */
+  tableRow(label: string) {
+    return this.page.locator("li").filter({ has: this.removeTableButton(label) });
+  }
+
+  /** TS-166: the row's "Accessible" and "Single-side" checkboxes. */
+  accessibleCheckbox(label: string) {
+    return this.tableRow(label).getByRole("checkbox", { name: "Accessible", exact: true });
+  }
+
+  singleSideCheckbox(label: string) {
+    return this.tableRow(label).getByRole("checkbox", { name: "Single-side", exact: true });
+  }
+
+  /** TS-166: any error shown on the Tables tab. */
+  errorText() {
+    return this.page.locator("p.text-red-600, p.text-red-400");
+  }
 }

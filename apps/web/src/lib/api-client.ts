@@ -64,10 +64,21 @@ async function fetchWithRetry(path: string, init: RequestInit): Promise<Response
   }
 }
 
+// TS-166: non-GET requests that don't save anything the planner made.
+const NOT_A_SAVE = [/\/guests\/import\/preview$/, /^\/api\/v1\/notifications(\/[^/]+\/read)?$/];
+
+/** TS-93 / TS-166: whether a request counts toward the "Saving… / Saved / Not saved" indicator. */
+export function tracksSaveStatus(method: string, path: string): boolean {
+  if (method === "GET" || path.startsWith("/api/v1/auth/")) return false;
+  return !NOT_A_SAVE.some((re) => re.test(path));
+}
+
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const isAuthRoute = path.startsWith("/api/v1/auth/");
   // TS-93: every write except signing in/out counts toward the visible save status.
-  const tracksSave = options.method !== "GET" && !isAuthRoute;
+  // TS-166: so do requests that only look something up or mark notifications read -- a failed
+  // import preview used to show "Not saved" in the header when nothing was being saved.
+  const tracksSave = tracksSaveStatus(options.method ?? "GET", path);
   if (tracksSave) writeStarted();
   const startedInGeneration = sessionGeneration;
 

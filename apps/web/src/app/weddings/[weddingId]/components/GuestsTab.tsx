@@ -298,7 +298,8 @@ export function GuestsTab({
         email: email || null,
         notes: notes.trim() || null,
       });
-      setGuests([...guests, guest].sort((a, b) => a.lastName.localeCompare(b.lastName)));
+      // TS-166: built from the list as it is now, so another change made meanwhile isn't lost.
+      setGuests((cur) => [...cur, guest].sort((a, b) => a.lastName.localeCompare(b.lastName)));
       // TS-143: a guest added with an email was just sent their RSVP link -- say so on their row.
       if (rsvpEmail && guest.email) showAutoRsvpResult(guest.id, guest.email, rsvpEmail);
       setFirstName("");
@@ -320,12 +321,13 @@ export function GuestsTab({
   }
 
   async function onDeleteGuest(guestId: string) {
-    const prev = guests;
-    setGuests(guests.filter((g) => g.id !== guestId));
+    const removed = guests.find((g) => g.id === guestId);
+    setGuests((cur) => cur.filter((g) => g.id !== guestId));
     try {
       await api.delete(`/api/v1/weddings/${weddingId}/guests/${guestId}`);
     } catch {
-      setGuests(prev);
+      // TS-166: put back just this guest, not an older copy of the whole list.
+      if (removed) setGuests((cur) => [...cur, removed].sort((a, b) => a.lastName.localeCompare(b.lastName)));
       setError("Couldn't delete that guest.");
     }
   }
@@ -371,6 +373,8 @@ export function GuestsTab({
         expectedRevision: revisionFor(guestId),
       });
       putGuest(result.guest);
+      // TS-166: a save that works clears an earlier save's error, which used to stay up for good.
+      setError(null);
       // TS-151: say when the change knocked the guest out of their seat.
       setWarning(result.warnings?.length ? result.warnings.join(" ") : null);
       return result;
@@ -996,7 +1000,10 @@ export function GuestsTab({
         </a>
       </div>
       {guests.length === 0 ? (
-        <p className="text-sm text-neutral-500 dark:text-neutral-400">No guests yet — add your first one above.</p>
+        <p className="text-sm text-neutral-500 dark:text-neutral-400">
+          {/* TS-166: only someone who can add guests has a form "above". */}
+          {canEdit ? "No guests yet — add your first one above." : "No guests yet."}
+        </p>
       ) : (
         <ul className="flex flex-col gap-2">
           {guests.map((g) => (
