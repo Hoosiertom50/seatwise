@@ -132,6 +132,21 @@ export class WeddingDetailPage extends BasePage {
   async clickTab(label: string): Promise<void> {
     await this.page.getByRole("button", { name: label, exact: true }).click();
   }
+  /**
+   * TS-176: the browser's Back button, once the page has put its Back guard in place -- it does so
+   * just after the input changes, and pressing Back in the same instant (a few milliseconds, as a
+   * test can) could beat it. A person can't type and press Back that fast.
+   */
+  async goBackWithUnsavedInput(): Promise<void> {
+    await this.page.waitForFunction(() => window.history.state?.seatwiseGuard === true);
+    await this.page.goBack();
+  }
+  /** TS-176: Back once the guard is gone again (after a save or a reload), for the same reason. */
+  async goBackWithNothingUnsaved(): Promise<void> {
+    await this.page.waitForFunction(() => window.history.state?.seatwiseGuard !== true);
+    await this.page.goBack();
+  }
+
   /** TS-159: the "you have unsaved changes on this tab" prompt. */
   unsavedChangesPrompt() {
     return this.page.getByRole("alertdialog").filter({ hasText: "You have unsaved changes on this tab" });

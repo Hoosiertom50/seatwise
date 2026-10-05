@@ -46,12 +46,12 @@ defineQualityTest(
       await guests.finishAddingGuest(uniquePersonName(testInfo.workerIndex).lastName);
       await expect.poll(() => guests.newGuestFirstName()).toBe("");
       await guests.typeNewGuestFirstName("Second");
-      await page.goBack();
+      await wedding.goBackWithUnsavedInput();
       await expect(wedding.unsavedChangesPrompt()).toBeVisible();
       await wedding.stayOnTab();
       await guests.finishAddingGuest(uniquePersonName(testInfo.workerIndex).lastName);
       await expect.poll(() => guests.newGuestFirstName()).toBe("");
-      await page.goBack();
+      await wedding.goBackWithNothingUnsaved();
       await page.waitForURL(/\/dashboard$/);
     });
 
@@ -60,7 +60,7 @@ defineQualityTest(
       await guests.typeNewGuestFirstName("Half-typed");
       await page.reload();
       await expect(wedding.backToDashboardLink()).toBeVisible();
-      await page.goBack();
+      await wedding.goBackWithNothingUnsaved();
       await page.waitForURL(/\/dashboard$/);
     });
 
@@ -75,7 +75,7 @@ defineQualityTest(
         const freshGuests = new WeddingGuestsPage(fresh);
         const freshWedding = new WeddingDetailPage(fresh);
         await freshGuests.typeNewGuestFirstName("Half-typed");
-        await fresh.goBack();
+        await freshWedding.goBackWithUnsavedInput();
         await expect(freshWedding.unsavedChangesPrompt()).toBeVisible();
         await freshWedding.leaveTabWithoutSaving();
         await fresh.waitForURL(/\/dashboard$/);

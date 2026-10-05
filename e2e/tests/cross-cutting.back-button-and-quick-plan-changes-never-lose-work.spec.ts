@@ -41,12 +41,12 @@ defineQualityTest(
       const guests = new WeddingGuestsPage(page);
       await guests.typeNewGuestFirstName("Half-typed");
       const wedding = new WeddingDetailPage(page);
-      await page.goBack();
+      await wedding.goBackWithUnsavedInput();
       await expect(wedding.unsavedChangesPrompt()).toBeVisible();
       await wedding.stayOnTab();
       await expect(page).toHaveURL(new RegExp(`/weddings/${w}$`));
       expect(await guests.newGuestFirstName()).toBe("Half-typed");
-      await page.goBack();
+      await wedding.goBackWithUnsavedInput();
       await expect(wedding.unsavedChangesPrompt()).toBeVisible();
       await wedding.leaveTabWithoutSaving();
       await page.waitForURL(/\/dashboard$/);
