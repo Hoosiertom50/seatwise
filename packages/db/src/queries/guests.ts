@@ -2,7 +2,7 @@ import { randomUUID } from "crypto";
 import { isRsvpCutoffPast } from "@seatwise/shared";
 import { pool } from "../pool";
 import { encryptText, decryptText } from "../crypto";
-import { currentPlanVersionId, recordRecheckIfApproved, refreshPlanCompleteness, resyncTables, tablesAffectedBy } from "./seat-checks";
+import { lockCurrentPlan, recordRecheckIfApproved, refreshPlanCompleteness, resyncTables, tablesAffectedBy } from "./seat-checks";
 import { hashLinkToken, isPlainStoredLinkToken, newLinkToken, readStoredLinkToken } from "../link-tokens";
 
 export interface GuestRow {
@@ -224,7 +224,8 @@ export async function deleteGuestForWedding(id: string, weddingId: string, actor
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    const planVersionId = await currentPlanVersionId(client, weddingId);
+    // TS-173: the current plan's row first, then the guest's (see lockCurrentPlan).
+    const planVersionId = await lockCurrentPlan(client, weddingId);
     const affected = planVersionId ? await tablesAffectedBy(client, weddingId, planVersionId, [id]) : [];
     // TS-169: whether they had a seat, and their name, for the plan's history (read before the delete).
     const { rows: seated } = planVersionId

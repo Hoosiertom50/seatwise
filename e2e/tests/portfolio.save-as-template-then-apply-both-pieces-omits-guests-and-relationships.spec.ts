@@ -82,7 +82,8 @@ defineQualityTest(
         purposeCriterionValue: "CHILD",
       });
       restrictedTableId = restricted.id;
-      await weddingData.setRequiredGuests(managedWedding.id, restrictedTableId, [guests.a.id]);
+      // TS-173: a must-sit-together pair goes on a list together (or not at all).
+      await weddingData.setRequiredGuests(managedWedding.id, restrictedTableId, [guests.a.id, guests.b.id]);
     });
 
     const tablesTabPage = new TablesTabPage(page);
