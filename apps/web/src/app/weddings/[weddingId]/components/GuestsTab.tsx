@@ -1002,8 +1002,11 @@ export function GuestsTab({
         <h2 className="text-lg font-medium">
           Guests ({guests.reduce((sum, g) => sum + g.headcount, 0)})
         </h2>
+        {/* TS-170: a download, not a page change -- so it doesn't set off "leave this page?" for
+            half-typed input, or replace the page with an error if the session has run out. */}
         <a
           href={`/api/v1/weddings/${weddingId}/guests/export`}
+          download
           className="rounded-md border border-neutral-300 dark:border-neutral-600 min-h-11 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800"
         >
           Export guest list (CSV)

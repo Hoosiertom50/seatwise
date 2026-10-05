@@ -99,8 +99,10 @@ export function SessionExpiredNotice() {
         >
           {signingIn ? "Signing in…" : "Sign in here"}
         </button>
-        <Link href={loginUrlReturningTo(here)} className="underline hover:no-underline">
-          or use the sign-in page
+        {/* TS-170: in a new tab -- this page keeps whatever was being typed when the session ran
+            out, and it picks up the new session once you've signed in there. */}
+        <Link href={loginUrlReturningTo(here)} target="_blank" rel="noopener" className="underline hover:no-underline">
+          or use the sign-in page (opens a new tab)
         </Link>
       </form>
       {error && <p className="mt-1 text-center text-red-700 dark:text-red-400">{error}</p>}

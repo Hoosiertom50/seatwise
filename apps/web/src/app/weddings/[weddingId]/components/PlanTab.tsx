@@ -102,7 +102,16 @@ export function PlanTab({
   const [scoreReport, setScoreReport] = useState<PlanVersionScoreReportDTO | null>(null);
   const [showScoreDetail, setShowScoreDetail] = useState(false);
   const [statusUpdating, setStatusUpdating] = useState(false);
-  const [movingGuestId, setMovingGuestId] = useState<string | null>(null);
+  // TS-170: every guest with a move queued or on its way (one value used to stand for all of
+  // them, so a row whose move was still queued looked idle again).
+  const [movingIds, setMovingIds] = useState<ReadonlySet<string>>(new Set());
+  const markMoving = (id: string, moving: boolean) =>
+    setMovingIds((cur) => {
+      const next = new Set(cur);
+      if (moving) next.add(id);
+      else next.delete(id);
+      return next;
+    });
   // TS-166: moves run one at a time, each against the plan as the previous one left it (see
   // serial-tasks.ts); detailRef is that latest copy, updated as soon as a move comes back.
   const queueMove = useSerialTasks();
@@ -195,7 +204,7 @@ export function PlanTab({
   useEffect(() => {
     if (!detail?.isCurrent) return;
     const planVersionId = detail.id;
-    const busy = movingGuestId !== null || undoRedoBusy || statusUpdating || savingLabel || restoring || generating;
+    const busy = movingIds.size > 0 || undoRedoBusy || statusUpdating || savingLabel || restoring || generating;
     if (busy) return;
     const interval = setInterval(async () => {
       try {
@@ -222,7 +231,7 @@ export function PlanTab({
     detail?.id,
     detail?.isCurrent,
     weddingId,
-    movingGuestId,
+    movingIds,
     undoRedoBusy,
     statusUpdating,
     savingLabel,
@@ -285,7 +294,7 @@ export function PlanTab({
   // so without forcing the user back up to the top-of-tab banner this also still populates.
   function onMoveGuest(guestId: string, tableId: string): Promise<MoveGuestResult> {
     if (!detail || !tableId) return Promise.resolve({});
-    setMovingGuestId(guestId);
+    markMoving(guestId, true);
     return queueMove(() => moveGuest(guestId, tableId));
   }
 
@@ -294,7 +303,6 @@ export function PlanTab({
     if (!current) return {};
     setError(null);
     setMoveWarnings([]);
-    setMovingGuestId(guestId);
     const priorTableId = current.assignments.find((a) => a.guestId === guestId)?.tableId ?? null;
     try {
       const res = await api.post<{ planVersion: PlanVersionDetailDTO; warnings: string[] }>(
@@ -331,7 +339,7 @@ export function PlanTab({
       setError(message);
       return { error: message };
     } finally {
-      setMovingGuestId((cur) => (cur === guestId ? null : cur));
+      markMoving(guestId, false);
     }
   }
 
@@ -413,10 +421,16 @@ export function PlanTab({
     setError(null);
     setStatusUpdating(true);
     try {
-      const res = await api.post<{ planVersion: PlanVersionDetailDTO }>(
-        `/api/v1/weddings/${weddingId}/plan-versions/${detail.id}/status`,
-        { status: newStatus, expectedRevision: detail.revision }
-      );
+      // TS-170: queued behind any move still on its way, and sent with the plan as that move left it
+      // -- clicking "Move to review" right after a move used to be refused as a stale change.
+      const res = await queueMove(() => {
+        const current = detailRef.current!;
+        return api.post<{ planVersion: PlanVersionDetailDTO }>(
+          `/api/v1/weddings/${weddingId}/plan-versions/${current.id}/status`,
+          { status: newStatus, expectedRevision: current.revision }
+        );
+      });
+      detailRef.current = res.planVersion;
       setDetail(res.planVersion);
       setVersions((vs) => vs.map((v) => (v.id === res.planVersion.id ? res.planVersion : v)));
     } catch (err) {
@@ -472,10 +486,16 @@ export function PlanTab({
     setError(null);
     setSavingLabel(true);
     try {
-      const res = await api.patch<{ planVersion: PlanVersionDetailDTO }>(
-        `/api/v1/weddings/${weddingId}/plan-versions/${detail.id}`,
-        { label: labelInput, expectedRevision: detail.revision }
-      );
+      // TS-170: queued like a move (see onSetStatus).
+      const label = labelInput;
+      const res = await queueMove(() => {
+        const current = detailRef.current!;
+        return api.patch<{ planVersion: PlanVersionDetailDTO }>(
+          `/api/v1/weddings/${weddingId}/plan-versions/${current.id}`,
+          { label, expectedRevision: current.revision }
+        );
+      });
+      detailRef.current = res.planVersion;
       setDetail(res.planVersion);
       setVersions((vs) => vs.map((v) => (v.id === res.planVersion.id ? res.planVersion : v)));
       setEditingLabel(false);
@@ -1031,7 +1051,7 @@ export function PlanTab({
               <button
                 data-testid="undo-button"
                 onClick={onUndo}
-                disabled={undoStack.length === 0 || undoRedoBusy || movingGuestId !== null}
+                disabled={undoStack.length === 0 || undoRedoBusy || movingIds.size > 0}
                 title={undoStack.length > 0 ? `Undo: ${undoStack[undoStack.length - 1].description}` : undefined}
                 className="min-h-11 rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50"
               >
@@ -1040,7 +1060,7 @@ export function PlanTab({
               <button
                 data-testid="redo-button"
                 onClick={onRedo}
-                disabled={redoStack.length === 0 || undoRedoBusy || movingGuestId !== null}
+                disabled={redoStack.length === 0 || undoRedoBusy || movingIds.size > 0}
                 title={redoStack.length > 0 ? `Redo: ${redoStack[redoStack.length - 1].description}` : undefined}
                 className="min-h-11 rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50"
               >
@@ -1065,11 +1085,11 @@ export function PlanTab({
                         aria-label={`Move ${guestName(id)} to a table`}
                         className="min-h-11 rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm disabled:opacity-50"
                         value=""
-                        disabled={movingGuestId === id}
+                        disabled={movingIds.has(id)}
                         onChange={(e) => onMoveGuest(id, e.target.value)}
                       >
                         <option value="" disabled>
-                          {movingGuestId === id ? "Seating..." : "Seat at..."}
+                          {movingIds.has(id) ? "Seating..." : "Seat at..."}
                         </option>
                         {tables.map((t) => (
                           <option key={t.id} value={t.id}>
@@ -1104,11 +1124,11 @@ export function PlanTab({
                         aria-label={`Move ${g.guestName} to a different table`}
                         className="min-h-11 rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm disabled:opacity-50"
                         value=""
-                        disabled={movingGuestId === g.guestId}
+                        disabled={movingIds.has(g.guestId)}
                         onChange={(e) => onMoveGuest(g.guestId, e.target.value)}
                       >
                         <option value="" disabled>
-                          {movingGuestId === g.guestId ? "Moving..." : "Move to..."}
+                          {movingIds.has(g.guestId) ? "Moving..." : "Move to..."}
                         </option>
                         {tables
                           .filter((t) => t.id !== g.tableId)
@@ -1152,7 +1172,7 @@ export function PlanTab({
               guestName={guestName}
               onMoveGuest={onMoveGuest}
               canEditThisVersion={canEditThisVersion}
-              movingGuestId={movingGuestId}
+              movingIds={movingIds}
             />
           ) : (
             <div className="flex flex-col gap-3">
@@ -1195,11 +1215,11 @@ export function PlanTab({
                             aria-label={`Move ${g.guestName} to a different table`}
                             className="min-h-11 rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-xs disabled:opacity-50"
                             value=""
-                            disabled={movingGuestId === g.guestId}
+                            disabled={movingIds.has(g.guestId)}
                             onChange={(e) => onMoveGuest(g.guestId, e.target.value)}
                           >
                             <option value="" disabled>
-                              {movingGuestId === g.guestId ? "Moving..." : "Move to..."}
+                              {movingIds.has(g.guestId) ? "Moving..." : "Move to..."}
                             </option>
                             {tables
                               .filter((table) => table.id !== tableId)
@@ -1247,7 +1267,7 @@ function PlanFloorPlan({
   guestName,
   onMoveGuest,
   canEditThisVersion,
-  movingGuestId,
+  movingIds,
 }: {
   tables: SeatingTableDTO[];
   grouped: Map<string, { tableLabel: string; guests: { guestId: string; guestName: string }[] }>;
@@ -1256,7 +1276,7 @@ function PlanFloorPlan({
   guestName: (id: string) => string;
   onMoveGuest: (guestId: string, tableId: string) => Promise<MoveGuestResult>;
   canEditThisVersion: boolean;
-  movingGuestId: string | null;
+  movingIds: ReadonlySet<string>;
 }) {
   const [dragOverTableId, setDragOverTableId] = useState<string | null>(null);
   // Feedback for the table that was just dropped onto, shown right there on the canvas instead of
@@ -1432,7 +1452,7 @@ function PlanFloorPlan({
                 baseClass="rounded-full border border-dashed border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-900 px-2 py-1 text-xs"
                 canEdit={canEditThisVersion}
                 picked={pickedGuestId === id}
-                moving={movingGuestId === id}
+                moving={movingIds.has(id)}
                 handlers={chipHandlers}
               />
             )}
@@ -1456,7 +1476,7 @@ function PlanFloorPlan({
                 title={`Currently at ${g.tableLabel}, which no longer fits a hard rule for them`}
                 canEdit={canEditThisVersion}
                 picked={pickedGuestId === g.guestId}
-                moving={movingGuestId === g.guestId}
+                moving={movingIds.has(g.guestId)}
                 handlers={chipHandlers}
               />
             )}
@@ -1522,7 +1542,7 @@ function PlanFloorPlan({
                 baseClass="truncate rounded px-1.5 py-0.5 bg-neutral-100 dark:bg-neutral-800 text-neutral-900 dark:text-neutral-100"
                 canEdit={canEditThisVersion}
                 picked={pickedGuestId === g.guestId}
-                moving={movingGuestId === g.guestId}
+                moving={movingIds.has(g.guestId)}
                 handlers={chipHandlers}
               />
                 )}

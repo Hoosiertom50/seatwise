@@ -32,7 +32,15 @@ export function DayOfTab({
   const [search, setSearch] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [busyGuestId, setBusyGuestId] = useState<string | null>(null);
+  // TS-170: every guest with a change queued or on its way (one value used to stand for all).
+  const [busyIds, setBusyIds] = useState<ReadonlySet<string>>(new Set());
+  const markBusy = (id: string, busy: boolean) =>
+    setBusyIds((cur) => {
+      const next = new Set(cur);
+      if (busy) next.add(id);
+      else next.delete(id);
+      return next;
+    });
 
   const [walkInFirst, setWalkInFirst] = useState("");
   const [walkInLast, setWalkInLast] = useState("");
@@ -50,6 +58,11 @@ export function DayOfTab({
   useEffect(() => {
     detailRef.current = detail;
   }, [detail]);
+  // TS-170: the guest list as it is right now, for queued changes.
+  const guestsRef = useRef<GuestDTO[]>([]);
+  useEffect(() => {
+    guestsRef.current = guests;
+  }, [guests]);
   function applyDetail(d: PlanVersionDetailDTO) {
     detailRef.current = d;
     setDetail(d);
@@ -118,21 +131,24 @@ export function DayOfTab({
   }, [detail]);
 
   function onToggleAttendance(guest: GuestDTO) {
-    setBusyGuestId(guest.id);
+    markBusy(guest.id, true);
     return queuePlanChange(() => toggleAttendance(guest));
   }
 
-  async function toggleAttendance(guest: GuestDTO) {
+  async function toggleAttendance(clicked: GuestDTO) {
+    // TS-170: worked out from the guest as they are when this runs, not as they were when clicked --
+    // so a second click queued behind the first toggles back, as the planner expects.
+    const guest = guestsRef.current.find((g) => g.id === clicked.id) ?? clicked;
     const nextAttendance = guest.dayOfAttendance === "ATTENDING" ? "NOT_ATTENDING" : "ATTENDING";
     setError(null);
     setNotice(null);
-    setBusyGuestId(guest.id);
     try {
       const res = await api.post<{ planVersion: PlanVersionDetailDTO | null }>(
         `/api/v1/weddings/${weddingId}/guests/${guest.id}/attendance`,
         { attendance: nextAttendance }
       );
       // Functional update: built from the list as it is now, not as it was when this was clicked.
+      guestsRef.current = guestsRef.current.map((g) => (g.id === guest.id ? { ...g, dayOfAttendance: nextAttendance } : g));
       setGuests((cur) => cur.map((g) => (g.id === guest.id ? { ...g, dayOfAttendance: nextAttendance } : g)));
       if (res.planVersion) applyDetail(res.planVersion);
       setNotice(
@@ -143,7 +159,7 @@ export function DayOfTab({
     } catch (err) {
       setError(apiErrorMessage(err, [], "Couldn't update attendance."));
     } finally {
-      setBusyGuestId((cur) => (cur === guest.id ? null : cur));
+      markBusy(guest.id, false);
     }
   }
 
@@ -158,7 +174,7 @@ export function DayOfTab({
 
   function onSeatGuest(guestId: string, tableId: string) {
     if (!detail || !tableId) return;
-    setBusyGuestId(guestId);
+    markBusy(guestId, true);
     return queuePlanChange(() => seatGuest(guestId, tableId));
   }
 
@@ -167,7 +183,6 @@ export function DayOfTab({
     if (!current) return;
     setError(null);
     setNotice(null);
-    setBusyGuestId(guestId);
     try {
       const res = await api.post<{ planVersion: PlanVersionDetailDTO; warnings: string[] }>(
         `/api/v1/weddings/${weddingId}/plan-versions/${current.id}/assignments`,
@@ -180,7 +195,7 @@ export function DayOfTab({
       if (fresh) applyDetail(fresh);
       setError(apiErrorMessage(err, [], "Couldn't seat that guest."));
     } finally {
-      setBusyGuestId((cur) => (cur === guestId ? null : cur));
+      markBusy(guestId, false);
     }
   }
 
@@ -224,7 +239,7 @@ export function DayOfTab({
       setWalkInTableId("");
     } catch (err) {
       const fresh = conflictPlanVersion(err);
-      if (fresh) setDetail(fresh);
+      if (fresh) applyDetail(fresh);
       if (added) {
         setNotice(`Added walk-in ${added.firstName} ${added.lastName} — not yet seated.`);
         setError(apiErrorMessage(err, [], "Couldn't seat them") + " Seat them from the guest list below.");
@@ -357,11 +372,11 @@ export function DayOfTab({
                       aria-label={`Seat ${g.firstName} ${g.lastName} at a table`}
                       className="min-h-11 rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-2 text-sm disabled:opacity-50"
                       value=""
-                      disabled={busyGuestId === g.id}
+                      disabled={busyIds.has(g.id)}
                       onChange={(e) => onSeatGuest(g.id, e.target.value)}
                     >
                       <option value="" disabled>
-                        {busyGuestId === g.id ? "Seating..." : "Seat at..."}
+                        {busyIds.has(g.id) ? "Seating..." : "Seat at..."}
                       </option>
                       {tables.map((t) => (
                         <option key={t.id} value={t.id}>
@@ -372,7 +387,7 @@ export function DayOfTab({
                   )}
                   <button
                     onClick={() => onToggleAttendance(g)}
-                    disabled={busyGuestId === g.id}
+                    disabled={busyIds.has(g.id)}
                     className={`min-h-11 rounded-md border px-3 py-2 text-sm font-medium disabled:opacity-50 ${
                       notAttending
                         ? "border-neutral-300 dark:border-neutral-600 hover:bg-neutral-50 dark:hover:bg-neutral-800"

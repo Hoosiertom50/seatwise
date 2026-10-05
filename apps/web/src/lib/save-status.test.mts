@@ -18,3 +18,20 @@ test("reads, sign-in, import previews and marking notifications read don't", () 
   assert.equal(tracksSaveStatus("POST", "/api/v1/notifications"), false);
   assert.equal(tracksSaveStatus("POST", "/api/v1/notifications/n1/read"), false);
 });
+
+// TS-170: a request that never answers gives up (as a connection error) instead of hanging forever.
+test("a request with no answer gives up after the time limit", async () => {
+  const { fetchWithRetry, NETWORK_ERROR_STATUS } = await import("./api-client");
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = ((_: unknown, init?: RequestInit) =>
+    new Promise((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => reject(new Error("aborted")));
+    })) as typeof fetch;
+  try {
+    const started = Date.now();
+    await assert.rejects(fetchWithRetry("/api/v1/x", { method: "POST" }, 50), (err: { status?: number }) => err.status === NETWORK_ERROR_STATUS);
+    assert.ok(Date.now() - started < 2000);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});

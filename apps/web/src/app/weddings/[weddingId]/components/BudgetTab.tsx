@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { ConfirmDeleteButton } from "@/components/ConfirmDeleteButton";
 import { api, ApiError, apiErrorMessage } from "@/lib/api-client";
 import { formatClockTime } from "@/lib/display-format";
@@ -93,6 +93,10 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
   // TS-159: tell the page this tab has input that leaving it would lose.
   // TS-166: including a budget figure typed but not yet saved.
   const budgetEdited = summary !== null && budgetInput !== centsToDollarsString(summary.budgetCents);
+  const budgetEditedRef = useRef(budgetEdited);
+  useEffect(() => {
+    budgetEditedRef.current = budgetEdited;
+  }, [budgetEdited]);
   useUnsavedChanges(
     "budget",
     !!(name.trim() || contactName.trim() || contactEmail.trim() || contactPhone.trim() || cost || contractNotes.trim() || arrivalTime || editingId || budgetEdited)
@@ -155,7 +159,14 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
       const { summary: updated } = await api.get<{ summary: BudgetSummaryDTO }>(
         `/api/v1/weddings/${weddingId}/budget`
       );
-      setSummary(updated);
+      // TS-170: the totals always come in fresh. The budget figure (and the version it's based on)
+      // only does when the planner isn't in the middle of typing a new one -- otherwise a
+      // collaborator's newer figure would quietly become the base for this planner's save, and
+      // the conflict check that protects it (TS-92) would never fire.
+      setSummary((cur) =>
+        cur && budgetEditedRef.current ? { ...updated, budgetCents: cur.budgetCents, budgetRevision: cur.budgetRevision } : updated
+      );
+      if (!budgetEditedRef.current) setBudgetInput(centsToDollarsString(updated.budgetCents));
     } catch {
       setError("Saved — but the budget totals couldn't be refreshed. Reload the page to see them.");
     }

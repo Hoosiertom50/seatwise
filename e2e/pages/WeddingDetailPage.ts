@@ -18,6 +18,7 @@
  */
 
 import type { Locator } from "@playwright/test";
+import type { Page } from "@playwright/test";
 import { BasePage } from "./BasePage.js";
 import { ConfirmDelete } from "../components/ConfirmDelete.js";
 
@@ -76,9 +77,14 @@ export class WeddingDetailPage extends BasePage {
     return this.page.getByRole("alert").filter({ hasText: "Your session has expired" });
   }
 
-  /** The notice's fallback link to the full /login page (with ?next= back here). */
-  async clickSignInAgain(): Promise<void> {
-    await this.page.getByRole("link", { name: "or use the sign-in page", exact: true }).click();
+  /** The notice's fallback link to the full /login page (with ?next= back here). TS-170: it opens
+   * in a new tab, so this page keeps whatever was typed -- returns that tab. */
+  async clickSignInAgain(): Promise<Page> {
+    const [tab] = await Promise.all([
+      this.page.context().waitForEvent("page"),
+      this.page.getByRole("link", { name: "or use the sign-in page (opens a new tab)", exact: true }).click(),
+    ]);
+    return tab;
   }
 
   /** TS-94: signs back in from the notice itself, without leaving the page. */

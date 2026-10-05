@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
-import { api, ApiError } from "@/lib/api-client";
+import { api, ApiError, apiErrorMessage } from "@/lib/api-client";
 import type { GuestRsvpPreviewDTO } from "@seatwise/shared";
 
 // TS-17 (FR-12.1/FR-12.2/FR-12.3): the guest's own RSVP page, reached via their unique
@@ -74,7 +74,9 @@ export default function GuestRsvpPage() {
     try {
       await api.post(`/api/v1/rsvp/${token}`, {
         rsvpStatus: attending,
-        headcount,
+        // TS-170: a cleared party-size box reads as 0 -- and once "declining" hides it, the browser
+        // no longer checks it -- so it's never sent below 1.
+        headcount: Math.max(1, headcount || 1),
         plusOneNames: plusOneNames || null,
         notes: notes || null,
         requiresAccessibleTable,
@@ -82,7 +84,8 @@ export default function GuestRsvpPage() {
       setJustSubmitted(true);
       await load();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Couldn't submit your RSVP.");
+      // TS-170: say which answer was refused, not just "Validation failed".
+      setError(apiErrorMessage(err, ["headcount", "plusOneNames", "notes"], "Couldn't submit your RSVP."));
     } finally {
       setSubmitting(false);
     }

@@ -221,4 +221,9 @@ export class WeddingGuestsPage extends BasePage {
     });
     return new GuestRow(li);
   }
+
+  /** TS-170: the "Export guest list (CSV)" link. */
+  exportCsvLink() {
+    return this.page.getByRole("link", { name: "Export guest list (CSV)", exact: true });
+  }
 }
