@@ -20,6 +20,10 @@ const SECURITY_HEADERS = [
 const nextConfig: NextConfig = {
   // TS-130: don't advertise the framework (and so its version family) on every response.
   poweredByHeader: false,
+  // TS-158: the PDF exports read their font files at runtime, so ship them with those routes.
+  outputFileTracingIncludes: {
+    "/api/v1/weddings/*/plan-versions/*/export/*": ["./fonts/**/*"],
+  },
   async headers() {
     return [{ source: "/:path*", headers: SECURITY_HEADERS }];
   },

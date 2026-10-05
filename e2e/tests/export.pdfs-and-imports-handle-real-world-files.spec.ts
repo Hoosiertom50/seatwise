@@ -2,6 +2,8 @@
  * TS-152 (REQ-EXPORT-PRINT-RESTORE) — exports and imports cope with real guest lists.
  * - All three PDF exports succeed when guest names, table labels or the wedding name use letters
  *   outside the basic set (Łukasz, Nguyễn, 王) -- one such name used to make every export fail.
+ * - TS-158: they're drawn with the embedded DejaVu Sans, so Łukasz and Nguyễn print as written
+ *   (no longer simplified to "Lukasz" and "Nguyen" in Helvetica).
  * - A guest import skips a blank row in the middle of the file instead of failing it.
  * - An import is capped (5,000 guests, 2 MB), and the household name and notes limits match adding
  *   a guest by hand.
@@ -9,15 +11,16 @@
 
 import { expect, defineQualityTest, test } from "../fixtures/index.js";
 import { uniqueTitle } from "../data/ids.js";
+import { pdfFontNames } from "../support/pdf.js";
 
 defineQualityTest(
   {
     id: "export.pdfs-and-imports-handle-real-world-files.unicode-pdfs-blank-rows-limits",
     title: "PDF exports work with names in any language, and guest imports skip blank rows and enforce sensible limits",
     objective:
-      "Confirms that the seating chart, lookup list and place cards PDFs all return 200 application/pdf for an approved plan whose guests, table and wedding names include Polish, Vietnamese and Chinese characters; that an import with a blank row in the middle adds the other guests; that a 5,001-guest import, an over-2 MB file, a 201-character household name and a 2,001-character note are each refused with a clear reason.",
+      "Confirms that the seating chart, lookup list and place cards PDFs all return 200 application/pdf for an approved plan whose guests, table and wedding names include Polish, Vietnamese and Chinese characters, each drawn with the embedded DejaVu Sans font (not Helvetica); that an import with a blank row in the middle adds the other guests; that a 5,001-guest import, an over-2 MB file, a 201-character household name and a 2,001-character note are each refused with a clear reason.",
     expectedOutcome:
-      "Three PDFs come back (200, application/pdf, non-trivial size). The import with a blank middle row creates 2 guests. The 5,001-row preview is refused with 'import at most 5,000'; the 2 MB+ file is refused; the long household name and note rows are reported as errors.",
+      "Three PDFs come back (200, application/pdf, non-trivial size), each using only DejaVu Sans fonts. The import with a blank middle row creates 2 guests. The 5,001-row preview is refused with 'import at most 5,000'; the 2 MB+ file is refused; the long household name and note rows are reported as errors.",
     requirementIds: ["REQ-EXPORT-PRINT-RESTORE", "REQ-GUEST-LIST-MANAGEMENT"],
     tags: ["@mutating", "@feature:export", "@feature:guests", "@risk:high", "@suite:regression"],
   },
@@ -47,7 +50,11 @@ defineQualityTest(
         const res = await context.request.get(api(`${w}/plan-versions/${plan.id}/export/${kind}`));
         expect(res.status(), kind).toBe(200);
         expect(res.headers()["content-type"]).toContain("application/pdf");
-        expect((await res.body()).length, kind).toBeGreaterThan(500);
+        const body = await res.body();
+        expect(body.length, kind).toBeGreaterThan(500);
+        const fonts = pdfFontNames(body);
+        expect(fonts.length, kind).toBeGreaterThan(0);
+        expect(fonts.filter((name) => !name.includes("DejaVuSans")), kind).toEqual([]);
       }
     });
 

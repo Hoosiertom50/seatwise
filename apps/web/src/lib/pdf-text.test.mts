@@ -2,6 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { toPdfText } from "./pdf-text";
+import { fontNames } from "./pdf-test-helpers";
 
 test("names the built-in font can draw are kept exactly", () => {
   for (const name of ["José Álvarez", "Zoë Müller", "Ñuñez", "Søren Ørsted", "Strauß", "O'Brien-Smith", "Table 12 — Head"]) {
@@ -38,4 +39,48 @@ test("all three exports build with names in any script", async () => {
   const lookup = await buildLookupListPdf("Ană & Bogdán's Wedding", rows);
   const cards = await buildPlaceCardsPdf(rows);
   for (const pdf of [chart, lookup, cards]) assert.ok(pdf.length > 500);
+});
+
+// TS-158: with the embedded DejaVu Sans, names are drawn as written rather than simplified.
+test("with a font that has the letters, names are kept exactly", () => {
+  const has = new Set([..."ŁukaszWłęsNguyễnVăThắАнаПетров "].map((c) => c.codePointAt(0)!));
+  const canDraw = (ch: string) => has.has(ch.codePointAt(0)!);
+  assert.equal(toPdfText("Łukasz Wałęsa", canDraw), "Łukasz Wałęsa");
+  assert.equal(toPdfText("Nguyễn Văn Thắng", canDraw), "Nguyễn Văn Thắng");
+  assert.equal(toPdfText("Анна Петрова", canDraw), "Анна Петрова");
+  // Still simplified or replaced when this font lacks the letter.
+  assert.equal(toPdfText("Wąs 王", canDraw), "Was ?");
+});
+
+test("the exports embed the Unicode font, subset to the letters used", async () => {
+  const { buildLookupListPdf } = await import("./pdf");
+  const pdf = await buildLookupListPdf("Ană & Bogdán's Wedding", [
+    { guestName: "Łukasz Wałęsa", tableLabel: "Stół 1" },
+    { guestName: "Nguyễn Văn Thắng", tableLabel: "Bàn 2" },
+    { guestName: "Анна Петрова", tableLabel: "Стол 3" },
+    { guestName: "Ελένη Παπαδοπούλου", tableLabel: "Τραπέζι 4" },
+  ]);
+  const names = await fontNames(pdf);
+  assert.ok(names.length > 0 && names.every((n) => n.includes("DejaVuSans")), names.join(", "));
+  // Subsetting keeps the file small (the full fonts are ~1.4 MB).
+  assert.ok(pdf.length < 150_000, `PDF is ${pdf.length} bytes`);
+});
+
+test("a long place-card name wraps onto two lines and/or shrinks to fit the card", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const fontkit = (await import("@pdf-lib/fontkit")).default;
+  const { PDFDocument } = await import("pdf-lib");
+  const { fitCardName } = await import("./pdf");
+  const doc = await PDFDocument.create();
+  doc.registerFontkit(fontkit);
+  const bold = await doc.embedFont(await readFile("fonts/DejaVuSans-Bold.ttf"));
+  const fits = (r: { lines: string[]; size: number }) =>
+    r.lines.every((l) => bold.widthOfTextAtSize(l, r.size) <= 236);
+
+  assert.deepEqual(fitCardName(bold, "Ana Ruiz", 236), { lines: ["Ana Ruiz"], size: 18 });
+  const long = fitCardName(bold, "Maximilian Alexander Featherstonehaugh-Worthington", 236);
+  assert.equal(long.lines.length, 2);
+  assert.ok(fits(long) && long.size >= 10, JSON.stringify(long));
+  const greek = fitCardName(bold, "Ελένη Παπαδοπούλου-Καραγιαννοπούλου", 236);
+  assert.ok(fits(greek), JSON.stringify(greek));
 });
