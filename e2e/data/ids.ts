@@ -105,7 +105,17 @@ export function uniqueTitle(workerIndex: number, label: string): string {
  * just as many separate people wouldn't. Only honoured off Netlify; on Netlify the real address
  * always wins (see apps/web/src/lib/client-address.ts).
  */
+//
+// TS-176: no longer a fresh random pick each time -- 2^17 random addresses, with the app's
+// counters kept for a day, gave a run a 1-2% chance of two tests sharing one and tripping a limit.
+// An address is now this worker process's own number (picked once), the worker's index, and a
+// count of addresses it has handed out: never repeated within a process (128 of them), never
+// shared between the workers of a run, and shared with another run's same worker only when both
+// picked the same one of 64 numbers. (64 x 16 workers x 128 = the 2^17 test addresses.)
+const ADDRESS_RUN_NONCE = Math.floor(Math.random() * 64);
+let addressesHandedOut = 0;
 export function uniqueTestAddress(): string {
-  const n = Math.floor(Math.random() * 2 ** 17);
+  const worker = Number(process.env.TEST_PARALLEL_INDEX ?? process.env.TEST_WORKER_INDEX ?? 0) % 16;
+  const n = (ADDRESS_RUN_NONCE * 16 + worker) * 128 + (addressesHandedOut++ % 128);
   return `198.${18 + (n >> 16)}.${(n >> 8) & 255}.${n & 255}`;
 }

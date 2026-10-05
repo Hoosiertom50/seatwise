@@ -71,6 +71,7 @@ export async function POST(req: NextRequest, { params }: Params) {
     // today) -- it doesn't use up the sender's allowance; the owner gets the link to send instead.
     if (sent === "recipient-limited") await releaseEmailSend("invites", user.id);
 
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars -- TS-176: the token is left out of the response on purpose.
     const { token: _token, ...invitePublic } = invite;
     // TS-132: if the email didn't go out, hand the owner the accept link to send themselves --
     // otherwise the invitee has no way in. (Accepting still requires signing in with this exact

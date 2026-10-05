@@ -187,6 +187,7 @@ export function PlanTab({
 
   useEffect(() => {
     Promise.all([
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- TS-176: loads the versions and tables when the tab opens.
       loadVersions(),
       api
         .get<{ tables: SeatingTableDTO[] }>(`/api/v1/weddings/${weddingId}/tables`)
@@ -229,7 +230,6 @@ export function PlanTab({
       }
     }, 4000);
     return () => clearInterval(interval);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     detail?.id,
     detail?.isCurrent,
@@ -891,7 +891,7 @@ export function PlanTab({
               <p className="mb-2 text-sm text-neutral-500 dark:text-neutral-400">
                 This is a past version — status can only be changed on the current one. Restoring
                 it makes a brand-new current version with a copy of its assignments,
-                re-checked against today's guests/tables/rules — it never rewrites this version or
+                re-checked against today&apos;s guests/tables/rules — it never rewrites this version or
                 anything newer.
               </p>
               {canEdit && restorePreview?.sourceVersionNumber !== detail.versionNumber && (
@@ -1066,7 +1066,7 @@ export function PlanTab({
                 Redo
               </button>
               <span className="text-xs text-neutral-500 dark:text-neutral-400">
-                Undo/redo covers this browser session's own moves only — reload or switch
+                Undo/redo covers this browser session&apos;s own moves only — reload or switch
                 versions and use version history instead.
               </span>
             </div>

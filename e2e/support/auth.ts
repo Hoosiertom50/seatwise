@@ -81,8 +81,8 @@ export async function signUpFreshAccount(
   const token = uniqueToken(workerIndex);
   const name = `Playwright Tester ${token}`;
   // `.invalid` is the IANA-reserved TLD guaranteed to never resolve or deliver (RFC 2606) — the
-  // right choice here since signup itself never sends a verification email and this address must
-  // never accidentally reach a real inbox.
+  // right choice here: sign-up sends a confirmation email (TS-164), and this address must never
+  // reach a real inbox.
   const email = `pw-tester-${token}${TEST_ACCOUNT_EMAIL_DOMAIN}`;
   const password = generateEphemeralPassword();
 

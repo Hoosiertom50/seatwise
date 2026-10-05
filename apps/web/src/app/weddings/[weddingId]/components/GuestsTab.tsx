@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ConfirmDeleteButton } from "@/components/ConfirmDeleteButton";
 import { api, ApiError, apiErrorMessage } from "@/lib/api-client";
 import type {
@@ -376,7 +376,10 @@ export function GuestsTab({
   // row changed meanwhile), and two quick edits to one guest sent the same revision, so the second
   // got a false "edited elsewhere" and was dropped.
   const guestsNow = useRef(guests);
-  guestsNow.current = guests;
+  // TS-176: kept current after each render (not during it); the save handlers read it later.
+  useEffect(() => {
+    guestsNow.current = guests;
+  }, [guests]);
   const confirmedRevision = useRef(new Map<string, number>());
   const saveChain = useRef(new Map<string, Promise<unknown>>());
 
@@ -619,7 +622,7 @@ export function GuestsTab({
     <div>
       {!canEdit && (
         <p className="mb-4 rounded-md bg-neutral-100 dark:bg-neutral-800 px-3 py-2 text-sm text-neutral-600 dark:text-neutral-300">
-          You have view-only access to this wedding's guest list — adding, importing, and editing
+          You have view-only access to this wedding&apos;s guest list — adding, importing, and editing
           guests is turned off.
         </p>
       )}

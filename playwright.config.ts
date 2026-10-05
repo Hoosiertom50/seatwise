@@ -58,8 +58,9 @@ export default defineConfig({
   globalSetup: "./e2e/support/globalSetup.ts",
 
   // TS-102: run-level cleanup backstop for test-created weddings the per-test cleanup missed.
-  // Dry-run unless PW_TEARDOWN_SWEEP=confirm, and it only ever matches names carrying
-  // TEST_DATA_MARKER -- see e2e/support/globalTeardown.ts for the full safety model.
+  // TS-176: it deletes by default; PW_TEARDOWN_SWEEP=dry-run only reports what it would delete
+  // (this comment used to say the reverse). It only ever matches names carrying TEST_DATA_MARKER,
+  // and only in a local database -- see e2e/support/globalTeardown.ts for the full safety model.
   globalTeardown: "./e2e/support/globalTeardown.ts",
 
   reporter: [

@@ -25,7 +25,7 @@ defineQualityTest(
     objective:
       "Confirms that pressing the browser's Back button on a wedding with a half-typed guest shows the unsaved-changes prompt, Stay keeps the page and the text, and Leave without saving goes back to the dashboard; that clicking Move to review while a (delayed) move is still saving moves the plan to review with no error; that an RSVP sent as Declined after clearing the party-size box succeeds; and that Export guest list (CSV) starts a download and leaves the page where it is.",
     expectedOutcome:
-      "The prompt appears on Back; after Stay the URL is the wedding's and the first-name box reads 'Half-typed'; after Leave the URL is /dashboard. The plan shows 'Move back to draft' and no error, and the guest is at the new table. The RSVP page shows its success banner. A download named for the guest list starts and the URL is unchanged.",
+      "The prompt appears on Back; after Stay the URL is the wedding's and the first-name box reads 'Half-typed'; after Leave the URL is /dashboard. The plan shows 'Move back to draft' and no error, and the guest is at the new table. The RSVP page shows its success banner. A download named for the guest list starts, no unsaved-changes prompt appears, the URL is unchanged and the half-typed first name is still there.",
     requirementIds: ["REQ-NON-FUNCTIONAL"],
     tags: ["@mutating", "@feature:guests", "@feature:seating-plan", "@feature:rsvp", "@risk:normal", "@suite:regression"],
   },
@@ -86,9 +86,14 @@ defineQualityTest(
     await test.step("Export guest list (CSV) downloads and stays on the page", async () => {
       const guests = new WeddingGuestsPage(page);
       await guests.goto(w);
+      // TS-176: with something half-typed -- leaving the page would ask first and lose it, so this
+      // fails if the export ever navigates away (the download alone passed either way).
+      await guests.typeNewGuestFirstName("Still here");
       const [download] = await Promise.all([page.waitForEvent("download"), guests.exportCsvLink().click()]);
       expect(download.suggestedFilename()).toMatch(/\.csv$/);
+      await expect(new WeddingDetailPage(page).unsavedChangesPrompt()).toHaveCount(0);
       await expect(page).toHaveURL(new RegExp(`/weddings/${w}$`));
+      expect(await guests.newGuestFirstName()).toBe("Still here");
     });
   },
 );

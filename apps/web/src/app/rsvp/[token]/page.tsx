@@ -64,6 +64,7 @@ export default function GuestRsvpPage() {
   }
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- TS-176: loads the guest's RSVP when the page opens.
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
