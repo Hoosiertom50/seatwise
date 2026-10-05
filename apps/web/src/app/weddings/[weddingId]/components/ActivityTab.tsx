@@ -10,6 +10,7 @@ const ACTION_LABELS: Record<string, string> = {
   STATUS_CHANGE: "Status change",
   ATTENDANCE_CHANGE: "Attendance",
   RESTORE: "Restored",
+  SEATING_RECHECK: "Seating re-check",
 };
 
 // FR-10.1: a single chronological log across every plan version of this wedding — who did what,

@@ -1,6 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createGuestSchema } from "@seatwise/shared";
-import { createGuest, listGuestsByWedding, getCurrentPlanVersionStatus, notifyWeddingCollaborators } from "@seatwise/db";
+import {
+  createGuest,
+  listGuestsByWedding,
+  getCurrentPlanVersionStatus,
+  notifyWeddingCollaborators,
+  refreshPlanAfterGuestAdded,
+} from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
 import { errorResponse, zodErrorResponse } from "@/lib/api-response";
 import { requireAccess } from "@/lib/access";
@@ -35,6 +41,10 @@ export async function POST(req: NextRequest, { params }: Params) {
   if (!parsed.success) return zodErrorResponse(parsed.error);
 
   const guest = await createGuest(weddingId, parsed.data);
+  // TS-165: a new attending guest makes the current plan incomplete until they're seated.
+  if (guest.dayOfAttendance === "ATTENDING") {
+    await refreshPlanAfterGuestAdded(weddingId, `${guest.firstName} ${guest.lastName}`, user.id);
+  }
 
   // FR-10.2: guest addition is only notification-worthy post-approval.
   const status = await getCurrentPlanVersionStatus(weddingId);

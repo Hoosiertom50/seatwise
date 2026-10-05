@@ -1,7 +1,14 @@
 import { randomUUID } from "crypto";
 import { pool } from "../pool";
 import { notifyWeddingCollaborators } from "./notifications";
-import { resyncSeatsAtTable, refreshPlanCompleteness } from "./seat-checks";
+import {
+  resyncSeatsAtTable,
+  refreshPlanCompleteness,
+  resyncTables,
+  tablesAffectedBy,
+  recordRecheckIfApproved,
+  currentPlanVersionId as currentPlanVersionIdFor,
+} from "./seat-checks";
 import { RULE_WEIGHT_CONFIG, RULE_WEIGHT_CONFIG_VERSION, compareTableLabels } from "@seatwise/shared";
 
 // TS-3 (FR-0.2 AC2): a soft-rule warning must name "the applied weighting-configuration version"
@@ -81,14 +88,19 @@ async function checkPlanVersionRevision(
   client: { query: (text: string, params?: unknown[]) => Promise<{ rows: Record<string, unknown>[] }> },
   planVersionId: string,
   weddingId: string,
-  expectedRevision: number | undefined
+  expectedRevision: number | undefined,
+  /** TS-165: for seat edits -- the error to throw if this version is no longer the current one. */
+  superseded?: () => Error
 ): Promise<void> {
   const { rows } = await client.query(
     // TS-148: scoped to the wedding, so another wedding's version is never locked or compared.
-    `SELECT revision FROM "plan_versions" WHERE id = $1 AND "weddingId" = $2 FOR UPDATE`,
+    `SELECT revision, "isCurrent" FROM "plan_versions" WHERE id = $1 AND "weddingId" = $2 FOR UPDATE`,
     [planVersionId, weddingId]
   );
   if (!rows[0]) throw new PlanVersionNotFoundError();
+  // TS-165: checked again under the lock -- a Generate committing between the caller's own check
+  // and here would otherwise let an edit land on a version that was just replaced.
+  if (superseded && !rows[0].isCurrent) throw superseded();
   const currentRevision = rows[0].revision as number;
   if (expectedRevision !== undefined && currentRevision !== expectedRevision) {
     const fresh = await getPlanVersionDetail(planVersionId, weddingId);
@@ -254,6 +266,29 @@ export async function getLatestAssignmentsForWedding(
   return new Map(rows.map((r) => [r.guestId, r.tableId]));
 }
 
+// TS-165: a new attending guest has no seat yet, so the plan is no longer complete. Nothing
+// recounted that on add, so a plan could be approved with the new guest unseated (and an approved
+// plan kept saying it was complete). Recounts, and on an approved plan records it in the plan's
+// history so it shows "Modified since approval".
+export async function refreshPlanAfterGuestAdded(weddingId: string, guestName: string, actorUserId: string): Promise<void> {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const planVersionId = await currentPlanVersionIdFor(client, weddingId);
+    if (planVersionId) {
+      await client.query(`SELECT 1 FROM "plan_versions" WHERE id = $1 FOR UPDATE`, [planVersionId]);
+      await refreshPlanCompleteness(client, weddingId, planVersionId, { bumpRevision: false });
+      await recordRecheckIfApproved(client, planVersionId, `${guestName} was added to the guest list — not seated yet`, actorUserId);
+    }
+    await client.query("COMMIT");
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
 // FR-2.9 ("removing the guest" trigger): recomputes the Current Plan Version's isComplete using
 // the same combined unassigned+needsReassignment formula every other write path uses. A guest
 // delete cascades away their seat_assignments row at the DB level (no invalid assignment can be
@@ -354,13 +389,19 @@ export async function setPlanVersionStatus(
   try {
     await client.query("BEGIN");
     const { rows } = await client.query(
-      `SELECT status, "isComplete", revision FROM "plan_versions" WHERE id = $1 AND "weddingId" = $2 FOR UPDATE`,
+      `SELECT status, "isComplete", revision, "isCurrent" FROM "plan_versions" WHERE id = $1 AND "weddingId" = $2 FOR UPDATE`,
       [id, weddingId]
     );
     const current = rows[0];
     if (!current) {
       await client.query("ROLLBACK");
       return null;
+    }
+    // TS-165: re-checked under the lock (a Generate could have replaced this version a moment ago).
+    if (!current.isCurrent) {
+      throw new PlanVersionStatusError(
+        "Only the current plan version's status can be changed — this one has been superseded."
+      );
     }
     if (expectedRevision !== undefined && current.revision !== expectedRevision) {
       await client.query("ROLLBACK");
@@ -371,6 +412,13 @@ export async function setPlanVersionStatus(
       );
     }
 
+    // TS-165: approval counts unseated and flagged guests now, under the lock, rather than trusting
+    // the stored flag -- a guest added since the last recount used to slip through unseated.
+    if (newStatus === "APPROVED") {
+      await refreshPlanCompleteness(client, weddingId, id, { bumpRevision: false });
+      const { rows: recount } = await client.query(`SELECT "isComplete" FROM "plan_versions" WHERE id = $1`, [id]);
+      current.isComplete = recount[0].isComplete;
+    }
     if (newStatus === "APPROVED" && !current.isComplete) {
       throw new PlanVersionStatusError(
         "This plan can't be approved yet — some guests are unassigned. Fix that first."
@@ -551,7 +599,7 @@ export async function moveGuestAssignment(
     `SELECT rtg."guestId", rtg."tableId", t.label AS "tableLabel"
      FROM "restricted_table_guests" rtg
      JOIN "seating_tables" t ON t.id = rtg."tableId"
-     WHERE t."weddingId" = $1`,
+     WHERE t."weddingId" = $1 AND t."isRestricted"`,
     [weddingId]
   );
   const requiredTableByGuestId = new Map<string, { tableId: string; tableLabel: string }>(
@@ -706,7 +754,10 @@ export async function moveGuestAssignment(
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    await checkPlanVersionRevision(client, planVersionId, weddingId, expectedRevision);
+    await checkPlanVersionRevision(client, planVersionId, weddingId, expectedRevision, () => new ManualMoveError("Only the current plan version can be manually edited — this one has been superseded."));
+    // TS-165: the tables this move can affect, as things stand before it.
+    const unitIds = unit.map((member) => member.id);
+    const affectedBefore = await tablesAffectedBy(client, weddingId, planVersionId, unitIds);
     for (const member of unit) {
       await client.query(
         `INSERT INTO "seat_assignments" (id, "planVersionId", "guestId", "seatingTableId", "needsReassignment", "updatedAt")
@@ -719,7 +770,10 @@ export async function moveGuestAssignment(
     // TS-153: the move's checks ran before this transaction, so two moves at once (or one sent
     // without expectedRevision) could both see room at the table. Re-checking it here, as it now
     // stands, flags anyone who doesn't fit instead of letting the table go over capacity.
-    await resyncSeatsAtTable(client, weddingId, planVersionId, targetTableId);
+    // TS-165: and the table they left, and their rule partners' tables -- so a flag that no longer
+    // applies there (a must-not-sit-together pair now apart, a seat now free) is cleared.
+    const affectedAfter = await tablesAffectedBy(client, weddingId, planVersionId, unitIds);
+    await resyncTables(client, weddingId, planVersionId, [targetTableId, ...affectedBefore, ...affectedAfter]);
 
     const { rows: unassignedCountRows } = await client.query(
       `SELECT
@@ -841,13 +895,16 @@ export async function unassignGuestFromPlan(
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    await checkPlanVersionRevision(client, planVersionId, weddingId, expectedRevision);
+    await checkPlanVersionRevision(client, planVersionId, weddingId, expectedRevision, () => new ManualMoveError("Only the current plan version can be manually edited — this one has been superseded."));
+    // TS-165: re-check the table(s) they leave, and their rule partners' tables.
+    const affected = await tablesAffectedBy(client, weddingId, planVersionId, unit.map((member) => member.id));
     for (const member of unit) {
       await client.query(
         `DELETE FROM "seat_assignments" WHERE "planVersionId" = $1 AND "guestId" = $2`,
         [planVersionId, member.id]
       );
     }
+    await resyncTables(client, weddingId, planVersionId, affected);
 
     const { rows: unassignedCountRows } = await client.query(
       `SELECT
@@ -933,17 +990,23 @@ export async function setGuestAttendance(
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
+    // TS-165: bumps the guest's revision too, so a planner editing this guest from an older copy
+    // gets a conflict instead of overwriting the attendance change.
     await client.query(
-      `UPDATE "guests" SET "dayOfAttendance" = $1::"DayOfAttendance", "updatedAt" = now() WHERE id = $2`,
+      `UPDATE "guests" SET "dayOfAttendance" = $1::"DayOfAttendance", revision = revision + 1, "updatedAt" = now() WHERE id = $2`,
       [attendance, guestId]
     );
 
     if (currentPlanVersionId) {
       if (attendance === "NOT_ATTENDING") {
+        // TS-165: the freed seat can make room for someone flagged at that table, and a rule
+        // partner's flag may no longer apply -- re-check those tables.
+        const affected = await tablesAffectedBy(client, weddingId, currentPlanVersionId, [guestId]);
         await client.query(
           `DELETE FROM "seat_assignments" WHERE "planVersionId" = $1 AND "guestId" = $2`,
           [currentPlanVersionId, guestId]
         );
+        await resyncTables(client, weddingId, currentPlanVersionId, affected);
       }
       // Recompute completeness against the new attendance-filtered denominator — a guest who
       // just became NOT_ATTENDING can no longer make the plan "incomplete" by being unseated,
@@ -963,7 +1026,8 @@ export async function setGuestAttendance(
       );
       const isComplete =
         unassignedCountRows[0].count === 0 && unassignedCountRows[0].needsReassignmentCount === 0;
-      await client.query(`UPDATE "plan_versions" SET "isComplete" = $1 WHERE id = $2`, [
+      // TS-165: every other seat change bumps the plan's revision; this one now does too.
+      await client.query(`UPDATE "plan_versions" SET "isComplete" = $1, revision = revision + 1 WHERE id = $2`, [
         isComplete,
         currentPlanVersionId,
       ]);
@@ -1085,14 +1149,16 @@ export async function swapGuestAssignments(
 
   // Both units must currently be fully and consistently seated — each entirely at one table —
   // for "swap" to be a well-defined operation.
-  const unitATables = new Set(unitA.map((g) => tableByGuest.get(g.id)).filter(Boolean));
-  const unitBTables = new Set(unitB.map((g) => tableByGuest.get(g.id)).filter(Boolean));
-  if (unitATables.size !== 1) {
+  // TS-165: every member must have a seat -- dropping unseated ones let a half-seated group through,
+  // and its capacity check then counted people who weren't at the table.
+  const unitATables = new Set(unitA.map((g) => tableByGuest.get(g.id)));
+  const unitBTables = new Set(unitB.map((g) => tableByGuest.get(g.id)));
+  if (unitATables.size !== 1 || unitATables.has(undefined)) {
     throw new SwapError(
       `${guestA.name}'s group isn't fully seated at one table yet — seat them first before swapping.`
     );
   }
-  if (unitBTables.size !== 1) {
+  if (unitBTables.size !== 1 || unitBTables.has(undefined)) {
     throw new SwapError(
       `${guestB.name}'s group isn't fully seated at one table yet — seat them first before swapping.`
     );
@@ -1250,7 +1316,7 @@ export async function swapGuestAssignments(
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    await checkPlanVersionRevision(client, planVersionId, weddingId, expectedRevision);
+    await checkPlanVersionRevision(client, planVersionId, weddingId, expectedRevision, () => new SwapError("Only the current plan version can be manually edited — this one has been superseded."));
     for (const member of unitB) {
       await client.query(
         `UPDATE "seat_assignments" SET "seatingTableId" = $1, "needsReassignment" = false, "updatedAt" = now()
@@ -1269,8 +1335,9 @@ export async function swapGuestAssignments(
     // TS-150: re-check both tables as they now stand and recompute completeness -- a swap that
     // seats the last flagged guests makes the plan complete (so it can be approved), and anything
     // the swap breaks is flagged rather than hidden.
-    await resyncSeatsAtTable(client, weddingId, planVersionId, tableAId);
-    await resyncSeatsAtTable(client, weddingId, planVersionId, tableBId);
+    // TS-165: plus the tables the two groups' rule partners sit at.
+    const partnersTables = await tablesAffectedBy(client, weddingId, planVersionId, [...unitAIds, ...unitBIds]);
+    await resyncTables(client, weddingId, planVersionId, [tableAId, tableBId, ...partnersTables]);
     await refreshPlanCompleteness(client, weddingId, planVersionId, { bumpRevision: true });
 
     const description =
@@ -1347,7 +1414,7 @@ async function computeRestorePlacement(sourceVersionId: string, weddingId: strin
   // belongs at that table and no other.
   const { rows: requiredRows } = await pool.query(
     `SELECT rtg."tableId", rtg."guestId" FROM "restricted_table_guests" rtg
-     JOIN "seating_tables" st ON st.id = rtg."tableId" WHERE st."weddingId" = $1`,
+     JOIN "seating_tables" st ON st.id = rtg."tableId" WHERE st."weddingId" = $1 AND st."isRestricted"`,
     [weddingId]
   );
   const requiredTableByGuest = new Map(requiredRows.map((r) => [r.guestId as string, r.tableId as string]));

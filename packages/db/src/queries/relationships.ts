@@ -43,37 +43,56 @@ export async function createRelationship(
   }
   const [guestAId, guestBId] = normalizePair(input.guestAId, input.guestBId);
 
-  // FR-0.1: a hard rule can never be left violated. Two guests can't simultaneously be
-  // required to sit together and forbidden from sitting together — block that outright.
-  const opposite = OPPOSITE_HARD_TYPE[input.type];
-  if (opposite) {
-    const { rows: conflicting } = await pool.query(
+  // TS-165: the checks and the insert run as one, with the pair locked -- two requests at once
+  // (say "must sit together" and "must not sit together") used to both pass the checks, leaving
+  // contradictory hard rules that made every Generate fail.
+  const id = randomUUID();
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [`relationship:${weddingId}:${guestAId}:${guestBId}`]);
+
+    // FR-0.1: a hard rule can never be left violated. Two guests can't simultaneously be
+    // required to sit together and forbidden from sitting together — block that outright.
+    const opposite = OPPOSITE_HARD_TYPE[input.type];
+    if (opposite) {
+      const { rows: conflicting } = await client.query(
+        `SELECT id FROM "guest_relationships"
+         WHERE "weddingId" = $1 AND "guestAId" = $2 AND "guestBId" = $3 AND type = $4`,
+        [weddingId, guestAId, guestBId, opposite]
+      );
+      if (conflicting.length > 0) {
+        throw new RelationshipConflictError(
+          `These two guests already have a conflicting rule (${opposite.replace(/_/g, " ").toLowerCase()}). Remove that one first.`
+        );
+      }
+    }
+
+    const { rows: exact } = await client.query(
       `SELECT id FROM "guest_relationships"
        WHERE "weddingId" = $1 AND "guestAId" = $2 AND "guestBId" = $3 AND type = $4`,
-      [weddingId, guestAId, guestBId, opposite]
+      [weddingId, guestAId, guestBId, input.type]
     );
-    if (conflicting.length > 0) {
-      throw new RelationshipConflictError(
-        `These two guests already have a conflicting rule (${opposite.replace(/_/g, " ").toLowerCase()}). Remove that one first.`
-      );
+    if (exact.length > 0) {
+      throw new RelationshipConflictError("That rule already exists for these two guests.");
     }
-  }
 
-  const { rows: exact } = await pool.query(
-    `SELECT id FROM "guest_relationships"
-     WHERE "weddingId" = $1 AND "guestAId" = $2 AND "guestBId" = $3 AND type = $4`,
-    [weddingId, guestAId, guestBId, input.type]
-  );
-  if (exact.length > 0) {
-    throw new RelationshipConflictError("That rule already exists for these two guests.");
+    await client.query(
+      `INSERT INTO "guest_relationships" (id, "weddingId", "guestAId", "guestBId", type)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [id, weddingId, guestAId, guestBId, input.type]
+    );
+    await client.query("COMMIT");
+  } catch (err) {
+    await client.query("ROLLBACK");
+    // The database's own one-of-each-rule check, if a duplicate slipped in some other way.
+    if ((err as { code?: string }).code === "23505") {
+      throw new RelationshipConflictError("That rule already exists for these two guests.");
+    }
+    throw err;
+  } finally {
+    client.release();
   }
-
-  const id = randomUUID();
-  await pool.query(
-    `INSERT INTO "guest_relationships" (id, "weddingId", "guestAId", "guestBId", type)
-     VALUES ($1, $2, $3, $4, $5)`,
-    [id, weddingId, guestAId, guestBId, input.type]
-  );
 
   const created = await getRelationshipById(id, weddingId);
   if (!created) throw new Error("Failed to load relationship after creating it");

@@ -1,7 +1,7 @@
 import { randomUUID } from "crypto";
 import { pool } from "../pool";
 import { encryptText } from "../crypto";
-import { resyncSeatsAtTable } from "./seat-checks";
+import { resyncSeatsAtTable, tablesAffectedBy } from "./seat-checks";
 import {
   parseCsv,
   guestTierEnum,
@@ -315,6 +315,8 @@ export async function commitGuestImport(
     const reassignmentWarnings: string[] = [];
     // TS-150: seated guests whose table needs re-checking once every row is written.
     const recheckGuestIds = new Set<string>();
+    // TS-165: tables left by guests marked Not Attending in this import.
+    const recheckTableIds = new Set<string>();
     let planFlagsChanged = false;
 
     for (const row of preview.rows) {
@@ -409,6 +411,8 @@ export async function commitGuestImport(
         // otherwise, if any of the other named trigger fields changed, re-check this guest's
         // current assignment (if they have one) against hard rules.
         if (p.dayOfAttendance === "NOT_ATTENDING" && planVersionId) {
+          // TS-165: the table they leave (and their rule partners' tables) is re-checked below.
+          for (const t of await tablesAffectedBy(client, weddingId, planVersionId, [row.guestId])) recheckTableIds.add(t);
           await client.query(
             `DELETE FROM "seat_assignments" WHERE "planVersionId" = $1 AND "guestId" = $2`,
             [planVersionId, row.guestId]
@@ -429,13 +433,14 @@ export async function commitGuestImport(
 
     // TS-150: re-check every table an updated guest sits at -- rules *and* room -- inside this
     // same transaction, so a capacity flag is never cleared by mistake and a bigger party is caught.
-    if (planVersionId && recheckGuestIds.size > 0) {
+    if (planVersionId && (recheckGuestIds.size > 0 || recheckTableIds.size > 0)) {
       const { rows: tableRows } = await client.query(
         `SELECT DISTINCT "seatingTableId" AS "tableId" FROM "seat_assignments"
          WHERE "planVersionId" = $1 AND "guestId" = ANY($2::text[]) ORDER BY 1`,
         [planVersionId, [...recheckGuestIds]]
       );
-      for (const { tableId } of tableRows as { tableId: string }[]) {
+      const tableIds = [...new Set([...(tableRows as { tableId: string }[]).map((r) => r.tableId), ...recheckTableIds])].sort();
+      for (const tableId of tableIds) {
         const { newlyFlagged, changed } = await resyncSeatsAtTable(client, weddingId, planVersionId, tableId);
         if (changed) planFlagsChanged = true;
         for (const f of newlyFlagged) {
