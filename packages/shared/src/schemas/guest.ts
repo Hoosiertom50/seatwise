@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { PERSON_NAME_PATTERN, PERSON_NAME_MESSAGE } from "../validation";
+import { PERSON_NAME_PATTERN, PERSON_NAME_MESSAGE, looksLikeWebAddress, NO_WEB_ADDRESS_MESSAGE } from "../validation";
 
 export const guestTierEnum = z.enum(["VIP", "FAMILY", "FRIEND", "PLUS_ONE", "OTHER"]);
 export type GuestTier = z.infer<typeof guestTierEnum>;
@@ -45,13 +45,17 @@ export const createGuestSchema = z.object({
     .trim()
     .min(1, "First name is required")
     .max(100)
-    .regex(PERSON_NAME_PATTERN, PERSON_NAME_MESSAGE),
+    .regex(PERSON_NAME_PATTERN, PERSON_NAME_MESSAGE)
+    // TS-163: a guest's name goes into their RSVP email, so -- like a planner's name (TS-156) -- it
+    // can't read as a web address that the email app would turn into a link.
+    .refine((v) => !looksLikeWebAddress(v), NO_WEB_ADDRESS_MESSAGE),
   lastName: z
     .string()
     .trim()
     .min(1, "Last name is required")
     .max(100)
-    .regex(PERSON_NAME_PATTERN, PERSON_NAME_MESSAGE),
+    .regex(PERSON_NAME_PATTERN, PERSON_NAME_MESSAGE)
+    .refine((v) => !looksLikeWebAddress(v), NO_WEB_ADDRESS_MESSAGE),
   partyName: z.string().max(200).optional().nullable(),
   headcount: z.number().int().min(1).max(20).default(1),
   tier: guestTierEnum.default("OTHER"),

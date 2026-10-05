@@ -1,12 +1,34 @@
 // TS-132: unit tests for how Seatwise picks an email service and reports what happened
 // (packages/db/src/email.ts). Run with `pnpm --filter @seatwise/web test`. The real SMTP/Resend
 // sender is swapped for a fake, so nothing here ever sends an email.
-import { test, afterEach } from "node:test";
+import { test, afterEach, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 
-const { resolveEmailTransport, sendEmail, emailDelivered, setEmailSenderForTests, redactLinkTokens } = await import("@seatwise/db");
+const {
+  resolveEmailTransport,
+  sendEmail,
+  emailDelivered,
+  setEmailSenderForTests,
+  redactLinkTokens,
+  setDailyEmailCounterForTests,
+  dailyEmailLimits,
+} = await import("@seatwise/db");
 
-afterEach(() => setEmailSenderForTests());
+// TS-163: the daily email ceiling's counter lives in the database; here it's an in-memory one.
+let sentToday = 0;
+beforeEach(() => {
+  sentToday = 0;
+  setDailyEmailCounterForTests({
+    hit: async () => ++sentToday,
+    undo: async () => {
+      sentToday--;
+    },
+  });
+});
+afterEach(() => {
+  setEmailSenderForTests();
+  setDailyEmailCounterForTests();
+});
 
 test("Gmail is used when SMTP_USER and SMTP_PASSWORD are set, with Gmail's host, TLS port and the account as sender", () => {
   const config = resolveEmailTransport({ NODE_ENV: "production", SMTP_USER: "seatwise.notifications@gmail.com", SMTP_PASSWORD: "app-pass" });
@@ -114,4 +136,35 @@ test("links' secret parts are hidden in logged emails from a production build, k
   }
   assert.equal(logged[0].includes(token), false);
   assert.equal(logged[1].includes(token), true);
+});
+
+// TS-163: one Gmail account sends everything; Gmail suspends accounts that go over its daily limit.
+const GMAIL = { NODE_ENV: "production", SMTP_USER: "seatwise.notifications@gmail.com", SMTP_PASSWORD: "app-pass" };
+
+test("the daily ceiling defaults to 400 everyday emails, with 80 more kept for password resets", () => {
+  assert.deepEqual(dailyEmailLimits({}), { everyday: 400, essential: 480 });
+  assert.deepEqual(dailyEmailLimits({ EMAIL_DAILY_LIMIT: "100" }), { everyday: 100, essential: 180 });
+  assert.deepEqual(dailyEmailLimits({ EMAIL_DAILY_LIMIT: "nonsense" }), { everyday: 400, essential: 480 });
+});
+
+test("over the daily ceiling, everyday emails aren't sent (and don't use up the reset headroom); resets still go", async () => {
+  const sent: string[] = [];
+  setEmailSenderForTests(async (_config, message) => {
+    sent.push(message.to);
+  });
+  const env = { ...GMAIL, EMAIL_DAILY_LIMIT: "2" };
+  assert.equal(await sendEmail("a@example.invalid", "s", "t", env), "sent");
+  assert.equal(await sendEmail("b@example.invalid", "s", "t", env), "sent");
+  assert.equal(await sendEmail("c@example.invalid", "s", "t", env), "limited");
+  assert.equal(await sendEmail("d@example.invalid", "s", "t", env), "limited");
+  assert.equal(sentToday, 2, "refused emails are taken back off the count");
+  assert.equal(emailDelivered("limited"), false);
+  // A password reset still goes out, up to the extra headroom.
+  assert.equal(await sendEmail("me@example.invalid", "Reset", "t", env, { essential: true }), "sent");
+  assert.deepEqual(sent, ["a@example.invalid", "b@example.invalid", "me@example.invalid"]);
+});
+
+test("the log transport used locally and in CI never counts against the ceiling", async () => {
+  assert.equal(await sendEmail("a@example.invalid", "s", "t", { EMAIL_TRANSPORT: "log", NODE_ENV: "production", EMAIL_DAILY_LIMIT: "1" }), "logged");
+  assert.equal(sentToday, 0);
 });

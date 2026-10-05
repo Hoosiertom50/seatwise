@@ -173,3 +173,17 @@ export async function plantPreHashingRsvpLink(guestId: string): Promise<string> 
   if (!rowCount) throw new Error(`testDatabase: no guest ${guestId} on a test wedding.`);
   return token;
 }
+
+/**
+ * TS-163: how many times a test guest's responses have asked to email the planners this hour. Only
+ * the first in the hour is emailed (the key's limit is 1), so 3 means one email and two skipped.
+ */
+export async function rsvpNotificationEmailRequests(guestId: string): Promise<number> {
+  await storedGuestRsvpLink(guestId); // throws unless the guest is on a test wedding
+  const { rows } = await testPool().query<{ n: number }>(
+    `SELECT COALESCE(SUM(count), 0)::int AS n FROM "rate_limit_counters"
+     WHERE key = $1 AND "windowStart" > now() - interval '1 hour'`,
+    [`email:rsvp-notify:${guestId}`],
+  );
+  return rows[0].n;
+}

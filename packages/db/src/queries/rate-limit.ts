@@ -34,6 +34,20 @@ export async function hitRateLimit(key: string, limit: number, windowSeconds: nu
   };
 }
 
+// TS-163: counts one hit against `key` in the current window and returns the new count -- for a
+// limit with more than one threshold (the daily email ceiling, with headroom for password resets).
+export async function hitRateLimitCount(key: string, windowSeconds: number): Promise<number> {
+  const windowMs = windowSeconds * 1000;
+  const windowStart = new Date(Math.floor(Date.now() / windowMs) * windowMs);
+  const { rows } = await pool.query<{ count: number }>(
+    `INSERT INTO "rate_limit_counters" (key, "windowStart", count) VALUES ($1, $2, 1)
+     ON CONFLICT (key, "windowStart") DO UPDATE SET count = "rate_limit_counters".count + 1
+     RETURNING count`,
+    [key, windowStart]
+  );
+  return rows[0].count;
+}
+
 // TS-113: how many hits `key` already has in the current window, without adding one -- for limits
 // that only count failures (a failed sign-in), so the check happens before the attempt and the
 // count only goes up if it fails.

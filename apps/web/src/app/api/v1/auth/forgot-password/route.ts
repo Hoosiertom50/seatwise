@@ -29,7 +29,10 @@ export async function POST(req: NextRequest) {
   const result = await sendEmail(
     user.email,
     "Reset your Seatwise password",
-    `Hi ${user.name},\n\nSomeone (hopefully you) asked to reset your Seatwise password. Choose a new one here:\n\n${appUrl}/reset-password/${token}\n\nThis link works once, for ${PASSWORD_RESET_TTL_MINUTES} minutes. If you didn't ask for this, you can ignore this email -- your password hasn't changed.`
+    `Hi ${user.name},\n\nSomeone (hopefully you) asked to reset your Seatwise password. Choose a new one here:\n\n${appUrl}/reset-password/${token}\n\nThis link works once, for ${PASSWORD_RESET_TTL_MINUTES} minutes. If you didn't ask for this, you can ignore this email -- your password hasn't changed.`,
+    process.env,
+    // TS-163: password resets still go out when the day's everyday email limit is reached.
+    { essential: true }
   );
   // TS-153: older links are cancelled only once this one has gone out.
   if (emailDelivered(result)) await retireOlderResetTokens(user.id, token);

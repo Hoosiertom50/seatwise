@@ -1,5 +1,6 @@
 import { ensureGuestRsvpToken, regenerateGuestRsvpToken, sendEmailNotification, emailDelivered } from "@seatwise/db";
 import { reserveEmailSend } from "./rate-limit";
+import { emailSafePersonName, emailSafeWeddingName } from "./email-safe-names";
 
 // TS-17 / TS-143: email a guest their own RSVP link. Shared by the "RSVP link" button and by
 // adding a guest with an email (or giving an existing guest their first email), so the message is
@@ -26,10 +27,13 @@ export async function sendGuestRsvpLink(
   }
 
   const cutoffNote = wedding.rsvpCutoffDate ? ` Please respond by ${wedding.rsvpCutoffDate}.` : "";
+  // TS-163: names saved before today's rules only go into the email if they still pass them.
+  const firstName = emailSafePersonName(guest.firstName);
+  const weddingName = emailSafeWeddingName(wedding.name);
   const result = await sendEmailNotification(
     guest.email,
-    `RSVP for ${wedding.name}`,
-    `Hi ${guest.firstName},\n\nPlease RSVP for "${wedding.name}" here: ${url}\n\nIf you've already responded, this same link shows what you submitted and lets you update it.${cutoffNote}`
+    weddingName ? `RSVP for ${weddingName}` : "Please RSVP",
+    `${firstName ? `Hi ${firstName}` : "Hi"},\n\nPlease RSVP${weddingName ? ` for "${weddingName}"` : ""} here: ${url}\n\nIf you've already responded, this same link shows what you submitted and lets you update it.${cutoffNote}`
   );
   const emailed = emailDelivered(result);
   return { url, emailed, emailFailed: !emailed };
