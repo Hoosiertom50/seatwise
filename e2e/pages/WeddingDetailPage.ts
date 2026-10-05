@@ -121,4 +121,19 @@ export class WeddingDetailPage extends BasePage {
     await this.page.getByRole("button", { name: label, exact: true }).click();
     await this.page.waitForLoadState("networkidle");
   }
+
+  /** TS-159: clicks a tab without waiting for it to open (it may be held by the unsaved-changes prompt). */
+  async clickTab(label: string): Promise<void> {
+    await this.page.getByRole("button", { name: label, exact: true }).click();
+  }
+  /** TS-159: the "you have unsaved changes on this tab" prompt. */
+  unsavedChangesPrompt() {
+    return this.page.getByRole("alertdialog").filter({ hasText: "You have unsaved changes on this tab" });
+  }
+  async stayOnTab(): Promise<void> {
+    await this.unsavedChangesPrompt().getByRole("button", { name: "Stay on this tab", exact: true }).click();
+  }
+  async leaveTabWithoutSaving(): Promise<void> {
+    await this.unsavedChangesPrompt().getByRole("button", { name: "Leave without saving", exact: true }).click();
+  }
 }

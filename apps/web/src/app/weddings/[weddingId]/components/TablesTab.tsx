@@ -14,6 +14,7 @@ import type {
   WeddingDTO,
 } from "@seatwise/shared";
 import { compareTableLabels, GUEST_TIER_LABELS, type GuestTier } from "@seatwise/shared";
+import { useUnsavedChanges } from "@/lib/unsaved-changes";
 
 const SHAPES: TableShape[] = ["ROUND", "RECTANGULAR", "SQUARE", "OVAL", "OTHER"];
 
@@ -152,6 +153,8 @@ export function TablesTab({
   const [templateName, setTemplateName] = useState("");
   const [savingTemplate, setSavingTemplate] = useState(false);
   const [savedTemplate, setSavedTemplate] = useState<SeatingTemplateDTO | null>(null);
+  // TS-159: tell the page this tab has input that leaving it would lose.
+  useUnsavedChanges("tables", !!(label.trim() || purpose.trim() || templateName.trim() || editingId));
 
   // TS-91: add a saved template's tables to this existing wedding (additive -- nothing already
   // here changes). The template list loads the first time the section is opened.

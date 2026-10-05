@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState, useRef } from "react";
 import { api, ApiError } from "@/lib/api-client";
 import type { CommentDTO, GuestDTO, SeatingTableDTO, TimelineEntryDTO } from "@seatwise/shared";
+import { useUnsavedChanges } from "@/lib/unsaved-changes";
 
 // TS-13 (Collaboration & Notifications, FR-10.3): comments attached to a guest or table. A
 // dedicated tab (rather than inline per-row) keeps this tractable — pick a target, see its
@@ -36,6 +37,8 @@ export function CommentsTab({
   const [replyingTo, setReplyingTo] = useState<string | null>(null);
   // TS-151: which reply is being posted, so a double-click can't post it twice.
   const [postingReply, setPostingReply] = useState<string | null>(null);
+  // TS-159: tell the page this tab has input that leaving it would lose.
+  useUnsavedChanges("comments", !!(body.trim() || Object.values(replyBodies).some((b) => b.trim())));
   // Checked synchronously: a second click can land before React re-renders with postingReply set.
   const postingReplyNow = useRef(false);
 

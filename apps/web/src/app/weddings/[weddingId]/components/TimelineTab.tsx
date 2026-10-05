@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { ConfirmDeleteButton } from "@/components/ConfirmDeleteButton";
 import { api, ApiError, apiErrorMessage } from "@/lib/api-client";
 import type { TimelineEntryDTO } from "@seatwise/shared";
+import { useUnsavedChanges } from "@/lib/unsaved-changes";
 
 // TS-18 (Day-Of Timeline / Run-of-Show, FR-13.1/FR-13.2): a per-wedding, chronological schedule of
 // day-of events -- its own record, entirely independent of guests/tables/rules/seating plans.
@@ -21,6 +22,8 @@ export function TimelineTab({ weddingId, canEdit }: { weddingId: string; canEdit
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editTime, setEditTime] = useState("");
   const [editDescription, setEditDescription] = useState("");
+  // TS-159: tell the page this tab has input that leaving it would lose.
+  useUnsavedChanges("timeline", !!(description.trim() || editingId));
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {

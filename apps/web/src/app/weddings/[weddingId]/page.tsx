@@ -5,6 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { api, ApiError } from "@/lib/api-client";
 import { formatShortEventDate } from "@/lib/display-format";
+import { useUnsavedChangesProvider } from "@/lib/unsaved-changes";
 import { loginUrlReturningTo } from "@/lib/safe-next";
 import type { WeddingDTO, GuestDTO } from "@seatwise/shared";
 import { GuestsTab } from "./components/GuestsTab";
@@ -66,6 +67,20 @@ export default function WeddingDetailPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>("guests");
+  // TS-159: a tab change waiting on "you have unsaved changes" -- see goToTab.
+  const unsaved = useUnsavedChangesProvider();
+  const [pendingTab, setPendingTab] = useState<Tab | null>(null);
+  function goToTab(next: Tab) {
+    if (next === tab) return;
+    if (unsaved.hasUnsaved()) setPendingTab(next);
+    else setTab(next);
+  }
+  function leaveTab() {
+    if (!pendingTab) return;
+    unsaved.clear();
+    setTab(pendingTab);
+    setPendingTab(null);
+  }
   const [startCounts, setStartCounts] = useState<GettingStartedCounts | null>(null);
   // FR-1.6: "a change [to a collaborator's access] takes effect within five seconds, even for a
   // wedding already open in the user's browser." accessLevelRef lets the poll below compare
@@ -236,7 +251,7 @@ export default function WeddingDetailPage() {
           guestCount={guests.length}
           initialCounts={startCounts}
           refreshKey={tab}
-          onGoTo={setTab}
+          onGoTo={goToTab}
         />
       )}
 
@@ -244,7 +259,7 @@ export default function WeddingDetailPage() {
         {TABS.map((t) => (
           <button
             key={t.value}
-            onClick={() => setTab(t.value)}
+            onClick={() => goToTab(t.value)}
             className={`whitespace-nowrap px-4 py-2 text-sm font-medium ${
               tab === t.value
                 ? "border-b-2 border-neutral-900 dark:border-neutral-100 text-neutral-900 dark:text-neutral-100"
@@ -256,6 +271,35 @@ export default function WeddingDetailPage() {
         ))}
       </div>
 
+      {/* TS-159 */}
+      {pendingTab && (
+        <div
+          role="alertdialog"
+          aria-labelledby="unsaved-question"
+          className="mb-6 flex flex-wrap items-center gap-3 rounded-md bg-amber-50 dark:bg-amber-950 px-4 py-3 text-sm text-amber-900 dark:text-amber-200"
+        >
+          <span id="unsaved-question" className="flex-1">
+            You have unsaved changes on this tab. Leave it and lose them?
+          </span>
+          <button
+            type="button"
+            autoFocus
+            onClick={() => setPendingTab(null)}
+            className="rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800"
+          >
+            Stay on this tab
+          </button>
+          <button
+            type="button"
+            onClick={leaveTab}
+            className="rounded-md bg-red-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-red-800"
+          >
+            Leave without saving
+          </button>
+        </div>
+      )}
+
+      <unsaved.Provider value={unsaved.registry}>
       {tab === "guests" && (
         <GuestsTab
           weddingId={weddingId}
@@ -303,6 +347,7 @@ export default function WeddingDetailPage() {
           setWedding={setWedding}
         />
       )}
+      </unsaved.Provider>
     </main>
   );
 }
