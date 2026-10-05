@@ -24,6 +24,17 @@ export async function POST(req: NextRequest, { params }: Params) {
       { status: 409 }
     );
   }
+  // TS-164: an invite is for the person who owns the address -- an account that hasn't confirmed it
+  // (anyone could have signed up with it) can't accept until it has.
+  if (user.emailVerifiedAt === null && user.email.toLowerCase() === invite.email.toLowerCase()) {
+    return NextResponse.json(
+      {
+        error: `Confirm your email address to accept this invite — we sent a link to ${user.email}. Then come back to this page.`,
+        status: "EMAIL_NOT_VERIFIED",
+      },
+      { status: 403 }
+    );
+  }
   if (user.email.toLowerCase() !== invite.email.toLowerCase()) {
     return NextResponse.json(
       {

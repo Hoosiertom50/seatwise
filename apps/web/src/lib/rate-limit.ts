@@ -30,6 +30,13 @@ export const SIGNUP_LIMITS = {
   perAddressDay: { limit: 100, windowSeconds: 86_400 },
 };
 
+// TS-164: confirming an email address -- link uses per address (guessing isn't feasible; this only
+// stops abuse), and "Resend link" per account, so it can't be used to flood an inbox.
+export const EMAIL_VERIFICATION_LIMITS = {
+  confirmsPerAddress: { limit: 30, windowSeconds: 900 },
+  resendsPerAccount: { limit: 3, windowSeconds: 900 },
+};
+
 // TS-142: "forgot password" -- requests per address and per email (the per-email cap is what keeps
 // one inbox from being flooded), and attempts to use a link per address. Links are 64 random hex
 // characters, so guessing one isn't feasible; that limit only stops abuse, hence generous.

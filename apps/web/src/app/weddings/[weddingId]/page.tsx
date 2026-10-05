@@ -20,6 +20,7 @@ import { TimelineTab } from "./components/TimelineTab";
 import { BudgetTab } from "./components/BudgetTab";
 import { GettingStarted, loadGettingStartedCounts, type GettingStartedCounts } from "./components/GettingStarted";
 import { NotificationsBell } from "@/components/NotificationsBell";
+import { EmailVerificationNotice } from "@/components/EmailVerificationNotice";
 import { SaveStatusIndicator } from "@/components/SaveStatusIndicator";
 import { saveStatusStore } from "@/lib/save-status";
 
@@ -217,6 +218,11 @@ export default function WeddingDetailPage() {
           <SaveStatusIndicator />
           <NotificationsBell />
         </div>
+      </div>
+
+      {/* TS-164 */}
+      <div className="mt-4">
+        <EmailVerificationNotice />
       </div>
       {accessNotice && !accessRevoked && (
         // FR-1.6: access changed (but was not revoked entirely) while this tab was already open --

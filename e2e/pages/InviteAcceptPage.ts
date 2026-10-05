@@ -52,4 +52,9 @@ export class InviteAcceptPage extends BasePage {
   logInLink() {
     return this.page.getByRole("link", { name: "Log in", exact: true });
   }
+
+  /** TS-164: the message shown when accepting is refused (e.g. the account hasn't confirmed its email). */
+  acceptError() {
+    return this.page.locator("main p.text-red-600, main p.text-red-400");
+  }
 }

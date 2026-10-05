@@ -187,3 +187,42 @@ export async function rsvpNotificationEmailRequests(guestId: string): Promise<nu
   );
   return rows[0].n;
 }
+
+/**
+ * TS-164: marks a test account's email address as confirmed, as clicking the emailed link would.
+ * The test-account sign-up helpers do this by default (most tests aren't about confirming email);
+ * a test about confirmation signs up without it and uses plantEmailVerificationToken instead.
+ */
+export async function confirmTestAccountEmail(email: string): Promise<void> {
+  const { rowCount } = await testPool().query(
+    `UPDATE "users" SET "emailVerifiedAt" = COALESCE("emailVerifiedAt", now()) WHERE email = $1 AND email LIKE $2`,
+    [email.toLowerCase(), TEST_EMAIL_PATTERN],
+  );
+  if (!rowCount) throw new Error(`testDatabase: no test account ${email}.`);
+}
+
+/** TS-164: whether a test account has confirmed its email address. */
+export async function testAccountEmailConfirmed(email: string): Promise<boolean> {
+  const { rows } = await testPool().query<{ confirmed: boolean }>(
+    `SELECT "emailVerifiedAt" IS NOT NULL AS confirmed FROM "users" WHERE email = $1 AND email LIKE $2`,
+    [email.toLowerCase(), TEST_EMAIL_PATTERN],
+  );
+  if (!rows[0]) throw new Error(`testDatabase: no test account ${email}.`);
+  return rows[0].confirmed;
+}
+
+/**
+ * TS-164: gives a test account a confirmation link the test knows (the emailed one can't be read --
+ * only its hash is stored) and returns its token. Like plantPasswordResetToken.
+ */
+export async function plantEmailVerificationToken(email: string): Promise<string> {
+  const { createHash, randomBytes, randomUUID } = await import("node:crypto");
+  const token = randomBytes(32).toString("hex");
+  const { rowCount } = await testPool().query(
+    `INSERT INTO "email_verification_tokens" (id, "userId", "tokenHash", "expiresAt")
+     SELECT $1, id, $2, now() + interval '1 hour' FROM "users" WHERE email = $3 AND email LIKE $4`,
+    [randomUUID(), createHash("sha256").update(token).digest("hex"), email.toLowerCase(), TEST_EMAIL_PATTERN],
+  );
+  if (!rowCount) throw new Error(`testDatabase: no test account ${email}.`);
+  return token;
+}

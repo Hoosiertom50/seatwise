@@ -11,9 +11,9 @@ import { emailSafePersonName, emailSafeWeddingName } from "./email-safe-names";
 export async function sendGuestRsvpLink(
   guest: { id: string; firstName: string; email: string | null },
   wedding: { id: string; name: string; rsvpCutoffDate: string | null },
-  senderId: string,
+  sender: { id: string; emailVerifiedAt: Date | null },
   { regenerate = false }: { regenerate?: boolean } = {}
-): Promise<{ url: string; emailed: boolean; emailFailed: boolean; emailLimited?: boolean } | null> {
+): Promise<{ url: string; emailed: boolean; emailFailed: boolean; emailLimited?: boolean; confirmEmailFirst?: boolean } | null> {
   const token = regenerate
     ? await regenerateGuestRsvpToken(guest.id, wedding.id)
     : await ensureGuestRsvpToken(guest.id, wedding.id);
@@ -22,7 +22,10 @@ export async function sendGuestRsvpLink(
   const appUrl = process.env.APP_URL || "http://localhost:3000";
   const url = `${appUrl}/rsvp/${token}`;
   if (!guest.email) return { url, emailed: false, emailFailed: false };
-  if (!(await reserveEmailSend("rsvpEmails", senderId))) {
+  // TS-164: an account that hasn't confirmed its own address can't have Seatwise email people. The
+  // link is still made, so the planner can send it themselves.
+  if (sender.emailVerifiedAt === null) return { url, emailed: false, emailFailed: true, confirmEmailFirst: true };
+  if (!(await reserveEmailSend("rsvpEmails", sender.id))) {
     return { url, emailed: false, emailFailed: true, emailLimited: true };
   }
 

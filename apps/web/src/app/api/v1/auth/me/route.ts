@@ -9,7 +9,10 @@ import { LOGIN_LIMITS, TOO_MANY_SIGN_INS } from "@/lib/rate-limit";
 export async function GET(req: NextRequest) {
   const user = await getAuthUser(req);
   if (!user) return errorResponse("Not authenticated", 401);
-  return NextResponse.json({ user: { id: user.id, name: user.name, email: user.email } });
+  // TS-164: whether the address has been confirmed (drives the "confirm your email" banner).
+  return NextResponse.json({
+    user: { id: user.id, name: user.name, email: user.email, emailVerified: user.emailVerifiedAt !== null },
+  });
 }
 
 const deleteSchema = z.object({ password: z.string().min(1, "Enter your password to confirm") });

@@ -6,6 +6,7 @@ import Link from "next/link";
 import { api, ApiError } from "@/lib/api-client";
 import type { InvitePreviewDTO } from "@seatwise/shared";
 import { loginUrlReturningTo } from "@/lib/safe-next";
+import { EmailVerificationNotice } from "@/components/EmailVerificationNotice";
 
 // FR-1.4a: the invite accept page. Deliberately shows nothing about the wedding unless the
 // invite is genuinely PENDING and (once we know who's signed in) the address matches -- an
@@ -60,6 +61,8 @@ export default function InviteAcceptPage() {
     <main className="flex flex-1 items-center justify-center px-6">
       <div className="w-full max-w-sm text-center">
         <h1 className="mb-4 text-2xl font-semibold">Wedding invite</h1>
+        {/* TS-164: an account must confirm its email before it can accept. */}
+        {signedIn && <EmailVerificationNotice />}
 
         {preview.status === "NOT_FOUND" && (
           <p className="text-sm text-neutral-600 dark:text-neutral-300">This invite link doesn&apos;t exist.</p>

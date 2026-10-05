@@ -104,12 +104,12 @@ export async function PATCH(req: NextRequest, { params }: Params) {
     !!guest?.email && !!before?.email && guest.email.trim().toLowerCase() !== before.email.trim().toLowerCase();
   const rsvpEmail =
     (firstEmail || correctedEmail) && guest
-      ? await sendGuestRsvpLink(guest, access.wedding, user.id, { regenerate: correctedEmail })
+      ? await sendGuestRsvpLink(guest, access.wedding, user, { regenerate: correctedEmail })
       : null;
   return NextResponse.json({
     guest,
     warnings,
-    ...(rsvpEmail ? { rsvpEmail: { emailed: rsvpEmail.emailed, emailFailed: rsvpEmail.emailFailed, emailLimited: rsvpEmail.emailLimited ?? false } } : {}),
+    ...(rsvpEmail ? { rsvpEmail: { emailed: rsvpEmail.emailed, emailFailed: rsvpEmail.emailFailed, emailLimited: rsvpEmail.emailLimited ?? false, confirmEmailFirst: rsvpEmail.confirmEmailFirst ?? false } } : {}),
   });
 }
 

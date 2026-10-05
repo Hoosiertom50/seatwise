@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createInviteSchema } from "@seatwise/shared";
 import { emailSafePersonName, emailSafeWeddingName } from "@/lib/email-safe-names";
+import { confirmEmailFirstMessage } from "@/lib/email-verification";
 import { createInvite, listInvitesForWedding, sendEmailNotification, emailDelivered, InviteError } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
 import { errorResponse, zodErrorResponse } from "@/lib/api-response";
@@ -35,6 +36,9 @@ export async function POST(req: NextRequest, { params }: Params) {
   const body = await req.json().catch(() => null);
   const parsed = createInviteSchema.safeParse(body);
   if (!parsed.success) return zodErrorResponse(parsed.error);
+
+  // TS-164: only an account that has confirmed its own address can have Seatwise email people.
+  if (user.emailVerifiedAt === null) return errorResponse(confirmEmailFirstMessage(user.email), 403);
 
   // TS-156: every invite sends an email, so invites are capped per sender.
   if (!(await reserveEmailSend("invites", user.id))) return errorResponse(TOO_MANY_INVITES, 429);

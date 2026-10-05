@@ -24,6 +24,8 @@ model User {
   name         String
   // TS-155: carried in every session token; bumping it ends every session issued before.
   sessionVersion Int    @default(0)
+  // TS-164: when the owner confirmed this email address (null until they do).
+  emailVerifiedAt DateTime?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
@@ -37,6 +39,7 @@ model User {
   // they can reach -- not scoped to the one wedding they were captured from.
   seatingTemplates SeatingTemplate[]
   passwordResetTokens PasswordResetToken[]
+  emailVerificationTokens EmailVerificationToken[]
 
   @@map("users")
 }
@@ -725,4 +728,18 @@ model PasswordResetToken {
 
   @@index([userId])
   @@map("password_reset_tokens")
+}
+
+// TS-164: "confirm your email" links -- same shape as PasswordResetToken (only the hash is stored).
+model EmailVerificationToken {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
+  @@map("email_verification_tokens")
 }
