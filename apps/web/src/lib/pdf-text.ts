@@ -4,12 +4,16 @@
 // exactly (é, ñ, ü, ø, ß ... are all in it); an accented letter it lacks becomes its plain letter
 // ("ễ" -> "e"); a few letters with no accent to strip are spelled the usual way ("Ł" -> "L");
 // anything else (other scripts, emoji) becomes "?". The export always succeeds.
+//
+// TS-158: the exports now embed DejaVu Sans (apps/web/fonts), which draws Latin in every accent
+// (Polish, Vietnamese, Turkish, Romanian ...), Greek and Cyrillic exactly. toPdfText takes what the
+// embedded font can draw; Helvetica's WinAnsi set is only the fallback if the font can't be loaded.
 
 const WIN_ANSI_EXTRAS = new Set(
   "€‚ƒ„…†‡ˆ‰Š‹ŒŽ‘’“”•–—˜™š›œžŸ".split("")
 );
 
-function inWinAnsi(ch: string): boolean {
+export function inWinAnsi(ch: string): boolean {
   const c = ch.codePointAt(0)!;
   return (c >= 0x20 && c <= 0x7e) || (c >= 0xa0 && c <= 0xff) || WIN_ANSI_EXTRAS.has(ch);
 }
@@ -20,11 +24,11 @@ const SPELLED: Record<string, string> = {
   Ŋ: "N", ŋ: "n", ĸ: "k", ſ: "s", Ə: "E", ə: "e",
 };
 
-export function toPdfText(text: string): string {
+export function toPdfText(text: string, canDraw: (ch: string) => boolean = inWinAnsi): string {
   let out = "";
   // Combine "e" + a separate accent mark into "é" first, so it can be kept as one letter.
   for (const ch of text.normalize("NFC")) {
-    if (inWinAnsi(ch)) {
+    if (canDraw(ch)) {
       out += ch;
       continue;
     }
@@ -37,7 +41,7 @@ export function toPdfText(text: string): string {
       continue;
     }
     const base = ch.normalize("NFD").replace(/\p{M}/gu, "");
-    if (base && [...base].every(inWinAnsi)) {
+    if (base && [...base].every(canDraw)) {
       out += base;
       continue;
     }

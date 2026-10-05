@@ -1,5 +1,8 @@
+import { readFile } from "node:fs/promises";
+import path from "node:path";
+import fontkit from "@pdf-lib/fontkit";
 import { PDFDocument, StandardFonts, rgb, PDFFont, PDFPage } from "pdf-lib";
-import { toPdfText } from "./pdf-text";
+import { inWinAnsi, toPdfText } from "./pdf-text";
 
 // TS-12 (Export & Print, FR-9.1/9.2/9.3): three PDF exports built from the same
 // (guestName, tableLabel) data every plan-version endpoint already returns. No layout/rendering
@@ -15,22 +18,61 @@ export interface ExportGuestRow {
   tableLabel: string;
 }
 
-function safeRow(row: ExportGuestRow): ExportGuestRow {
-  return { guestName: toPdfText(row.guestName), tableLabel: toPdfText(row.tableLabel) };
-}
-
 interface Fonts {
   regular: PDFFont;
   bold: PDFFont;
+  /** Only text these fonts can draw (see pdf-text.ts). */
+  text: (s: string) => string;
 }
+
+// TS-158: DejaVu Sans, shipped with the app (fonts/, included in the export routes' bundles by
+// next.config.ts). Read once per server instance.
+const FONT_DIR = path.join(process.cwd(), "fonts");
+let fontFiles: Promise<{ regular: Uint8Array; bold: Uint8Array }> | null = null;
+function loadFontFiles() {
+  fontFiles ??= Promise.all([
+    readFile(path.join(FONT_DIR, "DejaVuSans.ttf")),
+    readFile(path.join(FONT_DIR, "DejaVuSans-Bold.ttf")),
+  ]).then(([regular, bold]) => ({ regular, bold }));
+  fontFiles.catch(() => (fontFiles = null)); // try again next time rather than caching a failure
+  return fontFiles;
+}
+
+// pdf-lib draws characters one after another, left to right, with no joining -- right-to-left
+// scripts would come out backwards (and Arabic unjoined), so they're left to the "?" fallback.
+const RIGHT_TO_LEFT = /[\p{Script=Hebrew}\p{Script=Arabic}\p{Script=Syriac}\p{Script=Thaana}\p{Script=Nko}]/u;
 
 async function newDoc(): Promise<{ doc: PDFDocument; fonts: Fonts }> {
   const doc = await PDFDocument.create();
-  const fonts: Fonts = {
-    regular: await doc.embedFont(StandardFonts.Helvetica),
-    bold: await doc.embedFont(StandardFonts.HelveticaBold),
-  };
-  return { doc, fonts };
+  try {
+    const files = await loadFontFiles();
+    doc.registerFontkit(fontkit);
+    // subset: only the letters actually used go into the file, so a PDF stays small.
+    const regular = await doc.embedFont(files.regular, { subset: true });
+    const bold = await doc.embedFont(files.bold, { subset: true });
+    const inBold = new Set(bold.getCharacterSet());
+    const drawable = new Set(regular.getCharacterSet().filter((c) => inBold.has(c)));
+    const canDraw = (ch: string) => {
+      const c = ch.codePointAt(0)!;
+      return c >= 0x20 && drawable.has(c) && !RIGHT_TO_LEFT.test(ch);
+    };
+    return { doc, fonts: { regular, bold, text: (s) => toPdfText(s, canDraw) } };
+  } catch (err) {
+    // The export must never fail over a font: fall back to the built-in Helvetica (TS-152).
+    console.error("PDF export: couldn't load the DejaVu fonts, using Helvetica", err);
+    return {
+      doc,
+      fonts: {
+        regular: await doc.embedFont(StandardFonts.Helvetica),
+        bold: await doc.embedFont(StandardFonts.HelveticaBold),
+        text: (s) => toPdfText(s, inWinAnsi),
+      },
+    };
+  }
+}
+
+function safeRow(fonts: Fonts, row: ExportGuestRow): ExportGuestRow {
+  return { guestName: fonts.text(row.guestName), tableLabel: fonts.text(row.tableLabel) };
 }
 
 function drawHeader(page: PDFPage, fonts: Fonts, title: string, weddingName: string) {
@@ -54,10 +96,10 @@ export async function buildSeatingChartPdf(
   weddingName: string,
   tables: { label: string; guestNames: string[] }[]
 ): Promise<Uint8Array> {
-  // TS-152: only text the PDF font can draw (see pdf-text.ts).
-  weddingName = toPdfText(weddingName);
-  tables = tables.map((t) => ({ label: toPdfText(t.label), guestNames: t.guestNames.map(toPdfText) }));
   const { doc, fonts } = await newDoc();
+  // TS-152: only text the PDF font can draw (see pdf-text.ts).
+  weddingName = fonts.text(weddingName);
+  tables = tables.map((t) => ({ label: fonts.text(t.label), guestNames: t.guestNames.map(fonts.text) }));
   let page = doc.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
   drawHeader(page, fonts, "Seating Chart", weddingName);
   let y = PAGE_HEIGHT - MARGIN - 56;
@@ -104,9 +146,9 @@ export async function buildLookupListPdf(
   weddingName: string,
   rows: ExportGuestRow[]
 ): Promise<Uint8Array> {
-  weddingName = toPdfText(weddingName);
-  rows = rows.map(safeRow);
   const { doc, fonts } = await newDoc();
+  weddingName = fonts.text(weddingName);
+  rows = rows.map((r) => safeRow(fonts, r));
   let page = doc.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
   drawHeader(page, fonts, "Guest Lookup List", weddingName);
   let y = PAGE_HEIGHT - MARGIN - 56;
@@ -132,11 +174,34 @@ export async function buildLookupListPdf(
   return doc.save();
 }
 
+/**
+ * TS-158: the largest size (18pt down to 8pt) at which a place-card name fits `maxWidth` -- on one
+ * line if it can, otherwise split at the space that best balances two lines. A name with no space
+ * that still doesn't fit at 8pt is drawn at 8pt.
+ */
+export function fitCardName(font: PDFFont, name: string, maxWidth: number): { lines: string[]; size: number } {
+  const widest = (lines: string[], size: number) => Math.max(...lines.map((l) => font.widthOfTextAtSize(l, size)));
+  const options: string[][] = [[name]];
+  const words = name.split(" ");
+  if (words.length > 1) {
+    let best: string[] | null = null;
+    for (let i = 1; i < words.length; i++) {
+      const pair = [words.slice(0, i).join(" "), words.slice(i).join(" ")];
+      if (!best || widest(pair, 18) < widest(best, 18)) best = pair;
+    }
+    options.push(best!);
+  }
+  for (let size = 18; size >= 8; size--) {
+    for (const lines of options) if (widest(lines, size) <= maxWidth) return { lines, size };
+  }
+  return { lines: options[options.length - 1], size: 8 };
+}
+
 // FR-9.3: one print-ready place/escort card per guest — name and table, cut lines, several to a
 // page. Sized generously (roughly 3.6in x 2.3in) for readability over cramming the max per page.
 export async function buildPlaceCardsPdf(rows: ExportGuestRow[]): Promise<Uint8Array> {
-  rows = rows.map(safeRow);
   const { doc, fonts } = await newDoc();
+  rows = rows.map((r) => safeRow(fonts, r));
   const cols = 2;
   const rowsPerPage = 4;
   const cardW = (PAGE_WIDTH - MARGIN * 2) / cols;
@@ -164,13 +229,17 @@ export async function buildPlaceCardsPdf(rows: ExportGuestRow[]): Promise<Uint8A
       borderWidth: 0.75,
     });
 
-    const nameSize = 18;
-    const nameWidth = fonts.bold.widthOfTextAtSize(row.guestName, nameSize);
-    page!.drawText(row.guestName, {
-      x: x + (cardW - nameWidth) / 2,
-      y: yTop - cardH / 2 - nameSize / 2 + 10,
-      size: nameSize,
-      font: fonts.bold,
+    // TS-158: a long name goes onto two lines and/or shrinks, rather than running over the cut line.
+    const { lines, size: nameSize } = fitCardName(fonts.bold, row.guestName, cardW - 16);
+    const lineGap = nameSize * 1.2;
+    lines.forEach((line, i) => {
+      const lineWidth = fonts.bold.widthOfTextAtSize(line, nameSize);
+      page!.drawText(line, {
+        x: x + (cardW - lineWidth) / 2,
+        y: yTop - cardH / 2 - nameSize / 2 + 10 + (lines.length - 1 - i) * lineGap,
+        size: nameSize,
+        font: fonts.bold,
+      });
     });
 
     const tableText = row.tableLabel;
