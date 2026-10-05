@@ -41,5 +41,8 @@ body {
   select,
   textarea {
     font-size: 16px !important;
+    /* The larger text mustn't make a field (a drop-down sizes itself to its longest choice)
+       wider than the space it's in -- on Linux's wider fonts one pushed the page sideways. */
+    max-width: 100%;
   }
 }
