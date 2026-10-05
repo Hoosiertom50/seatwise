@@ -43,6 +43,8 @@ export default function LoginPage() {
             </label>
             <input
               id="login-email"
+              // TS-175: lets the browser and password managers fill these in.
+              autoComplete="email"
               type="email"
               className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
               value={email}
@@ -56,6 +58,7 @@ export default function LoginPage() {
             </label>
             <input
               id="login-password"
+              autoComplete="current-password"
               type="password"
               className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
               value={password}
@@ -67,7 +70,7 @@ export default function LoginPage() {
           <Link href="/forgot-password" className="-mt-2 self-end text-sm underline">
             Forgot password?
           </Link>
-          {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}
+          {error && <p role="alert" className="text-sm text-red-600 dark:text-red-400">{error}</p>}
           <button
             type="submit"
             disabled={loading}

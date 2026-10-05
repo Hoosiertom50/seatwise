@@ -32,7 +32,8 @@ export class TimelineTabPage extends BasePage {
   }
 
   private editButton(description: string) {
-    return this.entryRow(description).getByRole("button", { name: "Edit", exact: true });
+    // TS-175: buttons are named for their entry ("Edit <description>", "Move <description> earlier").
+    return this.entryRow(description).getByRole("button", { name: `Edit ${description}`, exact: true });
   }
   // Not row-scoped, deliberately: once Edit is clicked, TimelineTab.tsx replaces that row's own
   // description text with these very inputs -- so a row locator keyed on the (now-gone) plain
@@ -48,10 +49,10 @@ export class TimelineTabPage extends BasePage {
     return this.page.getByRole("button", { name: "Save", exact: true });
   }
   private upButton(description: string) {
-    return this.entryRow(description).getByRole("button", { name: "↑", exact: true });
+    return this.entryRow(description).getByRole("button", { name: `Move ${description} earlier`, exact: true });
   }
   private downButton(description: string) {
-    return this.entryRow(description).getByRole("button", { name: "↓", exact: true });
+    return this.entryRow(description).getByRole("button", { name: `Move ${description} later`, exact: true });
   }
   private removeButton(description: string) {
     return this.entryRow(description).getByRole("button", { name: /^Remove / });
@@ -97,16 +98,16 @@ export class TimelineTabPage extends BasePage {
     return this.addDescriptionInput();
   }
   allEditButtons() {
-    return this.page.getByRole("button", { name: "Edit", exact: true });
+    return this.page.getByRole("button", { name: /^Edit / });
   }
   allRemoveButtons() {
     return this.page.getByRole("button", { name: /^Remove / });
   }
   allMoveUpButtons() {
-    return this.page.getByRole("button", { name: "↑", exact: true });
+    return this.page.getByRole("button", { name: /^Move .* earlier$/ });
   }
   allMoveDownButtons() {
-    return this.page.getByRole("button", { name: "↓", exact: true });
+    return this.page.getByRole("button", { name: /^Move .* later$/ });
   }
 
   /**

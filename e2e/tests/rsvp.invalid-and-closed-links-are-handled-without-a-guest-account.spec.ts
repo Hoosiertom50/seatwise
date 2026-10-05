@@ -96,7 +96,8 @@ defineQualityTest(
           const rsvpPage = new GuestRsvpPage(guestPage);
           await rsvpPage.goto(closedToken);
           await expect(rsvpPage.closedMessage()).toBeVisible();
-          await expect(rsvpPage.closedMessage()).toContainText(closedCutoffDate);
+          // TS-175: the deadline is written out, not shown as 2026-09-05.
+          await expect(rsvpPage.closedMessage()).toContainText("September 5, 2026");
           expect(await rsvpPage.isFormDisabled()).toBe(true);
           await guestPage.close();
         });

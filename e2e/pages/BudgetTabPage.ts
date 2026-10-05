@@ -296,7 +296,8 @@ export class BudgetTabPage extends BasePage {
   }
 
   private editButton(nameContains: string) {
-    return this.vendorRow(nameContains).getByRole("button", { name: "Edit", exact: true });
+    // TS-175: named for the vendor ("Edit <name>").
+    return this.vendorRow(nameContains).getByRole("button", { name: /^Edit / });
   }
   private removeButton(nameContains: string) {
     return this.vendorRow(nameContains).getByRole("button", { name: /^Remove / });
@@ -367,6 +368,15 @@ export class BudgetTabPage extends BasePage {
     ]);
   }
 
+  /** TS-175: how many vendor edit forms are open (0 once a conflict has closed the editor). */
+  async editCostInputCount(): Promise<number> {
+    return this.editCostInput().count();
+  }
+  /** TS-175: clicks Save without waiting for a request -- for a value the screen refuses itself. */
+  async clickSaveEdit(): Promise<void> {
+    await this.saveEditButton().click();
+  }
+
   async cancelEdit(): Promise<void> {
     await this.cancelEditButton().click();
   }
@@ -396,7 +406,7 @@ export class BudgetTabPage extends BasePage {
     return this.vendorNameInput();
   }
   allEditButtons() {
-    return this.page.getByRole("button", { name: "Edit", exact: true });
+    return this.page.getByRole("button", { name: /^Edit / });
   }
   allRemoveButtons() {
     return this.page.getByRole("button", { name: /^Remove / });

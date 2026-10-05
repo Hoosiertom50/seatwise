@@ -14,6 +14,17 @@ import { EmailVerificationNotice } from "@/components/EmailVerificationNotice";
 export default function InviteAcceptPage() {
   const { token } = useParams<{ token: string }>();
   const router = useRouter();
+  const [signOutError, setSignOutError] = useState<string | null>(null);
+  async function onSignOutAndReturn() {
+    setSignOutError(null);
+    try {
+      await api.post("/api/v1/auth/logout");
+    } catch {
+      setSignOutError("Couldn't sign out — check your connection and try again.");
+      return;
+    }
+    router.replace(loginUrlReturningTo(`/invites/${token}`));
+  }
 
   const [preview, setPreview] = useState<InvitePreviewDTO | null>(null);
   const [currentUserEmail, setCurrentUserEmail] = useState<string | null | undefined>(undefined);
@@ -109,10 +120,25 @@ export default function InviteAcceptPage() {
           <p className="text-sm text-neutral-600 dark:text-neutral-300">This invite has already been accepted.</p>
         )}
         {preview.status === "MISMATCHED_ACCOUNT" && (
-          <p className="text-sm text-neutral-600 dark:text-neutral-300">
-            This invite was sent to a different email address than the account you&apos;re signed
-            in with. Sign out and sign in with the invited address to accept it.
-          </p>
+          <>
+            <p className="text-sm text-neutral-600 dark:text-neutral-300">
+              This invite was sent to a different email address than the account you&apos;re signed
+              in with. Sign out and sign in with the invited address to accept it.
+            </p>
+            {/* TS-175: the button the message asks for -- signs out, then comes back here. */}
+            <button
+              type="button"
+              onClick={() => void onSignOutAndReturn()}
+              className="mt-4 rounded-md bg-neutral-900 dark:bg-neutral-100 px-4 py-2 text-sm font-medium text-white dark:text-neutral-900 hover:bg-neutral-700 dark:hover:bg-neutral-300"
+            >
+              Sign out and use the invited address
+            </button>
+            {signOutError && (
+              <p role="alert" className="mt-2 text-sm text-red-600 dark:text-red-400">
+                {signOutError}
+              </p>
+            )}
+          </>
         )}
 
         {preview.status === "PENDING" && (
@@ -130,7 +156,7 @@ export default function InviteAcceptPage() {
 
             {signedIn ? (
               <>
-                {error && <p className="mb-3 text-sm text-red-600 dark:text-red-400">{error}</p>}
+                {error && <p role="alert" className="mb-3 text-sm text-red-600 dark:text-red-400">{error}</p>}
                 <button
                   onClick={onAccept}
                   disabled={accepting}

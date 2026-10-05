@@ -52,6 +52,8 @@ export default function SignupPage() {
             </label>
             <input
               id="signup-name"
+              // TS-175: lets the browser and password managers fill these in.
+              autoComplete="name"
               className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
               value={name}
               onChange={(e) => setName(e.target.value)}
@@ -64,6 +66,7 @@ export default function SignupPage() {
             </label>
             <input
               id="signup-email"
+              autoComplete="email"
               type="email"
               className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
               value={email}
@@ -77,6 +80,7 @@ export default function SignupPage() {
             </label>
             <input
               id="signup-password"
+              autoComplete="new-password"
               type="password"
               className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
               value={password}
@@ -89,7 +93,7 @@ export default function SignupPage() {
               At least 8 characters.
             </p>
           </div>
-          {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}
+          {error && <p role="alert" className="text-sm text-red-600 dark:text-red-400">{error}</p>}
           <button
             type="submit"
             disabled={loading}

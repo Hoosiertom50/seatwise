@@ -55,13 +55,18 @@ const RETRY_DELAYS_MS = [400, 1200];
 // serial-tasks.ts) waited for good. Long enough for the slowest real request (a large import).
 export const REQUEST_TIMEOUT_MS = 30_000;
 
+// TS-175: responses that came from a retry (an earlier try got no answer, so it may have landed).
+const retriedResponses = new WeakSet<Response>();
+
 export async function fetchWithRetry(path: string, init: RequestInit, timeoutMs = REQUEST_TIMEOUT_MS): Promise<Response> {
   const retryable = init.method !== "POST";
   for (let attempt = 0; ; attempt++) {
     try {
       // AbortSignal.timeout is in every browser Seatwise supports; without it, no limit (as before).
       const signal = typeof AbortSignal !== "undefined" && "timeout" in AbortSignal ? AbortSignal.timeout(timeoutMs) : undefined;
-      return await fetch(path, signal ? { ...init, signal } : init);
+      const res = await fetch(path, signal ? { ...init, signal } : init);
+      if (attempt > 0) retriedResponses.add(res);
+      return res;
     } catch {
       if (!retryable || attempt >= RETRY_DELAYS_MS.length) {
         throw new ApiError(NETWORK_ERROR_MESSAGE, NETWORK_ERROR_STATUS);
@@ -105,9 +110,13 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   }
 
   const data = await res.json().catch(() => ({}));
+  // TS-175: a retried delete that finds nothing means the first try did delete it (only its answer
+  // was lost) -- that's success. It used to count as a failure, and the item came back on screen.
+  const alreadyGone = options.method === "DELETE" && res.status === 404 && retriedResponses.has(res);
+  const ok = res.ok || alreadyGone;
 
   if (tracksSave) {
-    if (res.ok) writeSucceeded();
+    if (ok) writeSucceeded();
     else if (data.needsConfirmation === true) writeAwaitingConfirmation();
     else if (res.status === 401) writeFailed("Not saved — your session has expired.");
     else writeFailed(data.error || "Something went wrong");
@@ -126,6 +135,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     }
   }
 
+  if (alreadyGone) return {} as T;
   if (!res.ok) {
     throw new ApiError(data.error || "Something went wrong", res.status, data.fieldErrors, data);
   }

@@ -34,6 +34,11 @@ export class LoginPage extends BasePage {
     await this.page.goto("/login");
   }
 
+  /** TS-175: the email field's rendered text size in px (an iPhone zooms in below 16). */
+  async emailFieldFontSize(): Promise<number> {
+    return this.emailInput().evaluate((el) => parseFloat(getComputedStyle(el).fontSize));
+  }
+
   /** TS-147: opens /login with a raw, already-encoded `?next=` value (e.g. "/%09/evil.example"). */
   async gotoWithEncodedNext(encodedNext: string): Promise<void> {
     await this.page.goto(`/login?next=${encodedNext}`);

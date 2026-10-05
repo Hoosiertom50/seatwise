@@ -189,7 +189,7 @@ export function RulesTab({
         </>
       )}
       {/* TS-151: shown to everyone -- a View user whose rules failed to load used to see "No seating rules yet." */}
-      {error && <p className="mb-4 text-sm text-red-600 dark:text-red-400">{error}</p>}
+      {error && <p role="alert" className="mb-4 text-sm text-red-600 dark:text-red-400">{error}</p>}
 
       <h2 className="mb-3 text-lg font-medium">Rules ({relationships.length})</h2>
       {relationships.length === 0 ? (

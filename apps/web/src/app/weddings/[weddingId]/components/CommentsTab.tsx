@@ -91,7 +91,7 @@ export function CommentsTab({
           body,
         }
       );
-      setComments([comment, ...comments]);
+      setComments((cur) => [comment, ...cur]);
       setBody("");
       setTargetId("");
     } catch (err) {
@@ -133,18 +133,18 @@ export function CommentsTab({
   // could. Still, sync from the server's returned comment rather than guessing at
   // resolvedAt/resolvedByName, and revert the optimistic update on any failure (a gap the
   // optimistic update here previously left open).
+  // TS-175: every update works on the list as it is at that moment. It used to put back a copy
+  // taken when Resolve was clicked, so a reply posted while the resolve was saving disappeared.
   async function onResolve(commentId: string) {
-    const prev = comments;
-    setComments(
-      comments.map((c) => (c.id === commentId ? { ...c, resolvedAt: new Date().toISOString() } : c))
-    );
+    const before = comments.find((c) => c.id === commentId);
+    setComments((cur) => cur.map((c) => (c.id === commentId ? { ...c, resolvedAt: new Date().toISOString() } : c)));
     try {
       const { comment } = await api.post<{ comment: CommentDTO }>(
         `/api/v1/weddings/${weddingId}/comments/${commentId}/resolve`
       );
-      setComments(prev.map((c) => (c.id === commentId ? comment : c)));
+      setComments((cur) => cur.map((c) => (c.id === commentId ? comment : c)));
     } catch (err) {
-      setComments(prev);
+      if (before) setComments((cur) => cur.map((c) => (c.id === commentId ? before : c)));
       setError(err instanceof ApiError ? err.message : "Couldn't resolve that comment.");
     }
   }
@@ -238,7 +238,7 @@ export function CommentsTab({
         </p>
       )}
 
-      {error && <p className="mb-4 text-sm text-red-600 dark:text-red-400">{error}</p>}
+      {error && <p role="alert" className="mb-4 text-sm text-red-600 dark:text-red-400">{error}</p>}
 
       <h2 className="mb-3 text-lg font-medium">Comments ({threads.length})</h2>
       {threads.length === 0 ? (

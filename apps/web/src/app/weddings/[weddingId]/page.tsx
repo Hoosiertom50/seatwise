@@ -63,6 +63,10 @@ export default function WeddingDetailPage() {
   const router = useRouter();
 
   const [wedding, setWedding] = useState<WeddingDTO | null>(null);
+  // TS-175: the browser tab names the wedding once it has loaded.
+  useEffect(() => {
+    if (wedding) document.title = `${wedding.name} · Seatwise`;
+  }, [wedding]);
   const [guests, setGuests] = useState<GuestDTO[]>([]);
   const [accessLevel, setAccessLevel] = useState<AccessLevel | null>(null);
   // TS-151: "COUPLE" or "COLLABORATOR" for a collaborator, null for the owner.
@@ -92,14 +96,17 @@ export default function WeddingDetailPage() {
   function leaveTab() {
     if (pendingHref === BACK) {
       setPendingHref(null);
-      unsaved.goBackPastPage();
+      // TS-175: opened in a fresh tab, there's no page before this one -- go to the dashboard.
+      unsaved.goBackPastPage(() => router.replace("/dashboard"));
       return;
     }
     if (pendingHref) {
-      unsaved.clear();
       const href = pendingHref;
       setPendingHref(null);
-      router.push(href);
+      // TS-175: replace the page's extra history entry rather than leaving it behind (Back from the
+      // next page used to land on it, a dead copy of this one).
+      if (unsaved.releaseForLink()) router.replace(href);
+      else router.push(href);
       return;
     }
     if (!pendingTab) return;
