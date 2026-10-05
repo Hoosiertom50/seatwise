@@ -55,6 +55,9 @@ const TABS: { value: Tab; label: string }[] = [
 
 type AccessLevel = "OWNER" | "EDIT" | "COMMENT" | "VIEW";
 
+// TS-170: what pendingHref holds when the browser's Back button was pressed.
+const BACK = "__back__";
+
 export default function WeddingDetailPage() {
   const { weddingId } = useParams<{ weddingId: string }>();
   const router = useRouter();
@@ -69,7 +72,8 @@ export default function WeddingDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>("guests");
   // TS-159: a tab change waiting on "you have unsaved changes" -- see goToTab.
-  const unsaved = useUnsavedChangesProvider();
+  // TS-170: the browser's Back button with unsaved input asks first, like the links do.
+  const unsaved = useUnsavedChangesProvider({ onBackRequested: () => setPendingHref(BACK) });
   const [pendingTab, setPendingTab] = useState<Tab | null>(null);
   // TS-166: leaving the wedding page itself ("Back to dashboard") asks the same question; the
   // browser's own prompt only covers closing or reloading the page, not links inside the app.
@@ -86,6 +90,11 @@ export default function WeddingDetailPage() {
     return false;
   }
   function leaveTab() {
+    if (pendingHref === BACK) {
+      setPendingHref(null);
+      unsaved.goBackPastPage();
+      return;
+    }
     if (pendingHref) {
       unsaved.clear();
       const href = pendingHref;

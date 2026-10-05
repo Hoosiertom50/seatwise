@@ -50,11 +50,18 @@ const NETWORK_ERROR_MESSAGE = "Couldn't reach Seatwise — check your connection
 // first create landed and only its response was lost, a retry would create a duplicate.
 const RETRY_DELAYS_MS = [400, 1200];
 
-async function fetchWithRetry(path: string, init: RequestInit): Promise<Response> {
+// TS-170: how long one request may take before it counts as having got no response. Without a
+// limit, a request stuck on a dead connection never finished -- and changes queued behind it (see
+// serial-tasks.ts) waited for good. Long enough for the slowest real request (a large import).
+export const REQUEST_TIMEOUT_MS = 30_000;
+
+export async function fetchWithRetry(path: string, init: RequestInit, timeoutMs = REQUEST_TIMEOUT_MS): Promise<Response> {
   const retryable = init.method !== "POST";
   for (let attempt = 0; ; attempt++) {
     try {
-      return await fetch(path, init);
+      // AbortSignal.timeout is in every browser Seatwise supports; without it, no limit (as before).
+      const signal = typeof AbortSignal !== "undefined" && "timeout" in AbortSignal ? AbortSignal.timeout(timeoutMs) : undefined;
+      return await fetch(path, signal ? { ...init, signal } : init);
     } catch {
       if (!retryable || attempt >= RETRY_DELAYS_MS.length) {
         throw new ApiError(NETWORK_ERROR_MESSAGE, NETWORK_ERROR_STATUS);

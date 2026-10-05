@@ -27,8 +27,14 @@ export function useUnsavedChanges(key: string, dirty: boolean): void {
  * Wraps the tabs. `hasUnsaved` tells the page whether any tab has unsaved input right now; the
  * provider also asks the browser to confirm before the page is closed or reloaded while it does.
  */
-export function useUnsavedChangesProvider() {
+export function useUnsavedChangesProvider({ onBackRequested }: { onBackRequested?: () => void } = {}) {
   const dirtyKeys = useRef(new Set<string>());
+  const onBackRef = useRef(onBackRequested);
+  useEffect(() => {
+    onBackRef.current = onBackRequested;
+  }, [onBackRequested]);
+  // TS-170: whether this page has added its extra history entry (see below).
+  const guardPushed = useRef(false);
   const [count, setCount] = useState(0);
   const setDirty = useCallback((key: string, dirty: boolean) => {
     const had = dirtyKeys.current.has(key);
@@ -49,10 +55,42 @@ export function useUnsavedChangesProvider() {
     return () => window.removeEventListener("beforeunload", warn);
   }, [count]);
 
+  // TS-170: the browser's Back button (or a back swipe) moves within the app without unloading the
+  // page, so "beforeunload" never fires and half-typed input was lost without a word. While there's
+  // unsaved input, the page adds one extra history entry for itself (a copy of the current one, so
+  // the router treats it as this same page). Pressing Back lands on the real entry for this page --
+  // nothing visible changes -- and the page puts the extra entry back and asks first.
+  useEffect(() => {
+    if (count === 0) return;
+    const pushGuard = () => window.history.pushState({ ...(window.history.state ?? {}), seatwiseGuard: true }, "", window.location.href);
+    if (!guardPushed.current) {
+      pushGuard();
+      guardPushed.current = true;
+    }
+    const onPop = () => {
+      if (dirtyKeys.current.size === 0) {
+        guardPushed.current = false;
+        return;
+      }
+      pushGuard();
+      onBackRef.current?.();
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, [count]);
+
   const hasUnsaved = useCallback(() => dirtyKeys.current.size > 0, []);
   const clear = useCallback(() => {
     dirtyKeys.current.clear();
     setCount(0);
   }, []);
-  return { registry, hasUnsaved, clear, Provider: UnsavedChangesContext.Provider };
+  /** TS-170: "Leave without saving" after Back -- skips the extra entry and the page itself. */
+  const goBackPastPage = useCallback(() => {
+    dirtyKeys.current.clear();
+    setCount(0);
+    const steps = guardPushed.current ? 2 : 1;
+    guardPushed.current = false;
+    window.history.go(-steps);
+  }, []);
+  return { registry, hasUnsaved, clear, goBackPastPage, Provider: UnsavedChangesContext.Provider };
 }

@@ -190,4 +190,9 @@ export class GuestRsvpPage extends BasePage {
   tryAgainButton() {
     return this.page.getByRole("button", { name: "Try again", exact: true });
   }
+
+  /** TS-170: empties the party-size box (a guest deleting the number before changing their mind). */
+  async clearPartySize(): Promise<void> {
+    await this.headcountInput().fill("");
+  }
 }

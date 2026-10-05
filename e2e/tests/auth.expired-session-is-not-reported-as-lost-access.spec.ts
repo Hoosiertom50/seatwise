@@ -16,6 +16,7 @@
 
 import { randomBytes } from "node:crypto";
 import { expect, defineQualityTest, test } from "../fixtures/index.js";
+import { LoginPage } from "../pages/LoginPage.js";
 import { WeddingDetailPage } from "../pages/WeddingDetailPage.js";
 import { uniqueTitle, uniqueToken } from "../data/ids.js";
 import { TEST_ACCOUNT_EMAIL_DOMAIN } from "../support/auth.js";
@@ -66,13 +67,16 @@ defineQualityTest(
       expect(new URL(page.url()).pathname).toBe(`/weddings/${weddingId}`);
     });
 
-    await test.step("Act + Assert: signing in from the notice returns to the same wedding", async () => {
-      await detailPage.clickSignInAgain();
-      await page.waitForURL((url) => url.pathname === "/login" && url.searchParams.get("next") === `/weddings/${weddingId}`);
-      await loginPage.login(email, password);
-      await page.waitForURL(`/weddings/${weddingId}`);
-      await expect(detailPage.heading()).toHaveText(weddingName);
-      await expect(detailPage.sessionExpiredNotice()).toHaveCount(0);
+    await test.step("Act + Assert: signing in from the notice's link (a new tab) returns there to the same wedding, and this page picks up the session", async () => {
+      // TS-170: the link opens a new tab, so this page -- and anything typed on it -- stays put.
+      const tab = await detailPage.clickSignInAgain();
+      await tab.waitForURL((url) => url.pathname === "/login" && url.searchParams.get("next") === `/weddings/${weddingId}`);
+      await new LoginPage(tab).login(email, password);
+      await tab.waitForURL(`/weddings/${weddingId}`);
+      await expect(new WeddingDetailPage(tab).heading()).toHaveText(weddingName);
+      await tab.close();
+      expect(new URL(page.url()).pathname).toBe(`/weddings/${weddingId}`);
+      await expect(detailPage.sessionExpiredNotice()).toHaveCount(0, { timeout: 10_000 });
     });
 
     await test.step("Assert: the login page never follows a ?next= that points off-site", async () => {

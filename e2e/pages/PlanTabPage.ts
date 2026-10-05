@@ -385,4 +385,23 @@ export class PlanTabPage extends BasePage {
     // fixed sleep.
     await this.page.getByRole("button", { name: "Generate new plan", exact: true }).waitFor();
   }
+
+  /** TS-170: starts a tap-to-move without waiting for it to save (to act again while it's on its way). */
+  async startTapMove(guestId: string, tableId: string): Promise<void> {
+    await this.guestChip(guestId).click();
+    const table = this.tableBox(tableId);
+    await table.scrollIntoViewIfNeeded();
+    const box = (await table.boundingBox())!;
+    await this.page.mouse.click(box.x + box.width / 2, box.y + 10);
+  }
+
+  /** TS-170: clicks "Move to review" without waiting for the status to change. */
+  async clickMoveToReview(): Promise<void> {
+    await this.moveToReviewButton().click();
+  }
+
+  /** TS-170: the "Move back to draft" button, which appears once the plan is In review. */
+  moveBackToDraftLocator() {
+    return this.moveBackToDraftButton();
+  }
 }
