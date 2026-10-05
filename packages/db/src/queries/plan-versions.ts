@@ -966,7 +966,10 @@ export async function setGuestAttendance(
   weddingId: string,
   guestId: string,
   attendance: "ATTENDING" | "NOT_ATTENDING",
-  actorUserId: string
+  // TS-167: null when the guest did it themselves (declining or re-confirming through their link).
+  actorUserId: string | null,
+  // TS-167: the RSVP route sends its own notification about the response, so it skips this one.
+  { notify = true }: { notify?: boolean } = {}
 ): Promise<PlanVersionDetail | null> {
   const { rows: guestRows } = await pool.query(
     `SELECT id, ("firstName" || ' ' || "lastName") AS name, "dayOfAttendance"
@@ -1054,7 +1057,7 @@ export async function setGuestAttendance(
   const detail = currentPlanVersionId ? await getPlanVersionDetail(currentPlanVersionId, weddingId) : null;
 
   // FR-10.2: attendance changes are only notification-worthy once the plan has been approved.
-  if (detail?.status === "APPROVED") {
+  if (notify && detail?.status === "APPROVED") {
     await notifyWeddingCollaborators(
       weddingId,
       actorUserId,

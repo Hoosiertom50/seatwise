@@ -76,6 +76,10 @@ export async function PATCH(req: NextRequest, { params }: Params) {
 
   if (dayOfAttendance !== undefined) {
     await setGuestAttendance(weddingId, guestId, dayOfAttendance, user.id);
+  } else if (rest.rsvpStatus === "DECLINED") {
+    // TS-167: marking a guest Declined frees their seat, the same as when they decline themselves.
+    // (setGuestAttendance does nothing if they're already Not Attending.)
+    await setGuestAttendance(weddingId, guestId, "NOT_ATTENDING", user.id);
   }
 
   const warnings: string[] = [];

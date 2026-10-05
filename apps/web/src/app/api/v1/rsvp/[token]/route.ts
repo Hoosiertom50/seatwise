@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { submitGuestRsvpSchema, type GuestRsvpPreviewDTO, isRsvpCutoffPast } from "@seatwise/shared";
-import { getGuestByRsvpToken, hashLinkToken, submitGuestRsvp, RsvpSubmissionError, resyncGuestSeat, notifyWeddingCollaborators } from "@seatwise/db";
+import { getGuestByRsvpToken, hashLinkToken, setGuestAttendance, submitGuestRsvp, RsvpSubmissionError, resyncGuestSeat, notifyWeddingCollaborators } from "@seatwise/db";
 import { errorResponse, zodErrorResponse } from "@/lib/api-response";
 import { clientAddress, rateLimitOr429, RSVP_LIMITS } from "@/lib/rate-limit";
 
@@ -73,6 +73,17 @@ export async function POST(req: NextRequest, { params }: Params) {
   try {
     const { notes, ...rest } = parsed.data;
     const guest = await submitGuestRsvp(token, { ...rest, rsvpNotes: notes });
+    // TS-167 (Tom, 2026-10-05): a guest who declines gives up their seat -- they're marked Not
+    // Attending, which frees it and re-checks the table, as on the day. If they confirm again
+    // later, they count as attending again and wait, unseated, for the planner to seat them.
+    let seatNote = "";
+    if (guest.rsvpStatus === "DECLINED" && guest.dayOfAttendance === "ATTENDING") {
+      await setGuestAttendance(guest.weddingId, guest.id, "NOT_ATTENDING", null, { notify: false });
+      seatNote = " Their seat has been freed.";
+    } else if (guest.rsvpStatus === "CONFIRMED" && guest.dayOfAttendance === "NOT_ATTENDING") {
+      await setGuestAttendance(guest.weddingId, guest.id, "ATTENDING", null, { notify: false });
+      seatNote = " They need a seat.";
+    }
     // TS-134: a guest who now needs an accessible seat, or is bringing more people than their
     // table has room for, is flagged Needs Reassignment -- exactly as a planner's own edit would --
     // instead of silently staying where they no longer fit.
@@ -86,7 +97,7 @@ export async function POST(req: NextRequest, { params }: Params) {
           : "updated their RSVP";
     // TS-163: everyone is emailed about a guest's response at most once an hour, however often
     // their link is submitted; each response still shows in the app.
-    await notifyWeddingCollaborators(guest.weddingId, null, "RSVP_RECEIVED", `${guest.firstName} ${guest.lastName} ${answer}.`, {
+    await notifyWeddingCollaborators(guest.weddingId, null, "RSVP_RECEIVED", `${guest.firstName} ${guest.lastName} ${answer}.${seatNote}`, {
       emailOncePer: { key: `email:rsvp-notify:${guest.id}`, windowSeconds: 3600 },
     });
     return NextResponse.json({ ok: true });
