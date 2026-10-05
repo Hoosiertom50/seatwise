@@ -150,6 +150,15 @@ export class CollaboratorsTabPage extends BasePage {
     return this.page.getByRole("button", { name: "Delete wedding", exact: true });
   }
 
+  /** The error shown inside the delete section when a delete fails. */
+  deleteWeddingError() {
+    return this.page.getByRole("heading", { name: "Delete this wedding", exact: true }).locator("..").getByRole("alert");
+  }
+
+  async confirmDelete(): Promise<void> {
+    await new ConfirmDelete(this.page).confirm();
+  }
+
   /** Types the name, clicks Delete wedding, confirms, and waits for the dashboard. */
   async deleteWedding(name: string): Promise<void> {
     await this.deleteWeddingConfirmInput().fill(name);

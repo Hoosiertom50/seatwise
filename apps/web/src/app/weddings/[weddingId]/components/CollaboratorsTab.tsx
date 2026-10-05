@@ -259,13 +259,15 @@ export function CollaboratorsTab({
 
   // TS-161: the owner deletes the wedding for everyone, then goes back to the dashboard.
   const [deleteConfirmName, setDeleteConfirmName] = useState("");
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   async function onDeleteWedding() {
-    setError(null);
+    setDeleteError(null);
     try {
       await api.delete(`/api/v1/weddings/${weddingId}`);
       router.push("/dashboard");
     } catch (err) {
-      setError(apiErrorMessage(err, [], "Couldn't delete this wedding."));
+      // Shown inside the delete section, next to the button the owner just used.
+      setDeleteError(apiErrorMessage(err, [], "Couldn't delete this wedding."));
     }
   }
 
@@ -816,6 +818,11 @@ export function CollaboratorsTab({
               onConfirm={onDeleteWedding}
             />
           </div>
+          {deleteError && (
+            <p role="alert" className="mt-2 text-sm text-red-600 dark:text-red-400">
+              {deleteError}
+            </p>
+          )}
         </div>
       )}
     </div>

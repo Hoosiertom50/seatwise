@@ -11,15 +11,16 @@ import { uniquePersonName, uniqueTitle } from "../data/ids.js";
 import { CollaboratorsTabPage } from "../pages/CollaboratorsTabPage.js";
 import { DashboardPage } from "../pages/DashboardPage.js";
 import { signUpFreshAccountInNewContext } from "../support/auth.js";
+import { failRequests } from "../support/networkFaults.js";
 
 defineQualityTest(
   {
     id: "collaboration.owner-can-delete-a-wedding.typed-name-confirm-owner-only",
     title: "the owner can delete a wedding after typing its name; collaborators can't, and its links stop working",
     objective:
-      "Confirms that an Edit collaborator sees no Delete wedding control and is refused by the API; that the owner's Delete wedding button stays disabled until the exact wedding name is typed; and that confirming returns the owner to the dashboard without the wedding, the collaborator can no longer open it, and the wedding's RSVP link reads NOT_FOUND.",
+      "Confirms that an Edit collaborator sees no Delete wedding control and is refused by the API; that the owner's Delete wedding button stays disabled until the exact wedding name is typed; and that confirming returns the owner to the dashboard without the wedding, the collaborator can no longer open it, and the wedding's RSVP link reads NOT_FOUND; and that a failed delete shows its error inside the delete section and deletes nothing.",
     expectedOutcome:
-      "Collaborator: no Delete wedding button, API DELETE 403. Owner: button disabled for a wrong name, enabled for the right one; after confirming, the dashboard no longer lists the wedding, the collaborator gets 403/404 for it, and the RSVP preview status is NOT_FOUND.",
+      "Collaborator: no Delete wedding button, API DELETE 403. Owner: button disabled for a wrong name, enabled for the right one; after confirming, the dashboard no longer lists the wedding, the collaborator gets 403/404 for it, and the RSVP preview status is NOT_FOUND. A simulated 500 on delete shows 'Simulated outage while deleting.' in the delete section and the wedding still loads.",
     requirementIds: ["REQ-COLLABORATION-NOTIFICATIONS"],
     tags: ["@mutating", "@feature:collaboration", "@risk:high", "@suite:regression"],
   },
@@ -50,6 +51,15 @@ defineQualityTest(
         await expect(tab.deleteWeddingButton()).toBeDisabled();
         await tab.deleteWeddingConfirmInput().fill(name);
         await expect(tab.deleteWeddingButton()).toBeEnabled();
+      });
+
+      await test.step("If the delete fails, the error shows in the delete section and nothing is deleted", async () => {
+        const fault = await failRequests(page, `**/api/v1/weddings/${w}`, "DELETE", { status: 500, error: "Simulated outage while deleting." });
+        await tab.deleteWeddingButton().click();
+        await tab.confirmDelete();
+        await expect(tab.deleteWeddingError()).toHaveText("Simulated outage while deleting.");
+        await fault.clear();
+        expect((await context.request.get(`/api/v1/weddings/${w}`)).status()).toBe(200);
       });
 
       await test.step("Deleting returns to the dashboard; access and links are gone", async () => {
