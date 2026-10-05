@@ -10,7 +10,11 @@ export async function sendVerificationEmail(user: { id: string; name: string; em
   const result = await sendEmail(
     user.email,
     "Confirm your email for Seatwise",
-    `${name ? `Hi ${name}` : "Hi"},\n\nPlease confirm this is your email address for Seatwise:\n\n${appUrl}/verify-email/${token}\n\nThis link works for ${EMAIL_VERIFICATION_TTL_HOURS} hours. Until you confirm, Seatwise won't send invites or RSVP emails from your account. If you didn't sign up for Seatwise, you can ignore this email.`
+    `${name ? `Hi ${name}` : "Hi"},\n\nPlease confirm this is your email address for Seatwise:\n\n${appUrl}/verify-email/${token}\n\nThis link works for ${EMAIL_VERIFICATION_TTL_HOURS} hours. Until you confirm, Seatwise won't send invites or RSVP emails from your account. If you didn't sign up for Seatwise, you can ignore this email.`,
+    process.env,
+    // TS-168: like password resets, these still go out once the day's everyday allowance is used
+    // (otherwise using it up would stop anyone new confirming their address).
+    { essential: true }
   );
   return emailDelivered(result);
 }

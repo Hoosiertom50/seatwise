@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { hitRateLimit, peekRateLimit } from "@seatwise/db";
+import { hitRateLimit, peekRateLimit, undoRateLimitHit } from "@seatwise/db";
 
 // TS-98: limits for the public, unauthenticated guest RSVP link -- the one part of the API anyone
 // on the internet can call without signing in. Generous enough that no real guest (or a household
@@ -35,6 +35,10 @@ export const SIGNUP_LIMITS = {
 export const EMAIL_VERIFICATION_LIMITS = {
   confirmsPerAddress: { limit: 30, windowSeconds: 900 },
   resendsPerAccount: { limit: 3, windowSeconds: 900 },
+  // TS-168: daily ceilings, so "Resend link" can't be used to flood one inbox or spend the day's
+  // email allowance.
+  resendsPerAccountDay: { limit: 6, windowSeconds: 86_400 },
+  resendsPerAddressDay: { limit: 20, windowSeconds: 86_400 },
 };
 
 // TS-142: "forgot password" -- requests per address and per email (the per-email cap is what keeps
@@ -43,6 +47,9 @@ export const EMAIL_VERIFICATION_LIMITS = {
 export const PASSWORD_RESET_LIMITS = {
   requestsPerAddress: { limit: 50, windowSeconds: 900 },
   requestsPerEmail: { limit: 3, windowSeconds: 900 },
+  // TS-168: daily ceilings -- reset emails share a reserved part of the daily email allowance.
+  requestsPerAddressDay: { limit: 100, windowSeconds: 86_400 },
+  requestsPerEmailDay: { limit: 6, windowSeconds: 86_400 },
   resetsPerAddress: { limit: 100, windowSeconds: 900 },
 };
 
@@ -120,4 +127,11 @@ export async function reserveEmailSend(kind: keyof typeof EMAIL_SEND_LIMITS, use
     )
   );
   return results.every((r) => r.allowed);
+}
+
+/** TS-168: gives back one email counted by reserveEmailSend, when nothing was sent after all. */
+export async function releaseEmailSend(kind: keyof typeof EMAIL_SEND_LIMITS, userId: string): Promise<void> {
+  await Promise.all(
+    EMAIL_SEND_LIMITS[kind].map(({ windowSeconds }) => undoRateLimitHit(`email:${kind}:${windowSeconds}:${userId}`, windowSeconds))
+  );
 }

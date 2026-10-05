@@ -11,6 +11,8 @@ import {
   ageCategoryEnum,
   PERSON_NAME_PATTERN,
   PERSON_NAME_MESSAGE,
+  looksLikeWebAddress,
+  NO_WEB_ADDRESS_MESSAGE,
   type GuestImportMapping,
   type GuestImportRow,
   type GuestImportRowPreview,
@@ -81,6 +83,9 @@ function parseRow(
       errors.push(`First name "${firstName}" is too long (100 characters max).`);
     } else if (!PERSON_NAME_PATTERN.test(firstName)) {
       errors.push(`First name "${firstName}" is invalid: ${PERSON_NAME_MESSAGE.toLowerCase()}.`);
+    } else if (looksLikeWebAddress(firstName)) {
+      // TS-168: same rule as adding a guest by hand (names go into emails).
+      errors.push(`First name "${firstName}" is invalid: ${NO_WEB_ADDRESS_MESSAGE.toLowerCase()}.`);
     } else {
       data.firstName = firstName;
     }
@@ -88,6 +93,8 @@ function parseRow(
       errors.push(`Last name "${lastName}" is too long (100 characters max).`);
     } else if (!PERSON_NAME_PATTERN.test(lastName)) {
       errors.push(`Last name "${lastName}" is invalid: ${PERSON_NAME_MESSAGE.toLowerCase()}.`);
+    } else if (looksLikeWebAddress(lastName)) {
+      errors.push(`Last name "${lastName}" is invalid: ${NO_WEB_ADDRESS_MESSAGE.toLowerCase()}.`);
     } else {
       data.lastName = lastName;
     }
