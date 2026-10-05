@@ -22,8 +22,8 @@
  * their previously-submitted values -- the component's own local state for those fields is simply
  * left untouched and is still sent along with the decline.
  *
- * Also confirmed and asserted: submitting an RSVP never touches `dayOfAttendance` (that's Day-Of
- * Mode's own, separate signal). TS-154 (Tom's decision #2): each RSVP now notifies the planner and
+ * Also confirmed and asserted: TS-167 (Tom's decision, 2026-10-05) -- declining marks the guest
+ * Not Attending (`dayOfAttendance`), which gives up their seat. TS-154 (Tom's decision #2): each RSVP now notifies the planner and
  * collaborators ("RSVP_RECEIVED"); the Guests tab's "responded" badge (`rsvpRespondedAt`) still
  * flips too, which this test also confirms.
  *
@@ -58,9 +58,9 @@ defineQualityTest(
     id: "rsvp.guest-can-submit-and-update-their-own-rsvp-through-the-link.no-account-needed-and-no-lock-after-first-answer",
     title: "a guest submits and later changes their own RSVP through their unauthenticated link, with no account and no lock after their first answer, and the change is reflected on the planner's Guests tab with an RSVP notification each time",
     objective:
-      "Confirms a fresh, cookie-free browser context can open a guest's RSVP link, see their own name and the wedding name, submit an attending response with party details, see it persisted on reload, then revisit the same link and change to declining -- all without any sign-in. Confirms the planner's private note on the guest is never exposed to the guest and never overwritten (TS-107). Confirms the guest record's rsvpStatus/rsvpRespondedAt/revision update accordingly, dayOfAttendance is untouched, the planner gets an RSVP notification for each submission, and previously-submitted party details survive a switch to declining even though their fields are hidden.",
+      "Confirms a fresh, cookie-free browser context can open a guest's RSVP link, see their own name and the wedding name, submit an attending response with party details, see it persisted on reload, then revisit the same link and change to declining -- all without any sign-in. Confirms the planner's private note on the guest is never exposed to the guest and never overwritten (TS-107). Confirms the guest record's rsvpStatus/rsvpRespondedAt/revision update accordingly, declining marks the guest Not Attending (TS-167), the planner gets an RSVP notification for each submission, and previously-submitted party details survive a switch to declining even though their fields are hidden.",
     expectedOutcome:
-      "The guest sees their own first name and the wedding's name with no login. Submitting shows the success banner and persists on reload (pre-filled). Revisiting and switching to declining succeeds with no restriction. The planner's own guest record afterward shows rsvpStatus DECLINED, a non-null rsvpRespondedAt, revision bumped by 2, dayOfAttendance still ATTENDING, and the earlier party details (headcount/plusOneNames/requiresAccessibleTable) still on file. The planner's private note is absent from the RSVP API response and page and unchanged afterward, while the guest's own final note is in rsvpNotes. The planner has two new RSVP notifications.",
+      "The guest sees their own first name and the wedding's name with no login. Submitting shows the success banner and persists on reload (pre-filled). Revisiting and switching to declining succeeds with no restriction. The planner's own guest record afterward shows rsvpStatus DECLINED, a non-null rsvpRespondedAt, revision bumped by 2, dayOfAttendance NOT_ATTENDING (TS-167), and the earlier party details (headcount/plusOneNames/requiresAccessibleTable) still on file. The planner's private note is absent from the RSVP API response and page and unchanged afterward, while the guest's own final note is in rsvpNotes. The planner has two new RSVP notifications.",
     requirementIds: ["REQ-CLIENT-RSVP-COLLECTION"],
     tags: ["@mutating", "@feature:rsvp", "@risk:critical", "@suite:regression"],
   },
@@ -131,7 +131,7 @@ defineQualityTest(
       await guestBrowserContext.close();
     }
 
-    await test.step("Assert: the planner's own guest record reflects the final (declined) answer, with rsvpRespondedAt set, revision bumped twice, dayOfAttendance untouched, and the earlier party details still on file despite being hidden once declining", async () => {
+    await test.step("Assert: the planner's own guest record reflects the final (declined) answer, with rsvpRespondedAt set, revision bumped twice, dayOfAttendance now Not Attending (TS-167), and the earlier party details still on file despite being hidden once declining", async () => {
       const res = await context.request.get(`/api/v1/weddings/${managedWedding.id}/guests`);
       expect(res.status()).toBe(200);
       const body = (await res.json()) as { guests: GuestListRow[] };
@@ -141,7 +141,8 @@ defineQualityTest(
       expect(guest!.rsvpStatus).toBe("DECLINED");
       expect(guest!.rsvpRespondedAt).toBeTruthy();
       expect(guest!.revision).toBeGreaterThanOrEqual(2); // bumped once per submission (2 submissions)
-      expect(guest!.dayOfAttendance).toBe("ATTENDING"); // RSVP never touches Day-Of Mode's own signal
+      // TS-167 (Tom, 2026-10-05): declining gives up the seat, so the guest is now Not Attending.
+      expect(guest!.dayOfAttendance).toBe("NOT_ATTENDING");
       // TS-107: the guest's note lands in rsvpNotes; the planner's own note is untouched.
       expect(guest!.rsvpNotes).toBe("Can't make it after all, sorry!");
       expect(guest!.notes).toBe(PLANNER_NOTE);
