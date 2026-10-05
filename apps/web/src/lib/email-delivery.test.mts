@@ -12,12 +12,27 @@ const {
   redactLinkTokens,
   setDailyEmailCounterForTests,
   dailyEmailLimits,
+  setRecipientEmailCounterForTests,
+  EMAILS_PER_RECIPIENT_PER_DAY,
 } = await import("@seatwise/db");
 
 // TS-163: the daily email ceiling's counter lives in the database; here it's an in-memory one.
 let sentToday = 0;
+// TS-171: and so does the per-recipient one.
+let toAddress = new Map<string, number>();
 beforeEach(() => {
   sentToday = 0;
+  toAddress = new Map();
+  setRecipientEmailCounterForTests({
+    hit: async (to) => {
+      const n = (toAddress.get(to.toLowerCase()) ?? 0) + 1;
+      toAddress.set(to.toLowerCase(), n);
+      return n;
+    },
+    undo: async (to) => {
+      toAddress.set(to.toLowerCase(), (toAddress.get(to.toLowerCase()) ?? 1) - 1);
+    },
+  });
   setDailyEmailCounterForTests({
     hit: async () => ++sentToday,
     undo: async () => {
@@ -28,6 +43,7 @@ beforeEach(() => {
 afterEach(() => {
   setEmailSenderForTests();
   setDailyEmailCounterForTests();
+  setRecipientEmailCounterForTests();
 });
 
 test("Gmail is used when SMTP_USER and SMTP_PASSWORD are set, with Gmail's host, TLS port and the account as sender", () => {
@@ -182,4 +198,78 @@ test("email-confirmation links' secret parts are hidden like the other link type
 test("EMAIL_TRANSPORT=log wins even when Gmail or Resend credentials are present", () => {
   assert.equal(resolveEmailTransport({ EMAIL_TRANSPORT: "log", SMTP_USER: "u@example.invalid", SMTP_PASSWORD: "p" }).kind, "log");
   assert.equal(resolveEmailTransport({ EMAIL_TRANSPORT: "log", RESEND_API_KEY: "re_x" }).kind, "log");
+});
+
+/** Runs `fn` with console.warn (and console.log) silenced -- refused sends warn on purpose. */
+async function quietly<T>(fn: () => Promise<T>): Promise<T> {
+  const { warn, log } = console;
+  console.warn = () => {};
+  console.log = () => {};
+  try {
+    return await fn();
+  } finally {
+    console.warn = warn;
+    console.log = log;
+  }
+}
+
+// TS-171: the reserved headroom is for password resets only.
+test("with the everyday allowance used up, an email-confirmation (an everyday email) isn't sent but a password reset is", async () => {
+  setEmailSenderForTests(async () => {});
+  const env = { ...GMAIL, EMAIL_DAILY_LIMIT: "1" };
+  await quietly(async () => {
+    assert.equal(await sendEmail("a@example.invalid", "Confirm your email for Seatwise", "t", env), "sent");
+    assert.equal(await sendEmail("b@example.invalid", "Confirm your email for Seatwise", "t", env), "limited");
+    assert.equal(await sendEmail("c@example.invalid", "Reset your Seatwise password", "t", env, { essential: true }), "sent");
+  });
+  assert.equal(sentToday, 2);
+});
+
+test("one address gets at most 5 capped emails a day, however it's written; other addresses are unaffected", async () => {
+  const sent: string[] = [];
+  setEmailSenderForTests(async (_config, message) => {
+    sent.push(message.to);
+  });
+  assert.equal(EMAILS_PER_RECIPIENT_PER_DAY, 5);
+  await quietly(async () => {
+    for (let i = 1; i <= 5; i++) {
+      const to = i % 2 ? "Victim@example.invalid" : "victim@example.invalid";
+      assert.equal(await sendEmail(to, "s", "t", GMAIL), "sent", `email ${i}`);
+    }
+    assert.equal(await sendEmail("victim@example.invalid", "s", "t", GMAIL), "recipient-limited");
+    assert.equal(await sendEmail("VICTIM@example.invalid", "s", "t", GMAIL), "recipient-limited");
+    assert.equal(await sendEmail("someone-else@example.invalid", "s", "t", GMAIL), "sent");
+  });
+  assert.equal(sent.length, 6);
+  assert.equal(sentToday, 6, "refused emails don't use up the day's allowance");
+  assert.equal(emailDelivered("recipient-limited"), false);
+});
+
+test("password resets and notifications to a wedding's own members aren't held to the per-address cap", async () => {
+  setEmailSenderForTests(async () => {});
+  await quietly(async () => {
+    for (let i = 0; i < EMAILS_PER_RECIPIENT_PER_DAY; i++) await sendEmail("me@example.invalid", "s", "t", GMAIL);
+    assert.equal(await sendEmail("me@example.invalid", "s", "t", GMAIL), "recipient-limited");
+    assert.equal(await sendEmail("me@example.invalid", "Reset", "t", GMAIL, { essential: true }), "sent");
+    assert.equal(await sendEmail("me@example.invalid", "Seatwise: update", "t", GMAIL, { toWeddingMember: true }), "sent");
+  });
+});
+
+test("the per-address cap counts with the log transport too, so local runs and CI behave like the live site", async () => {
+  const env = { EMAIL_TRANSPORT: "log", NODE_ENV: "production" };
+  await quietly(async () => {
+    for (let i = 0; i < EMAILS_PER_RECIPIENT_PER_DAY; i++) assert.equal(await sendEmail("x@example.invalid", "s", "t", env), "logged");
+    assert.equal(await sendEmail("x@example.invalid", "s", "t", env), "recipient-limited");
+  });
+  assert.equal(sentToday, 0, "the daily ceiling still only counts real sends");
+});
+
+test("an email refused by the daily ceiling doesn't count toward its recipient's cap", async () => {
+  setEmailSenderForTests(async () => {});
+  const env = { ...GMAIL, EMAIL_DAILY_LIMIT: "1" };
+  await quietly(async () => {
+    await sendEmail("first@example.invalid", "s", "t", env);
+    assert.equal(await sendEmail("y@example.invalid", "s", "t", env), "limited");
+  });
+  assert.equal(toAddress.get("y@example.invalid"), 0);
 });

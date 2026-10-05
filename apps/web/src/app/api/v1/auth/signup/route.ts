@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { signupSchema } from "@seatwise/shared";
-import { createUser, findUserByEmail } from "@seatwise/db";
+import { createUser, findUserByEmail, hitRateLimit } from "@seatwise/db";
 import { hashPassword, signToken, setAuthCookie, wantsBearerToken } from "@/lib/auth";
 import { errorResponse, zodErrorResponse } from "@/lib/api-response";
-import { clientAddress, rateLimitOr429, SIGNUP_LIMITS } from "@/lib/rate-limit";
+import { accountEmailAddressKey, ACCOUNT_EMAIL_LIMITS, clientAddress, rateLimitOr429, SIGNUP_LIMITS } from "@/lib/rate-limit";
 import { sendVerificationEmail } from "@/lib/email-verification";
 
 export async function POST(req: NextRequest) {
@@ -39,7 +39,15 @@ export async function POST(req: NextRequest) {
   }
   const token = await signToken({ sub: user.id, email: user.email, sessionVersion: user.sessionVersion });
   // TS-164: the new account is signed in straight away, and asked to confirm its email address.
-  const verificationEmailSent = await sendVerificationEmail(user);
+  // TS-171: the confirmation email counts with resends and resets from this address. Past the
+  // address's daily allowance the account is still made (a whole office may sign up from one
+  // network) -- just without the email; the banner offers "Resend link" for later.
+  const { allowed: mayEmail } = await hitRateLimit(
+    accountEmailAddressKey(address),
+    ACCOUNT_EMAIL_LIMITS.perAddressDay.limit,
+    ACCOUNT_EMAIL_LIMITS.perAddressDay.windowSeconds
+  );
+  const verificationEmailSent = mayEmail ? await sendVerificationEmail(user) : false;
 
   const response = NextResponse.json(
     {

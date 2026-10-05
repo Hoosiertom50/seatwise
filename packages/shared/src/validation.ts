@@ -30,3 +30,13 @@ export const NO_WEB_ADDRESS_MESSAGE = "Can't look like a web address";
 export function looksLikeWebAddress(value: string): boolean {
   return WEB_ADDRESS_LIKE.test(value);
 }
+
+// TS-171: a wedding's name may hold numbers (a year, a date), but not a phone number -- the name
+// goes into emails Seatwise sends, and a number to call is what a scam message needs. Seven or
+// more digits in a row, ignoring spaces, hyphens and periods between them, is how a phone number
+// looks; a year ("2026") or a short date ("10-5-26") doesn't reach that.
+export const PHONE_NUMBER_LIKE = /\p{Nd}(?:[ .-]*\p{Nd}){6,}/u;
+export const NO_PHONE_NUMBER_MESSAGE = "Can't contain a long run of digits, like a phone number (7 or more)";
+export function looksLikePhoneNumber(value: string): boolean {
+  return PHONE_NUMBER_LIKE.test(value);
+}

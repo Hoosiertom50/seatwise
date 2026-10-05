@@ -390,3 +390,18 @@ export async function holdTimelineEntry(entryId: string): Promise<HeldTimelineEn
     },
   };
 }
+
+/**
+ * TS-171: uses up all but `remaining` of a test network address's daily allowance of account
+ * emails (sign-up confirmations, resent links and password resets), so a test can reach the limit
+ * without a hundred real sign-ups. Test addresses only (198.18.0.0/15, see uniqueTestAddress).
+ */
+export async function useUpAccountEmailAllowance(address: string, limit: number, remaining: number): Promise<void> {
+  if (!/^198\.(18|19)\.\d+\.\d+$/.test(address)) throw new Error(`testDatabase: ${address} isn't a test address.`);
+  const day = 86_400_000;
+  await testPool().query(
+    `INSERT INTO "rate_limit_counters" (key, "windowStart", count) VALUES ($1, $2, $3)
+     ON CONFLICT (key, "windowStart") DO UPDATE SET count = $3`,
+    [`account-email:addr:day:${address}`, new Date(Math.floor(Date.now() / day) * day), limit - remaining],
+  );
+}
