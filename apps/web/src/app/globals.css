@@ -29,5 +29,17 @@
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  /* TS-175: the Geist font the layout loads (this used to say Arial, so Geist was never used). */
+  font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
+}
+
+/* TS-175: an iPhone zooms the whole page in when a form field under 16px is focused, and every
+   field here was 14px -- including the guest's RSVP page. Phone-width screens get 16px fields. */
+@media (max-width: 640px) {
+  /* (Not file pickers: nothing is typed into them, and at 16px they no longer fit.) */
+  input:not([type="file"]),
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
 }

@@ -33,8 +33,6 @@ export function useUnsavedChangesProvider({ onBackRequested }: { onBackRequested
   useEffect(() => {
     onBackRef.current = onBackRequested;
   }, [onBackRequested]);
-  // TS-170: whether this page has added its extra history entry (see below).
-  const guardPushed = useRef(false);
   const [count, setCount] = useState(0);
   const setDirty = useCallback((key: string, dirty: boolean) => {
     const had = dirtyKeys.current.has(key);
@@ -58,39 +56,91 @@ export function useUnsavedChangesProvider({ onBackRequested }: { onBackRequested
   // TS-170: the browser's Back button (or a back swipe) moves within the app without unloading the
   // page, so "beforeunload" never fires and half-typed input was lost without a word. While there's
   // unsaved input, the page adds one extra history entry for itself (a copy of the current one, so
-  // the router treats it as this same page). Pressing Back lands on the real entry for this page --
-  // nothing visible changes -- and the page puts the extra entry back and asks first.
-  useEffect(() => {
-    if (count === 0) return;
-    const pushGuard = () => window.history.pushState({ ...(window.history.state ?? {}), seatwiseGuard: true }, "", window.location.href);
-    if (!guardPushed.current) {
-      pushGuard();
-      guardPushed.current = true;
+  // the router treats it as this same page, marked `seatwiseGuard`). Pressing Back lands on the real
+  // entry for this page -- nothing visible changes -- and the page puts the extra entry back and asks.
+  // TS-175: whether we're on the extra entry is read from the browser's own history state every time
+  // (it was a flag in memory, which went wrong after a save or a reload), the listener stays for the
+  // page's whole life (it was only there while something was unsaved, so the guard worked once), and
+  // the extra entry is taken back off as soon as there's nothing unsaved.
+  const pageUrl = useRef<string | null>(null);
+  /** A Back the page made itself (taking the extra entry off) -- not the user's. */
+  const ignoreNextPop = useRef(false);
+  /** Set while the page is leaving on purpose, so the extra entry isn't taken off in the meantime. */
+  const leaving = useRef(false);
+  const onGuardEntry = () => window.history.state?.seatwiseGuard === true;
+
+  const reconcile = useCallback(() => {
+    if (leaving.current || ignoreNextPop.current) return;
+    if (pageUrl.current !== null && window.location.href !== pageUrl.current) return;
+    if (dirtyKeys.current.size > 0 && !onGuardEntry()) {
+      pageUrl.current = window.location.href;
+      window.history.pushState({ ...(window.history.state ?? {}), seatwiseGuard: true }, "", window.location.href);
+    } else if (dirtyKeys.current.size === 0 && onGuardEntry()) {
+      ignoreNextPop.current = true;
+      window.history.back();
     }
+  }, []);
+
+  // Runs on load too: after a reload the extra entry is still there with nothing unsaved, and is
+  // taken off here (before, one Back press then seemed to do nothing).
+  useEffect(() => {
+    reconcile();
+  }, [count, reconcile]);
+
+  useEffect(() => {
+    pageUrl.current = window.location.href;
     const onPop = () => {
-      if (dirtyKeys.current.size === 0) {
-        guardPushed.current = false;
+      // Back to some other page: the router is taking us there.
+      if (window.location.href !== pageUrl.current) return;
+      if (ignoreNextPop.current) {
+        ignoreNextPop.current = false;
+        reconcile();
         return;
       }
-      pushGuard();
-      onBackRef.current?.();
+      if (leaving.current) return;
+      if (dirtyKeys.current.size > 0 && !onGuardEntry()) {
+        // The user pressed Back from the extra entry: put it back and ask.
+        reconcile();
+        onBackRef.current?.();
+        return;
+      }
+      reconcile();
     };
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
-  }, [count]);
+  }, [reconcile]);
 
   const hasUnsaved = useCallback(() => dirtyKeys.current.size > 0, []);
   const clear = useCallback(() => {
     dirtyKeys.current.clear();
     setCount(0);
   }, []);
-  /** TS-170: "Leave without saving" after Back -- skips the extra entry and the page itself. */
-  const goBackPastPage = useCallback(() => {
+  /**
+   * TS-175: for leaving through a link once the user has said "leave without saving". Returns true
+   * when the page is on its extra history entry, in which case the caller should `router.replace`
+   * (so the extra entry becomes the new page instead of being left behind as a dead entry).
+   */
+  const releaseForLink = useCallback(() => {
+    leaving.current = true;
     dirtyKeys.current.clear();
     setCount(0);
-    const steps = guardPushed.current ? 2 : 1;
-    guardPushed.current = false;
-    window.history.go(-steps);
+    return onGuardEntry();
   }, []);
-  return { registry, hasUnsaved, clear, goBackPastPage, Provider: UnsavedChangesContext.Provider };
+  /**
+   * TS-170: "Leave without saving" after Back -- skips the extra entry and the page itself.
+   * TS-175: if there's nothing before this page (it was opened in a fresh tab), `fallback` runs
+   * instead (before, Leave did nothing there).
+   */
+  const goBackPastPage = useCallback((fallback: () => void) => {
+    leaving.current = true;
+    dirtyKeys.current.clear();
+    setCount(0);
+    window.history.go(onGuardEntry() ? -2 : -1);
+    // If the page is still here shortly after, there was nowhere to go back to.
+    const timer = window.setTimeout(() => {
+      if (window.location.href === pageUrl.current) fallback();
+    }, 500);
+    window.addEventListener("pagehide", () => window.clearTimeout(timer), { once: true });
+  }, []);
+  return { registry, hasUnsaved, clear, releaseForLink, goBackPastPage, Provider: UnsavedChangesContext.Provider };
 }

@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { setAttendanceSchema } from "@seatwise/shared";
-import { setGuestAttendance, AttendanceError } from "@seatwise/db";
+import { setGuestAttendance, AttendanceError, getGuestForWedding } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
 import { errorResponse, zodErrorResponse } from "@/lib/api-response";
 import { requireAccess } from "@/lib/access";
+import { guestForViewer } from "@/lib/guest-privacy";
 
 type Params = { params: Promise<{ weddingId: string; guestId: string }> };
 
@@ -34,7 +35,10 @@ export async function POST(req: NextRequest, { params }: Params) {
       parsed.data.attendance,
       user.id
     );
-    return NextResponse.json({ planVersion });
+    // TS-175: the guest too -- the change bumps their revision (TS-165), and a screen that kept the
+    // old one got a false "edited elsewhere" on its next edit of them.
+    const guest = await getGuestForWedding(guestId, weddingId);
+    return NextResponse.json({ planVersion, guest: guest ? guestForViewer(guest, access.accessLevel) : null });
   } catch (err) {
     if (err instanceof AttendanceError) {
       return errorResponse(err.message, 409);

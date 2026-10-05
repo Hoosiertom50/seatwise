@@ -39,8 +39,10 @@ export function EmailVerificationNotice() {
       className="mb-6 flex flex-wrap items-center gap-3 rounded-md bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:bg-amber-950 dark:text-amber-200"
     >
       <span className="flex-1">
-        Please confirm your email address — we sent a link to <span className="font-medium">{email}</span>. Until you
-        do, Seatwise can&apos;t send invites or RSVP emails for you.
+        {/* TS-175: doesn't claim a link was sent (the sign-up email can fail), and mentions notification emails. */}
+        Please confirm your email address, <span className="font-medium">{email}</span>, with the link we email you —
+        if it hasn&apos;t arrived, use Resend link. Until you do, Seatwise can&apos;t send invites or RSVP emails for
+        you, or email you notifications.
       </span>
       <button
         type="button"

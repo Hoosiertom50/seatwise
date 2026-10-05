@@ -27,8 +27,9 @@ const PLAN_STATUS_LABELS: Record<"DRAFT" | "IN_REVIEW" | "APPROVED", string> = {
 };
 
 const PLAN_STATUS_BADGE_CLASSES: Record<"DRAFT" | "IN_REVIEW" | "APPROVED", string> = {
-  DRAFT: "bg-amber-100 text-amber-700 dark:text-amber-400",
-  IN_REVIEW: "bg-blue-100 text-blue-700 dark:text-blue-400",
+  // TS-175: dark-mode backgrounds too -- light text on the light pill was unreadable.
+  DRAFT: "bg-amber-100 dark:bg-amber-900 text-amber-700 dark:text-amber-300",
+  IN_REVIEW: "bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300",
   APPROVED: "bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-400",
 };
 
@@ -97,6 +98,9 @@ export default function DashboardPage() {
   const [planStatusFilter, setPlanStatusFilter] = useState<PlanStatusFilter>("ALL");
   const [sortKey, setSortKey] = useState<SortKey>("urgency");
 
+  // TS-175: a failed load says so, with Try again -- it used to show "No weddings yet".
+  const [loadFailed, setLoadFailed] = useState(false);
+  const [loadAttempt, setLoadAttempt] = useState(0);
   useEffect(() => {
     (async () => {
       try {
@@ -109,17 +113,18 @@ export default function DashboardPage() {
         ]);
         setWeddings(list.weddings);
         setTemplates(templatesRes.templates);
+        setLoadFailed(false);
       } catch (err) {
         if (err instanceof ApiError && err.status === 401) {
           router.push("/login");
           return;
         }
-        setError("Couldn't load your weddings.");
+        setLoadFailed(true);
       } finally {
         setLoading(false);
       }
     })();
-  }, [router]);
+  }, [router, loadAttempt]);
 
   const visibleWeddings = useMemo(() => {
     const term = search.trim().toLowerCase();
@@ -224,9 +229,16 @@ export default function DashboardPage() {
     }
   }
 
+  // TS-175: a failed log out says so (it failed silently), and a successful one replaces this
+  // page in history, so Back doesn't bounce between the dashboard and the sign-in page.
   async function onLogout() {
-    await api.post("/api/v1/auth/logout");
-    router.push("/login");
+    try {
+      await api.post("/api/v1/auth/logout");
+    } catch {
+      setError("Couldn't log out — check your connection and try again.");
+      return;
+    }
+    router.replace("/login");
   }
 
   if (loading) {
@@ -400,14 +412,18 @@ export default function DashboardPage() {
         )}
       </form>
 
-      {error && <p className="mb-4 text-sm text-red-600 dark:text-red-400">{error}</p>}
+      {error && (
+        <p role="alert" className="mb-4 text-sm text-red-600 dark:text-red-400">
+          {error}
+        </p>
+      )}
 
       {templates.length > 0 && (
         <details className="mb-8 rounded-lg border border-neutral-200 dark:border-neutral-700 p-4">
           <summary className="cursor-pointer text-sm font-medium">
             Your templates ({templates.length})
           </summary>
-          {templatesError && <p className="mt-2 text-sm text-red-600 dark:text-red-400">{templatesError}</p>}
+          {templatesError && <p role="alert" className="mt-2 text-sm text-red-600 dark:text-red-400">{templatesError}</p>}
           <ul className="mt-3 flex flex-col gap-2">
             {templates.map((t) => (
               <li
@@ -474,7 +490,21 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {weddings.length === 0 ? (
+      {loadFailed ? (
+        <div role="alert" className="flex flex-wrap items-center gap-3 text-sm text-red-600 dark:text-red-400">
+          Couldn&apos;t load your weddings.
+          <button
+            type="button"
+            onClick={() => {
+              setLoading(true);
+              setLoadAttempt((n) => n + 1);
+            }}
+            className="rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 text-neutral-900 dark:text-neutral-100 hover:bg-neutral-50 dark:hover:bg-neutral-800"
+          >
+            Try again
+          </button>
+        </div>
+      ) : weddings.length === 0 ? (
         <p className="text-sm text-neutral-500 dark:text-neutral-400">
           {/* TS-96: say what happens after this first step, not just "add one". */}
           No weddings yet — add one above. Then open it to add your guests and tables, and Seatwise
