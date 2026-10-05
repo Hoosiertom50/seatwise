@@ -27,6 +27,11 @@ export async function POST(req: NextRequest, { params }: Params) {
   const parsed = resetPasswordSchema.safeParse({ token, password: body?.password });
   if (!parsed.success) return zodErrorResponse(parsed.error);
 
+  // TS-171: check the link before hashing the new password -- hashing is deliberately slow, and
+  // shouldn't be done for a link that can't be used. (Using it below is still the real check, so
+  // two uses at once can't both succeed.)
+  if (!(await isPasswordResetTokenUsable(parsed.data.token))) return errorResponse(NO_LONGER_VALID, 400);
+
   const user = await resetPasswordWithToken(parsed.data.token, await hashPassword(parsed.data.password));
   if (!user) return errorResponse(NO_LONGER_VALID, 400);
 

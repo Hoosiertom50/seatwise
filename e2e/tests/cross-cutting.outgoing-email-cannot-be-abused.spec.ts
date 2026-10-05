@@ -1,25 +1,28 @@
 /**
  * TS-156 (REQ-NON-FUNCTIONAL) — Seatwise sends every email from one Gmail account, so nobody can
  * use it to spam or phish strangers. A person's or wedding's name (which goes into those emails)
- * can't look like a web address or contain line breaks; one person can send at most 20 invites an
- * hour; and once they've sent 150 RSVP emails in an hour the link is still made but not emailed,
- * with the planner told why.
+ * can't look like a web address or contain line breaks; and one person can send at most 20 invites
+ * an hour.
+ *
+ * TS-171: the RSVP-email limit is now the account's daily allowance for every kind of email (100),
+ * and one guest's link isn't re-emailed within the hour -- so the old "150 RSVP emails to one guest"
+ * step is covered by cross-cutting.no-one-can-use-up-seatwise-email.spec.ts instead.
  */
 
 import { randomBytes } from "node:crypto";
 import { expect, defineQualityTest, test } from "../fixtures/index.js";
-import { uniquePersonName, uniqueToken } from "../data/ids.js";
+import { uniqueToken } from "../data/ids.js";
 import { SignupPage } from "../pages/SignupPage.js";
 
 defineQualityTest(
   {
     id: "cross-cutting.outgoing-email-cannot-be-abused.names-and-send-limits",
     title:
-      "names that look like web addresses are refused, invites are capped at 20 an hour, and RSVP emails stop (link still made) after 150 an hour",
+      "names that look like web addresses are refused, and invites are capped at 20 an hour",
     objective:
-      "Confirms that signup refuses a name that looks like a web address or contains a line break (and the signup page says which field and why), that a wedding name that looks like a web address is refused, that a 21st invite within an hour is refused with 429 and not created, and that after 150 RSVP emails in an hour the RSVP link is still returned but marked emailLimited and not emailed.",
+      "Confirms that signup refuses a name that looks like a web address or contains a line break (and the signup page says which field and why), that a wedding name that looks like a web address is refused, and that a 21st invite within an hour is refused with 429 and not created.",
     expectedOutcome:
-      "Signup and wedding-name attempts get 422 with a name field error; the page shows 'Name: Can't look like a web address'. Invites 1-20 get 201 and the 21st gets 429 with the 'sent a lot of invites' message, leaving 20 invites. RSVP-link calls 1-150 report emailed: true; the 151st reports emailed: false, emailLimited: true and still carries a URL.",
+      "Signup and wedding-name attempts get 422 with a name field error; the page shows 'Name: Can't look like a web address'. Invites 1-20 get 201 and the 21st gets 429 with the 'sent a lot of invites' message, leaving 20 invites.",
     requirementIds: ["REQ-NON-FUNCTIONAL"],
     tags: [
       "@mutating",
@@ -29,7 +32,7 @@ defineQualityTest(
       "@suite:regression",
     ],
   },
-  async ({ managedWedding, weddingData, context, browser }, testInfo) => {
+  async ({ managedWedding, context, browser }, testInfo) => {
     test.setTimeout(120_000);
     const w = managedWedding.id;
 
@@ -117,41 +120,6 @@ defineQualityTest(
         await context.request.get(`/api/v1/weddings/${w}/invites`)
       ).json()) as { invites: unknown[] };
       expect(invites).toHaveLength(20);
-    });
-
-    await test.step("After 150 RSVP emails in an hour, the link is still made but not emailed", async () => {
-      const guest = await weddingData.createGuest(w, {
-        ...uniquePersonName(testInfo.workerIndex),
-      });
-      await context.request.patch(`/api/v1/weddings/${w}/guests/${guest.id}`, {
-        data: {
-          email: `pw-guest-${uniqueToken(testInfo.workerIndex)}@example.invalid`,
-        },
-      });
-      // Adding the first email above already sent one RSVP email automatically.
-      type Rsvp = {
-        rsvp: { url: string; emailed: boolean; emailLimited?: boolean };
-      };
-      for (let sent = 2; sent <= 150; sent += 10) {
-        const batch = Array.from({ length: Math.min(10, 151 - sent) }, () =>
-          context.request
-            .post(`/api/v1/weddings/${w}/guests/${guest.id}/rsvp-link`, {
-              data: {},
-            })
-            .then(async (r) => (await r.json()) as Rsvp),
-        );
-        for (const { rsvp } of await Promise.all(batch))
-          expect(rsvp.emailed).toBe(true);
-      }
-      const over = (await (
-        await context.request.post(
-          `/api/v1/weddings/${w}/guests/${guest.id}/rsvp-link`,
-          { data: {} },
-        )
-      ).json()) as Rsvp;
-      expect(over.rsvp.emailed).toBe(false);
-      expect(over.rsvp.emailLimited).toBe(true);
-      expect(over.rsvp.url).toMatch(/\/rsvp\/[0-9a-f]{64}$/);
     });
   },
 );

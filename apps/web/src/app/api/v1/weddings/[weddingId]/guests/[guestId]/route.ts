@@ -117,7 +117,7 @@ export async function PATCH(req: NextRequest, { params }: Params) {
   return NextResponse.json({
     guest,
     warnings,
-    ...(rsvpEmail ? { rsvpEmail: { emailed: rsvpEmail.emailed, emailFailed: rsvpEmail.emailFailed, emailLimited: rsvpEmail.emailLimited ?? false, confirmEmailFirst: rsvpEmail.confirmEmailFirst ?? false } } : {}),
+    ...(rsvpEmail ? { rsvpEmail: { emailed: rsvpEmail.emailed, emailFailed: rsvpEmail.emailFailed, emailLimited: rsvpEmail.emailLimited ?? false, confirmEmailFirst: rsvpEmail.confirmEmailFirst ?? false, recentlyEmailed: rsvpEmail.recentlyEmailed ?? false, recipientLimited: rsvpEmail.recipientLimited ?? false } } : {}),
   });
 }
 

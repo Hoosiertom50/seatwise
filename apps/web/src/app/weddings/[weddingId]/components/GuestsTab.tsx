@@ -34,10 +34,16 @@ interface RsvpEmailOutcome {
   emailLimited?: boolean;
   // TS-164
   confirmEmailFirst?: boolean;
+  // TS-171
+  recentlyEmailed?: boolean;
+  recipientLimited?: boolean;
 }
 
-// TS-156: shown when the planner has hit the RSVP-email limit.
-const EMAIL_LIMITED_NOTE = "You've sent a lot of RSVP emails in a short time, so this one wasn't sent";
+// TS-156: shown when the planner has hit their email limit. (TS-171: it now counts every kind of
+// email the account sends in a day.)
+const EMAIL_LIMITED_NOTE = "You've sent a lot of emails today, so this one wasn't sent";
+// TS-171: this address has already had its share of Seatwise email today.
+const RECIPIENT_LIMITED_NOTE = "This address has already had several emails from Seatwise today, so this one wasn't sent";
 // TS-164
 const CONFIRM_EMAIL_NOTE = "Not emailed — confirm your own email address first (see the note at the top of the page)";
 
@@ -436,6 +442,10 @@ export function GuestsTab({
           ? `${CONFIRM_EMAIL_NOTE} — or use "RSVP link" to copy it and send it yourself.`
           : outcome.emailLimited
           ? `${EMAIL_LIMITED_NOTE} — use "RSVP link" later, or copy it and send it yourself.`
+          : outcome.recipientLimited
+          ? `${RECIPIENT_LIMITED_NOTE} — use "RSVP link" to copy it and send it yourself.`
+          : outcome.recentlyEmailed
+          ? `Already emailed the RSVP link to ${email} within the last hour.`
           : `Couldn't email ${email} — use "RSVP link" to copy it and send it yourself.`,
     }));
   }
@@ -536,7 +546,7 @@ export function GuestsTab({
     setRsvpLinkResult((prev) => ({ ...prev, [guestId]: "" }));
     try {
       const { rsvp } = await api.post<{
-        rsvp: { url: string; emailed: boolean; emailFailed?: boolean; emailLimited?: boolean; confirmEmailFirst?: boolean };
+        rsvp: RsvpEmailOutcome & { url: string };
       }>(
         `/api/v1/weddings/${weddingId}/guests/${guestId}/rsvp-link`,
         { regenerate }
@@ -546,6 +556,10 @@ export function GuestsTab({
         ? `${CONFIRM_EMAIL_NOTE} — send ${guestEmail} the link yourself. `
         : rsvp.emailLimited
         ? `${EMAIL_LIMITED_NOTE} — send ${guestEmail} the link yourself. `
+        : rsvp.recipientLimited
+        ? `${RECIPIENT_LIMITED_NOTE} — send ${guestEmail} the link yourself. `
+        : rsvp.recentlyEmailed
+        ? `Already emailed to ${guestEmail} within the last hour, so not sent again. `
         : rsvp.emailFailed
           ? `Couldn't email ${guestEmail} — send them the link yourself. `
           : "";

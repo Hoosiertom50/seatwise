@@ -93,9 +93,12 @@ defineQualityTest(
 
     await test.step("25 wrong passwords sent at once still only get 10 tries", async () => {
       const { email } = await newAccount();
+      // TS-171: from one address -- the 10-try limit is per account *from each address* (with a much
+      // higher limit across all addresses), so a stranger elsewhere can't lock the owner out.
+      const from = address();
       const statuses = await Promise.all(
         Array.from({ length: 25 }, async () => {
-          const api = await playwright.request.newContext({ baseURL, extraHTTPHeaders: { "x-forwarded-for": address() } });
+          const api = await playwright.request.newContext({ baseURL, extraHTTPHeaders: { "x-forwarded-for": from } });
           try {
             return (await api.post("/api/v1/auth/login", { data: { email, password: `wrong-${randomUUID()}` } })).status();
           } finally {

@@ -60,6 +60,10 @@ export interface RsvpLinkDTO {
   emailLimited?: boolean;
   // TS-164: not emailed because the planner hasn't confirmed their own email address yet.
   confirmEmailFirst?: boolean;
+  // TS-171: not emailed again because this link already went to this address within the hour.
+  recentlyEmailed?: boolean;
+  // TS-171: not emailed because this address has already had its share of Seatwise email today.
+  recipientLimited?: boolean;
   // TS-132: true only when the email really went out (or, in local dev/CI, was logged) -- lets the
   // UI say "link emailed to X" vs. "link copied".
   emailed: boolean;

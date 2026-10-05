@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createInviteSchema } from "@seatwise/shared";
-import { emailSafePersonName, emailSafeWeddingName } from "@/lib/email-safe-names";
+import { inviteEmailText } from "@/lib/outgoing-email-text";
 import { confirmEmailFirstMessage } from "@/lib/email-verification";
 import { createInvite, listInvitesForWedding, sendEmailNotification, emailDelivered, InviteError } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
@@ -58,17 +58,18 @@ export async function POST(req: NextRequest, { params }: Params) {
     const appUrl = process.env.APP_URL || "http://localhost:3000";
     const acceptUrl = `${appUrl}/invites/${invite.token}`;
     const roleLabel = invite.role === "COUPLE" ? "a Couple member" : "a collaborator";
-    // TS-156: the inviter's own name only goes into the email if it reads as a name -- accounts
-    // made before the signup rule tightened could hold anything.
-    const safeInviter = emailSafePersonName(user.name);
-    // TS-163: the same for the wedding's name -- weddings named before TS-156 could hold anything.
-    const weddingName = emailSafeWeddingName(access.wedding.name);
-    const safeWedding = weddingName ? `"${weddingName}"` : "a wedding";
-    const sent = await sendEmailNotification(
-      invite.email,
-      `You've been invited to plan a wedding on Seatwise`,
-      `${safeInviter ? `${safeInviter} invited you` : "You've been invited"} to join ${safeWedding} on Seatwise as ${roleLabel} with ${invite.permissionLevel.toLowerCase()} access.\n\nAccept the invite: ${acceptUrl}\n\nThis link expires in 7 days. If you weren't expecting this, you can ignore it.`
-    );
+    // TS-156 / TS-163 / TS-171: names only go in if they pass today's rules, and never in the subject.
+    const { subject, text } = inviteEmailText({
+      inviterName: user.name,
+      weddingName: access.wedding.name,
+      roleLabel,
+      permissionLevel: invite.permissionLevel,
+      acceptUrl,
+    });
+    const sent = await sendEmailNotification(invite.email, subject, text);
+    // TS-171: the invite was made but nothing went out (this address has had its share of email
+    // today) -- it doesn't use up the sender's allowance; the owner gets the link to send instead.
+    if (sent === "recipient-limited") await releaseEmailSend("invites", user.id);
 
     const { token: _token, ...invitePublic } = invite;
     // TS-132: if the email didn't go out, hand the owner the accept link to send themselves --
