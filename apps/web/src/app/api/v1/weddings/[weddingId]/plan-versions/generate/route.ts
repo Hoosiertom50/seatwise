@@ -18,7 +18,7 @@ import {
   getWeddingById,
 } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
-import { errorResponse, zodErrorResponse } from "@/lib/api-response";
+import { errorResponse, zodErrorResponse, concurrentChangeResponse } from "@/lib/api-response";
 import { requireAccess } from "@/lib/access";
 
 type Params = { params: Promise<{ weddingId: string }> };
@@ -115,15 +115,24 @@ export async function POST(req: NextRequest, { params }: Params) {
     });
   }
 
-  const planVersionId = await createPlanVersionWithAssignments(weddingId, {
-    isComplete: result.isComplete,
-    warnings: result.warnings,
-    assignments: result.assignments,
-    unassignedGuestIds: result.unassignedGuestIds,
-    sideMixingSetting: sideMixing,
-    ruleConfigVersion: RULE_WEIGHT_CONFIG_VERSION,
-    makeCurrent,
-  });
+  let planVersionId: string;
+  try {
+    // TS-173: the new version is re-checked table by table and recounted as it's saved, since
+    // tables, rules or lists can change while the plan above was being worked out.
+    planVersionId = await createPlanVersionWithAssignments(weddingId, {
+      isComplete: result.isComplete,
+      warnings: result.warnings,
+      assignments: result.assignments,
+      unassignedGuestIds: result.unassignedGuestIds,
+      sideMixingSetting: sideMixing,
+      ruleConfigVersion: RULE_WEIGHT_CONFIG_VERSION,
+      makeCurrent,
+    });
+  } catch (err) {
+    const conflict = concurrentChangeResponse(err);
+    if (conflict) return conflict;
+    throw err;
+  }
 
   const planVersion = await getPlanVersionDetail(planVersionId, weddingId);
   if (!planVersion) {

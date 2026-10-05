@@ -43,6 +43,15 @@ export async function checkGuestHardRuleViolation(
     );
     if (reqRows.length === 0) return true;
   }
+  // TS-173: and the other way round -- a guest on a Restricted table's list belongs at that table
+  // and no other. Before, only an unlisted guest *at* a Restricted table was flagged, so putting a
+  // seated guest on another table's list left them where they were, unflagged.
+  const { rows: requiredElsewhere } = await q.query(
+    `SELECT 1 FROM "restricted_table_guests" rtg JOIN "seating_tables" t ON t.id = rtg."tableId"
+     WHERE rtg."guestId" = $1 AND rtg."tableId" <> $2 AND t."isRestricted" LIMIT 1`,
+    [guestId, tableId]
+  );
+  if (requiredElsewhere.length > 0) return true;
 
   const { rows: conflictRows } = await q.query(
     `SELECT 1
@@ -229,6 +238,19 @@ export async function refreshPlanCompleteness(
   );
 }
 
+// TS-173: every write that touches seats takes its locks in one order -- the wedding row (when it
+// needs one), then the current plan's row, then guests, tables and seats. Before, moves locked the
+// plan first and re-checks locked tables or guests first, so a guest declining by link while the
+// planner moved someone into their table could deadlock (and fail with a 500). Call this right
+// after BEGIN (and after any wedding lock); it returns the current plan's id, if there is one.
+export async function lockCurrentPlan(q: Queryable, weddingId: string): Promise<string | null> {
+  const { rows } = await q.query(
+    `SELECT id FROM "plan_versions" WHERE "weddingId" = $1 AND "isCurrent" FOR UPDATE`,
+    [weddingId]
+  );
+  return (rows[0]?.id as string | undefined) ?? null;
+}
+
 /** The Current Plan Version's id for a wedding, if there is one. */
 export async function currentPlanVersionId(q: Queryable, weddingId: string): Promise<string | null> {
   const { rows } = await q.query(`SELECT id FROM "plan_versions" WHERE "weddingId" = $1 AND "isCurrent" LIMIT 1`, [
@@ -244,11 +266,15 @@ export async function resyncGuestsSeats(
   weddingId: string,
   guestIds: string[]
 ): Promise<{ newlyFlagged: { guestId: string; name: string; reason: TableSeatingFlagReason }[] }> {
-  const planVersionId = await currentPlanVersionId(pool, weddingId);
-  if (!planVersionId || guestIds.length === 0) return { newlyFlagged: [] };
+  if (guestIds.length === 0) return { newlyFlagged: [] };
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
+    const planVersionId = await lockCurrentPlan(client, weddingId);
+    if (!planVersionId) {
+      await client.query("COMMIT");
+      return { newlyFlagged: [] };
+    }
     const { rows } = await client.query(
       `SELECT DISTINCT "seatingTableId" AS "tableId" FROM "seat_assignments"
        WHERE "planVersionId" = $1 AND "guestId" = ANY($2::text[])

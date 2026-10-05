@@ -244,3 +244,65 @@ export async function weddingNotificationEmailsThisHour(weddingId: string): Prom
   );
   return rows[0].n;
 }
+
+/** TS-173: a test wedding's row lock, held from outside the app -- see holdWeddingLock. */
+export interface HeldWeddingLock {
+  /** Resolves once `count` of the app's own database sessions are waiting on this lock. */
+  waitForWaiters(count: number): Promise<void>;
+  /** Lets the waiting requests carry on. */
+  release(): Promise<void>;
+}
+
+/**
+ * TS-173: holds a test wedding's row lock (the one Generate, Restore, imports and attendance
+ * changes take) so a test can pause those requests at exactly the point a race used to slip in,
+ * change something meanwhile, then let them go. Uses its own connection, separate from the
+ * lookups above. Test weddings only (owner at the reserved test domain).
+ */
+export async function holdWeddingLock(weddingId: string): Promise<HeldWeddingLock> {
+  const { Client } = await import("pg");
+  const client = new Client({ connectionString: resolveDatabaseUrl() });
+  testPool(); // the same production refusal as every other helper here
+  await client.connect();
+  await client.query("BEGIN");
+  const { rows } = await client.query(
+    `SELECT w.id FROM "weddings" w JOIN "users" u ON u.id = w."ownerId"
+     WHERE w.id = $1 AND u.email LIKE $2 FOR UPDATE OF w`,
+    [weddingId, TEST_EMAIL_PATTERN],
+  );
+  if (!rows[0]) {
+    await client.query("ROLLBACK");
+    await client.end();
+    throw new Error(`testDatabase: no test wedding ${weddingId}.`);
+  }
+  const { rows: me } = await client.query<{ pid: number }>(`SELECT pg_backend_pid() AS pid`);
+  const pid = me[0].pid;
+  return {
+    async waitForWaiters(count: number) {
+      const deadline = Date.now() + 15_000;
+      for (;;) {
+        // Waiting behind this lock directly, or queued behind a request that is (a second request
+        // for the same row waits on the first waiter, not on the holder).
+        const { rows: waiting } = await testPool().query<{ n: number }>(
+          `WITH RECURSIVE blocked(pid) AS (
+             SELECT pid FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid))
+             UNION
+             SELECT a.pid FROM pg_stat_activity a JOIN blocked b ON b.pid = ANY(pg_blocking_pids(a.pid))
+           )
+           SELECT COUNT(*)::int AS n FROM blocked`,
+          [pid],
+        );
+        if (waiting[0].n >= count) return;
+        if (Date.now() > deadline) throw new Error(`testDatabase: only ${waiting[0].n} of ${count} request(s) reached the wedding lock.`);
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+    },
+    async release() {
+      try {
+        await client.query("ROLLBACK");
+      } finally {
+        await client.end();
+      }
+    },
+  };
+}

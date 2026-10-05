@@ -1,7 +1,7 @@
 import { randomUUID } from "crypto";
 import { pool } from "../pool";
 import { encryptText } from "../crypto";
-import { recordRecheckIfApproved, resyncSeatsAtTable, tablesAffectedBy } from "./seat-checks";
+import { lockCurrentPlan, recordRecheckIfApproved, resyncSeatsAtTable, tablesAffectedBy } from "./seat-checks";
 import {
   parseCsv,
   guestTierEnum,
@@ -288,17 +288,15 @@ export async function commitGuestImport(
     );
   }
 
-  // FR-2.9: the Current Plan Version, if any -- fetched once up front since import never
-  // generates a new version itself, so it's stable for the whole commit below.
-  const { rows: planRows } = await pool.query(
-    `SELECT id FROM "plan_versions" WHERE "weddingId" = $1 AND "isCurrent" LIMIT 1`,
-    [weddingId]
-  );
-  const planVersionId: string | undefined = planRows[0]?.id;
-
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
+    // TS-173: the same wedding lock Generate, Restore and attendance changes take, then the
+    // current plan's row (see lockCurrentPlan) -- and the current plan read under them. Before,
+    // it was read before the transaction, so an import racing a Generate could leave guests it
+    // marked Not Attending seated in the new version.
+    await client.query(`SELECT id FROM "weddings" WHERE id = $1 FOR UPDATE`, [weddingId]);
+    const planVersionId: string | undefined = (await lockCurrentPlan(client, weddingId)) ?? undefined;
 
     // TS-92: refuse the whole import (it's all-or-nothing already) if any guest it would update
     // was changed by someone else after the planner previewed it -- otherwise the import would

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { restorePlanVersion, RestoreError } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
-import { errorResponse } from "@/lib/api-response";
+import { errorResponse, concurrentChangeResponse } from "@/lib/api-response";
 import { requireAccess } from "@/lib/access";
 
 type Params = { params: Promise<{ weddingId: string; planVersionId: string }> };
@@ -24,6 +24,8 @@ export async function POST(req: NextRequest, { params }: Params) {
     return NextResponse.json({ planVersion, warnings }, { status: 201 });
   } catch (err) {
     if (err instanceof RestoreError) return errorResponse(err.message, 404);
+    const conflict = concurrentChangeResponse(err);
+    if (conflict) return conflict;
     throw err;
   }
 }

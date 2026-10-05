@@ -2,12 +2,12 @@ import { randomUUID } from "crypto";
 import { pool } from "../pool";
 import { notifyWeddingCollaborators } from "./notifications";
 import {
-  resyncSeatsAtTable,
   refreshPlanCompleteness,
   resyncTables,
   tablesAffectedBy,
   recordRecheckIfApproved,
   currentPlanVersionId as currentPlanVersionIdFor,
+  lockCurrentPlan,
 } from "./seat-checks";
 import { RULE_WEIGHT_CONFIG, RULE_WEIGHT_CONFIG_VERSION, compareTableLabels } from "@seatwise/shared";
 
@@ -64,6 +64,45 @@ export class ManualMoveError extends Error {}
 export class AttendanceError extends Error {}
 export class SwapError extends Error {}
 export class RestoreError extends Error {}
+// TS-173: a guest or table this new version seats was deleted while it was being worked out (the
+// database refused the seat, 23503). Nothing was saved; trying again works from the new data.
+export class PlanSourceChangedError extends Error {
+  constructor() {
+    super("The guest list or tables changed while this plan was being made — nothing was saved. Please try again.");
+  }
+}
+
+// TS-173: inserts every seat of a new version in one statement (it was one query per guest).
+async function insertSeats(
+  client: { query: (text: string, params?: unknown[]) => Promise<unknown> },
+  planVersionId: string,
+  seats: { guestId: string; tableId: string }[]
+): Promise<void> {
+  if (seats.length === 0) return;
+  await client.query(
+    `INSERT INTO "seat_assignments" (id, "planVersionId", "guestId", "seatingTableId", "needsReassignment", "updatedAt")
+     SELECT id, $1, "guestId", "tableId", false, now()
+     FROM unnest($2::text[], $3::text[], $4::text[]) AS x(id, "guestId", "tableId")`,
+    [planVersionId, seats.map(() => randomUUID()), seats.map((a) => a.guestId), seats.map((a) => a.tableId)]
+  );
+}
+
+// TS-173: re-checks every table a brand-new version seats anyone at, then recounts it. The seats
+// were worked out from data read before the version's transaction, so a table edit, a new rule or
+// a changed list in between could otherwise leave it overfilled or breaking a rule while still
+// saying "complete".
+async function checkNewVersion(
+  client: Parameters<typeof resyncTables>[0],
+  weddingId: string,
+  planVersionId: string
+): Promise<void> {
+  const { rows } = await client.query(
+    `SELECT DISTINCT "seatingTableId" AS "tableId" FROM "seat_assignments" WHERE "planVersionId" = $1`,
+    [planVersionId]
+  );
+  await resyncTables(client, weddingId, planVersionId, rows.map((r) => r.tableId as string));
+  await refreshPlanCompleteness(client, weddingId, planVersionId, { bumpRevision: false });
+}
 
 // FR-7.7: thrown instead of applying a write whose expectedRevision no longer matches the
 // version's current one -- the fresh, up-to-date planVersion is attached so the caller can
@@ -217,22 +256,16 @@ export async function createPlanVersionWithAssignments(
       );
     }
 
-    for (const a of input.assignments) {
-      await client.query(
-        `INSERT INTO "seat_assignments" (id, "planVersionId", "guestId", "seatingTableId", "needsReassignment", "updatedAt")
-         VALUES ($1, $2, $3, $4, false, now())`,
-        [randomUUID(), planVersionId, a.guestId, a.tableId]
-      );
-    }
+    await insertSeats(client, planVersionId, input.assignments);
     // TS-169: the plan was worked out from the guest list as it was before this transaction; a
     // guest who declined (or was marked Not Attending) since then doesn't keep a seat in it.
     // Attendance changes take the same wedding lock, so they land either before this or after it.
-    const { rowCount: dropped } = await client.query(
+    await client.query(
       `DELETE FROM "seat_assignments" WHERE "planVersionId" = $1
          AND "guestId" IN (SELECT id FROM "guests" WHERE "weddingId" = $2 AND "dayOfAttendance" <> 'ATTENDING')`,
       [planVersionId, weddingId]
     );
-    if (dropped) await refreshPlanCompleteness(client, weddingId, planVersionId, { bumpRevision: false });
+    await checkNewVersion(client, weddingId, planVersionId);
 
     const draftSuffix = makeCurrent ? "" : " (saved as a comparison draft, not made Current)";
     const description =
@@ -252,6 +285,7 @@ export async function createPlanVersionWithAssignments(
     return planVersionId;
   } catch (err) {
     await client.query("ROLLBACK");
+    if ((err as { code?: string }).code === "23503") throw new PlanSourceChangedError();
     throw err;
   } finally {
     client.release();
@@ -1014,15 +1048,13 @@ export async function setGuestAttendance(
     // current version and their attendance read again under them. Before, a guest declining by
     // link while a plan was being generated (or the planner moved them) could keep their seat.
     await client.query(`SELECT id FROM "weddings" WHERE id = $1 FOR UPDATE`, [weddingId]);
+    // TS-173: the current plan's row before the guest's (see lockCurrentPlan) -- a move locks the
+    // plan first too, so the two can no longer deadlock.
+    currentPlanVersionId = (await lockCurrentPlan(client, weddingId)) ?? undefined;
     const { rows: lockedGuest } = await client.query(
       `SELECT "dayOfAttendance" FROM "guests" WHERE id = $1 FOR UPDATE`,
       [guestId]
     );
-    const { rows: lockedCurrent } = await client.query(
-      `SELECT id FROM "plan_versions" WHERE "weddingId" = $1 AND "isCurrent" LIMIT 1`,
-      [weddingId]
-    );
-    currentPlanVersionId = lockedCurrent[0]?.id;
     if (lockedGuest[0]?.dayOfAttendance === attendance) {
       await client.query("COMMIT");
       return currentPlanVersionId ? getPlanVersionDetail(currentPlanVersionId, weddingId) : null;
@@ -1422,41 +1454,48 @@ export async function swapGuestAssignments(
 // must-sit-together rule added since the snapshot is a genuine tension with "restore exactly
 // what v2 looked like" — rather than silently reshuffling the copied layout to fix it (which
 // would stop being a restore), it's surfaced as a non-blocking warning instead.
-async function computeRestorePlacement(sourceVersionId: string, weddingId: string) {
-  const { rows: sourceRows } = await pool.query(
+// TS-173: reads through `q` -- a restore passes its own transaction's client, after taking the
+// wedding lock, so attendance can't change between working out the seats and saving them.
+async function computeRestorePlacement(sourceVersionId: string, weddingId: string, q: Pick<typeof pool, "query"> = pool) {
+  const { rows: sourceRows } = await q.query(
     `SELECT id, "versionNumber" FROM "plan_versions" WHERE id = $1 AND "weddingId" = $2`,
     [sourceVersionId, weddingId]
   );
   const source = sourceRows[0];
   if (!source) throw new RestoreError("Source plan version not found.");
 
-  const { rows: sourceAssignments } = await pool.query(
-    `SELECT "guestId", "seatingTableId" AS "tableId" FROM "seat_assignments" WHERE "planVersionId" = $1`,
+  const { rows: sourceAssignments } = await q.query(
+    // TS-173: in the same order a table re-check uses (locked guests first, then in the order they
+    // were seated), so the preview and the restore keep and drop the same guests.
+    `SELECT sa."guestId", sa."seatingTableId" AS "tableId"
+     FROM "seat_assignments" sa JOIN "guests" g ON g.id = sa."guestId"
+     WHERE sa."planVersionId" = $1
+     ORDER BY g."isLocked" DESC, sa."createdAt", sa.id`,
     [sourceVersionId]
   );
 
-  const { rows: guests } = await pool.query(
+  const { rows: guests } = await q.query(
     `SELECT id, ("firstName" || ' ' || "lastName") AS name, headcount, "requiresAccessibleTable"
      FROM "guests" WHERE "weddingId" = $1 AND "dayOfAttendance" = 'ATTENDING'`,
     [weddingId]
   );
   const guestsById = new Map(guests.map((g) => [g.id, g]));
 
-  const { rows: tables } = await pool.query(
+  const { rows: tables } = await q.query(
     `SELECT id, label, capacity, "isAccessible", "isRestricted" FROM "seating_tables" WHERE "weddingId" = $1`,
     [weddingId]
   );
   const tablesById = new Map(tables.map((t) => [t.id, t]));
   // TS-150: a Restricted table takes only the guests on its required list, and a guest on a list
   // belongs at that table and no other.
-  const { rows: requiredRows } = await pool.query(
+  const { rows: requiredRows } = await q.query(
     `SELECT rtg."tableId", rtg."guestId" FROM "restricted_table_guests" rtg
      JOIN "seating_tables" st ON st.id = rtg."tableId" WHERE st."weddingId" = $1 AND st."isRestricted"`,
     [weddingId]
   );
   const requiredTableByGuest = new Map(requiredRows.map((r) => [r.guestId as string, r.tableId as string]));
 
-  const { rows: rels } = await pool.query(
+  const { rows: rels } = await q.query(
     `SELECT "guestAId", "guestBId", type FROM "guest_relationships" WHERE "weddingId" = $1`,
     [weddingId]
   );
@@ -1614,15 +1653,17 @@ export async function restorePlanVersion(
   weddingId: string,
   actorUserId: string
 ): Promise<ManualMoveResult> {
-  const result = await computeRestorePlacement(sourceVersionId, weddingId);
-
   const client = await pool.connect();
   let newVersionId: string;
+  let result: Awaited<ReturnType<typeof computeRestorePlacement>>;
   try {
     await client.query("BEGIN");
     // TS-150: one new version at a time per wedding -- two Generate (or Restore) clicks at once
     // would otherwise both take the same next version number and the second would fail.
     await client.query(`SELECT id FROM "weddings" WHERE id = $1 FOR UPDATE`, [weddingId]);
+    // TS-173: worked out under the wedding lock (attendance changes take it too), so a guest who
+    // declined a moment ago is never seated by the restore.
+    result = await computeRestorePlacement(sourceVersionId, weddingId, client);
 
     const { rows: versionRows } = await client.query(
       `SELECT COALESCE(MAX("versionNumber"), 0) + 1 AS "next" FROM "plan_versions" WHERE "weddingId" = $1`,
@@ -1642,24 +1683,11 @@ export async function restorePlanVersion(
       [newVersionId, weddingId, versionNumber, result.isComplete, sourceVersionId]
     );
 
-    for (const a of result.kept) {
-      await client.query(
-        `INSERT INTO "seat_assignments" (id, "planVersionId", "guestId", "seatingTableId", "needsReassignment", "updatedAt")
-         VALUES ($1, $2, $3, $4, false, now())`,
-        [randomUUID(), newVersionId, a.guestId, a.tableId]
-      );
-    }
+    await insertSeats(client, newVersionId, result.kept);
 
     // TS-150: check the restored seating against today's rules table by table (e.g. a must-sit
     // pair the old version kept apart), so the new version's completeness tells the truth.
-    const { rows: restoredTables } = await client.query(
-      `SELECT DISTINCT "seatingTableId" AS "tableId" FROM "seat_assignments" WHERE "planVersionId" = $1 ORDER BY 1`,
-      [newVersionId]
-    );
-    for (const { tableId } of restoredTables as { tableId: string }[]) {
-      await resyncSeatsAtTable(client, weddingId, newVersionId, tableId);
-    }
-    await refreshPlanCompleteness(client, weddingId, newVersionId, { bumpRevision: false });
+    await checkNewVersion(client, weddingId, newVersionId);
 
     const description =
       `Restored from version ${result.sourceVersionNumber}` +
@@ -1675,6 +1703,7 @@ export async function restorePlanVersion(
     await client.query("COMMIT");
   } catch (err) {
     await client.query("ROLLBACK");
+    if ((err as { code?: string }).code === "23503") throw new PlanSourceChangedError();
     throw err;
   } finally {
     client.release();
