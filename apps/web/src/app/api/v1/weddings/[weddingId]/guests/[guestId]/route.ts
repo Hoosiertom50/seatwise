@@ -60,7 +60,8 @@ export async function PATCH(req: NextRequest, { params }: Params) {
   // TS-143: remember whether the guest had an email before this edit -- giving them their first one
   // sends their RSVP link, just like adding a guest with an email does (and TS-154: so does
   // correcting it).
-  const before = rest.email ? await getGuestForWedding(guestId, weddingId) : null;
+  // TS-169: and what their RSVP answer was, so a change of it can change their attendance.
+  const before = rest.email || rest.rsvpStatus ? await getGuestForWedding(guestId, weddingId) : null;
 
   try {
     const updated = await updateGuestForWedding(guestId, weddingId, rest, expectedRevision);
@@ -76,10 +77,13 @@ export async function PATCH(req: NextRequest, { params }: Params) {
 
   if (dayOfAttendance !== undefined) {
     await setGuestAttendance(weddingId, guestId, dayOfAttendance, user.id);
-  } else if (rest.rsvpStatus === "DECLINED") {
+  } else if (rest.rsvpStatus === "DECLINED" && before?.rsvpStatus !== "DECLINED") {
     // TS-167: marking a guest Declined frees their seat, the same as when they decline themselves.
     // (setGuestAttendance does nothing if they're already Not Attending.)
     await setGuestAttendance(weddingId, guestId, "NOT_ATTENDING", user.id);
+  } else if (rest.rsvpStatus && rest.rsvpStatus !== "DECLINED" && before?.rsvpStatus === "DECLINED") {
+    // TS-169: and changing them back from Declined brings them back -- Attending, waiting for a seat.
+    await setGuestAttendance(weddingId, guestId, "ATTENDING", user.id);
   }
 
   const warnings: string[] = [];
@@ -128,7 +132,7 @@ export async function DELETE(req: NextRequest, { params }: Params) {
   const guest = await getGuestForWedding(guestId, weddingId);
   if (!guest) return errorResponse("Guest not found", 404);
 
-  const deleted = await deleteGuestForWedding(guestId, weddingId);
+  const deleted = await deleteGuestForWedding(guestId, weddingId, user.id);
   if (!deleted) return errorResponse("Guest not found", 404);
 
   // FR-2.9: removing a guest cascades away their own seat_assignments row at the DB level, but
