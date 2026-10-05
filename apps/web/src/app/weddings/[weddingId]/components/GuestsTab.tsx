@@ -889,7 +889,8 @@ export function GuestsTab({
           type="file"
           accept=".csv,text/csv"
           onChange={onFileSelected}
-          className="mb-3 block text-sm"
+          // TS-175: never wider than the space it is in (with Linux fonts it ran 6px off a phone screen).
+          className="mb-3 block w-full max-w-full text-sm"
           // TS-53 (AC-079): no visible <label> wraps this input (the paragraph/button above it are
           // instructions and a download link, not a label element) -- axe-core's WCAG 2.1 AA "label"
           // rule flagged it as critical (no accessible name at all). Same sr-only-name fix shape as
