@@ -37,3 +37,12 @@ test("a decoded ?next= value with an encoded tab is refused", () => {
   const next = new URLSearchParams("next=/%09/evil.example").get("next");
   assert.equal(safeNextPath(next), "/dashboard");
 });
+
+test("dot segments that would resolve to another site fall back (TS-162)", () => {
+  for (const raw of ["/.//evil.example", "/..//evil.example", "/a/..//evil.example", "/%2e%2e//evil.example", "/./%2e//evil.example/x?y=1"]) {
+    assert.equal(safeNextPath(raw), "/dashboard", raw);
+  }
+  // Ordinary dot segments that stay on Seatwise still work.
+  assert.equal(safeNextPath("/weddings/./abc"), "/weddings/abc");
+  assert.equal(safeNextPath("/a/../dashboard"), "/dashboard");
+});
