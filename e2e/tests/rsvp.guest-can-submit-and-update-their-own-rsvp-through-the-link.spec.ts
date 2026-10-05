@@ -19,8 +19,8 @@
  * and resubmit, each time overwriting their own prior answer (the success banner's own text says
  * exactly this). A second real finding: switching to "Regretfully declining" hides the
  * CONFIRMED-only fields (headcount/plus-ones/accessible-seat) from the form, but does NOT clear
- * their previously-submitted values -- the component's own local state for those fields is simply
- * left untouched and is still sent along with the decline.
+ * their previously-submitted values. TS-174: they're no longer sent with the decline, and the server
+ * ignores them on a decline anyway -- the values already on file simply stay as they were.
  *
  * Also confirmed and asserted: TS-167 (Tom's decision, 2026-10-05) -- declining marks the guest
  * Not Attending (`dayOfAttendance`), which gives up their seat. TS-154 (Tom's decision #2): each RSVP now notifies the planner and

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { expectedRevisionField } from "./common";
 import { PERSON_NAME_PATTERN, PERSON_NAME_MESSAGE, looksLikeWebAddress, NO_WEB_ADDRESS_MESSAGE } from "../validation";
 
 export const guestTierEnum = z.enum(["VIP", "FAMILY", "FRIEND", "PLUS_ONE", "OTHER"]);
@@ -80,7 +81,7 @@ export type CreateGuestInput = z.infer<typeof createGuestSchema>;
 
 // FR-7.7, extended to guests: every edit accepts the revision the client last saw, so the server
 // can detect a save that landed on top of a newer one instead of silently overwriting it.
-const expectedRevisionField = z.number().int().nonnegative().optional();
+// TS-174: bounded to what the database can store (see ./common).
 
 export const updateGuestSchema = createGuestSchema.partial().extend({
   expectedRevision: expectedRevisionField,

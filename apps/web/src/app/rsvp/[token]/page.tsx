@@ -72,14 +72,22 @@ export default function GuestRsvpPage() {
     setError(null);
     setSubmitting(true);
     try {
+      // TS-170: a cleared party-size box reads as 0 -- and once "declining" hides it, the browser
+      // no longer checks it -- so it's never sent below 1.
+      const partySize = Math.max(1, headcount || 1);
+      // TS-174: only the answers the form is showing are sent. Declining hides the party size,
+      // plus-ones and accessible seat (they stay as they were on file); a party of one hides the
+      // plus-ones, so a name typed before the size dropped to 1 isn't sent (it's cleared).
       await api.post(`/api/v1/rsvp/${token}`, {
         rsvpStatus: attending,
-        // TS-170: a cleared party-size box reads as 0 -- and once "declining" hides it, the browser
-        // no longer checks it -- so it's never sent below 1.
-        headcount: Math.max(1, headcount || 1),
-        plusOneNames: plusOneNames || null,
         notes: notes || null,
-        requiresAccessibleTable,
+        ...(attending === "CONFIRMED"
+          ? {
+              headcount: partySize,
+              plusOneNames: partySize > 1 ? plusOneNames || null : null,
+              requiresAccessibleTable,
+            }
+          : {}),
       });
       setJustSubmitted(true);
       await load();

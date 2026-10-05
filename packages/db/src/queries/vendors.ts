@@ -119,6 +119,10 @@ export async function updateVendorForWedding(
   if (input.categoryOther !== undefined) {
     fields.push(`"categoryOther" = $${i++}`);
     values.push(input.categoryOther);
+  } else if (input.category !== undefined && input.category !== "OTHER") {
+    // TS-174: moving a vendor off "Other" drops its "Other" label -- before, it was kept and
+    // carried on into vendor suggestions on the planner's other weddings.
+    fields.push(`"categoryOther" = NULL`);
   }
   if (input.contactName !== undefined) {
     fields.push(`"contactName" = $${i++}`);
@@ -330,7 +334,7 @@ export async function getVendorViewByToken(token: string): Promise<VendorViewRow
       [v.weddingId, v.id]
     ),
     pool.query(
-      `SELECT time, description FROM "timeline_entries" WHERE "weddingId" = $1 ORDER BY time, "sortOrder"`,
+      `SELECT time, description FROM "timeline_entries" WHERE "weddingId" = $1 ORDER BY time, "sortOrder", "createdAt", id`, // TS-174: the planner's order (timeline.ts)
       [v.weddingId]
     ),
   ]);
@@ -371,7 +375,10 @@ export async function listVendorSuggestionsForOwner(
   const { rows } = await pool.query(
     `SELECT name, category, "categoryOther", "contactName", "contactEmail", "contactPhone" FROM (
        SELECT DISTINCT ON (lower(btrim(v.name)))
-              btrim(v.name) AS name, v.category, v."categoryOther", v."contactName", v."contactEmail", v."contactPhone"
+              btrim(v.name) AS name, v.category,
+              -- TS-174: a label left from before on a vendor that's no longer "Other" isn't offered.
+              CASE WHEN v.category = 'OTHER' THEN v."categoryOther" END AS "categoryOther",
+              v."contactName", v."contactEmail", v."contactPhone"
        FROM "vendors" v JOIN "weddings" w ON w.id = v."weddingId"
        WHERE w."ownerId" = $1 AND ($2::text IS NULL OR v."weddingId" <> $2)
        ORDER BY lower(btrim(v.name)), v."updatedAt" DESC

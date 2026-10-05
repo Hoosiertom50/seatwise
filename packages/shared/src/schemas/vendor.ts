@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { expectedRevisionField } from "./common";
 
 // TS-20 (FR-15.1): FR-15.1's own list of examples, plus the handful of other common wedding
 // vendor types -- OTHER (with categoryOther holding the free-text label) covers anything not
@@ -74,7 +75,7 @@ export type CreateVendorInput = z.infer<typeof createVendorSchema>;
 
 // FR-7.7, extended to vendors: every edit accepts the revision the client last saw, so the server
 // can detect a save that landed on top of a newer one instead of silently overwriting it.
-const expectedRevisionField = z.number().int().nonnegative().optional();
+// TS-174: bounded to what the database can store (see ./common).
 
 export const updateVendorSchema = vendorBaseSchema
   .partial()
@@ -89,7 +90,7 @@ export const setBudgetSchema = z.object({
   budgetCents: z.number().int().min(0).max(1_000_000_000).nullable(),
   // TS-92: the budgetRevision the client last saw -- a stale save is refused (409) rather than
   // overwriting a collaborator's newer budget figure.
-  expectedRevision: z.number().int().nonnegative().optional(),
+  expectedRevision: expectedRevisionField,
 });
 export type SetBudgetInput = z.infer<typeof setBudgetSchema>;
 
