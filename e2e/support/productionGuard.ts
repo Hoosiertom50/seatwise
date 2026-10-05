@@ -19,7 +19,28 @@ export function resolveIsProduction(baseURL: string, productionHostnames: string
     // validation is what should catch a malformed APP_URL in the first place).
     return false;
   }
-  return productionHostnames.includes(hostname);
+  // TS-172: a trailing dot is the same host, and Netlify also serves a site at
+  // "<deploy-id>--<site host>" permalinks and on subdomains -- all of them the production site
+  // (with its production database), so they count as production too.
+  hostname = hostname.replace(/\.$/, "");
+  return productionHostnames.some((p) => {
+    const host = p.toLowerCase().replace(/\.$/, "");
+    return hostname === host || hostname.endsWith(`--${host}`) || hostname.endsWith(`.${host}`);
+  });
+}
+
+/**
+ * TS-172: the framework's own database helpers (testDatabase.ts, the teardown sweep) only ever
+ * connect to a database on this machine or CI's throwaway one -- whatever APP_URL says. A
+ * production DATABASE_URL left exported in a shell must never be used by them.
+ */
+const LOCAL_DATABASE_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]", "postgres"]);
+export function isLocalDatabaseUrl(url: string | undefined): boolean {
+  try {
+    return LOCAL_DATABASE_HOSTS.has(new URL(url ?? "").hostname);
+  } catch {
+    return false;
+  }
 }
 
 /**

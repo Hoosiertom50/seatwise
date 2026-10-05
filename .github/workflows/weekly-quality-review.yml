@@ -66,7 +66,8 @@ jobs:
       - name: Start the application and wait for it to be ready
         run: |
           pnpm --filter @seatwise/web start -p 3000 &
-          npx --yes wait-on http://localhost:3000 --timeout 60000
+          # TS-172: a plain retry loop instead of downloading an unpinned npm package on every run.
+          node -e "const end=Date.now()+60000;(async function wait(){try{const r=await fetch('http://localhost:3000');if(r.ok)return;}catch{}if(Date.now()>end){console.error('server did not start');process.exit(1)}setTimeout(wait,1000)})()"
       - name: Re-run the regression selection 3x to proactively surface new flakiness
         env:
           CI: "true"

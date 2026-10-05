@@ -4,9 +4,17 @@ import bcrypt from "bcryptjs";
 
 const JWT_SECRET = process.env.JWT_SECRET;
 
+let warnedShortSecret = false;
+
 function getSecretKey() {
   if (!JWT_SECRET) {
     throw new Error("JWT_SECRET environment variable is not set");
+  }
+  // TS-172: a short secret could be guessed offline from any session token. It's reported rather
+  // than refused, so a deployment with a shorter secret keeps working while it's replaced.
+  if (process.env.NODE_ENV === "production" && JWT_SECRET.length < 32 && !warnedShortSecret) {
+    warnedShortSecret = true;
+    console.error("[auth] JWT_SECRET is shorter than 32 characters -- replace it with a long random value.");
   }
   return new TextEncoder().encode(JWT_SECRET);
 }
@@ -94,7 +102,8 @@ export async function signToken(payload: TokenPayload): Promise<string> {
 
 export async function verifyToken(token: string): Promise<VerifiedToken | null> {
   try {
-    const { payload } = await jwtVerify(token, getSecretKey());
+    // TS-172: only the algorithm Seatwise signs with is accepted.
+    const { payload } = await jwtVerify(token, getSecretKey(), { algorithms: ["HS256"] });
     if (typeof payload.sub !== "string" || typeof payload.email !== "string") return null;
     const issuedAt = typeof payload.iat === "number" ? payload.iat : 0;
     const authTime = typeof payload.authTime === "number" ? payload.authTime : issuedAt;
@@ -116,4 +125,12 @@ export function setAuthCookie(response: NextResponse, token: string): void {
     path: "/",
     maxAge: AUTH_TOKEN_TTL_SECONDS,
   });
+}
+
+// TS-172: the session token goes back in a sign-in response's body only to a client that keeps it
+// itself (the mobile app, which says so with this header). A web page gets it only as the
+// httpOnly cookie -- a copy in the body is something a script injected into the page could read.
+export const BEARER_CLIENT_HEADER = "x-seatwise-client";
+export function wantsBearerToken(req: { headers: Headers }): boolean {
+  return req.headers.get(BEARER_CLIENT_HEADER) === "mobile";
 }

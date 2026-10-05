@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { signupSchema } from "@seatwise/shared";
 import { createUser, findUserByEmail } from "@seatwise/db";
-import { hashPassword, signToken, setAuthCookie } from "@/lib/auth";
+import { hashPassword, signToken, setAuthCookie, wantsBearerToken } from "@/lib/auth";
 import { errorResponse, zodErrorResponse } from "@/lib/api-response";
 import { clientAddress, rateLimitOr429, SIGNUP_LIMITS } from "@/lib/rate-limit";
 import { sendVerificationEmail } from "@/lib/email-verification";
@@ -42,7 +42,11 @@ export async function POST(req: NextRequest) {
   const verificationEmailSent = await sendVerificationEmail(user);
 
   const response = NextResponse.json(
-    { user: { id: user.id, name: user.name, email: user.email, emailVerified: false }, token, verificationEmailSent },
+    {
+      user: { id: user.id, name: user.name, email: user.email, emailVerified: false },
+      ...(wantsBearerToken(req) ? { token } : {}),
+      verificationEmailSent,
+    },
     { status: 201 }
   );
   setAuthCookie(response, token);

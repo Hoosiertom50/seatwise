@@ -16,7 +16,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { Pool } from "pg";
 import { getEnv } from "./env";
-import { resolveIsProduction } from "./productionGuard";
+import { isLocalDatabaseUrl, resolveIsProduction } from "./productionGuard";
 import { TEST_ACCOUNT_EMAIL_DOMAIN } from "./auth";
 
 /**
@@ -50,6 +50,10 @@ function testPool(): Pool {
     const connectionString = resolveDatabaseUrl();
     if (!connectionString) {
       throw new Error("testDatabase: no DATABASE_URL in the environment or the root .env.");
+    }
+    // TS-172: never a database that isn't on this machine (or CI's), whatever APP_URL is.
+    if (!isLocalDatabaseUrl(connectionString)) {
+      throw new Error("testDatabase: refused -- DATABASE_URL isn't a local database.");
     }
     // One connection is plenty for a handful of lookups, and keeps a worker from holding a pool.
     // allowExitOnIdle so an idle connection never keeps a worker process alive.

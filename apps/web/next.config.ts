@@ -11,7 +11,9 @@ import type { NextConfig } from "next";
 // - Permissions-Policy turns off device features Seatwise never uses.
 const SECURITY_HEADERS = [
   { key: "X-Frame-Options", value: "DENY" },
-  { key: "Content-Security-Policy", value: "frame-ancestors 'none'" },
+  // TS-172: plus three directives that can't break any script or style -- no plugins, no changing
+  // the page's base URL, and forms only submit to Seatwise itself.
+  { key: "Content-Security-Policy", value: "frame-ancestors 'none'; object-src 'none'; base-uri 'self'; form-action 'self'" },
   { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
   { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=()" },
   { key: "X-Content-Type-Options", value: "nosniff" },
@@ -25,7 +27,16 @@ const nextConfig: NextConfig = {
     "/api/v1/weddings/*/plan-versions/*/export/*": ["./fonts/**/*"],
   },
   async headers() {
-    return [{ source: "/:path*", headers: SECURITY_HEADERS }];
+    // TS-172: private links (guest RSVP, vendor view, invites, password reset, email confirmation)
+    // are never to be indexed or followed by search engines.
+    const noIndex = [{ key: "X-Robots-Tag", value: "noindex, nofollow" }];
+    return [
+      { source: "/:path*", headers: SECURITY_HEADERS },
+      ...["/rsvp/:path*", "/vendor/:path*", "/invites/:path*", "/reset-password/:path*", "/verify-email/:path*"].map((source) => ({
+        source,
+        headers: noIndex,
+      })),
+    ];
   },
 };
 

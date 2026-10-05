@@ -3,7 +3,13 @@
 // E2E-fixture weddings that tests never cleaned up) instead of just the two real weddings on
 // Tom's own account. See fill-existing-weddings.ts for the script that caused this.
 //
-// This deletes every wedding EXCEPT the two explicitly kept below. Because every row that
+// TS-172: it now deletes ONLY test data -- weddings whose name carries the Playwright marker
+// ("pwqa-fixture") or that are owned by a test account (@example.invalid). It used to delete every
+// wedding except two hard-coded ids, which would have wiped every real wedding made since (and,
+// pointed at the live database, every couple's wedding). It also refuses to run against anything
+// but a local database (local-only.ts).
+//
+// Previously: this deleted every wedding EXCEPT the two explicitly kept below. Because every row that
 // references a wedding (guests, guest_relationships, seating_tables, plan_versions,
 // seat_assignments, change_history_entries, comments, notifications, timeline_entries,
 // collaborators, invites) has `onDelete: Cascade` back to Wedding in schema.prisma, deleting the
@@ -14,14 +20,14 @@
 //
 //   pnpm db:cleanup-test-weddings            # dry run, safe, prints a preview
 //   pnpm db:cleanup-test-weddings --confirm  # actually deletes
-import "./load-env";
+// TS-172: local databases only (see local-only.ts).
+import "./local-only";
 import { pool } from "../src/index";
 
-// Tom's two real weddings -- everything else in the dev DB is a leftover Playwright test fixture.
-const KEEP_WEDDING_IDS = [
-  "5f384ca5-d27c-42d6-b971-4f1d4c0f0453", // "Jim and Melissa"
-  "d95acaaa-1974-40c8-bdbf-f91b0c2794f6", // "Chris and Jill"
-];
+// TS-172: what counts as test data -- the same rules the e2e teardown sweep uses.
+const TEST_DATA_MARKER = "pwqa-fixture";
+const TEST_ACCOUNT_DOMAIN = "%@example.invalid";
+const IS_TEST_WEDDING = `(w.name LIKE '%' || $1 || '%' OR u.email LIKE $2)`;
 
 interface WeddingRow {
   id: string;
@@ -33,13 +39,15 @@ async function main() {
   const confirmed = process.argv.includes("--confirm");
 
   const { rows: toDelete } = await pool.query<WeddingRow>(
-    `SELECT id, name, "createdAt" FROM "weddings" WHERE id != ALL($1::text[]) ORDER BY "createdAt"`,
-    [KEEP_WEDDING_IDS],
+    `SELECT w.id, w.name, w."createdAt" FROM "weddings" w JOIN "users" u ON u.id = w."ownerId"
+     WHERE ${IS_TEST_WEDDING} ORDER BY w."createdAt"`,
+    [TEST_DATA_MARKER, TEST_ACCOUNT_DOMAIN],
   );
 
   const { rows: kept } = await pool.query<WeddingRow>(
-    `SELECT id, name, "createdAt" FROM "weddings" WHERE id = ANY($1::text[])`,
-    [KEEP_WEDDING_IDS],
+    `SELECT w.id, w.name, w."createdAt" FROM "weddings" w JOIN "users" u ON u.id = w."ownerId"
+     WHERE NOT ${IS_TEST_WEDDING}`,
+    [TEST_DATA_MARKER, TEST_ACCOUNT_DOMAIN],
   );
 
   console.log(`Weddings in DB: ${toDelete.length + kept.length} total.\n`);

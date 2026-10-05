@@ -388,6 +388,12 @@ export async function listPlanVersionsForWedding(weddingId: string): Promise<Pla
 // TS-13/FR-10.2: several notification triggers ("post-approval") need to know whether the
 // wedding's Current Plan Version is currently Approved — used by guest add/remove routes, which
 // otherwise have no reason to touch plan_versions at all.
+/** TS-172: one plan version's status, scoped to its wedding (null if there's no such version). */
+export async function getPlanVersionStatusForWedding(id: string, weddingId: string): Promise<string | null> {
+  const { rows } = await pool.query(`SELECT status FROM "plan_versions" WHERE id = $1 AND "weddingId" = $2`, [id, weddingId]);
+  return (rows[0]?.status as string | undefined) ?? null;
+}
+
 export async function getCurrentPlanVersionStatus(weddingId: string): Promise<string | null> {
   const { rows } = await pool.query(
     `SELECT status FROM "plan_versions" WHERE "weddingId" = $1 AND "isCurrent" LIMIT 1`,
