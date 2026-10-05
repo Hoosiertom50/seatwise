@@ -47,11 +47,16 @@ export interface SeatingTemplateDetail extends SeatingTemplateRow {
 export class TemplateNotFoundError extends Error {}
 
 const SELECT_TEMPLATE = `
-  SELECT st.id, st."ownerId", st.name, st."sourceWeddingId", w.name AS "sourceWeddingName",
+  SELECT st.id, st."ownerId", st.name, w.id AS "sourceWeddingId", w.name AS "sourceWeddingName",
          st."sideMixing", st."createdAt", st."updatedAt",
          COALESCE(tc.count, 0)::int AS "tableCount"
   FROM "seating_templates" st
+  -- TS-172: the wedding a template came from is shown only while the template's owner can still
+  -- open that wedding (owner or collaborator). An Edit collaborator who saved a template and was
+  -- later removed used to keep seeing the wedding's current name.
   LEFT JOIN "weddings" w ON w.id = st."sourceWeddingId"
+    AND (w."ownerId" = st."ownerId"
+      OR EXISTS (SELECT 1 FROM "wedding_collaborators" wc WHERE wc."weddingId" = w.id AND wc."userId" = st."ownerId"))
   LEFT JOIN (
     SELECT "templateId", COUNT(*) AS count FROM "seating_template_tables" GROUP BY "templateId"
   ) tc ON tc."templateId" = st.id

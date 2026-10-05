@@ -2,7 +2,7 @@
 // TypeScript-native test runner (no `page`/browser fixture involved) -- pure-function logic gets
 // pure-function tests, matching spec Section 8.2's "quality" idea of testing at the right level.
 import { test, expect } from "@playwright/test";
-import { resolveIsProduction, assertMutationAllowed, ProductionMutationBlockedError, selectionMayMutate } from "../../e2e/support/productionGuard";
+import { resolveIsProduction, assertMutationAllowed, ProductionMutationBlockedError, selectionMayMutate, isLocalDatabaseUrl } from "../../e2e/support/productionGuard";
 
 test.describe("resolveIsProduction", () => {
   test("an empty production hostname list never matches, by construction", () => {
@@ -16,6 +16,23 @@ test.describe("resolveIsProduction", () => {
 
   test("does not match an unrelated hostname", () => {
     expect(resolveIsProduction("https://staging.example.com", ["app.example.com"])).toBe(false);
+  });
+
+  // TS-172
+  test("Netlify deploy permalinks, subdomains and a trailing dot count as the production site", () => {
+    const prod = ["seatwise-app.netlify.app"];
+    expect(resolveIsProduction("https://68f1c2--seatwise-app.netlify.app", prod)).toBe(true);
+    expect(resolveIsProduction("https://seatwise-app.netlify.app.", prod)).toBe(true);
+    expect(resolveIsProduction("https://www.seatwise-app.netlify.app", prod)).toBe(true);
+    expect(resolveIsProduction("https://other-seatwise-app.netlify.app", prod)).toBe(false);
+  });
+
+  test("only a local or CI database counts as local", () => {
+    expect(isLocalDatabaseUrl("postgresql://u:p@localhost:5432/db")).toBe(true);
+    expect(isLocalDatabaseUrl("postgresql://u:p@postgres:5432/db")).toBe(true);
+    expect(isLocalDatabaseUrl("postgresql://u:p@127.0.0.1/db")).toBe(true);
+    expect(isLocalDatabaseUrl("postgresql://u:p@ep-x.us-east-2.aws.neon.tech/db")).toBe(false);
+    expect(isLocalDatabaseUrl(undefined)).toBe(false);
   });
 
   test("a malformed base URL is treated as non-production rather than throwing", () => {

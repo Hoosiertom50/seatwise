@@ -19,7 +19,12 @@ export async function GET(req: NextRequest, { params }: Params) {
   if ("error" in access) return access.error;
 
   const vendors = await listVendorsForWedding(weddingId);
-  return NextResponse.json({ vendors });
+  // TS-172 (Tom's decision, 2026-10-05): a vendor's contract notes are for the owner and Edit
+  // collaborators only. View and Comment still see costs, contacts and the budget.
+  const canSeeContractNotes = access.accessLevel === "OWNER" || access.accessLevel === "EDIT";
+  return NextResponse.json({
+    vendors: canSeeContractNotes ? vendors : vendors.map((v) => ({ ...v, contractNotes: null })),
+  });
 }
 
 export async function POST(req: NextRequest, { params }: Params) {

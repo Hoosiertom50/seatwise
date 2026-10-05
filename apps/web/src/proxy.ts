@@ -49,7 +49,12 @@ function refuseCrossSiteWrite(req: NextRequest): NextResponse | null {
     return NextResponse.json({ error: "Requests from other sites aren't accepted." }, { status: 403 });
   }
   const type = req.headers.get("content-type");
-  if (type && !type.toLowerCase().startsWith("application/json")) {
+  // TS-172: a request with a body must say it's JSON. One with no Content-Type at all used to get
+  // through -- and a cross-site "no-cors" request can send a body without one, which (in browsers
+  // that don't send Sec-Fetch-Site) the routes would still have read as JSON. A write with no body
+  // (Generate, log out) needs no type.
+  const hasBody = Number(req.headers.get("content-length") ?? "0") > 0 || req.headers.has("transfer-encoding");
+  if ((type && !type.toLowerCase().startsWith("application/json")) || (!type && hasBody)) {
     return NextResponse.json({ error: "Send this request as JSON." }, { status: 415 });
   }
   return null;
