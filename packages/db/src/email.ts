@@ -156,5 +156,5 @@ export async function sendEmail(
 
 /** TS-149: hides the secret part of every Seatwise link (reset, invite, RSVP, vendor) in a text. */
 export function redactLinkTokens(text: string): string {
-  return text.replace(/(\/(?:reset-password|invites|rsvp|vendor)\/)[0-9a-f]{16,}/gi, "$1[hidden]");
+  return text.replace(/(\/(?:reset-password|verify-email|invites|rsvp|vendor)\/)[0-9a-f]{16,}/gi, "$1[hidden]");
 }

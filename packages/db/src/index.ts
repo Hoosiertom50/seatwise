@@ -19,4 +19,5 @@ export * from "./queries/rate-limit";
 export * from "./email";
 export * from "./queries/account";
 export * from "./queries/password-reset";
+export * from "./queries/email-verification";
 export { hashLinkToken } from "./link-tokens";

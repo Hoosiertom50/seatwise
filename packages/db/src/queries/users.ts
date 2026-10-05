@@ -8,6 +8,8 @@ export interface UserRow {
   name: string;
   // TS-155
   sessionVersion: number;
+  // TS-164: null until the owner confirms their address.
+  emailVerifiedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -21,7 +23,7 @@ export async function createUser(input: {
   const { rows } = await pool.query<UserRow>(
     `INSERT INTO "users" (id, email, "passwordHash", name, "updatedAt")
      VALUES ($1, $2, $3, $4, now())
-     RETURNING id, email, "passwordHash", name, "sessionVersion", "createdAt", "updatedAt"`,
+     RETURNING id, email, "passwordHash", name, "sessionVersion", "emailVerifiedAt", "createdAt", "updatedAt"`,
     [id, input.email.toLowerCase(), input.passwordHash, input.name]
   );
   return rows[0];
@@ -29,7 +31,7 @@ export async function createUser(input: {
 
 export async function findUserByEmail(email: string): Promise<UserRow | null> {
   const { rows } = await pool.query<UserRow>(
-    `SELECT id, email, "passwordHash", name, "sessionVersion", "createdAt", "updatedAt"
+    `SELECT id, email, "passwordHash", name, "sessionVersion", "emailVerifiedAt", "createdAt", "updatedAt"
      FROM "users" WHERE email = $1`,
     [email.toLowerCase()]
   );
@@ -38,7 +40,7 @@ export async function findUserByEmail(email: string): Promise<UserRow | null> {
 
 export async function findUserById(id: string): Promise<UserRow | null> {
   const { rows } = await pool.query<UserRow>(
-    `SELECT id, email, "passwordHash", name, "sessionVersion", "createdAt", "updatedAt"
+    `SELECT id, email, "passwordHash", name, "sessionVersion", "emailVerifiedAt", "createdAt", "updatedAt"
      FROM "users" WHERE id = $1`,
     [id]
   );

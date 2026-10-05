@@ -71,7 +71,9 @@ export async function resetPasswordWithToken(
     ]);
     // TS-155: a new password also ends every existing session.
     const { rows: users } = await client.query<{ id: string; email: string; sessionVersion: number }>(
-      `UPDATE "users" SET "passwordHash" = $1, "sessionVersion" = "sessionVersion" + 1, "updatedAt" = now()
+      // TS-164: using a link emailed to the address also proves the person owns it.
+      `UPDATE "users" SET "passwordHash" = $1, "sessionVersion" = "sessionVersion" + 1,
+         "emailVerifiedAt" = COALESCE("emailVerifiedAt", now()), "updatedAt" = now()
        WHERE id = $2 RETURNING id, email, "sessionVersion"`,
       [newPasswordHash, row.userId]
     );

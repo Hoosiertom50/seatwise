@@ -168,3 +168,12 @@ test("the log transport used locally and in CI never counts against the ceiling"
   assert.equal(await sendEmail("a@example.invalid", "s", "t", { EMAIL_TRANSPORT: "log", NODE_ENV: "production", EMAIL_DAILY_LIMIT: "1" }), "logged");
   assert.equal(sentToday, 0);
 });
+
+// TS-164: "confirm your email" links are hidden in production logs too.
+test("email-confirmation links' secret parts are hidden like the other link types", () => {
+  const token = "ab".repeat(32);
+  assert.equal(
+    redactLinkTokens(`Confirm here: https://seatwise.example/verify-email/${token}`),
+    "Confirm here: https://seatwise.example/verify-email/[hidden]"
+  );
+});

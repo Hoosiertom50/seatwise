@@ -75,6 +75,7 @@ function generateEphemeralPassword(): string {
 export async function signUpFreshAccount(
   request: APIRequestContext,
   workerIndex: number,
+  { confirmEmail = true }: { confirmEmail?: boolean } = {},
 ): Promise<SignedUpAccount> {
   refuseTestAccountsOnProduction();
   const token = uniqueToken(workerIndex);
@@ -89,6 +90,8 @@ export async function signUpFreshAccount(
   if (!res.ok()) {
     throw new Error(`signUpFreshAccount failed: HTTP ${res.status()} — ${await res.text()}`);
   }
+  // TS-164: confirmed as if the emailed link had been clicked (see confirmTestAccountEmail).
+  if (confirmEmail) await (await import("./testDatabase.js")).confirmTestAccountEmail(email);
   return { name, email };
 }
 
@@ -116,6 +119,7 @@ export async function signUpFreshAccountInNewContext(
   browser: Browser,
   workerIndex: number,
   label = "",
+  { confirmEmail = true }: { confirmEmail?: boolean } = {},
 ): Promise<SignedUpBrowserSession> {
   refuseTestAccountsOnProduction();
   // TS-163: its own made-up address, like every test (see uniqueTestAddress).
@@ -133,5 +137,7 @@ export async function signUpFreshAccountInNewContext(
     await context.close();
     throw new Error(`signUpFreshAccountInNewContext failed: HTTP ${res.status()} — ${await res.text()}`);
   }
+  // TS-164: confirmed as if the emailed link had been clicked (see confirmTestAccountEmail).
+  if (confirmEmail) await (await import("./testDatabase.js")).confirmTestAccountEmail(email);
   return { name, email, context };
 }

@@ -8,6 +8,7 @@ import { api, ApiError, apiErrorMessage } from "@/lib/api-client";
 import { formatShortEventDate, localTodayIso } from "@/lib/display-format";
 import type { WeddingSummaryDTO, SeatingTemplateDTO } from "@seatwise/shared";
 import { NotificationsBell } from "@/components/NotificationsBell";
+import { EmailVerificationNotice } from "@/components/EmailVerificationNotice";
 
 // TS-19 (FR-14.2): human-readable labels for a template's captured rule-shape.
 const SIDE_MIXING_LABELS: Record<string, string> = {
@@ -256,6 +257,9 @@ export default function DashboardPage() {
           </button>
         </div>
       </div>
+
+      {/* TS-164 */}
+      <EmailVerificationNotice />
 
       <form
         onSubmit={onCreate}

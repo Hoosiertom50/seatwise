@@ -4,6 +4,7 @@ import { createUser, findUserByEmail } from "@seatwise/db";
 import { hashPassword, signToken, setAuthCookie } from "@/lib/auth";
 import { errorResponse, zodErrorResponse } from "@/lib/api-response";
 import { clientAddress, rateLimitOr429, SIGNUP_LIMITS } from "@/lib/rate-limit";
+import { sendVerificationEmail } from "@/lib/email-verification";
 
 export async function POST(req: NextRequest) {
   // TS-163: counted before anything else (including the password hash, the expensive part).
@@ -37,9 +38,11 @@ export async function POST(req: NextRequest) {
     throw err;
   }
   const token = await signToken({ sub: user.id, email: user.email, sessionVersion: user.sessionVersion });
+  // TS-164: the new account is signed in straight away, and asked to confirm its email address.
+  const verificationEmailSent = await sendVerificationEmail(user);
 
   const response = NextResponse.json(
-    { user: { id: user.id, name: user.name, email: user.email }, token },
+    { user: { id: user.id, name: user.name, email: user.email, emailVerified: false }, token, verificationEmailSent },
     { status: 201 }
   );
   setAuthCookie(response, token);
