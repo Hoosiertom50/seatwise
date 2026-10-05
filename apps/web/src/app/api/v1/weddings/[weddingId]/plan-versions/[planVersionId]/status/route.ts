@@ -6,6 +6,7 @@ import {
   PlanVersionStatusError,
   PlanVersionConflictError,
   PlanVersionNotFoundError,
+  getPlanVersionStatusForWedding,
 } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
 import { errorResponse, zodErrorResponse } from "@/lib/api-response";
@@ -33,16 +34,22 @@ export async function POST(req: NextRequest, { params }: Params) {
   const parsed = planVersionStatusSchema.safeParse(body);
   if (!parsed.success) return zodErrorResponse(parsed.error);
 
-  if (parsed.data.status === "APPROVED" && access.accessLevel !== "OWNER") {
+  // TS-172 (Tom's decision, 2026-10-05): undoing an approval (Approved -> Draft or In review) is for
+  // the same people who can approve -- before, any Edit collaborator could withdraw it.
+  const currentStatus = await getPlanVersionStatusForWedding(planVersionId, weddingId);
+  const touchesApproval = parsed.data.status === "APPROVED" || currentStatus === "APPROVED";
+  if (touchesApproval && access.accessLevel !== "OWNER") {
     const detail = await getWeddingAccessDetail(weddingId, user.id);
     const canApprove = detail.role === "COUPLE" && detail.accessLevel !== "VIEW";
     if (!canApprove) {
       return errorResponse(
-        "Only the wedding's owner, or a Couple member with Comment or Edit access, can approve a plan.",
+        parsed.data.status === "APPROVED"
+          ? "Only the wedding's owner, or a Couple member with Comment or Edit access, can approve a plan."
+          : "Only the wedding's owner, or a Couple member with Comment or Edit access, can undo an approval.",
         403
       );
     }
-  } else if (parsed.data.status !== "APPROVED" && access.accessLevel !== "OWNER" && access.accessLevel !== "EDIT") {
+  } else if (!touchesApproval && access.accessLevel !== "OWNER" && access.accessLevel !== "EDIT") {
     // Draft <-> In Review still requires Edit -- only Approve gets the Couple/Comment carve-out.
     return errorResponse("You don't have permission to do that", 403);
   }

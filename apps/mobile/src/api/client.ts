@@ -43,7 +43,8 @@ export function createApiClient(
 ): ApiClient {
   async function request<T>(path: string, init: { method: string; body?: unknown }): Promise<T> {
     const token = await getToken();
-    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    // TS-172: tells the server this app keeps its own session token (sign-in sends it back only then).
+    const headers: Record<string, string> = { "Content-Type": "application/json", "x-seatwise-client": "mobile" };
     if (token) headers.Authorization = `Bearer ${token}`;
 
     let res: Response;

@@ -260,7 +260,8 @@ jobs:
         # and every log write -- and so every request -- blocked forever.
         run: |
           pnpm --filter @seatwise/web start -p 3000 > "$RUNNER_TEMP/next-server.log" 2>&1 &
-          npx --yes wait-on http://localhost:3000 --timeout 60000
+          # TS-172: a plain retry loop instead of downloading an unpinned npm package on every run.
+          node -e "const end=Date.now()+60000;(async function wait(){try{const r=await fetch('http://localhost:3000');if(r.ok)return;}catch{}if(Date.now()>end){console.error('server did not start');process.exit(1)}setTimeout(wait,1000)})()"
 
       - name: Run the application E2E suite (this shard, regression selection minus quarantined)
         # pnpm pw:run (Stage 05) has no --shard support and its --reporter forwards a single
@@ -380,7 +381,8 @@ jobs:
         # and every log write -- and so every request -- blocked forever.
         run: |
           pnpm --filter @seatwise/web start -p 3000 > "$RUNNER_TEMP/next-server.log" 2>&1 &
-          npx --yes wait-on http://localhost:3000 --timeout 60000
+          # TS-172: a plain retry loop instead of downloading an unpinned npm package on every run.
+          node -e "const end=Date.now()+60000;(async function wait(){try{const r=await fetch('http://localhost:3000');if(r.ok)return;}catch{}if(Date.now()>end){console.error('server did not start');process.exit(1)}setTimeout(wait,1000)})()"
 
       - name: Run the application E2E suite (this shard, regression selection minus quarantined)
         # Same selection mechanism as the chromium e2e job -- see that job's own step comment for
@@ -487,7 +489,8 @@ jobs:
         # and every log write -- and so every request -- blocked forever.
         run: |
           pnpm --filter @seatwise/web start -p 3000 > "$RUNNER_TEMP/next-server.log" 2>&1 &
-          npx --yes wait-on http://localhost:3000 --timeout 60000
+          # TS-172: a plain retry loop instead of downloading an unpinned npm package on every run.
+          node -e "const end=Date.now()+60000;(async function wait(){try{const r=await fetch('http://localhost:3000');if(r.ok)return;}catch{}if(Date.now()>end){console.error('server did not start');process.exit(1)}setTimeout(wait,1000)})()"
 
       - name: Run the application E2E suite (this shard, regression selection minus quarantined)
         # Same selection mechanism as the chromium/firefox e2e jobs -- see e2e's own step comment
@@ -588,7 +591,8 @@ jobs:
         # and every log write -- and so every request -- blocked forever.
         run: |
           pnpm --filter @seatwise/web start -p 3000 > "$RUNNER_TEMP/next-server.log" 2>&1 &
-          npx --yes wait-on http://localhost:3000 --timeout 60000
+          # TS-172: a plain retry loop instead of downloading an unpinned npm package on every run.
+          node -e "const end=Date.now()+60000;(async function wait(){try{const r=await fetch('http://localhost:3000');if(r.ok)return;}catch{}if(Date.now()>end){console.error('server did not start');process.exit(1)}setTimeout(wait,1000)})()"
 
       - name: Run the application E2E suite (this shard, regression selection minus quarantined)
         # Same selection mechanism as the other e2e jobs -- see e2e's own step comment for the full

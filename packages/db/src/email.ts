@@ -26,6 +26,9 @@ export type EmailTransportConfig =
   | { kind: "none" };
 
 export function resolveEmailTransport(env: EmailEnv = process.env): EmailTransportConfig {
+  // TS-172: an explicit "log" always wins -- even if Gmail or Resend credentials are also present
+  // (say, in a developer's .env while the test suite runs), nothing is really sent.
+  if (env.EMAIL_TRANSPORT === "log") return { kind: "log" };
   if (env.SMTP_USER && env.SMTP_PASSWORD) {
     const port = Number(env.SMTP_PORT || 465);
     return {

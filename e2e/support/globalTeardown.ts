@@ -45,7 +45,7 @@
 
 import { Pool } from "pg";
 import { getEnv } from "./env";
-import { resolveIsProduction } from "./productionGuard";
+import { isLocalDatabaseUrl, resolveIsProduction } from "./productionGuard";
 import { TEST_DATA_MARKER } from "../data/ids";
 import { TEST_ACCOUNT_EMAIL_DOMAIN } from "./auth";
 import { resolveDatabaseUrl } from "./testDatabase";
@@ -76,6 +76,11 @@ export default async function globalTeardown(): Promise<void> {
     const connectionString = resolveDatabaseUrl();
     if (!connectionString) {
       console.warn("[teardown-sweep] SKIPPED: no DATABASE_URL in the environment or the root .env.");
+      return;
+    }
+    // TS-172: only ever a local (or CI) database.
+    if (!isLocalDatabaseUrl(connectionString)) {
+      console.warn("[teardown-sweep] REFUSED: DATABASE_URL isn't a local database.");
       return;
     }
 

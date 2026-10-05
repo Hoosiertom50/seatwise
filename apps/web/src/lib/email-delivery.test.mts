@@ -177,3 +177,9 @@ test("email-confirmation links' secret parts are hidden like the other link type
     "Confirm here: https://seatwise.example/verify-email/[hidden]"
   );
 });
+
+// TS-172: an explicit "log" wins over real credentials, so a test run can never send real email.
+test("EMAIL_TRANSPORT=log wins even when Gmail or Resend credentials are present", () => {
+  assert.equal(resolveEmailTransport({ EMAIL_TRANSPORT: "log", SMTP_USER: "u@example.invalid", SMTP_PASSWORD: "p" }).kind, "log");
+  assert.equal(resolveEmailTransport({ EMAIL_TRANSPORT: "log", RESEND_API_KEY: "re_x" }).kind, "log");
+});

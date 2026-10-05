@@ -33,7 +33,8 @@
 //   pnpm --filter @seatwise/db cleanup-test-users            # dry run, prints a preview
 //   pnpm --filter @seatwise/db cleanup-test-users --confirm  # actually deletes
 
-import "./load-env";
+// TS-172: local databases only (see local-only.ts).
+import "./local-only";
 import { pool } from "../src/index";
 
 /** Mirrors TEST_ACCOUNT_EMAIL_DOMAIN in e2e/support/auth.ts. Kept as a literal because packages/
