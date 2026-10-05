@@ -19,3 +19,4 @@ export * from "./queries/rate-limit";
 export * from "./email";
 export * from "./queries/account";
 export * from "./queries/password-reset";
+export { hashLinkToken } from "./link-tokens";

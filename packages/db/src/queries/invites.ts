@@ -1,5 +1,6 @@
 import { randomBytes, randomUUID } from "crypto";
 import { pool } from "../pool";
+import { hashLinkToken } from "../link-tokens";
 import { type CollaboratorRole } from "./collaborators";
 
 // FR-1.4a: a real invite lifecycle. An invite is looked up only by its opaque token (never a
@@ -95,7 +96,8 @@ export async function createInvite(
        (id, "weddingId", email, role, "permissionLevel", token, status, "invitedByUserId", "expiresAt")
      VALUES ($1, $2, $3, $4::"CollaboratorRole", $5::"CollaboratorPermission", $6, 'PENDING', $7, $8)
      RETURNING id, "weddingId", email, role, "permissionLevel", status, "invitedByUserId", "expiresAt", "acceptedAt", "createdAt"`,
-    [id, weddingId, normalizedEmail, role, permissionLevel, token, invitedByUserId, expiresAt]
+    // TS-160: only the token's hash is stored; the token itself goes out in the email and nowhere else.
+    [id, weddingId, normalizedEmail, role, permissionLevel, hashLinkToken(token), invitedByUserId, expiresAt]
   );
 
   return { ...withDerivedStatus(rows[0]), token };
@@ -132,7 +134,7 @@ export async function getInviteByToken(token: string): Promise<InviteLookupRow |
      FROM "wedding_invites" wi
      JOIN "weddings" w ON w.id = wi."weddingId"
      WHERE wi.token = $1`,
-    [token]
+    [hashLinkToken(token)]
   );
   if (!rows[0]) return null;
   return withDerivedStatus(rows[0]);
@@ -157,7 +159,7 @@ export async function acceptInvite(
       `UPDATE "wedding_invites" SET status = 'ACCEPTED', "acceptedAt" = now()
        WHERE token = $1 AND status = 'PENDING' AND "expiresAt" > now()
        RETURNING "weddingId", role, "permissionLevel", "invitedByUserId"`,
-      [token]
+      [hashLinkToken(token)]
     );
     const claimed = rows[0];
     if (!claimed) {

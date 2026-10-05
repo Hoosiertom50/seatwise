@@ -4,6 +4,7 @@
 // - An invite's token. The app deliberately never returns it over the API -- it exists only in the
 //   invite email, and there's no inbox a test can read (email is a console stand-in locally and in
 //   CI). Without it the accept flow, the one real way anyone joins a wedding, can't be driven.
+//   TS-160: the database keeps only the token's hash, so the test plants a token it knows instead.
 // - An invite's expiry. The 7-day expiry can't be waited out, so a test moves expiresAt into the
 //   past.
 //
@@ -59,8 +60,26 @@ function testPool(): Pool {
 
 const TEST_EMAIL_PATTERN = `%${TEST_ACCOUNT_EMAIL_DOMAIN}`;
 
-/** The token in an invite's emailed accept link (`/invites/<token>`). */
+const sha256Hex = async (text: string) => (await import("node:crypto")).createHash("sha256").update(text).digest("hex");
+
+/**
+ * A working token for an invite's accept link (`/invites/<token>`). TS-160: the app stores only a
+ * SHA-256 hash of the emailed token, so -- like plantPasswordResetToken -- this gives the invite a
+ * fresh token the test knows (replacing the emailed one) and returns it. Test invites only.
+ */
 export async function inviteToken(inviteId: string): Promise<string> {
+  const { randomBytes } = await import("node:crypto");
+  const token = randomBytes(32).toString("hex");
+  const { rowCount } = await testPool().query(
+    `UPDATE "wedding_invites" SET token = $1 WHERE id = $2 AND email LIKE $3`,
+    [await sha256Hex(token), inviteId, TEST_EMAIL_PATTERN],
+  );
+  if (!rowCount) throw new Error(`testDatabase: no test invite ${inviteId}.`);
+  return token;
+}
+
+/** TS-160: what an invite row stores in place of its token. */
+export async function storedInviteToken(inviteId: string): Promise<string> {
   const { rows } = await testPool().query<{ token: string }>(
     `SELECT token FROM "wedding_invites" WHERE id = $1 AND email LIKE $2`,
     [inviteId, TEST_EMAIL_PATTERN],
@@ -105,15 +124,52 @@ export async function usableResetTokenCount(email: string): Promise<number> {
   return rows[0].n;
 }
 
-/** TS-143: a guest's current RSVP token (null if no link has been made yet), for guests on weddings
- * owned by a test account only. */
-export async function guestRsvpToken(guestId: string): Promise<string | null> {
-  const { rows } = await testPool().query<{ token: string | null }>(
-    `SELECT g."rsvpToken" AS token FROM "guests" g
+/** What a test guest's row stores for their RSVP link (TS-160: an encrypted copy and the hash). */
+export async function storedGuestRsvpLink(guestId: string): Promise<{ stored: string | null; hash: string | null }> {
+  const { rows } = await testPool().query<{ stored: string | null; hash: string | null }>(
+    `SELECT g."rsvpToken" AS stored, g."rsvpTokenHash" AS hash FROM "guests" g
      JOIN "weddings" w ON w.id = g."weddingId" JOIN "users" u ON u.id = w."ownerId"
      WHERE g.id = $1 AND u.email LIKE $2`,
     [guestId, TEST_EMAIL_PATTERN],
   );
   if (!rows[0]) throw new Error(`testDatabase: no guest ${guestId} on a test wedding.`);
-  return rows[0].token;
+  return rows[0];
+}
+
+/**
+ * TS-143: which RSVP link a test guest currently has, or null if none has been made yet. TS-160:
+ * this is the link's hash (the database no longer holds the token itself) -- enough to tell
+ * whether a link exists and whether it has changed. The link itself comes from the rsvp-link API.
+ */
+export async function guestRsvpLinkFingerprint(guestId: string): Promise<string | null> {
+  return (await storedGuestRsvpLink(guestId)).hash;
+}
+
+/** TS-160: what a test vendor's row stores for their share link. */
+export async function storedVendorShareLink(vendorId: string): Promise<{ stored: string | null; hash: string | null }> {
+  const { rows } = await testPool().query<{ stored: string | null; hash: string | null }>(
+    `SELECT v."shareToken" AS stored, v."shareTokenHash" AS hash FROM "vendors" v
+     JOIN "weddings" w ON w.id = v."weddingId" JOIN "users" u ON u.id = w."ownerId"
+     WHERE v.id = $1 AND u.email LIKE $2`,
+    [vendorId, TEST_EMAIL_PATTERN],
+  );
+  if (!rows[0]) throw new Error(`testDatabase: no vendor ${vendorId} on a test wedding.`);
+  return rows[0];
+}
+
+/**
+ * TS-160: gives a test guest an RSVP link stored the way it was before TS-160 (token in plain text,
+ * plus its hash, as the migration leaves it) and returns the token.
+ */
+export async function plantPreHashingRsvpLink(guestId: string): Promise<string> {
+  const { randomBytes } = await import("node:crypto");
+  const token = randomBytes(32).toString("hex");
+  const { rowCount } = await testPool().query(
+    `UPDATE "guests" g SET "rsvpToken" = $1, "rsvpTokenHash" = $2
+     FROM "weddings" w JOIN "users" u ON u.id = w."ownerId"
+     WHERE g.id = $3 AND w.id = g."weddingId" AND u.email LIKE $4`,
+    [token, await sha256Hex(token), guestId, TEST_EMAIL_PATTERN],
+  );
+  if (!rowCount) throw new Error(`testDatabase: no guest ${guestId} on a test wedding.`);
+  return token;
 }

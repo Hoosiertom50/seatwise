@@ -1,5 +1,7 @@
-import { randomBytes, randomUUID } from "crypto";
+import { randomUUID } from "crypto";
 import { pool } from "../pool";
+import { encryptText } from "../crypto";
+import { hashLinkToken, isPlainStoredLinkToken, newLinkToken, readStoredLinkToken } from "../link-tokens";
 
 // TS-20 (FR-15.1/FR-15.2): a per-wedding vendor record, plus the wedding-wide budget figure it's
 // tracked against. Money is always integer cents (never a float) -- see the Vendor model comment
@@ -252,28 +254,40 @@ export async function setBudgetForWedding(
 export async function ensureVendorShareToken(id: string, weddingId: string): Promise<string | null> {
   // TS-153: one statement, so two requests at once both get the same link (before, each could
   // write its own and the first link handed out would stop working).
+  // TS-160: looked up by its hash; the encrypted copy is what lets this show the same link again.
+  const fresh = newLinkToken();
   const { rows } = await pool.query(
-    `UPDATE "vendors" SET "shareToken" = COALESCE("shareToken", $3) WHERE id = $1 AND "weddingId" = $2
+    `UPDATE "vendors" SET "shareToken" = COALESCE("shareToken", $3), "shareTokenHash" = COALESCE("shareTokenHash", $4)
+     WHERE id = $1 AND "weddingId" = $2
      RETURNING "shareToken"`,
-    [id, weddingId, randomBytes(32).toString("hex")]
+    [id, weddingId, fresh.encrypted, fresh.hash]
   );
-  return rows[0]?.shareToken ?? null;
+  const stored: string | null = rows[0]?.shareToken ?? null;
+  if (stored && isPlainStoredLinkToken(stored)) {
+    // A link made before TS-160: keep it working, but stop storing it in plain text.
+    await pool.query(`UPDATE "vendors" SET "shareToken" = $1 WHERE id = $2 AND "shareToken" = $3`, [
+      encryptText(stored),
+      id,
+      stored,
+    ]);
+  }
+  return readStoredLinkToken(stored);
 }
 
 /** A brand-new token -- the previous link (if any) stops working at once. */
 export async function regenerateVendorShareToken(id: string, weddingId: string): Promise<string | null> {
-  const token = randomBytes(32).toString("hex");
+  const fresh = newLinkToken();
   const { rowCount } = await pool.query(
-    `UPDATE "vendors" SET "shareToken" = $1 WHERE id = $2 AND "weddingId" = $3`,
-    [token, id, weddingId]
+    `UPDATE "vendors" SET "shareToken" = $1, "shareTokenHash" = $2 WHERE id = $3 AND "weddingId" = $4`,
+    [fresh.encrypted, fresh.hash, id, weddingId]
   );
-  return (rowCount ?? 0) > 0 ? token : null;
+  return (rowCount ?? 0) > 0 ? fresh.token : null;
 }
 
 /** Turns the link off. Returns false if there's no such vendor. */
 export async function revokeVendorShareToken(id: string, weddingId: string): Promise<boolean> {
   const { rowCount } = await pool.query(
-    `UPDATE "vendors" SET "shareToken" = NULL WHERE id = $1 AND "weddingId" = $2`,
+    `UPDATE "vendors" SET "shareToken" = NULL, "shareTokenHash" = NULL WHERE id = $1 AND "weddingId" = $2`,
     [id, weddingId]
   );
   return (rowCount ?? 0) > 0;
@@ -303,8 +317,8 @@ export async function getVendorViewByToken(token: string): Promise<VendorViewRow
             v."contactPhone", v."arrivalTime", w.name AS "weddingName", w."eventDate"::text AS "eventDate",
             w."venueName"
      FROM "vendors" v JOIN "weddings" w ON w.id = v."weddingId"
-     WHERE v."shareToken" = $1`,
-    [token]
+     WHERE v."shareTokenHash" = $1`,
+    [hashLinkToken(token)]
   );
   const v = rows[0];
   if (!v) return null;

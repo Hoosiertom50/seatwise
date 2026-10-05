@@ -11,7 +11,7 @@
 
 import { expect, defineQualityTest, test } from "../fixtures/index.js";
 import { uniquePersonName } from "../data/ids.js";
-import { guestRsvpToken } from "../support/testDatabase.js";
+import { guestRsvpLinkFingerprint } from "../support/testDatabase.js";
 
 defineQualityTest(
   {
@@ -40,7 +40,7 @@ defineQualityTest(
       await weddingGuestsPage.addGuest({ ...withEmail, email });
       const row = weddingGuestsPage.guestRow(`${withEmail.firstName} ${withEmail.lastName}`);
       await expect(row.autoRsvpResult()).toHaveText(`Emailed RSVP link to ${email}`);
-      expect(await guestRsvpToken(await idOf(withEmail.lastName))).toMatch(/^[0-9a-f]{64}$/);
+      expect(await guestRsvpLinkFingerprint(await idOf(withEmail.lastName))).toMatch(/^[0-9a-f]{64}$/);
     });
 
     let laterId = "";
@@ -50,13 +50,13 @@ defineQualityTest(
       const row = weddingGuestsPage.guestRow(`${withoutEmail.firstName} ${withoutEmail.lastName}`);
       await row.expectVisible();
       laterId = await idOf(withoutEmail.lastName);
-      expect(await guestRsvpToken(laterId)).toBeNull();
+      expect(await guestRsvpLinkFingerprint(laterId)).toBeNull();
       await expect(row.autoRsvpResult()).toHaveCount(0);
 
       const email = address("later");
       await row.editEmail(email);
       await expect(row.autoRsvpResult()).toHaveText(`Emailed RSVP link to ${email}`);
-      firstToken = await guestRsvpToken(laterId);
+      firstToken = await guestRsvpLinkFingerprint(laterId);
       expect(firstToken).toMatch(/^[0-9a-f]{64}$/);
     });
 
@@ -68,7 +68,7 @@ defineQualityTest(
       });
       expect(res.ok()).toBe(true);
       expect(((await res.json()) as { rsvpEmail?: { emailed: boolean } }).rsvpEmail?.emailed).toBe(true);
-      expect(await guestRsvpToken(laterId)).not.toBe(firstToken);
+      expect(await guestRsvpLinkFingerprint(laterId)).not.toBe(firstToken);
     });
   },
 );
