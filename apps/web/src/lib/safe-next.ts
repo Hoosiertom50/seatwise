@@ -20,7 +20,12 @@ export function safeNextPath(raw: string | null | undefined, fallback = "/dashbo
     return fallback;
   }
   if (url.origin !== PROBE_ORIGIN) return fallback;
-  return url.pathname + url.search + url.hash;
+  // TS-162: dot segments ("/.//x", "/a/..//x", "/%2e%2e//x") pass the checks above and then
+  // resolve to a path starting "//" -- which the router treats as another site. So the path that
+  // comes out is checked too, not just what went in.
+  const path = url.pathname + url.search + url.hash;
+  if (path.startsWith("//") || path.includes("\\")) return fallback;
+  return path;
 }
 
 // TS-122: the other auth page's URL, keeping this page's `?next=` along -- so switching between

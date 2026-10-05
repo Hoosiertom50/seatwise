@@ -8,14 +8,15 @@ import { randomBytes } from "node:crypto";
 import { expect, defineQualityTest, test } from "../fixtures/index.js";
 import { uniqueToken } from "../data/ids.js";
 
-const TRICKS = ["/%09/evil.example", "/%0a/evil.example", "/%0d%0a/evil.example", "/%5Cevil.example", "//evil.example"];
+// TS-162: dot segments that resolve to "//evil.example".
+const TRICKS = ["/%09/evil.example", "/%0a/evil.example", "/%0d%0a/evil.example", "/%5Cevil.example", "//evil.example", "/.//evil.example", "/a/..//evil.example", "/%2e%2e//evil.example"];
 
 defineQualityTest(
   {
     id: "auth.sign-in-never-redirects-off-site.crafted-next-values-land-on-dashboard",
     title: "signing in from a crafted ?next= link never leaves Seatwise, while a real Seatwise path is still followed",
     objective:
-      "Confirms that signing in from /login with ?next= values that try to reach another site (encoded tab, line feed, CR/LF, backslash, protocol-relative) always lands on the Seatwise dashboard, and that ?next=/account still lands on the Account page.",
+      "Confirms that signing in from /login with ?next= values that try to reach another site (encoded tab, line feed, CR/LF, backslash, protocol-relative, and dot segments such as /.// that resolve to one) always lands on the Seatwise dashboard, and that ?next=/account still lands on the Account page.",
     expectedOutcome:
       "Each crafted value ends on /dashboard on the app's own origin; ?next=/account ends on /account.",
     requirementIds: ["REQ-ACCOUNT-WEDDING-MANAGEMENT"],
