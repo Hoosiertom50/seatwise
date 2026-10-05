@@ -2,6 +2,7 @@ import { randomUUID } from "crypto";
 import { isRsvpCutoffPast } from "@seatwise/shared";
 import { pool } from "../pool";
 import { encryptText, decryptText } from "../crypto";
+import { currentPlanVersionId, refreshPlanCompleteness, resyncTables, tablesAffectedBy } from "./seat-checks";
 import { hashLinkToken, isPlainStoredLinkToken, newLinkToken, readStoredLinkToken } from "../link-tokens";
 
 export interface GuestRow {
@@ -49,7 +50,9 @@ const COLUMNS = `g.id, g."weddingId", g."firstName", g."lastName", g."partyName"
   g."rsvpStatus", g."requiresAccessibleTable", g."isLocked", g."dayOfAttendance", g.notes, g.side,
   g."ageCategory", g.email, g."plusOneNames", g."rsvpRespondedAt", g."rsvpNotes", g.revision,
   rtg."tableId" AS "requiredTableId", g."createdAt", g."updatedAt"`;
-const FROM_JOINED = `FROM "guests" g LEFT JOIN "restricted_table_guests" rtg ON rtg."guestId" = g.id`;
+// TS-165: only lists on tables that are still Restricted count.
+const FROM_JOINED = `FROM "guests" g LEFT JOIN "restricted_table_guests" rtg ON rtg."guestId" = g.id
+  AND EXISTS (SELECT 1 FROM "seating_tables" rt WHERE rt.id = rtg."tableId" AND rt."isRestricted")`;
 
 // NFR-9.3b / TS-107: both free-text note columns are encrypted at rest -- every read decrypts both.
 function decryptGuestNotes<T extends { notes: string | null; rsvpNotes: string | null }>(row: T): T {
@@ -215,11 +218,31 @@ export async function updateGuestForWedding(
 }
 
 export async function deleteGuestForWedding(id: string, weddingId: string): Promise<boolean> {
-  const { rowCount } = await pool.query(
-    `DELETE FROM "guests" WHERE id = $1 AND "weddingId" = $2`,
-    [id, weddingId]
-  );
-  return (rowCount ?? 0) > 0;
+  // TS-165: their seat and seating rules go with them, which can clear flags on other guests -- a
+  // must-sit-together partner now seated alone, a table that now has room. Re-check those tables
+  // in the same transaction (the caller already recounts completeness).
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const planVersionId = await currentPlanVersionId(client, weddingId);
+    const affected = planVersionId ? await tablesAffectedBy(client, weddingId, planVersionId, [id]) : [];
+    const { rowCount } = await client.query(`DELETE FROM "guests" WHERE id = $1 AND "weddingId" = $2`, [
+      id,
+      weddingId,
+    ]);
+    const deleted = (rowCount ?? 0) > 0;
+    if (deleted && planVersionId && affected.length > 0) {
+      const { changed } = await resyncTables(client, weddingId, planVersionId, affected);
+      await refreshPlanCompleteness(client, weddingId, planVersionId, { bumpRevision: changed });
+    }
+    await client.query("COMMIT");
+    return deleted;
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 
 // TS-17: the guest-facing RSVP flow -- looked up by the opaque token alone (never a

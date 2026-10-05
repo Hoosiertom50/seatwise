@@ -1,3 +1,4 @@
+import { randomUUID } from "crypto";
 import { pool } from "../pool";
 
 // TS-150: every check of "does the Current Plan Version still keep the hard rules?" lives here, in
@@ -140,6 +141,69 @@ export async function resyncSeatsAtTable(
   return { newlyFlagged, changed };
 }
 
+// TS-165: every table a change to these guests' seats can affect -- the tables they're at now,
+// and the tables their seating-rule partners are at (a must-sit-together partner left behind, or a
+// must-not-sit-together pair that's now apart). Call it before the change and again after, and
+// re-check both sets: before, a guest who moved, left or was removed only had their new table (if
+// any) re-checked, so flags at the table they left -- on someone else -- went stale.
+export async function tablesAffectedBy(
+  q: Queryable,
+  weddingId: string,
+  planVersionId: string,
+  guestIds: string[]
+): Promise<string[]> {
+  if (guestIds.length === 0) return [];
+  const { rows } = await q.query(
+    `SELECT DISTINCT sa."seatingTableId" AS "tableId"
+     FROM "seat_assignments" sa
+     WHERE sa."planVersionId" = $1
+       AND (sa."guestId" = ANY($2::text[])
+         OR sa."guestId" IN (
+           SELECT CASE WHEN gr."guestAId" = ANY($2::text[]) THEN gr."guestBId" ELSE gr."guestAId" END
+           FROM "guest_relationships" gr
+           WHERE gr."weddingId" = $3 AND (gr."guestAId" = ANY($2::text[]) OR gr."guestBId" = ANY($2::text[]))
+         ))`,
+    [planVersionId, guestIds, weddingId]
+  );
+  return rows.map((r) => r.tableId as string);
+}
+
+// TS-165: re-checks each of these tables (each once, in a fixed order so two requests lock them
+// the same way round). The caller owns the transaction and refreshes completeness afterwards.
+export async function resyncTables(
+  client: Queryable,
+  weddingId: string,
+  planVersionId: string,
+  tableIds: Iterable<string>
+): Promise<{ newlyFlagged: { guestId: string; name: string; reason: TableSeatingFlagReason }[]; changed: boolean }> {
+  const newlyFlagged: { guestId: string; name: string; reason: TableSeatingFlagReason }[] = [];
+  let changed = false;
+  for (const tableId of [...new Set(tableIds)].sort()) {
+    const result = await resyncSeatsAtTable(client, weddingId, planVersionId, tableId);
+    newlyFlagged.push(...result.newlyFlagged);
+    changed ||= result.changed;
+  }
+  return { newlyFlagged, changed };
+}
+
+// TS-165: when a re-check changes who's flagged on an *approved* plan (a guest's RSVP grew their
+// party, a table edit), it's recorded in the plan's history, so the plan shows "Modified since
+// approval" -- before, an approved plan could quietly become incomplete with no sign of it.
+export async function recordRecheckIfApproved(
+  client: Queryable,
+  planVersionId: string,
+  description: string,
+  actorUserId: string | null
+): Promise<void> {
+  const { rows } = await client.query(`SELECT status FROM "plan_versions" WHERE id = $1`, [planVersionId]);
+  if (rows[0]?.status !== "APPROVED") return;
+  await client.query(
+    `INSERT INTO "change_history_entries" (id, "planVersionId", action, description, "actorUserId")
+     VALUES ($1, $2, 'SEATING_RECHECK', $3, $4)`,
+    [randomUUID(), planVersionId, description, actorUserId]
+  );
+}
+
 // TS-150: after flags change, keep the plan's completeness in step -- and bump its revision, so
 // anyone holding the plan from before gets a conflict instead of acting on a stale picture.
 export async function refreshPlanCompleteness(
@@ -199,6 +263,7 @@ export async function resyncGuestsSeats(
       changed ||= result.changed;
     }
     await refreshPlanCompleteness(client, weddingId, planVersionId, { bumpRevision: changed });
+    if (changed) await recordRecheckIfApproved(client, planVersionId, "Seating re-checked after a change — some guests' Needs Reassignment flags changed", null);
     await client.query("COMMIT");
     return { newlyFlagged };
   } catch (err) {

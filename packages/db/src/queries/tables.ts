@@ -1,7 +1,13 @@
 import { randomUUID } from "crypto";
 import { pool } from "../pool";
 import { compareTableLabels } from "@seatwise/shared";
-import { resyncSeatsAtTable, refreshPlanCompleteness, currentPlanVersionId, type TableSeatingFlagReason } from "./seat-checks";
+import {
+  resyncSeatsAtTable,
+  refreshPlanCompleteness,
+  currentPlanVersionId,
+  recordRecheckIfApproved,
+  type TableSeatingFlagReason,
+} from "./seat-checks";
 
 export interface SeatingTableRow {
   id: string;
@@ -40,9 +46,11 @@ const SELECT_WITH_REQUIRED = `
          t."createdAt", t."updatedAt",
          COALESCE(rtg."guestIds", ARRAY[]::text[]) AS "requiredGuestIds"
   FROM "seating_tables" t
+  -- TS-165: only a Restricted table has a required-guest list (one left behind on a table that
+  -- was later unmarked is ignored).
   LEFT JOIN (
     SELECT "tableId", array_agg("guestId") AS "guestIds" FROM "restricted_table_guests" GROUP BY "tableId"
-  ) rtg ON rtg."tableId" = t.id
+  ) rtg ON rtg."tableId" = t.id AND t."isRestricted"
 `;
 
 // FR-7.7: thrown instead of applying an edit whose expectedRevision no longer matches the table's
@@ -294,6 +302,12 @@ export async function updateSeatingTableForWedding(
         values
       );
     }
+    // TS-165: a table that's no longer Restricted has no required-guest list. Leaving the list in
+    // place kept those guests pinned to it (they couldn't be moved, and Generate put them back),
+    // with no way to clear it, since only a Restricted table's list can be edited.
+    if (input.isRestricted === false) {
+      await client.query(`DELETE FROM "restricted_table_guests" WHERE "tableId" = $1`, [id]);
+    }
     await client.query("COMMIT");
     return true;
   } catch (err) {
@@ -432,6 +446,13 @@ export async function setRequiredGuestsForTable(
         );
       }
 
+      // TS-165: drop these guests from any list left behind on a table that's no longer Restricted
+      // (lists from before unmarking cleared them), so it can't block them here.
+      await client.query(
+        `DELETE FROM "restricted_table_guests" rtg USING "seating_tables" t
+         WHERE rtg."tableId" = t.id AND NOT t."isRestricted" AND rtg."guestId" = ANY($1::text[])`,
+        [uniqueIds]
+      );
       // FR-3.7a: a guest can be required at only one Restricted table wedding-wide.
       const { rows: conflictRows } = await client.query(
         `SELECT rtg."guestId", (g."firstName" || ' ' || g."lastName") AS "guestName", t.label AS "tableLabel"
@@ -460,6 +481,13 @@ export async function setRequiredGuestsForTable(
     await client.query("COMMIT");
   } catch (err) {
     await client.query("ROLLBACK");
+    // TS-165: two tables claiming the same guest at the same moment -- the database's
+    // one-list-per-guest rule stops the second; say so instead of failing with a 500.
+    if ((err as { code?: string }).code === "23505") {
+      throw new RestrictedTableError(
+        "Someone just put one of these guests on another Restricted table's list — refresh and try again."
+      );
+    }
     throw err;
   } finally {
     client.release();
@@ -485,6 +513,7 @@ export async function resyncTableSeating(
     await client.query("BEGIN");
     const { newlyFlagged, changed } = await resyncSeatsAtTable(client, weddingId, planVersionId, tableId);
     await refreshPlanCompleteness(client, weddingId, planVersionId, { bumpRevision: changed });
+    if (changed) await recordRecheckIfApproved(client, planVersionId, "Seating re-checked after a change — some guests' Needs Reassignment flags changed", null);
     await client.query("COMMIT");
     return { newlyFlagged };
   } catch (err) {
