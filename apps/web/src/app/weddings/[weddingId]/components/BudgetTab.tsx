@@ -12,6 +12,7 @@ import type {
   VendorShareLinkDTO,
   VendorSuggestionDTO,
 } from "@seatwise/shared";
+import { useUnsavedChanges } from "@/lib/unsaved-changes";
 
 // TS-20 (FR-15.1/FR-15.2): a per-wedding vendor list plus the wedding's overall budget figure and
 // a running total/remaining against it. Money is always handled here in whole dollars for
@@ -89,6 +90,11 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
   // TS-151: the cost exactly as typed while editing -- turned into cents only on save. Reformatting
   // every keystroke ("1" -> "1.00") made a real cost impossible to type.
   const [editCostText, setEditCostText] = useState("");
+  // TS-159: tell the page this tab has input that leaving it would lose.
+  useUnsavedChanges(
+    "budget",
+    !!(name.trim() || contactName.trim() || contactEmail.trim() || contactPhone.trim() || cost || contractNotes.trim() || arrivalTime || editingId)
+  );
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {

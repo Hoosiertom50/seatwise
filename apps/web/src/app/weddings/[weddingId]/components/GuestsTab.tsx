@@ -14,6 +14,7 @@ import type {
   WeddingDTO,
 } from "@seatwise/shared";
 import { parseCsv, toCsv, GUEST_TIER_LABELS, RSVP_STATUS_LABELS } from "@seatwise/shared";
+import { useUnsavedChanges } from "@/lib/unsaved-changes";
 
 const TIERS: GuestTier[] = ["VIP", "FAMILY", "FRIEND", "PLUS_ONE", "OTHER"];
 const RSVP_STATUSES: RsvpStatus[] = ["PENDING", "CONFIRMED", "DECLINED"];
@@ -148,6 +149,8 @@ export function GuestsTab({
   const [previewing, setPreviewing] = useState(false);
   const [committing, setCommitting] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
+  // TS-159: tell the page this tab has input that leaving it would lose.
+  useUnsavedChanges("guests", !!(firstName.trim() || lastName.trim() || partyName.trim() || email.trim() || notes.trim() || csvText));
   const [importResult, setImportResult] = useState<{
     createdCount: number;
     updatedCount: number;

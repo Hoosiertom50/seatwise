@@ -11,6 +11,7 @@ import type {
   WeddingDTO,
   WeddingInviteDTO,
 } from "@seatwise/shared";
+import { useUnsavedChanges } from "@/lib/unsaved-changes";
 
 const LEVELS: { value: CollaboratorPermission; label: string; hint: string }[] = [
   { value: "VIEW", label: "View", hint: "Can see everything, can't change anything" },
@@ -82,6 +83,12 @@ export function CollaboratorsTab({
   const [venueName, setVenueName] = useState(wedding?.venueName ?? "");
   const [savingDetails, setSavingDetails] = useState(false);
   const [detailsSaved, setDetailsSaved] = useState(false);
+  // TS-159: tell the page this tab has input that leaving it would lose.
+  useUnsavedChanges(
+    "collaborators",
+    !!email.trim() ||
+      (!!wedding && (eventDate !== (wedding.eventDate ?? "") || venueName !== (wedding.venueName ?? "")))
+  );
   // FR-1.3a: this wedding's own names for its two sides -- edited here, then PATCHed as a pure
   // label rename. Local input state so typing doesn't PATCH on every keystroke; saved on blur.
   const [sideLabel1, setSideLabel1] = useState(wedding?.sideLabel1 ?? "Bride");
