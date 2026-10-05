@@ -226,3 +226,21 @@ export async function plantEmailVerificationToken(email: string): Promise<string
   if (!rowCount) throw new Error(`testDatabase: no test account ${email}.`);
   return token;
 }
+
+/**
+ * TS-168: how many RSVP notification emails a test wedding has sent this hour (the per-wedding
+ * counter is only touched for recipients who've confirmed their address and are being emailed).
+ */
+export async function weddingNotificationEmailsThisHour(weddingId: string): Promise<number> {
+  const { rows: owned } = await testPool().query(
+    `SELECT 1 FROM "weddings" w JOIN "users" u ON u.id = w."ownerId" WHERE w.id = $1 AND u.email LIKE $2`,
+    [weddingId, TEST_EMAIL_PATTERN],
+  );
+  if (!owned[0]) throw new Error(`testDatabase: no test wedding ${weddingId}.`);
+  const { rows } = await testPool().query<{ n: number }>(
+    `SELECT COALESCE(SUM(count), 0)::int AS n FROM "rate_limit_counters"
+     WHERE key = $1 AND "windowStart" > now() - interval '1 hour'`,
+    [`email:notify-wedding:3600:${weddingId}`],
+  );
+  return rows[0].n;
+}

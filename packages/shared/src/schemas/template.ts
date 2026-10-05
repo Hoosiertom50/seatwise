@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { weddingNameField } from "./wedding";
 import type { SideMixing } from "./wedding";
 import type { TableShape, TablePurposeCriterionType } from "./table";
 
@@ -68,8 +69,10 @@ export const addTemplateTablesSchema = z.object({
 export type AddTemplateTablesInput = z.infer<typeof addTemplateTablesSchema>;
 
 // TS-91: copy a wedding's room layout and seating settings into a new wedding. Name defaults to
-// "<original name> (copy)".
+// "<original name> - copy". TS-168: a name given here follows the same rules as any wedding name
+// (it used to only be length-checked, so a copy could be named like a web address and that name
+// would then go out in emails).
 export const duplicateWeddingSchema = z.object({
-  name: z.string().trim().min(1).max(200).optional(),
+  name: weddingNameField.optional(),
 });
 export type DuplicateWeddingInput = z.infer<typeof duplicateWeddingSchema>;

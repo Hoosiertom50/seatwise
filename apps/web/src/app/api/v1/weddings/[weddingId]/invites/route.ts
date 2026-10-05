@@ -6,7 +6,7 @@ import { createInvite, listInvitesForWedding, sendEmailNotification, emailDelive
 import { getAuthUser } from "@/lib/session";
 import { errorResponse, zodErrorResponse } from "@/lib/api-response";
 import { requireAccess } from "@/lib/access";
-import { reserveEmailSend, TOO_MANY_INVITES } from "@/lib/rate-limit";
+import { releaseEmailSend, reserveEmailSend, TOO_MANY_INVITES } from "@/lib/rate-limit";
 
 type Params = { params: Promise<{ weddingId: string }> };
 
@@ -81,6 +81,8 @@ export async function POST(req: NextRequest, { params }: Params) {
     );
   } catch (err) {
     if (err instanceof InviteError) {
+      // TS-168: no invite was made, so no email went out -- this one doesn't count.
+      await releaseEmailSend("invites", user.id);
       return errorResponse(err.message, err.code === "NOT_FOUND" ? 404 : 409);
     }
     throw err;

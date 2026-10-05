@@ -2,6 +2,7 @@ import { randomUUID } from "crypto";
 import { sendEmail, type EmailResult } from "../email";
 import { pool } from "../pool";
 import { hitRateLimit } from "./rate-limit";
+import { emailSafeWeddingName, looksLikeWebAddress } from "@seatwise/shared";
 
 // TS-163: how many notification emails one person's actions can set off (each recipient counts).
 // Generous for real planning -- approving a plan emails a handful of collaborators -- but a loop of
@@ -11,6 +12,29 @@ export const NOTIFICATION_EMAILS_PER_ACTOR = [
   { limit: 60, windowSeconds: 3600 },
   { limit: 200, windowSeconds: 86_400 },
 ] as const;
+
+// TS-168: the same idea for events nobody signed in caused (guests' RSVPs) -- a cap per wedding,
+// so many guest links submitted in turn can't flood the planners' inboxes either.
+export const NOTIFICATION_EMAILS_PER_WEDDING_WITHOUT_ACTOR = [
+  { limit: 30, windowSeconds: 3600 },
+  { limit: 150, windowSeconds: 86_400 },
+] as const;
+
+async function weddingMayEmailWithoutActor(weddingId: string): Promise<boolean> {
+  const results = await Promise.all(
+    NOTIFICATION_EMAILS_PER_WEDDING_WITHOUT_ACTOR.map(({ limit, windowSeconds }) =>
+      hitRateLimit(`email:notify-wedding:${windowSeconds}:${weddingId}`, limit, windowSeconds)
+    )
+  );
+  return results.every((r) => r.allowed);
+}
+
+// TS-168: what an email may say. A message built from names typed by people (guest names, table
+// labels) only goes out if it can't read as a web address; otherwise the email just says there's
+// an update, and the details stay in the app.
+export function emailSafeNotificationText(message: string): string {
+  return looksLikeWebAddress(message) ? "There's an update on your wedding — open Seatwise to see it." : message;
+}
 
 async function actorMayEmail(actorUserId: string): Promise<boolean> {
   const results = await Promise.all(
@@ -57,6 +81,7 @@ export async function notifyWeddingCollaborators(
   message: string,
   {
     emailOncePer,
+    emailMessage,
   }: {
     /**
      * TS-163: for events nobody signed in caused (a guest's RSVP): email at most once per
@@ -64,6 +89,8 @@ export async function notifyWeddingCollaborators(
      * everyone's inbox. The in-app notification is still written every time.
      */
     emailOncePer?: { key: string; windowSeconds: number };
+    /** TS-168: what the email says, when it should say less than the in-app notification. */
+    emailMessage?: string;
   } = {}
 ): Promise<void> {
   const { rows: weddingRows } = await pool.query(
@@ -74,9 +101,9 @@ export async function notifyWeddingCollaborators(
   if (!wedding) return;
 
   const { rows: recipients } = await pool.query(
-    `SELECT id, email FROM "users" WHERE id = $1
+    `SELECT id, email, "emailVerifiedAt" FROM "users" WHERE id = $1
      UNION
-     SELECT u.id, u.email FROM "users" u
+     SELECT u.id, u.email, u."emailVerifiedAt" FROM "users" u
      JOIN "wedding_collaborators" wc ON wc."userId" = u.id
      WHERE wc."weddingId" = $2`,
     [wedding.ownerId, weddingId]
@@ -94,9 +121,18 @@ export async function notifyWeddingCollaborators(
        VALUES ($1, $2, $3, $4::"NotificationType", $5)`,
       [randomUUID(), weddingId, recipient.id, type, message]
     );
+    // TS-168: only to an address its owner has confirmed (TS-164) -- otherwise anyone could sign
+    // up with a stranger's address and have Seatwise email them every time a guest responded.
+    if (!recipient.emailVerifiedAt) continue;
     if (mayEmail && actorUserId && !(await actorMayEmail(actorUserId))) mayEmail = false;
+    if (mayEmail && !actorUserId && !(await weddingMayEmailWithoutActor(weddingId))) mayEmail = false;
     if (mayEmail) {
-      await sendEmailNotification(recipient.email, `Seatwise: ${wedding.name}`, message);
+      const weddingName = emailSafeWeddingName(wedding.name);
+      await sendEmailNotification(
+        recipient.email,
+        weddingName ? `Seatwise: ${weddingName}` : "Seatwise: an update on your wedding",
+        emailSafeNotificationText(emailMessage ?? message)
+      );
     }
   }
 }
