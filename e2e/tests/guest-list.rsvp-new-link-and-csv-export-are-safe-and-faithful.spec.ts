@@ -91,7 +91,8 @@ defineQualityTest(
         for (const g of guests) expect(rowFor(g.id), g.id).toMatch(new RegExp(`^${g.id},${g.firstName},${g.lastName},`));
 
         expect(rowFor(withEmail.id)).toContain(",Vegetarian,");
-        expect(rowFor(withEmail.id)!.endsWith(`,"'${PLANTED_NOTE.replace(/"/g, '""')}"`)).toBe(true);
+        // TS-180: the RSVP note is followed by the Plus-ones and Version columns.
+        expect(rowFor(withEmail.id)).toContain(`,"'${PLANTED_NOTE.replace(/"/g, '""')}",`);
         expect(rowFor(plannerFormula.id)).toContain(",'=1+1,");
       });
 

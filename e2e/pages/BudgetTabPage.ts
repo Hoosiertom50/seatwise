@@ -371,6 +371,15 @@ export class BudgetTabPage extends BasePage {
     ]);
   }
 
+  /** TS-180: like saveEdit, and returns what the Save actually sent (only changed fields go). */
+  async saveEditReturningSentFields(): Promise<Record<string, unknown>> {
+    const [request] = await Promise.all([
+      this.page.waitForRequest((req) => req.method() === "PATCH" && /\/vendors\/[^/]+$/.test(new URL(req.url()).pathname)),
+      this.saveEdit(),
+    ]);
+    return (request.postDataJSON() ?? {}) as Record<string, unknown>;
+  }
+
   /** TS-175: how many vendor edit forms are open (0 once a conflict has closed the editor). */
   async editCostInputCount(): Promise<number> {
     return this.editCostInput().count();

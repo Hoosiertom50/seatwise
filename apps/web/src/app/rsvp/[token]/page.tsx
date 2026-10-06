@@ -218,6 +218,8 @@ export default function GuestRsvpPage() {
                       type="text"
                       value={plusOneNames}
                       onChange={(e) => setPlusOneNames(e.target.value)}
+                      // TS-180: the most the server accepts, so typing stops there instead of failing on send.
+                      maxLength={500}
                       placeholder="e.g. Jamie Lee"
                       className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
                     />
@@ -242,6 +244,8 @@ export default function GuestRsvpPage() {
               <textarea
                 value={notes}
                 onChange={(e) => setNotes(e.target.value)}
+                // TS-180: the most the server accepts.
+                maxLength={2000}
                 rows={3}
                 className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
               />

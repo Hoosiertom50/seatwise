@@ -1,4 +1,6 @@
 import { z } from "zod";
+// TS-180: free text refuses hidden control characters (see ../safe-text).
+import { safeText } from "../safe-text";
 import { expectedRevisionField } from "./common";
 import { guestSideEnum, guestTierEnum, ageCategoryEnum } from "./guest";
 
@@ -60,14 +62,14 @@ function validatePurposeCriterion(
 }
 
 const tableBaseSchema = z.object({
-  label: z.string().min(1, "Table name is required").max(100),
+  label: safeText(100, { required: "Table name is required" }),
   capacity: z.number().int().min(1).max(50),
   isRestricted: z.boolean().default(false),
   isAccessible: z.boolean().default(false),
   isLocked: z.boolean().default(false),
-  purpose: z.string().max(200).optional().nullable(),
+  purpose: safeText(200).optional().nullable(),
   purposeCriterionType: tablePurposeCriterionTypeEnum.optional().nullable(),
-  purposeCriterionValue: z.string().max(40).optional().nullable(),
+  purposeCriterionValue: safeText(40).optional().nullable(),
   // FR-3.4: table-level override, favoring one side only regardless of the wedding's setting.
   singleSideOnly: z.boolean().default(false),
   shape: tableShapeEnum.default("ROUND"),
@@ -104,7 +106,7 @@ export const quickCreateTablesSchema = z.object({
   count: z.number().int().min(1).max(100),
   capacity: z.number().int().min(1).max(50),
   shape: tableShapeEnum.default("ROUND"),
-  labelPrefix: z.string().min(1).max(50).default("Table"),
+  labelPrefix: safeText(50, { required: "A name for the tables is required" }).default("Table"),
 });
 export type QuickCreateTablesInput = z.infer<typeof quickCreateTablesSchema>;
 

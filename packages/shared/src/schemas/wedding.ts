@@ -1,4 +1,6 @@
 import { z } from "zod";
+// TS-180: free text refuses hidden control characters (see ../safe-text).
+import { safeText } from "../safe-text";
 import { calendarDateField } from "./common";
 import {
   WEDDING_NAME_PATTERN,
@@ -37,16 +39,16 @@ const weddingBaseSchema = z.object({
   name: weddingNameField,
   // TS-174: a date the database can store (year 0000 used to be a server error).
   eventDate: calendarDateField.optional().nullable(),
-  venueName: z.string().max(200).optional().nullable(),
+  venueName: safeText(200).optional().nullable(),
   // FR-1.3: "an optional note" -- always optional, blank is fine (AC: creating with the note left
   // blank saves with no error).
-  note: z.string().max(2000).optional().nullable(),
+  note: safeText(2000, { multiline: true }).optional().nullable(),
   sideMixing: sideMixingEnum.default("BALANCED_MIX"),
   // FR-1.3a: this wedding's own name for each side (e.g. "Bride"/"Groom") -- a display label
   // only. Renaming never touches the underlying GuestSide value (BRIDE/GROOM/BOTH) stored on any
   // guest, so no guest, rule, or assignment is recreated or lost when these change.
-  sideLabel1: z.string().min(1, "Side label is required").max(40).default("Bride"),
-  sideLabel2: z.string().min(1, "Side label is required").max(40).default("Groom"),
+  sideLabel1: safeText(40, { required: "Side label is required" }).default("Bride"),
+  sideLabel2: safeText(40, { required: "Side label is required" }).default("Groom"),
   // TS-17 (FR-12.2): the cutoff after which a guest's own RSVP link becomes read-only. Optional --
   // omitting it (or explicitly clearing it) means no cutoff at all, matching the FR's "or none"
   // language exactly.

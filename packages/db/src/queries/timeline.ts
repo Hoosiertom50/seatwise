@@ -190,15 +190,20 @@ export async function reorderTimelineEntry(
     // fell through to a TypeError and a server error.
     if (index === -1) throw new TimelineReorderConflictError();
     const target = direction === "UP" ? index - 1 : index + 1;
+    const swapped = new Set<string>();
     if (target >= 0 && target < group.length) {
       [group[index], group[target]] = [group[target], group[index]];
+      swapped.add(group[index].id).add(group[target].id);
     }
     for (let position = 0; position < group.length; position++) {
-      if (group[position].sortOrder !== position) {
+      if (group[position].sortOrder !== position || swapped.has(group[position].id)) {
         // TS-92: a reorder bumps the moved entries' revisions, so an edit made from a copy loaded
-        // before the reorder is caught too.
+        // before the reorder is caught too. TS-180: only the two entries that swapped places --
+        // the others are just renumbered, which changes nothing anyone sees, so an edit someone
+        // has open on one of them is no longer refused as "changed".
+        const bump = swapped.has(group[position].id);
         await client.query(
-          `UPDATE "timeline_entries" SET "sortOrder" = $1, "updatedAt" = now(), revision = revision + 1 WHERE id = $2`,
+          `UPDATE "timeline_entries" SET "sortOrder" = $1${bump ? `, "updatedAt" = now(), revision = revision + 1` : ""} WHERE id = $2`,
           [position, group[position].id]
         );
       }

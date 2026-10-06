@@ -60,6 +60,15 @@ export async function listCommentsForWedding(weddingId: string): Promise<Comment
   return rows;
 }
 
+// TS-180: "16:30" as "4:30 PM" -- the same as the web app's formatClockTime (lib/display-format).
+function clockTime12(hhmm: string): string {
+  const [h, m] = hhmm.split(":").map(Number);
+  if (!Number.isInteger(h) || !Number.isInteger(m)) return hhmm;
+  const period = h < 12 ? "AM" : "PM";
+  const h12 = h % 12 === 0 ? 12 : h % 12;
+  return `${h12}:${String(m).padStart(2, "0")} ${period}`;
+}
+
 export async function createComment(
   weddingId: string,
   authorUserId: string,
@@ -69,6 +78,38 @@ export async function createComment(
   let guestId: string | null = null;
   let tableId: string | null = null;
   let timelineEntryId: string | null = null;
+
+  // TS-180: a reply goes on a comment that starts a thread (threads are one level deep), and is
+  // about whatever that comment is about -- the target is taken from it, not from the request, so a
+  // reply can't land in a thread while pointing at a different guest or table.
+  let parentAuthorId: string | null = null;
+  if (input.parentCommentId) {
+    const { rows } = await pool.query<{
+      authorUserId: string;
+      parentCommentId: string | null;
+      targetType: CreateCommentInput["targetType"];
+      guestId: string | null;
+      tableId: string | null;
+      timelineEntryId: string | null;
+    }>(
+      `SELECT "authorUserId", "parentCommentId", "targetType", "guestId", "tableId", "timelineEntryId"
+       FROM "comments" WHERE id = $1 AND "weddingId" = $2`,
+      [input.parentCommentId, weddingId]
+    );
+    const parent = rows[0];
+    if (!parent) throw new CommentError("Parent comment not found.", "NOT_FOUND");
+    if (parent.parentCommentId) {
+      throw new CommentError("Reply to the comment that starts the thread, not to a reply.", "INVALID_TARGET");
+    }
+    parentAuthorId = parent.authorUserId;
+    input = {
+      ...input,
+      targetType: parent.targetType,
+      guestId: parent.guestId,
+      tableId: parent.tableId,
+      timelineEntryId: parent.timelineEntryId,
+    };
+  }
 
   if (input.targetType === "GUEST") {
     if (!input.guestId) throw new CommentError("guestId is required for a guest comment.", "INVALID_TARGET");
@@ -100,18 +141,8 @@ export async function createComment(
     const entry = rows[0];
     if (!entry) throw new CommentError("Timeline entry not found.", "NOT_FOUND");
     timelineEntryId = input.timelineEntryId;
-    targetLabel = `Timeline: ${entry.time} ${entry.description}`;
-  }
-
-  let parentAuthorId: string | null = null;
-  if (input.parentCommentId) {
-    const { rows } = await pool.query(
-      `SELECT "authorUserId" FROM "comments" WHERE id = $1 AND "weddingId" = $2`,
-      [input.parentCommentId, weddingId]
-    );
-    const parent = rows[0];
-    if (!parent) throw new CommentError("Parent comment not found.", "NOT_FOUND");
-    parentAuthorId = parent.authorUserId;
+    // TS-180: the time as the app shows it (4:30 PM), not the stored 24-hour "16:30".
+    targetLabel = `Timeline: ${clockTime12(entry.time)} ${entry.description}`;
   }
 
   const id = randomUUID();

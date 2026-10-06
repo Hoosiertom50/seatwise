@@ -14,7 +14,16 @@ import type {
   RsvpStatus,
   WeddingDTO,
 } from "@seatwise/shared";
-import { formatGuestCounts, parseCsv, toCsv, GUEST_TIER_LABELS, RSVP_STATUS_LABELS } from "@seatwise/shared";
+import {
+  formatGuestCounts,
+  parseCsv,
+  toCsv,
+  CsvParseError,
+  findDuplicateCsvHeader,
+  duplicateCsvHeaderMessage,
+  GUEST_TIER_LABELS,
+  RSVP_STATUS_LABELS,
+} from "@seatwise/shared";
 import { useUnsavedChanges } from "@/lib/unsaved-changes";
 
 const TIERS: GuestTier[] = ["VIP", "FAMILY", "FRIEND", "PLUS_ONE", "OTHER"];
@@ -75,6 +84,9 @@ function buildImportFields(
     { field: "side", label: `Side (${sideLabel1}/${sideLabel2}/Both)` },
     { field: "ageCategory", label: "Age category (Adult/Child/Infant)" },
     { field: "notes", label: "Notes" },
+    // TS-180: the export's last two columns.
+    { field: "plusOneNames", label: "Plus-ones" },
+    { field: "version", label: "Version (from an export)" },
   ];
 }
 
@@ -188,8 +200,11 @@ export function GuestsTab({
   const [importResult, setImportResult] = useState<{
     createdCount: number;
     updatedCount: number;
+    skippedCount?: number;
     warnings: string[];
   } | null>(null);
+  // TS-180: the planner chose to overwrite guests changed in Seatwise since the file was exported.
+  const [overwriteChanged, setOverwriteChanged] = useState(false);
   const [showImportExample, setShowImportExample] = useState(false);
 
   function onDownloadImportExample() {
@@ -212,6 +227,7 @@ export function GuestsTab({
     setMapping({});
     setImportPreview(null);
     setImportError(null);
+    setOverwriteChanged(false);
     if (fileInputRef.current) fileInputRef.current.value = "";
   }
 
@@ -226,6 +242,12 @@ export function GuestsTab({
       const { headers } = parseCsv(text);
       if (headers.length === 0) {
         setImportError("Couldn't find a header row in that file.");
+        return;
+      }
+      // TS-180: two columns with one name can't be told apart in the column pickers below.
+      const duplicate = findDuplicateCsvHeader(headers);
+      if (duplicate !== null) {
+        setImportError(duplicateCsvHeaderMessage(duplicate));
         return;
       }
       setCsvText(text);
@@ -249,8 +271,9 @@ export function GuestsTab({
         if (match) guess[field] = match;
       }
       setMapping(guess);
-    } catch {
-      setImportError("Couldn't read that file.");
+    } catch (err) {
+      // TS-180: e.g. a quote that never closes -- say what's wrong with the file.
+      setImportError(err instanceof CsvParseError ? err.message : "Couldn't read that file.");
     }
   }
 
@@ -276,6 +299,7 @@ export function GuestsTab({
     if (!csvText) return;
     setImportError(null);
     setImportResult(null);
+    setOverwriteChanged(false);
     setPreviewing(true);
     try {
       const { preview } = await api.post<{ preview: GuestImportPreview }>(
@@ -296,18 +320,25 @@ export function GuestsTab({
     setCommitting(true);
     try {
       const { result, guests: updatedGuests } = await api.post<{
-        result: { createdCount: number; updatedCount: number; warnings: string[] };
+        result: { createdCount: number; updatedCount: number; skippedCount?: number; warnings: string[] };
         guests: GuestDTO[];
       }>(`/api/v1/weddings/${weddingId}/guests/import/commit`, {
         csv: csvText,
         mapping: cleanMapping(),
         // TS-92: the versions this preview showed, so the import is refused rather than silently
-        // overwriting a guest someone else edited in the meantime.
+        // overwriting a guest someone else edited in the meantime. TS-180: including guests changed
+        // since the export, when the planner chose to overwrite them.
         expectedRevisions: Object.fromEntries(
           (importPreview?.rows ?? [])
-            .filter((r) => r.kind === "update" && r.guestId && r.revision !== undefined)
+            .filter(
+              (r) =>
+                (r.kind === "update" || (r.kind === "conflict" && overwriteChanged)) &&
+                r.guestId &&
+                r.revision !== undefined
+            )
             .map((r) => [r.guestId!, r.revision!])
         ),
+        overwriteChanged,
       });
       setGuests(updatedGuests.sort((a, b) => a.lastName.localeCompare(b.lastName)));
       setImportResult(result);
@@ -856,8 +887,8 @@ export function GuestsTab({
         <p className="mb-3 text-sm text-neutral-500 dark:text-neutral-400">
           Add many guests at once, or update existing ones. Map a &quot;Guest ID&quot; column
           (from a prior export) to update those exact guests instead of creating new ones — a
-          blank cell leaves that guest&apos;s existing value alone; type <code>CLEAR</code> in a
-          Party/household or Notes cell to blank it out explicitly. Nothing is saved until you
+          blank cell leaves that guest&apos;s existing value alone; type <code>[CLEAR]</code> in a
+          Party/household, Notes or Plus-ones cell to blank it out explicitly. Nothing is saved until you
           confirm the preview below, and either everything imports or nothing does.
         </p>
 
@@ -984,7 +1015,9 @@ export function GuestsTab({
           <div className="mb-3">
             <p className="text-sm text-green-700 dark:text-green-400">
               Import complete: {importResult.createdCount} guest(s) added, {importResult.updatedCount}{" "}
-              updated.
+              updated
+              {/* TS-180 */}
+              {importResult.skippedCount ? `, ${importResult.skippedCount} left as they are (changed since the export)` : ""}.
             </p>
             {importResult.warnings.length > 0 && (
               <ul className="mt-1 list-inside list-disc text-sm text-amber-700 dark:text-amber-400">
@@ -1001,6 +1034,12 @@ export function GuestsTab({
             <p className="mb-2 text-sm">
               <strong>{importPreview.summary.newCount}</strong> new,{" "}
               <strong>{importPreview.summary.updatingCount}</strong> updating,{" "}
+              {/* TS-180 */}
+              {importPreview.summary.conflictCount > 0 && (
+                <>
+                  <strong>{importPreview.summary.conflictCount}</strong> changed since the export,{" "}
+                </>
+              )}
               <strong>{importPreview.summary.errorCount}</strong> with errors (of{" "}
               {importPreview.summary.totalRows} row(s)).
             </p>
@@ -1009,7 +1048,13 @@ export function GuestsTab({
                 <li
                   key={r.rowNumber}
                   className={`flex flex-wrap items-center gap-2 border-b border-neutral-100 dark:border-neutral-800 px-2 py-1.5 text-sm last:border-b-0 ${
-                    r.kind === "error" ? "bg-red-50 dark:bg-red-950" : r.kind === "update" ? "bg-blue-50 dark:bg-blue-950" : ""
+                    r.kind === "error"
+                      ? "bg-red-50 dark:bg-red-950"
+                      : r.kind === "conflict"
+                        ? "bg-amber-50 dark:bg-amber-950"
+                        : r.kind === "update"
+                          ? "bg-blue-50 dark:bg-blue-950"
+                          : ""
                   }`}
                 >
                   <span className="w-12 shrink-0 text-neutral-400 dark:text-neutral-500">Row {r.rowNumber}</span>
@@ -1017,15 +1062,22 @@ export function GuestsTab({
                     className={`shrink-0 rounded px-1.5 py-0.5 text-xs font-medium ${
                       r.kind === "error"
                         ? "bg-red-100 dark:bg-red-900 text-red-700 dark:text-red-400"
+                        : r.kind === "conflict"
+                          ? "bg-amber-100 dark:bg-amber-900 text-amber-800 dark:text-amber-300"
                         : r.kind === "update"
                           ? "bg-blue-100 text-blue-700 dark:text-blue-400"
                           : "bg-neutral-100 dark:bg-neutral-800 text-neutral-700 dark:text-neutral-300"
                     }`}
                   >
-                    {r.kind}
+                    {r.kind === "conflict" ? "changed" : r.kind}
                   </span>
                   {r.kind === "error" ? (
                     <span className="text-red-700 dark:text-red-400">{r.reason}</span>
+                  ) : r.kind === "conflict" ? (
+                    <span>
+                      {r.preview.firstName} {r.preview.lastName}:{" "}
+                      <span className="text-amber-800 dark:text-amber-300">{r.reason}</span>
+                    </span>
                   ) : (
                     <span>
                       {r.preview.firstName} {r.preview.lastName}
@@ -1035,14 +1087,41 @@ export function GuestsTab({
                 </li>
               ))}
             </ul>
+            {/* TS-180: guests changed in Seatwise since the file was exported are left alone
+                unless the planner says otherwise. */}
+            {importPreview.summary.conflictCount > 0 && (
+              <label className="mb-3 flex items-start gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  className="mt-0.5"
+                  checked={overwriteChanged}
+                  onChange={(e) => setOverwriteChanged(e.target.checked)}
+                />
+                <span>
+                  Overwrite guests changed since the export ({importPreview.summary.conflictCount}) — otherwise
+                  they&apos;re left as they are in Seatwise.
+                </span>
+              </label>
+            )}
             <button
               onClick={onConfirmImport}
-              disabled={committing || importPreview.summary.errorCount > 0 || importPreview.summary.totalRows === 0}
+              disabled={
+                committing ||
+                importPreview.summary.errorCount > 0 ||
+                importPreview.summary.newCount +
+                  importPreview.summary.updatingCount +
+                  (overwriteChanged ? importPreview.summary.conflictCount : 0) ===
+                  0
+              }
               className="rounded-md bg-neutral-900 dark:bg-neutral-100 px-4 py-2 text-sm font-medium text-white dark:text-neutral-900 hover:bg-neutral-700 dark:hover:bg-neutral-300 disabled:opacity-50"
             >
               {committing
                 ? "Importing..."
-                : `Confirm import (${importPreview.summary.newCount + importPreview.summary.updatingCount} guest(s))`}
+                : `Confirm import (${
+                    importPreview.summary.newCount +
+                    importPreview.summary.updatingCount +
+                    (overwriteChanged ? importPreview.summary.conflictCount : 0)
+                  } guest(s))`}
             </button>
             {importPreview.summary.errorCount > 0 && (
               <p className="mt-2 text-sm text-red-600 dark:text-red-400">
@@ -1167,8 +1246,8 @@ export function GuestsTab({
                     <span className="font-medium">Guest&apos;s RSVP note:</span> {g.rsvpNotes}
                   </p>
                 )}
-                {/* TS-129: the planner's private notes -- editable by Owner/Edit, read-only for
-                    View/Comment (who can already read them in the CSV export). */}
+                {/* TS-129: the planner's private notes -- editable by Owner/Edit. TS-180: View and
+                    Comment collaborators don't get them at all (TS-154), here or in the CSV export. */}
                 {canEdit ? (
                   <textarea
                     aria-label={`Notes for ${g.firstName} ${g.lastName}`}
