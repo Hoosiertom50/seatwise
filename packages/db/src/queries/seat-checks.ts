@@ -195,8 +195,9 @@ export async function restrictedListsOverCapacity(
   );
   const over: { tableLabel: string; capacity: number; seats: number; guestNames: string[] }[] = [];
   for (const t of tables as { id: string; label: string; capacity: number }[]) {
+    // TS-188: only guests who are Attending need a seat; someone marked Not Attending doesn't count.
     const { rows } = await q.query(
-      `SELECT COALESCE(SUM(g.headcount), 0)::int AS seats,
+      `SELECT COALESCE(SUM(g.headcount) FILTER (WHERE g."dayOfAttendance" = 'ATTENDING'), 0)::int AS seats,
               array_agg(g."firstName" || ' ' || g."lastName" ORDER BY g."lastName", g."firstName")
                 FILTER (WHERE g.id = ANY($2::text[])) AS "guestNames"
        FROM "restricted_table_guests" rtg JOIN "guests" g ON g.id = rtg."guestId"
@@ -209,6 +210,29 @@ export async function restrictedListsOverCapacity(
     }
   }
   return over;
+}
+
+// TS-188: which of these guests is on the required-guest list of a Restricted table that isn't
+// accessible -- for a change that marks them as needing an accessible table (the planner's edit,
+// an import), checked on the same transaction so the caller can refuse it. Share-locks those
+// tables' rows (guests before tables, as everywhere), so switching a table's Accessible flag off
+// at the same moment waits for this change and then sees it.
+export async function requiredAtNonAccessibleTable(
+  q: Queryable,
+  guestIds: string[]
+): Promise<{ guestName: string; tableLabel: string }[]> {
+  if (guestIds.length === 0) return [];
+  const { rows } = await q.query(
+    `SELECT (g."firstName" || ' ' || g."lastName") AS "guestName", t.label AS "tableLabel"
+     FROM "restricted_table_guests" rtg
+     JOIN "seating_tables" t ON t.id = rtg."tableId"
+     JOIN "guests" g ON g.id = rtg."guestId"
+     WHERE rtg."guestId" = ANY($1::text[]) AND t."isRestricted" AND NOT t."isAccessible"
+     ORDER BY t.id, g."lastName", g."firstName"
+     FOR SHARE OF t`,
+    [guestIds]
+  );
+  return rows as { guestName: string; tableLabel: string }[];
 }
 
 // TS-165: every table a change to these guests' seats can affect -- the tables they're at now,

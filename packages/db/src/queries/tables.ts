@@ -240,15 +240,19 @@ async function validateRequiredList(
     name: string;
     headcount: number;
     requiresAccessibleTable: boolean;
+    dayOfAttendance: string;
   }>(
-    `SELECT id, ("firstName" || ' ' || "lastName") AS name, headcount, "requiresAccessibleTable"
+    `SELECT id, ("firstName" || ' ' || "lastName") AS name, headcount, "requiresAccessibleTable", "dayOfAttendance"
      FROM "guests" WHERE id = ANY($1::text[]) AND "weddingId" = $2`,
     [uniqueIds, weddingId]
   );
   if (guestRows.length !== uniqueIds.length) {
     throw new RestrictedTableError("One or more guest IDs don't belong to this wedding.");
   }
-  const totalHeadcount = guestRows.reduce((sum, g) => sum + g.headcount, 0);
+  // TS-188: only guests who are Attending need a seat; someone marked Not Attending doesn't count.
+  const totalHeadcount = guestRows
+    .filter((g) => g.dayOfAttendance === "ATTENDING")
+    .reduce((sum, g) => sum + g.headcount, 0);
   if (totalHeadcount > table.capacity) {
     throw new RestrictedTableError(
       `This list needs ${totalHeadcount} seat(s), but "${table.label}" only has ${table.capacity}.`
@@ -505,8 +509,13 @@ export async function updateSeatingTableForWedding(
       // TS-181: the new list, against the table as this edit leaves it -- before anything is written.
       await validateRequiredList(client, weddingId, after, listIds);
     } else if (after.isRestricted && current.isRestricted) {
-      const { rows: listRows } = await client.query<{ name: string; headcount: number; requiresAccessibleTable: boolean }>(
-        `SELECT (g."firstName" || ' ' || g."lastName") AS name, g.headcount, g."requiresAccessibleTable"
+      const { rows: listRows } = await client.query<{
+        name: string;
+        headcount: number;
+        requiresAccessibleTable: boolean;
+        dayOfAttendance: string;
+      }>(
+        `SELECT (g."firstName" || ' ' || g."lastName") AS name, g.headcount, g."requiresAccessibleTable", g."dayOfAttendance"
          FROM "restricted_table_guests" rtg JOIN "guests" g ON g.id = rtg."guestId"
          WHERE rtg."tableId" = $1`,
         [id]
@@ -514,7 +523,10 @@ export async function updateSeatingTableForWedding(
       // TS-173: a Restricted table can't have fewer seats than its required guests need. Before, the
       // list was checked against the seats only when the list was saved, so lowering the seats
       // afterwards left required guests with nowhere they're allowed to sit.
-      const seats = listRows.reduce((sum, g) => sum + g.headcount, 0);
+      // TS-188: counting only the guests who are Attending.
+      const seats = listRows
+        .filter((g) => g.dayOfAttendance === "ATTENDING")
+        .reduce((sum, g) => sum + g.headcount, 0);
       if (input.capacity !== undefined && seats > after.capacity) {
         throw new RestrictedTableError(
           `This table's required guests need ${seats} seat(s), so it can't have fewer than that. Take guests off its list first.`

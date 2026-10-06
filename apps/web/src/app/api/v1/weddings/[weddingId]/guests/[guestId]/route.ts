@@ -13,6 +13,7 @@ import {
   guestHasRsvpLink,
   GuestConflictError,
   GuestHeadcountError,
+  GuestAccessibleTableError,
   type NewlyFlaggedSeat,
 } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
@@ -92,6 +93,8 @@ export async function PATCH(req: NextRequest, { params }: Params) {
     }
     // TS-181: a bigger party than their Restricted table can hold for its list -- nothing saved.
     if (err instanceof GuestHeadcountError) return errorResponse(err.message, 422);
+    // TS-188: needing an accessible table while required at a Restricted table that isn't one.
+    if (err instanceof GuestAccessibleTableError) return errorResponse(err.message, 422);
     throw err;
   }
 

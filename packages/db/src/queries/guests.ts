@@ -10,6 +10,7 @@ import {
   resyncTables,
   restrictedListsOverCapacity,
   tablesAffectedBy,
+  requiredAtNonAccessibleTable,
   type TableSeatingFlagReason,
 } from "./seat-checks";
 import { hashLinkToken, isPlainStoredLinkToken, newLinkToken, readStoredLinkToken } from "../link-tokens";
@@ -82,6 +83,11 @@ export class GuestConflictError extends Error {
 // TS-181: thrown instead of saving a party size that a guest's Restricted table can't hold for
 // its required-guest list. Nothing is saved.
 export class GuestHeadcountError extends Error {}
+
+// TS-188: thrown instead of marking a guest as needing an accessible table while they're on the
+// required-guest list of a Restricted table that isn't accessible -- the only table they'd be
+// allowed at would be one they can't use. Nothing is saved.
+export class GuestAccessibleTableError extends Error {}
 
 export interface CreateGuestData {
   firstName: string;
@@ -227,6 +233,17 @@ export async function updateGuestForWedding(
       if (over) {
         throw new GuestHeadcountError(
           `${over.guestNames[0] ?? "This guest"} is on "${over.tableLabel}"'s required-guest list, and a party of ${input.headcount} would need ${over.seats} seats there — it has ${over.capacity}. Give that table more seats, or take them off its list first.`
+        );
+      }
+    }
+    // TS-188: nor can they be marked as needing an accessible table while they're required at a
+    // Restricted table that isn't accessible -- the only table they're allowed at would be one
+    // they can't use. (The same check the table's list already makes from the other side.)
+    if (input.requiresAccessibleTable === true) {
+      const [clash] = await requiredAtNonAccessibleTable(client, [id]);
+      if (clash) {
+        throw new GuestAccessibleTableError(
+          `${clash.guestName} is on "${clash.tableLabel}"'s required-guest list, and "${clash.tableLabel}" isn't marked Accessible — mark it Accessible first, or take them off its list.`
         );
       }
     }

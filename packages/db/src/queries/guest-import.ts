@@ -6,6 +6,7 @@ import {
   recordRecheckIfApproved,
   resyncSeatsAtTable,
   restrictedListsOverCapacity,
+  requiredAtNonAccessibleTable,
   tablesAffectedBy,
 } from "./seat-checks";
 import {
@@ -650,6 +651,17 @@ export async function commitGuestImport(
     if (listOver) {
       throw new GuestImportError(
         `Nothing was imported: ${listOver.guestNames.join(", ") || "a guest"} ${listOver.guestNames.length === 1 ? "is" : "are"} on "${listOver.tableLabel}"'s required-guest list, and the party sizes in this file would need ${listOver.seats} seats there — it has ${listOver.capacity}. Give that table more seats, or take them off its list first.`
+      );
+    }
+    // TS-188: nor can the file mark a listed guest as needing an accessible table when their
+    // Restricted table isn't accessible -- refused the same way.
+    const [notAccessible] = await requiredAtNonAccessibleTable(
+      client,
+      updates.filter((u) => u.p.requiresAccessibleTable === true).map((u) => u.guestId)
+    );
+    if (notAccessible) {
+      throw new GuestImportError(
+        `Nothing was imported: ${notAccessible.guestName} is on "${notAccessible.tableLabel}"'s required-guest list, and this file marks them as needing an accessible table — "${notAccessible.tableLabel}" isn't marked Accessible. Mark it Accessible first, or take them off its list.`
       );
     }
 
