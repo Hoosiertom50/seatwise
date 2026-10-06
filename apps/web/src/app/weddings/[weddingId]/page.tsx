@@ -97,7 +97,11 @@ export default function WeddingDetailPage() {
   }
   function restoreFocus(target: HTMLElement | null) {
     setTimeout(() => {
-      if (target && target.isConnected) target.focus();
+      // Only if focus was lost with the question (it falls to the page) -- someone who has already
+      // clicked into another box keeps their place, rather than having what they type land here.
+      const active = document.activeElement;
+      const focusLost = !active || active === document.body || !active.isConnected;
+      if (focusLost && target && target.isConnected) target.focus();
     }, 0);
   }
   function goToTab(next: Tab) {
