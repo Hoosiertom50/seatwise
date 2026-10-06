@@ -142,8 +142,10 @@ export async function createGuest(weddingId: string, input: CreateGuestData): Pr
 }
 
 export async function listGuestsByWedding(weddingId: string): Promise<GuestRow[]> {
+  // TS-196: g.id breaks ties between guests with the same name, so they always come back in the
+  // same order (and generating a plan from them always gives the same result).
   const { rows } = await pool.query(
-    `SELECT ${COLUMNS} ${FROM_JOINED} WHERE g."weddingId" = $1 ORDER BY g."lastName", g."firstName"`,
+    `SELECT ${COLUMNS} ${FROM_JOINED} WHERE g."weddingId" = $1 ORDER BY g."lastName", g."firstName", g.id`,
     [weddingId]
   );
   return rows.map(decryptGuestNotes);

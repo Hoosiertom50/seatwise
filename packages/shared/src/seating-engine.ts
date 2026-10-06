@@ -27,6 +27,9 @@
 //     is a soft preference like prefer-near/avoid: it nudges a matching guest toward that table
 //     but never blocks a non-matching guest from being seated there, and overflow beyond the
 //     table's capacity is simply placed elsewhere rather than failing generation.
+//   - TS-196: if a plan leaves anyone unseated, it's repaired (one seated group moved to make room)
+//     and also tried in plain largest-first order, and whichever seats the most guests is kept.
+//     Every hard rule above still holds in each of them, and the result is the same every time.
 
 export type EngineRelationshipType =
   | "MUST_SIT_TOGETHER"
@@ -187,7 +190,10 @@ interface Unit {
 // whenever these numbers (or the formula that uses them) change, so a Plan Version's stored
 // ruleConfigVersion always identifies exactly what produced it (FR-3.4's acceptance criterion).
 // TS-188: version 3 adds accessibleTableMisusePenalty.
-export const RULE_WEIGHT_CONFIG_VERSION = 3;
+// TS-196: version 4 takes it out again (it could leave a party unseated when there was room for
+// everyone -- seating guests who need an accessible table first already keeps those seats for
+// them), and adds a repair step for plans that leave someone unseated (see generateSeatingPlan).
+export const RULE_WEIGHT_CONFIG_VERSION = 4;
 export const RULE_WEIGHT_CONFIG = {
   preferNearBonus: 10,
   avoidPenalty: 10,
@@ -206,9 +212,6 @@ export const RULE_WEIGHT_CONFIG = {
   // defeating "the criterion favors children" by letting non-matching guests fill it first.
   purposeCriterionBonus: 6,
   purposeCriterionMismatchPenalty: 2,
-  // TS-188: a small nudge that keeps accessible tables free for the guests who need them --
-  // applied when a group that doesn't need one could sit at a non-accessible table instead.
-  accessibleTableMisusePenalty: 2,
 } as const;
 
 // FR-5.3: a pure post-analysis pass over the final assignments -- deliberately decoupled from
@@ -360,10 +363,12 @@ export function generateSeatingPlan(
   guests: EngineGuest[],
   relationships: EngineRelationship[],
   tables: EngineTable[],
-  sideMixing: EngineSideMixing = "BALANCED_MIX"
+  sideMixing: EngineSideMixing = "BALANCED_MIX",
+  // TS-196: { repair: false } skips the retry/repair step below -- only the unit tests use it, to
+  // check the repair never seats fewer guests than the plain engine.
+  options: { repair?: boolean } = {}
 ): SeatingPlanResult {
   const errors: string[] = [];
-  const warnings: string[] = [];
   const guestById = new Map(guests.map((g) => [g.id, g]));
   const guestName = (id: string) => guestById.get(id)?.name ?? id;
   const tablesById = new Map(tables.map((t) => [t.id, t]));
@@ -387,7 +392,7 @@ export function generateSeatingPlan(
     }
   }
   if (errors.length > 0) {
-    return { assignments: [], unassignedGuestIds: guests.map((g) => g.id), warnings, errors, isComplete: false };
+    return { assignments: [], unassignedGuestIds: guests.map((g) => g.id), warnings: [], errors, isComplete: false };
   }
 
   const unitsByRoot = new Map<string, Unit>();
@@ -488,8 +493,13 @@ export function generateSeatingPlan(
   // by a lock can still land there; capacity/occupancy tracking covers every table so a pin can
   // target any of them.
   const candidateTables = tables.filter((t) => !t.isRestricted && !t.isLocked);
-  const remainingCapacity = new Map(tables.map((t) => [t.id, t.capacity]));
-  const occupants = new Map<string, string[]>(tables.map((t) => [t.id, []]));
+  // TS-196: the placement state below is reset for each attempt (see runPlacement), since a plan
+  // that leaves someone unseated is tried again in another order and repaired.
+  let remainingCapacity = new Map<string, number>();
+  let occupants = new Map<string, string[]>();
+  let assignments: SeatingPlanAssignment[] = [];
+  let unassignedGuestIds: string[] = [];
+  let warnings: string[] = [];
 
   const hasMustNotConflict = (unit: Unit, tableId: string) =>
     occupants.get(tableId)!.some((occupantId) =>
@@ -526,7 +536,6 @@ export function generateSeatingPlan(
     // guest-to-guest preferences above), tie-broken toward the tightest fit (least leftover
     // capacity) to reduce fragmentation.
     const w = RULE_WEIGHT_CONFIG;
-    const hasNonAccessibleOption = feasible.some((t) => !t.isAccessible);
     let best = feasible[0];
     let bestScore = -Infinity;
     for (const t of feasible) {
@@ -585,12 +594,6 @@ export function generateSeatingPlan(
           else mismatches++;
         }
         score += matches * w.purposeCriterionBonus - mismatches * w.purposeCriterionMismatchPenalty;
-      }
-
-      // TS-188: a group that doesn't need an accessible table is steered away from one when a
-      // non-accessible table could take it, so the accessible seats stay free for those who do.
-      if (!unit.requiresAccessible && t.isAccessible && hasNonAccessibleOption) {
-        score -= w.accessibleTableMisusePenalty;
       }
 
       if (score > bestScore) {
@@ -656,7 +659,15 @@ export function generateSeatingPlan(
         : "there's no accessible table";
     }
     if (suitable.every((t) => t.capacity < unit.totalHeadcount)) {
-      return `their party of ${unit.totalHeadcount} is bigger than any ${unit.requiresAccessible ? "accessible " : ""}table`;
+      // TS-196: if a locked or Restricted table is big enough, say the party is only bigger than
+      // the tables it could be seated at, not bigger than every table.
+      const lockedOrRestrictedFits = tables.some(
+        (t) => (!unit.requiresAccessible || t.isAccessible) && t.capacity >= unit.totalHeadcount
+      );
+      return (
+        `their party of ${unit.totalHeadcount} is bigger than any ` +
+        `${lockedOrRestrictedFits ? "unlocked, unrestricted " : ""}${unit.requiresAccessible ? "accessible " : ""}table`
+      );
     }
     const capacityFeasible = candidateTables.filter((t) => {
       if ((remainingCapacity.get(t.id) ?? 0) < unit.totalHeadcount) return false;
@@ -691,10 +702,15 @@ export function generateSeatingPlan(
     (a, b) => b.totalHeadcount - a.totalHeadcount
   );
 
-  const assignments: SeatingPlanAssignment[] = [];
-  const unassignedGuestIds: string[] = [];
-  // TS-181: locks that couldn't be kept, seated automatically once every pin has had its turn.
-  const failedLocks: { unit: Unit; target: EngineTable | undefined }[] = [];
+  // TS-196: where each automatically seated group (a lock that couldn't be kept, or an unpinned
+  // group) landed in the current attempt, and -- when re-running a repaired plan -- the table each
+  // of them must go to.
+  let autoTable = new Map<Unit, string>();
+  let forcedTable: Map<Unit, string> | null = null;
+  const autoPool = (unit: Unit): EngineTable[] => {
+    const forced = forcedTable?.get(unit);
+    return forced ? [tablesById.get(forced)!] : candidateTables;
+  };
 
   const names = (ids: string[]) => ids.map(guestName).join(", ");
   const guestWord = (ids: string[]) => (ids.length === 1 ? "Guest" : "Guests");
@@ -730,66 +746,70 @@ export function generateSeatingPlan(
     }
   }
 
-  for (const unit of pinnedUnits) {
-    if (unit.blockedReason) {
-      unassignedGuestIds.push(...unit.guestIds);
-      warnings.push(`Couldn't seat guests ${unit.guestIds.map(guestName).join(", ")} — ${unit.blockedReason}.`);
-      continue;
-    }
-    const target = unit.pinnedTableId ? tablesById.get(unit.pinnedTableId) : undefined;
-
-    // TS-188 (Tom's decision): a locked table keeps the people already at it and nobody new is
-    // seated there. Before, one member at a locked table pinned their whole must-sit-together
-    // group to it, so a partner who never sat there was added (and could push out someone who
-    // did). Now only the members already there are kept; a partner who'd be new there isn't
-    // seated (seating them anywhere else would break "must sit together"), with a warning.
-    // A Restricted table's required list is the planner's own choice of who sits there, so a
-    // required pin isn't split this way.
-    let toPlace = unit;
-    let newcomers: string[] = [];
-    if (target?.isLocked && unit.pinReason !== "required") {
-      newcomers = unit.guestIds.filter((id) => guestById.get(id)?.currentTableId !== target.id);
-      if (newcomers.length > 0) {
-        toPlace = subUnit(unit, unit.guestIds.filter((id) => !newcomers.includes(id)));
+  // TS-181: locks that couldn't be kept are collected into failedLocks, to be seated automatically
+  // once every pin has had its turn.
+  function placePinnedUnits(failedLocks: { unit: Unit; target: EngineTable | undefined }[]) {
+    for (const unit of pinnedUnits) {
+      if (unit.blockedReason) {
+        unassignedGuestIds.push(...unit.guestIds);
+        warnings.push(`Couldn't seat guests ${unit.guestIds.map(guestName).join(", ")} — ${unit.blockedReason}.`);
+        continue;
       }
-    }
+      const target = unit.pinnedTableId ? tablesById.get(unit.pinnedTableId) : undefined;
 
-    // A required-table pin targets its own restricted table directly (attemptPlace doesn't
-    // filter by isRestricted -- only the *general* candidateTables pool excludes it), same as a
-    // locked pin targeting any table.
-    const placedAt = target ? attemptPlace(toPlace, [target]) : null;
-    if (placedAt) {
-      if (newcomers.length > 0) {
-        unassignedGuestIds.push(...newcomers);
-        const staying = toPlace.guestIds;
-        const lockedTable =
-          staying.length === 1
-            ? `${guestName(staying[0])}'s table "${placedAt.label}" is locked`
-            : `${names(staying)} are at "${placedAt.label}", which is locked`;
+      // TS-188 (Tom's decision): a locked table keeps the people already at it and nobody new is
+      // seated there. Before, one member at a locked table pinned their whole must-sit-together
+      // group to it, so a partner who never sat there was added (and could push out someone who
+      // did). Now only the members already there are kept; a partner who'd be new there isn't
+      // seated (seating them anywhere else would break "must sit together"), with a warning.
+      // A Restricted table's required list is the planner's own choice of who sits there, so a
+      // required pin isn't split this way.
+      let toPlace = unit;
+      let newcomers: string[] = [];
+      if (target?.isLocked && unit.pinReason !== "required") {
+        newcomers = unit.guestIds.filter((id) => guestById.get(id)?.currentTableId !== target.id);
+        if (newcomers.length > 0) {
+          toPlace = subUnit(unit, unit.guestIds.filter((id) => !newcomers.includes(id)));
+        }
+      }
+
+      // A required-table pin targets its own restricted table directly (attemptPlace doesn't
+      // filter by isRestricted -- only the *general* candidateTables pool excludes it), same as a
+      // locked pin targeting any table.
+      const placedAt = target ? attemptPlace(toPlace, [target]) : null;
+      if (placedAt) {
+        if (newcomers.length > 0) {
+          unassignedGuestIds.push(...newcomers);
+          const staying = toPlace.guestIds;
+          const lockedTable =
+            staying.length === 1
+              ? `${guestName(staying[0])}'s table "${placedAt.label}" is locked`
+              : `${names(staying)} are at "${placedAt.label}", which is locked`;
+          warnings.push(
+            `Couldn't seat ${guestWord(newcomers).toLowerCase()} ${names(newcomers)} — they must sit with ` +
+              `${names(staying)}, but ${lockedTable}. Unlock it or move them together.`
+          );
+        }
+        warnMovedPins(toPlace, placedAt);
+        continue;
+      }
+
+      // The pin couldn't be honored (table deleted/shrunk, or it would now break a hard rule).
+      // TS-173: a guest required at a Restricted table may not sit anywhere else, so a required pin
+      // that can't be honored leaves them unassigned (with the reason) rather than seating them
+      // automatically at a table that would break that rule.
+      if (unit.pinReason === "required") {
+        unassignedGuestIds.push(...unit.guestIds);
         warnings.push(
-          `Couldn't seat ${guestWord(newcomers).toLowerCase()} ${names(newcomers)} — they must sit with ` +
-            `${names(staying)}, but ${lockedTable}. Unlock it or move them together.`
+          `Couldn't seat ${unit.guestIds.length === 1 ? "guest" : "guests"} ${unit.guestIds.map(guestName).join(", ")} — ` +
+            (target
+              ? `they're required at "${target.label}", and it has no room for them (or seating them there would break another hard rule).`
+              : "they're required at a table that no longer exists.")
         );
+        continue;
       }
-      warnMovedPins(toPlace, placedAt);
-      continue;
+      failedLocks.push({ unit, target });
     }
-
-    // The pin couldn't be honored (table deleted/shrunk, or it would now break a hard rule).
-    // TS-173: a guest required at a Restricted table may not sit anywhere else, so a required pin
-    // that can't be honored leaves them unassigned (with the reason) rather than seating them
-    // automatically at a table that would break that rule.
-    if (unit.pinReason === "required") {
-      unassignedGuestIds.push(...unit.guestIds);
-      warnings.push(
-        `Couldn't seat ${unit.guestIds.length === 1 ? "guest" : "guests"} ${unit.guestIds.map(guestName).join(", ")} — ` +
-          (target
-            ? `they're required at "${target.label}", and it has no room for them (or seating them there would break another hard rule).`
-            : "they're required at a table that no longer exists.")
-      );
-      continue;
-    }
-    failedLocks.push({ unit, target });
   }
 
   // A lock is only "keep them where they were", so fall back to normal automatic placement
@@ -806,8 +826,9 @@ export function generateSeatingPlan(
     const withPartners = partners.length > 0 ? ` (with ${names(partners)}, who must sit with them)` : "";
     const one = pinned.length === 1;
 
-    const fallback = attemptPlace(unit, candidateTables);
-    if (!fallback) unassignedGuestIds.push(...unit.guestIds);
+    const fallback = attemptPlace(unit, autoPool(unit));
+    if (fallback) autoTable.set(unit, fallback.id);
+    else unassignedGuestIds.push(...unit.guestIds);
 
     if (!target) {
       // TS-188: say plainly that the table was removed, and what happened instead.
@@ -823,19 +844,18 @@ export function generateSeatingPlan(
       unit.pinReason === "lock"
         ? `${one ? "is" : "are"} locked to "${target.label}"`
         : `${one ? "was" : "were"} at the locked table "${target.label}"`;
+    // TS-196: one message either way -- before, a lock that couldn't be kept *or* re-seated said
+    // "seated automatically instead" and then, separately, that they couldn't be seated.
     warnings.push(
-      `${guestWord(pinned)} ${names(pinned)} ${lead}${withPartners}, but that's no longer possible — seated automatically instead.`
+      `${guestWord(pinned)} ${names(pinned)} ${lead}${withPartners}, but that's no longer possible — ` +
+        (fallback ? "seated automatically instead." : `and couldn't be seated: ${unassignedReason(unit)}.`)
     );
-    if (!fallback) {
-      warnings.push(
-        `Couldn't seat ${unit.guestIds.length === 1 ? "guest" : "guests"} ${names(unit.guestIds)} — ${unassignedReason(unit)}.`
-      );
-    }
   }
 
   function placeUnpinned(unit: Unit) {
-    const placedAt = attemptPlace(unit, candidateTables);
-    if (!placedAt) {
+    const placedAt = attemptPlace(unit, autoPool(unit));
+    if (placedAt) autoTable.set(unit, placedAt.id);
+    else {
       unassignedGuestIds.push(...unit.guestIds);
       warnings.push(
         `Couldn't seat ${unit.guestIds.length === 1 ? "guest" : "guests"} ${unit.guestIds
@@ -845,19 +865,165 @@ export function generateSeatingPlan(
     }
   }
 
-  // TS-188: groups that need an accessible table are seated before the rest (failed locks, then
-  // unpinned, in each half), so another party can't take the only accessible seats first.
-  for (const entry of failedLocks.filter((f) => f.unit.requiresAccessible)) placeFailedLock(entry);
-  for (const unit of unpinnedUnits.filter((u) => u.requiresAccessible)) placeUnpinned(unit);
-  for (const entry of failedLocks.filter((f) => !f.unit.requiresAccessible)) placeFailedLock(entry);
-  for (const unit of unpinnedUnits.filter((u) => !u.requiresAccessible)) placeUnpinned(unit);
+  // TS-196: one automatic placement -- a lock that couldn't be kept, or an unpinned group.
+  type Step = { lock: { unit: Unit; target: EngineTable | undefined } } | { unit: Unit };
+  const stepUnit = (step: Step) => ("lock" in step ? step.lock.unit : step.unit);
+  const runStep = (step: Step) => ("lock" in step ? placeFailedLock(step.lock) : placeUnpinned(step.unit));
+
+  interface Attempt {
+    assignments: SeatingPlanAssignment[];
+    unassignedGuestIds: string[];
+    warnings: string[];
+    autoTable: Map<Unit, string>;
+    steps: Step[];
+  }
+
+  // One whole attempt at a plan: every pin first, then the automatic placements in the given order.
+  // "accessibleFirst" is the normal order -- TS-188: groups that need an accessible table are
+  // seated before the rest (failed locks, then unpinned, in each half), so another party can't take
+  // the only accessible seats first. TS-196: "largestFirst" is the plain largest-first order
+  // (failed locks, then unpinned), tried when the normal order leaves someone unseated. With
+  // `forced` (a repaired plan), each listed group is seated at its given table, and anyone not
+  // listed is tried last, once every listed group has its seat.
+  function runPlacement(order: "accessibleFirst" | "largestFirst", forced: Map<Unit, string> | null): Attempt {
+    remainingCapacity = new Map(tables.map((t) => [t.id, t.capacity]));
+    occupants = new Map(tables.map((t) => [t.id, []]));
+    assignments = [];
+    unassignedGuestIds = [];
+    warnings = [];
+    autoTable = new Map();
+    forcedTable = forced;
+
+    const failedLocks: { unit: Unit; target: EngineTable | undefined }[] = [];
+    placePinnedUnits(failedLocks);
+
+    const steps: Step[] =
+      order === "accessibleFirst"
+        ? [
+            ...failedLocks.filter((f) => f.unit.requiresAccessible).map((lock) => ({ lock })),
+            ...unpinnedUnits.filter((u) => u.requiresAccessible).map((unit) => ({ unit })),
+            ...failedLocks.filter((f) => !f.unit.requiresAccessible).map((lock) => ({ lock })),
+            ...unpinnedUnits.filter((u) => !u.requiresAccessible).map((unit) => ({ unit })),
+          ]
+        : [...failedLocks.map((lock) => ({ lock })), ...unpinnedUnits.map((unit) => ({ unit }))];
+    const later: Step[] = [];
+    for (const step of steps) {
+      if (forced && !forced.has(stepUnit(step))) later.push(step);
+      else runStep(step);
+    }
+    forcedTable = null;
+    for (const step of later) runStep(step);
+    return { assignments, unassignedGuestIds, warnings, autoTable, steps };
+  }
+
+  // TS-196: a one-step repair of an attempt that left unpinned groups unseated. For each of them
+  // (in seating order): if some table would have room once one already-seated unpinned group moved
+  // to another table, make that move and seat them there. Only unpinned groups ever move, always
+  // whole, and only between unlocked, unrestricted tables; every move keeps room, accessible-table
+  // needs and "must not sit together" rules. Returns where every automatically seated group should
+  // sit, or null if nobody more could be seated. The work is at most (unseated groups) x (groups) x
+  // (tables) checks, and it stops once REPAIR_CHECK_BUDGET checks are used, so a huge wedding can't
+  // stall generation (counting checks, not time, keeps the result the same on every run).
+  const REPAIR_CHECK_BUDGET = 2_000_000;
+  function repair(attempt: Attempt): Map<Unit, string> | null {
+    const tableOfUnit = new Map(attempt.autoTable);
+    const occ = new Map<string, Set<string>>(tables.map((t) => [t.id, new Set<string>()]));
+    const rem = new Map(tables.map((t) => [t.id, t.capacity]));
+    for (const a of attempt.assignments) {
+      occ.get(a.tableId)!.add(a.guestId);
+      rem.set(a.tableId, rem.get(a.tableId)! - (guestById.get(a.guestId)?.headcount ?? 0));
+    }
+    // Unpinned groups at each unlocked, unrestricted table -- the only ones a repair may move.
+    const movableAt = new Map<string, Unit[]>(candidateTables.map((t) => [t.id, []]));
+    for (const u of unpinnedUnits) {
+      const t = tableOfUnit.get(u);
+      if (t) movableAt.get(t)?.push(u);
+    }
+    const clashes = (unit: Unit, tableId: string, leaving: Unit | null) =>
+      unit.guestIds.some((g) =>
+        [...(mustNotMap.get(g) ?? [])].some((o) => occ.get(tableId)!.has(o) && !leaving?.guestIds.includes(o))
+      );
+    const fits = (unit: Unit, t: EngineTable, leaving: Unit | null) =>
+      (!unit.requiresAccessible || t.isAccessible) &&
+      rem.get(t.id)! + (leaving?.totalHeadcount ?? 0) >= unit.totalHeadcount &&
+      !clashes(unit, t.id, leaving);
+    const seat = (unit: Unit, t: EngineTable) => {
+      for (const g of unit.guestIds) occ.get(t.id)!.add(g);
+      rem.set(t.id, rem.get(t.id)! - unit.totalHeadcount);
+      movableAt.get(t.id)!.push(unit);
+      tableOfUnit.set(unit, t.id);
+    };
+    const unseat = (unit: Unit, t: EngineTable) => {
+      for (const g of unit.guestIds) occ.get(t.id)!.delete(g);
+      rem.set(t.id, rem.get(t.id)! + unit.totalHeadcount);
+      const list = movableAt.get(t.id)!;
+      list.splice(list.indexOf(unit), 1);
+      tableOfUnit.delete(unit);
+    };
+
+    let checks = 0;
+    let improved = false;
+    for (const step of attempt.steps) {
+      if ("lock" in step || tableOfUnit.has(step.unit)) continue;
+      const unit = step.unit;
+      let done = false;
+      for (const tv of candidateTables) {
+        if (done || checks > REPAIR_CHECK_BUDGET) break;
+        if (tv.capacity < unit.totalHeadcount || (unit.requiresAccessible && !tv.isAccessible)) continue;
+        checks++;
+        if (fits(unit, tv, null)) {
+          seat(unit, tv);
+          done = true;
+          break;
+        }
+        for (const moving of [...movableAt.get(tv.id)!]) {
+          if (done || checks > REPAIR_CHECK_BUDGET) break;
+          checks++;
+          if (!fits(unit, tv, moving)) continue;
+          for (const t2 of candidateTables) {
+            checks++;
+            if (t2.id === tv.id || !fits(moving, t2, null)) continue;
+            unseat(moving, tv);
+            seat(moving, t2);
+            seat(unit, tv);
+            done = true;
+            break;
+          }
+        }
+      }
+      if (done) improved = true;
+    }
+    return improved ? tableOfUnit : null;
+  }
+
+  // TS-196: if the normal order leaves anyone unseated, also try a repaired plan, the plain
+  // largest-first order, and that order repaired, and keep whichever seats the most guests (a tie
+  // keeps the earlier one, so the normal plan wins unless another really seats more). Every one of
+  // them keeps every hard rule, so the choice only ever seats more people.
+  const primary = runPlacement("accessibleFirst", null);
+  let best = primary;
+  if (primary.unassignedGuestIds.length > 0 && options.repair !== false) {
+    const better = (a: Attempt) => {
+      if (a.unassignedGuestIds.length < best.unassignedGuestIds.length) best = a;
+    };
+    const repaired = repair(primary);
+    if (repaired) better(runPlacement("accessibleFirst", repaired));
+    if (best.unassignedGuestIds.length > 0) {
+      const alternate = runPlacement("largestFirst", null);
+      better(alternate);
+      if (best.unassignedGuestIds.length > 0 && alternate.unassignedGuestIds.length > 0) {
+        const repairedAlternate = repair(alternate);
+        if (repairedAlternate) better(runPlacement("largestFirst", repairedAlternate));
+      }
+    }
+  }
 
   return {
-    assignments,
-    unassignedGuestIds,
-    warnings,
+    assignments: best.assignments,
+    unassignedGuestIds: best.unassignedGuestIds,
+    warnings: best.warnings,
     errors,
-    isComplete: unassignedGuestIds.length === 0,
-    scoreReport: computeScoreReport(guests, relationships, tables, sideMixing, assignments),
+    isComplete: best.unassignedGuestIds.length === 0,
+    scoreReport: computeScoreReport(guests, relationships, tables, sideMixing, best.assignments),
   };
 }
