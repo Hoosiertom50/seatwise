@@ -5,6 +5,8 @@ import { useEffect, useRef, useState } from "react";
 import { api, ApiError } from "@/lib/api-client";
 import { useSerialTasks } from "@/lib/serial-tasks";
 import { useUnsavedChanges } from "@/lib/unsaved-changes";
+import { inReadingOrder } from "@/lib/reading-order";
+import { PickThenActControl } from "@/components/PickThenActControl";
 import { PLAN_CHANGED_EVENT } from "./GettingStarted";
 import { SAVED_AS_DRAFT_BECAUSE_APPROVED, MADE_CURRENT_BECAUSE_NO_CURRENT_PLAN } from "@/lib/plan-approval-text";
 
@@ -1325,23 +1327,21 @@ export function PlanTab({
                 {detail.unassignedGuestIds.map((id) => (
                   <li key={id} className="flex items-center justify-between gap-2 text-sm">
                     <span>{guestName(id)}</span>
+                    {/* TS-199: pick a table, then press Seat -- the arrow keys no longer seat the
+                        guest at every table on the way (see PickThenActControl). */}
                     {canEditThisVersion && (
-                      <select
-                        aria-label={`Move ${guestName(id)} to a table`}
-                        className="min-h-11 rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm disabled:opacity-50"
-                        value=""
-                        disabled={movingIds.has(id) || versionChanging}
-                        onChange={(e) => onMoveGuest(id, e.target.value)}
-                      >
-                        <option value="" disabled>
-                          {movingIds.has(id) ? "Seating..." : "Seat at..."}
-                        </option>
-                        {tables.map((t) => (
-                          <option key={t.id} value={t.id}>
-                            {t.label}
-                          </option>
-                        ))}
-                      </select>
+                      <PickThenActControl
+                        id={`plan-move-${id}`}
+                        label={`Move ${guestName(id)} to a table`}
+                        placeholder="Seat at..."
+                        busy={movingIds.has(id)}
+                        busyLabel="Seating..."
+                        disabled={versionChanging}
+                        options={tables.map((t) => ({ value: t.id, label: t.label }))}
+                        actLabel="Seat"
+                        actAriaLabel={`Seat ${guestName(id)}`}
+                        onAct={(tableId) => onMoveGuest(id, tableId)}
+                      />
                     )}
                   </li>
                 ))}
@@ -1364,25 +1364,22 @@ export function PlanTab({
                       {g.guestName}{" "}
                       <span className="text-xs text-neutral-500 dark:text-neutral-400">(currently at {g.tableLabel})</span>
                     </span>
+                    {/* TS-199: pick, then Move (see PickThenActControl). */}
                     {canEditThisVersion && (
-                      <select
-                        aria-label={`Move ${g.guestName} to a different table`}
-                        className="min-h-11 rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm disabled:opacity-50"
-                        value=""
-                        disabled={movingIds.has(g.guestId) || versionChanging}
-                        onChange={(e) => onMoveGuest(g.guestId, e.target.value)}
-                      >
-                        <option value="" disabled>
-                          {movingIds.has(g.guestId) ? "Moving..." : "Move to..."}
-                        </option>
-                        {tables
+                      <PickThenActControl
+                        id={`plan-move-${g.guestId}`}
+                        label={`Move ${g.guestName} to a different table`}
+                        placeholder="Move to..."
+                        busy={movingIds.has(g.guestId)}
+                        busyLabel="Moving..."
+                        disabled={versionChanging}
+                        options={tables
                           .filter((t) => t.id !== g.tableId)
-                          .map((t) => (
-                            <option key={t.id} value={t.id}>
-                              {t.label}
-                            </option>
-                          ))}
-                      </select>
+                          .map((t) => ({ value: t.id, label: t.label }))}
+                        actLabel="Move"
+                        actAriaLabel={`Move ${g.guestName}`}
+                        onAct={(tableId) => onMoveGuest(g.guestId, tableId)}
+                      />
                     )}
                   </li>
                 ))}
@@ -1464,25 +1461,24 @@ export function PlanTab({
                     {t.guests.map((g) => (
                       <li key={g.guestId} className="flex items-center justify-between gap-2 text-sm">
                         <span>{g.guestName}</span>
+                        {/* TS-199: pick, then Move (see PickThenActControl). */}
                         {canEditThisVersion && (
-                          <select
-                            aria-label={`Move ${g.guestName} to a different table`}
-                            className="min-h-11 rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-xs disabled:opacity-50"
-                            value=""
-                            disabled={movingIds.has(g.guestId) || versionChanging}
-                            onChange={(e) => onMoveGuest(g.guestId, e.target.value)}
-                          >
-                            <option value="" disabled>
-                              {movingIds.has(g.guestId) ? "Moving..." : "Move to..."}
-                            </option>
-                            {tables
+                          <PickThenActControl
+                            id={`plan-move-${g.guestId}`}
+                            label={`Move ${g.guestName} to a different table`}
+                            placeholder="Move to..."
+                            busy={movingIds.has(g.guestId)}
+                            busyLabel="Moving..."
+                            disabled={versionChanging}
+                            options={tables
                               .filter((table) => table.id !== tableId)
-                              .map((table) => (
-                                <option key={table.id} value={table.id}>
-                                  {table.label}
-                                </option>
-                              ))}
-                          </select>
+                              .map((table) => ({ value: table.id, label: table.label }))}
+                            actLabel="Move"
+                            actAriaLabel={`Move ${g.guestName}`}
+                            selectClassName="min-h-11 max-w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-xs disabled:opacity-50"
+                            buttonClassName="min-h-11 rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1 text-xs font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50"
+                            onAct={(tableId) => onMoveGuest(g.guestId, tableId)}
+                          />
                         )}
                       </li>
                     ))}
@@ -1746,10 +1742,16 @@ function PlanFloorPlan({
         </div>
       )}
       <div
+        // TS-199: named, so the seating floor plan can be found as one area (e.g. its Tab order).
+        role="group"
+        aria-label="Seating floor plan"
         style={{ width: "100%", height, maxWidth: width }}
         className="relative overflow-auto rounded-lg border border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-900"
       >
-        {tables.map((t) => {
+        {/* TS-199: listed in reading order of where the tables sit (rows top to bottom, each left
+            to right), so Tab moves through the guests and tables the way the room reads. Tables
+            don't move on this view, so the order holds while a guest is dragged. */}
+        {inReadingOrder(tables, (t) => ({ x: t.positionX ?? 40, y: t.positionY ?? 40 })).map((t) => {
           const entry = grouped.get(t.id);
           const tableGuests = entry?.guests ?? [];
           const isTarget = pickedGuestId !== null && canEditThisVersion;

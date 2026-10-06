@@ -90,8 +90,9 @@ export default function AccountPage() {
         ← Back to your weddings
       </Link>
       <h1 className="mb-1 mt-4 text-2xl font-semibold">Your account</h1>
-      <p className="mb-8 text-sm text-neutral-600 dark:text-neutral-300">
-        Signed in as {user.name} ({user.email})
+      {/* TS-199: a long name or address wraps instead of running off a phone screen. */}
+      <p className="mb-8 break-words text-sm text-neutral-600 dark:text-neutral-300 [overflow-wrap:anywhere]">
+        Signed in as {user.name} (<span className="break-all">{user.email}</span>)
       </p>
 
       {/* TS-100 */}

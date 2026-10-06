@@ -20,8 +20,9 @@ export async function PATCH(req: NextRequest, { params }: Params) {
   if (!parsed.success) return zodErrorResponse(parsed.error);
 
   try {
-    await updateCollaboratorPermission(weddingId, collaboratorId, parsed.data.permissionLevel, parsed.data.role, user.id);
-    return NextResponse.json({ ok: true });
+    // TS-199: the saved level and role go back to the screen, which shows them.
+    const saved = await updateCollaboratorPermission(weddingId, collaboratorId, parsed.data.permissionLevel, parsed.data.role, user.id);
+    return NextResponse.json({ ok: true, collaborator: saved });
   } catch (err) {
     // TS-195: no longer the owner (handed off a moment ago) -- 403; otherwise not found.
     if (err instanceof CollaboratorError) return errorResponse(err.message, err.code === "NOT_OWNER" ? 403 : 404);

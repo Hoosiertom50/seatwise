@@ -17,6 +17,7 @@ import { compareTableLabels, GUEST_TIER_LABELS, type GuestTier } from "@seatwise
 import { useUnsavedChanges } from "@/lib/unsaved-changes";
 import { useSerialTasks } from "@/lib/serial-tasks";
 import { OPEN_EDIT_MESSAGE } from "@/lib/display-format";
+import { inReadingOrder } from "@/lib/reading-order";
 // TS-193: the same limits the server checks (packages/shared/src/field-limits.ts).
 import { FIELD_LIMITS } from "@seatwise/shared";
 
@@ -259,6 +260,12 @@ export function TablesTab({
 
   async function onAdd(e: React.FormEvent) {
     e.preventDefault();
+    // TS-199: an emptied Capacity box was sent as 0 and refused with a message that didn't say
+    // which box -- now it says so before anything is sent.
+    if (capacity.trim() === "") {
+      setError("Capacity: enter how many seats the table has.");
+      return;
+    }
     setError(null);
     setAdding(true);
     try {
@@ -296,6 +303,15 @@ export function TablesTab({
 
   async function onQuickCreate(e: React.FormEvent) {
     e.preventDefault();
+    // TS-199: as above, an emptied box says which one.
+    if (qcCount.trim() === "") {
+      setError("How many: enter how many tables to make.");
+      return;
+    }
+    if (qcCapacity.trim() === "") {
+      setError("Seats each: enter how many seats each table has.");
+      return;
+    }
     setError(null);
     setQcCreating(true);
     try {
@@ -549,6 +565,7 @@ export function TablesTab({
             type="number"
             min={1}
             max={50}
+            required
             className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
             value={capacity}
             onChange={(e) => setCapacity(e.target.value)}
@@ -685,6 +702,7 @@ export function TablesTab({
               type="number"
               min={1}
               max={100}
+              required
               className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1.5 text-sm"
               value={qcCount}
               onChange={(e) => setQcCount(e.target.value)}
@@ -700,6 +718,7 @@ export function TablesTab({
               type="number"
               min={1}
               max={50}
+              required
               className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1.5 text-sm"
               value={qcCapacity}
               onChange={(e) => setQcCapacity(e.target.value)}
@@ -1023,6 +1042,7 @@ export function TablesTab({
                       {/* TS-136: always asks first. If guests are seated here, the server then asks
                           again with how many (TS-124) before anyone is unseated. */}
                       <ConfirmDeleteButton
+                        id={`table-${t.id}-remove`}
                         ariaLabel={`Remove ${t.label}`}
                         question={`Remove the table "${t.label}"? Anyone seated at it, in the current plan or in saved past versions, loses that seat. This can't be undone.`}
                         confirmLabel="Yes, remove table"
@@ -1123,8 +1143,27 @@ function FloorPlan({
     return localPositions[t.id] ?? { x: t.positionX ?? 40, y: t.positionY ?? 40 };
   }
 
+  // TS-199: the tables are listed in reading order of their saved spots (see inReadingOrder), so
+  // Tab follows the room. While a table is being moved -- dragged, or moved with the arrow keys
+  // until it's left -- the order is held as it was: moving the focused table within the list
+  // would knock focus off it mid-move.
+  const [heldOrder, setHeldOrder] = useState<string[] | null>(null);
+  const savedOrder = inReadingOrder(tables, (t) => ({ x: t.positionX ?? 40, y: t.positionY ?? 40 })).map((t) => t.id);
+  const orderIds = heldOrder
+    ? [...heldOrder.filter((id) => savedOrder.includes(id)), ...savedOrder.filter((id) => !heldOrder.includes(id))]
+    : savedOrder;
+  const tableById = new Map(tables.map((t) => [t.id, t]));
+  const orderedTables = orderIds.map((id) => tableById.get(id)!);
+  function holdOrder() {
+    setHeldOrder((cur) => cur ?? orderIds);
+  }
+  function releaseOrder() {
+    setHeldOrder(null);
+  }
+
   function onPointerDown(e: React.PointerEvent<HTMLDivElement>, t: SeatingTableDTO) {
     if (!canEdit) return;
+    holdOrder();
     const el = e.currentTarget;
     el.setPointerCapture(e.pointerId);
     const rect = el.getBoundingClientRect();
@@ -1149,8 +1188,19 @@ function FloorPlan({
     const id = dragId.current;
     const pos = localPositions[id];
     dragId.current = null;
-    if (!pos) return;
+    // TS-199: a click without a drag, or once the drop has saved, lets the list follow the room
+    // again -- unless the table is being dragged again by then, or still has focus (a click
+    // focuses it; it's released when focus leaves, see onBlur).
+    const releaseIfDone = () => {
+      const focusInside = !!containerRef.current?.contains(document.activeElement);
+      if (dragId.current === null && keyboardSave.current === null && !focusInside) releaseOrder();
+    };
+    if (!pos) {
+      releaseIfDone();
+      return;
+    }
     await onMove(id, Math.round(pos.x), Math.round(pos.y));
+    releaseIfDone();
     // TS-110: the drag-time override has done its job once the save settles. Dropping it means the
     // table renders from `tables` again -- the saved position on success, the reverted one on
     // failure, or the other collaborator's on a 409 -- instead of sticking wherever it was dropped.
@@ -1169,6 +1219,7 @@ function FloorPlan({
     const id = dragId.current;
     if (!id) return;
     dragId.current = null;
+    releaseOrder(); // TS-199
     setLocalPositions((prev) => {
       const next = { ...prev };
       delete next[id];
@@ -1206,6 +1257,7 @@ function FloorPlan({
     const d = delta[e.key];
     if (!d) return;
     e.preventDefault();
+    holdOrder(); // TS-199: until the table is left (see onBlur below).
     const size = sizeForShape(t.shape);
     // TS-175: kept within the canvas, not the visible part of it -- on a phone a table beyond the
     // screen's width used to jump back into view on the first arrow press.
@@ -1240,13 +1292,16 @@ function FloorPlan({
       >
       <div
         ref={containerRef}
+        // TS-199: named, so the room can be found as one area (e.g. to check its Tab order).
+        role="group"
+        aria-label="Room floor plan"
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
         onPointerCancel={onPointerCancel}
         style={{ width, height }}
         className="relative"
       >
-        {tables.map((t) => {
+        {orderedTables.map((t) => {
           const pos = positionFor(t);
           const assigned = assignedHeadcountByTable[t.id] ?? 0;
           const over = assigned > t.capacity;
@@ -1262,6 +1317,8 @@ function FloorPlan({
               onKeyDown={(e) => onKeyDown(e, t)}
               onBlur={() => {
                 if (keyboardSave.current?.id === t.id) void flushKeyboardMove();
+                // TS-199: left the table -- the list follows the room again (unless mid-drag).
+                if (!dragId.current) releaseOrder();
               }}
               style={{ left: pos.x, top: pos.y, ...sizeForShape(t.shape) }}
               className={`absolute flex select-none flex-col items-center justify-center border-2 bg-white dark:bg-neutral-900 p-1 text-center text-xs shadow-sm outline-none focus-visible:ring-4 focus-visible:ring-blue-500 ${
@@ -1329,6 +1386,12 @@ function TableEditForm({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const idBase = `edit-table-${table.id}`;
+  const criterionOptions =
+    criterionType === "SIDE"
+      ? sideValues
+      : criterionType === "TIER"
+        ? TIER_VALUES.map((v) => ({ value: v, label: GUEST_TIER_LABELS[v] }))
+        : AGE_CATEGORY_VALUES.map((v) => ({ value: v, label: v.charAt(0) + v.slice(1).toLowerCase() }));
   const listDiffers =
     requiredGuestIds.length !== table.requiredGuestIds.length ||
     requiredGuestIds.some((id) => !table.requiredGuestIds.includes(id));
@@ -1338,7 +1401,9 @@ function TableEditForm({
     shape !== table.shape ||
     purpose !== (table.purpose ?? "") ||
     criterionType !== (table.purposeCriterionType ?? "") ||
-    criterionValue !== (table.purposeCriterionValue ?? "") ||
+    // TS-199: compared as it would be saved -- a criterion picked with its value list left alone
+    // shows (and saves) the first option, so that's what counts, not the empty box behind it.
+    (criterionType ? criterionValue || criterionOptions[0]?.value || "" : "") !== (table.purposeCriterionValue ?? "") ||
     isRestricted !== table.isRestricted ||
     listDiffers;
   useEffect(() => {
@@ -1351,13 +1416,6 @@ function TableEditForm({
   useEffect(() => {
     document.getElementById(`${idBase}-label`)?.focus();
   }, [idBase]);
-
-  const criterionOptions =
-    criterionType === "SIDE"
-      ? sideValues
-      : criterionType === "TIER"
-        ? TIER_VALUES.map((v) => ({ value: v, label: GUEST_TIER_LABELS[v] }))
-        : AGE_CATEGORY_VALUES.map((v) => ({ value: v, label: v.charAt(0) + v.slice(1).toLowerCase() }));
 
   async function onSave(e: React.FormEvent) {
     e.preventDefault();

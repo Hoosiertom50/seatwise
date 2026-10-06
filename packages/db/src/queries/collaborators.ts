@@ -169,7 +169,7 @@ export async function updateCollaboratorPermission(
   permissionLevel: "VIEW" | "COMMENT" | "EDIT" | undefined,
   role: CollaboratorRole | undefined,
   actorUserId: string
-): Promise<void> {
+): Promise<{ permissionLevel: "VIEW" | "COMMENT" | "EDIT"; role: CollaboratorRole }> {
   if (permissionLevel === undefined && role === undefined) {
     throw new CollaboratorError("Nothing to update.", "NOT_FOUND");
   }
@@ -189,15 +189,17 @@ export async function updateCollaboratorPermission(
     await beginTransaction(client);
     const { ownerId } = await lockWeddingRow(client, weddingId);
     if (ownerId !== actorUserId) throw new CollaboratorError(NOT_OWNER_ANY_MORE, "NOT_OWNER");
-    const { rows } = await client.query<{ userId: string }>(
+    // TS-199: returns the access level and role as saved, so the screen shows what's really stored.
+    const { rows } = await client.query<{ userId: string; permissionLevel: "VIEW" | "COMMENT" | "EDIT"; role: CollaboratorRole }>(
       `UPDATE "wedding_collaborators" SET ${sets.join(", ")}
        WHERE id = $${params.length - 1} AND "weddingId" = $${params.length}
-       RETURNING "userId"`,
+       RETURNING "userId", "permissionLevel", "role"`,
       params
     );
     if (!rows[0]) throw new CollaboratorError("Collaborator not found.", "NOT_FOUND");
     await revokePendingInvitesForUser(client, weddingId, rows[0].userId);
     await client.query("COMMIT");
+    return { permissionLevel: rows[0].permissionLevel, role: rows[0].role };
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});
     throw err;

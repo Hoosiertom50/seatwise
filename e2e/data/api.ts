@@ -46,6 +46,8 @@ export interface WeddingDetail {
   name: string;
   sideMixing: SideMixing;
   guestCount: number;
+  /** TS-199: the owner's free-text note (Collaborators tab). */
+  note?: string | null;
 }
 
 // TS-51: a template row as returned by the list endpoint (GET /api/v1/templates) -- no `tables`
@@ -91,6 +93,8 @@ export interface CreatedGuest {
 export interface ListedGuest extends CreatedGuest {
   email: string | null;
   notes: string | null;
+  /** TS-199 */
+  rsvpStatus?: "PENDING" | "CONFIRMED" | "DECLINED";
 }
 
 export interface CreateGuestInput {
@@ -162,6 +166,9 @@ export interface CreatedTableDetail extends CreatedTable {
 // optimistic-concurrency token the API accepts back.
 export interface UpdateTableInput extends Partial<CreateTableInput> {
   expectedRevision?: number;
+  /** TS-199: where the table sits on the floor plan (display only). */
+  positionX?: number;
+  positionY?: number;
 }
 
 export interface QuickCreateTablesInput {

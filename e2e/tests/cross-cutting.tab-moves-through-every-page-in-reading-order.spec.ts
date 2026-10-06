@@ -22,6 +22,7 @@ import { DashboardPage } from "../pages/DashboardPage.js";
 import { WeddingDetailPage } from "../pages/WeddingDetailPage.js";
 import { TablesTabPage } from "../pages/TablesTabPage.js";
 import { WeddingGuestsPage } from "../pages/WeddingGuestsPage.js";
+import { PlanTabPage } from "../pages/PlanTabPage.js";
 import { checkTabOrder, type TabCountException, type TabOrderException } from "../support/tabOrder.js";
 import { uniquePersonName, uniqueToken } from "../data/ids.js";
 import { TEST_ACCOUNT_EMAIL_DOMAIN } from "../support/auth.js";
@@ -171,6 +172,82 @@ defineQualityTest(
         await expect(wedding.unsavedChangesPrompt()).toBeVisible();
         await expectReadingOrder(page, testInfo, `unsaved-changes question showing @ ${label}`);
         await wedding.leaveTabWithoutSaving();
+      });
+    }
+  },
+);
+
+defineQualityTest(
+  {
+    id: "cross-cutting.tab-moves-through-every-page-in-reading-order.floor-plans-follow-the-room",
+    title: "on the Tables and Seating plan floor plans, Tab follows where the tables sit, not the order they were made, at desktop and phone width",
+    objective:
+      "Confirms (TS-199) that with three tables made in the order right-top, left-top, left-bottom and one guest at each, Tab through the Tables tab's room floor plan and through the Seating plan tab's floor plan goes along the top row left to right, then down -- at 1280px and at 375px.",
+    expectedOutcome:
+      "Both floor plans: Tab reaches every table (Tables tab) or every seated guest (Seating plan), the first stop is the top-left one, and no step goes back up or back to the left on the same line.",
+    requirementIds: ["REQ-NON-FUNCTIONAL", "REQ-TABLE-VENUE-LAYOUT"],
+    tags: ["@mutating", "@feature:non-functional", "@feature:tables", "@accessibility", "@risk:normal", "@suite:regression"],
+  },
+  async ({ managedWedding, weddingData, page }, testInfo) => {
+    test.setTimeout(120_000);
+    const w = managedWedding.id;
+    const guestNames: string[] = [];
+
+    await test.step("Arrange: tables made right-top, left-top, left-bottom, with one guest at each", async () => {
+      const spots = [
+        { label: "Made First", x: 420, y: 40 },
+        { label: "Made Second", x: 40, y: 40 },
+        { label: "Made Third", x: 40, y: 320 },
+      ];
+      const tableIds: string[] = [];
+      for (const spot of spots) {
+        const table = await weddingData.createTable(w, { label: spot.label, capacity: 4 });
+        await weddingData.updateTable(w, table.id, { positionX: spot.x, positionY: spot.y });
+        tableIds.push(table.id);
+      }
+      const guestIds: string[] = [];
+      for (let i = 0; i < spots.length; i++) {
+        const name = uniquePersonName(testInfo.workerIndex);
+        guestNames.push(`${name.firstName} ${name.lastName}`);
+        guestIds.push((await weddingData.createGuest(w, name)).id);
+      }
+      const plan = await weddingData.generatePlanVersion(w);
+      for (let i = 0; i < guestIds.length; i++) {
+        expect((await weddingData.moveGuestAssignment(w, plan.id, guestIds[i], tableIds[i])).status).toBe(200);
+      }
+    });
+
+    const tables = new TablesTabPage(page);
+    const plan = new PlanTabPage(page);
+    for (const { label, width, height } of WIDTHS) {
+      await test.step(`Tables tab floor plan at ${label} width (${width}px)`, async () => {
+        await page.setViewportSize({ width, height });
+        await tables.goto(w);
+        await tables.openTablesTab();
+        await tables.openFloorPlan();
+        await page.waitForLoadState("networkidle");
+        const { stops, problems } = await checkTabOrder(page, { region: tables.floorPlanRegion(), allow: ALLOWED });
+        await testInfo.attach(`tab-order: tables floor plan @ ${label}`, {
+          body: stops.map((s) => `${s.index + 1}. ${s.description}`).join("\n"),
+          contentType: "text/plain",
+        });
+        expect(stops.length, `tables floor plan @ ${label}: every table is reached`).toBe(3);
+        expect(stops[0].description, `tables floor plan @ ${label}: the top-left table comes first`).toContain("Made Second");
+        expect(problems, `tables floor plan @ ${label}: Tab should follow the room`).toEqual([]);
+      });
+
+      await test.step(`Seating plan floor plan at ${label} width (${width}px)`, async () => {
+        await plan.goto(w);
+        await plan.showFloorPlanView();
+        await page.waitForLoadState("networkidle");
+        const { stops, problems } = await checkTabOrder(page, { region: plan.floorPlanRegion(), allow: ALLOWED });
+        await testInfo.attach(`tab-order: seating floor plan @ ${label}`, {
+          body: stops.map((s) => `${s.index + 1}. ${s.description}`).join("\n"),
+          contentType: "text/plain",
+        });
+        expect(stops.length, `seating floor plan @ ${label}: every seated guest is reached`).toBe(3);
+        expect(stops[0].description, `seating floor plan @ ${label}: the guest at the top-left table comes first`).toContain(guestNames[1]);
+        expect(problems, `seating floor plan @ ${label}: Tab should follow the room`).toEqual([]);
       });
     }
   },

@@ -19,13 +19,15 @@ export default function ResetPasswordPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // TS-199: bumped by "Try again" to check the link once more.
+  const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     api
       .get<{ usable: boolean }>(`/api/v1/auth/reset-password/${token}`)
       .then((res) => setUsable(res.usable))
       // A rate limit (or outage) isn't the same as a dead link -- say what actually happened.
       .catch((err) => setLoadError(err instanceof ApiError ? err.message : "Couldn't check your link — please try again."));
-  }, [token]);
+  }, [token, attempt]);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -50,7 +52,25 @@ export default function ResetPasswordPage() {
       <div className="w-full max-w-sm">
         <h1 className="mb-4 text-2xl font-semibold">Choose a new password</h1>
         {loadError ? (
-          <p className="text-sm text-red-600 dark:text-red-400">{loadError}</p>
+          <>
+            <p role="alert" className="text-sm text-red-600 dark:text-red-400">{loadError}</p>
+            {/* TS-199: a way on from here -- check the link again, or ask for a new one. */}
+            <div className="mt-3 flex flex-wrap items-center gap-3">
+              <button
+                type="button"
+                onClick={() => {
+                  setLoadError(null);
+                  setAttempt((n) => n + 1);
+                }}
+                className="rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800"
+              >
+                Try again
+              </button>
+              <Link href="/forgot-password" className="text-sm font-medium underline">
+                Forgot password
+              </Link>
+            </div>
+          </>
         ) : usable === null ? (
           <p className="text-sm text-neutral-500 dark:text-neutral-400">Checking your link…</p>
         ) : !usable ? (

@@ -91,6 +91,8 @@ export default function DashboardPage() {
   const [applyTemplateTables, setApplyTemplateTables] = useState(true);
   const [applyTemplateRules, setApplyTemplateRules] = useState(true);
   const [templatesError, setTemplatesError] = useState<string | null>(null);
+  // TS-199: whether "Your templates" is unfolded (kept when the list is briefly empty).
+  const [templatesOpen, setTemplatesOpen] = useState(false);
   // TS-191: the template list itself couldn't be loaded (shown in the templates section).
   const [templatesLoadFailed, setTemplatesLoadFailed] = useState(false);
   async function loadTemplates() {
@@ -236,6 +238,7 @@ export default function DashboardPage() {
     // list taken here used to also undo another template deleted meanwhile.
     const index = templates.findIndex((t) => t.id === id);
     const removed = templates[index];
+    setTemplatesError(null);
     setTemplates((cur) => cur.filter((t) => t.id !== id));
     if (selectedTemplateId === id) setSelectedTemplateId("");
     try {
@@ -452,20 +455,30 @@ export default function DashboardPage() {
         </div>
       )}
 
+      {/* TS-199: the error is shown outside the fold, and the fold remembers it was open -- deleting
+          the only template took the whole section away for a moment, so when the delete failed it
+          came back closed with the error hidden inside it. */}
+      {templatesError && !templatesLoadFailed && (
+        <p role="alert" className="mb-2 text-sm text-red-600 dark:text-red-400">{templatesError}</p>
+      )}
       {templates.length > 0 && (
-        <details className="mb-8 rounded-lg border border-neutral-200 dark:border-neutral-700 p-4">
+        <details
+          open={templatesOpen}
+          onToggle={(e) => setTemplatesOpen(e.currentTarget.open)}
+          className="mb-8 rounded-lg border border-neutral-200 dark:border-neutral-700 p-4"
+        >
           <summary className="cursor-pointer text-sm font-medium">
             Your templates ({templates.length})
           </summary>
-          {templatesError && <p role="alert" className="mt-2 text-sm text-red-600 dark:text-red-400">{templatesError}</p>}
           <ul className="mt-3 flex flex-col gap-2">
             {templates.map((t) => (
               <li
                 key={t.id}
                 className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-neutral-200 dark:border-neutral-700 px-3 py-2"
               >
-                <div>
-                  <p className="font-medium">{t.name}</p>
+                {/* TS-199: a long name wraps instead of running off a phone screen. */}
+                <div className="min-w-0">
+                  <p className="break-words font-medium [overflow-wrap:anywhere]">{t.name}</p>
                   <p className="text-xs text-neutral-500 dark:text-neutral-400">
                     {t.tableCount} table{t.tableCount === 1 ? "" : "s"} ·{" "}
                     {SIDE_MIXING_LABELS[t.sideMixing]}
@@ -473,6 +486,7 @@ export default function DashboardPage() {
                   </p>
                 </div>
                 <ConfirmDeleteButton
+                  id={`template-${t.id}-delete`}
                   label="Delete"
                   ariaLabel={`Delete ${t.name}`}
                   question={`Delete the template "${t.name}"? Weddings already made from it aren't changed. This can't be undone.`}
@@ -561,11 +575,12 @@ export default function DashboardPage() {
                 <li key={w.id} className="flex items-stretch gap-2">
                   <Link
                     href={`/weddings/${w.id}`}
-                    className="flex flex-1 flex-col gap-2 rounded-lg border border-neutral-200 dark:border-neutral-700 px-4 py-3 hover:border-neutral-400 dark:hover:border-neutral-500 sm:flex-row sm:items-center sm:justify-between"
+                    className="flex min-w-0 flex-1 flex-col gap-2 rounded-lg border border-neutral-200 dark:border-neutral-700 px-4 py-3 hover:border-neutral-400 dark:hover:border-neutral-500 sm:flex-row sm:items-center sm:justify-between"
                   >
-                    <div>
+                    {/* TS-199: a long name or venue wraps instead of running off a phone screen. */}
+                    <div className="min-w-0">
                       <p className="flex flex-wrap items-center gap-2 font-medium">
-                        {w.name}
+                        <span className="min-w-0 break-words [overflow-wrap:anywhere]">{w.name}</span>
                         {userId && w.ownerId !== userId && (
                           <span className="rounded-full bg-neutral-100 dark:bg-neutral-800 px-2 py-0.5 text-xs font-normal text-neutral-500 dark:text-neutral-400">
                             Shared with you
@@ -581,7 +596,7 @@ export default function DashboardPage() {
                           {w.planStatus ? PLAN_STATUS_LABELS[w.planStatus] : "No plan yet"}
                         </span>
                       </p>
-                      <p className="text-sm text-neutral-500 dark:text-neutral-400">
+                      <p className="break-words text-sm text-neutral-500 dark:text-neutral-400 [overflow-wrap:anywhere]">
                         {w.eventDate ? formatDate(w.eventDate) : "No date set"}
                         {w.venueName ? ` · ${w.venueName}` : ""}
                       </p>

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError, apiErrorMessage } from "@/lib/api-client";
 import { useSerialTasks } from "@/lib/serial-tasks";
 import { useUnsavedChanges } from "@/lib/unsaved-changes";
+import { PickThenActControl } from "@/components/PickThenActControl";
 import type {
   GuestDTO,
   PlanVersionDTO,
@@ -71,6 +72,8 @@ export function DayOfTab({
   const [walkInLast, setWalkInLast] = useState("");
   const [walkInTableId, setWalkInTableId] = useState("");
   const [addingWalkIn, setAddingWalkIn] = useState(false);
+  // TS-199: shown in the walk-in form itself, next to the names.
+  const [walkInNameError, setWalkInNameError] = useState<string | null>(null);
 
   const [swapAId, setSwapAId] = useState("");
   const [swapBId, setSwapBId] = useState("");
@@ -405,7 +408,13 @@ export function DayOfTab({
 
   async function onAddWalkIn(e: React.FormEvent) {
     e.preventDefault();
-    if (!walkInFirst.trim() || !walkInLast.trim()) return;
+    // TS-199: a name of only spaces got past the browser's "required" check and then nothing
+    // happened -- now it says why.
+    if (!walkInFirst.trim() || !walkInLast.trim()) {
+      setWalkInNameError(!walkInFirst.trim() ? "Enter the walk-in's first name." : "Enter the walk-in's last name.");
+      return;
+    }
+    setWalkInNameError(null);
     setError(null);
     setNotice(null);
     setAddingWalkIn(true);
@@ -596,8 +605,9 @@ export function DayOfTab({
                 notAttending ? "border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-900 opacity-60" : "border-neutral-200 dark:border-neutral-700"
               }`}
             >
-              <div>
-                <p className="font-medium">
+              {/* TS-199: a long name wraps instead of pushing the row off a phone screen. */}
+              <div className="min-w-0">
+                <p className="break-words font-medium [overflow-wrap:anywhere]">
                   {g.firstName} {g.lastName}
                   {g.headcount > 1 ? ` (+${g.headcount - 1})` : ""}
                 </p>
@@ -611,43 +621,41 @@ export function DayOfTab({
               </div>
               {canEdit && (
                 <div className="flex min-h-11 flex-wrap items-center gap-2">
+                  {/* TS-199: pick a table, then press Seat -- the arrow keys no longer seat the guest
+                      at every table on the way (see PickThenActControl). */}
                   {!notAttending && detail && !seatedAt && (
-                    <select
-                      aria-label={`Seat ${g.firstName} ${g.lastName} at a table`}
-                      className="min-h-11 rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-2 text-sm disabled:opacity-50"
-                      value=""
-                      disabled={busyIds.has(g.id)}
-                      onChange={(e) => onSeatGuest(g.id, e.target.value)}
-                    >
-                      <option value="" disabled>
-                        {busyIds.has(g.id) ? "Seating..." : "Seat at..."}
-                      </option>
-                      {tables.map((t) => (
-                        <option key={t.id} value={t.id}>
-                          {t.label}
-                        </option>
-                      ))}
-                    </select>
+                    <PickThenActControl
+                      id={`dayof-move-${g.id}`}
+                      label={`Seat ${g.firstName} ${g.lastName} at a table`}
+                      placeholder="Seat at..."
+                      busy={busyIds.has(g.id)}
+                      busyLabel="Seating..."
+                      options={tables.map((t) => ({ value: t.id, label: t.label }))}
+                      actLabel="Seat"
+                      actAriaLabel={`Seat ${g.firstName} ${g.lastName}`}
+                      selectClassName="min-h-11 max-w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-2 text-sm disabled:opacity-50"
+                      onAct={(tableId) => onSeatGuest(g.id, tableId)}
+                    />
                   )}
                   {/* TS-191 (Tom's decision): a seated guest can be moved to any other table with
                       enough free seats for their party. Swap (below) stays for full tables. */}
                   {!notAttending && detail && seatedAt && (
-                    <select
-                      aria-label={`Move ${g.firstName} ${g.lastName} to another table`}
-                      className="min-h-11 rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-2 text-sm disabled:opacity-50"
-                      value=""
-                      disabled={busyIds.has(g.id) || moveChoices.length === 0}
-                      onChange={(e) => onSeatGuest(g.id, e.target.value, true)}
-                    >
-                      <option value="" disabled>
-                        {busyIds.has(g.id) ? "Moving..." : moveChoices.length === 0 ? "No other table has room" : "Move to..."}
-                      </option>
-                      {moveChoices.map(({ table, free }) => (
-                        <option key={table.id} value={table.id}>
-                          {table.label} ({free} free)
-                        </option>
-                      ))}
-                    </select>
+                    <PickThenActControl
+                      id={`dayof-move-${g.id}`}
+                      label={`Move ${g.firstName} ${g.lastName} to another table`}
+                      placeholder={moveChoices.length === 0 ? "No other table has room" : "Move to..."}
+                      busy={busyIds.has(g.id)}
+                      busyLabel="Moving..."
+                      disabled={moveChoices.length === 0}
+                      options={moveChoices.map(({ table, free }) => ({
+                        value: table.id,
+                        label: `${table.label} (${free} free)`,
+                      }))}
+                      actLabel="Move"
+                      actAriaLabel={`Move ${g.firstName} ${g.lastName}`}
+                      selectClassName="min-h-11 max-w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-2 text-sm disabled:opacity-50"
+                      onAct={(tableId) => onSeatGuest(g.id, tableId, true)}
+                    />
                   )}
                   <button
                     onClick={() => onToggleAttendance(g)}
@@ -705,6 +713,11 @@ export function DayOfTab({
               required
             />
           </div>
+          {walkInNameError && (
+            <p role="alert" className="text-sm text-red-600 dark:text-red-400">
+              {walkInNameError}
+            </p>
+          )}
           {detail && (
             <select
               aria-label="Seat the walk-in at a table"
