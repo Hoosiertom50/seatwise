@@ -22,8 +22,7 @@ import {
   findDuplicateCsvHeader,
   duplicateCsvHeaderMessage,
   decodeCsvBytes,
-  hasUnreadableCharacters,
-  UNREADABLE_CHARACTERS_MESSAGE,
+  CsvEncodingError,
   GUEST_TIER_LABELS,
   RSVP_STATUS_LABELS,
 } from "@seatwise/shared";
@@ -275,11 +274,11 @@ export function GuestsTab({
     setOverwriteChanged(false);
     try {
       // TS-190: read as UTF-8, or as Excel's older Windows encoding when it isn't (see decodeCsvBytes).
+      // TS-198: or as UTF-16 when it starts with that byte-order mark; a file in the older Mac
+      // encoding is refused (CsvEncodingError). And a file holding the "couldn't read this
+      // character" mark is no longer refused here as a whole -- the preview shows the rows whose
+      // imported cells hold it (a guest's own RSVP note in the export used to block the file).
       const text = decodeCsvBytes(await file.arrayBuffer());
-      if (hasUnreadableCharacters(text)) {
-        setImportError(UNREADABLE_CHARACTERS_MESSAGE);
-        return;
-      }
       const { headers } = parseCsv(text);
       if (headers.length === 0) {
         setImportError("Couldn't find a header row in that file.");
@@ -314,7 +313,9 @@ export function GuestsTab({
       setMapping(guess);
     } catch (err) {
       // TS-180: e.g. a quote that never closes -- say what's wrong with the file.
-      setImportError(err instanceof CsvParseError ? err.message : "Couldn't read that file.");
+      setImportError(
+        err instanceof CsvParseError || err instanceof CsvEncodingError ? err.message : "Couldn't read that file."
+      );
     }
   }
 

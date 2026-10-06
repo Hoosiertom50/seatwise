@@ -746,3 +746,25 @@ export async function setPasswordResetCount(email: string, counter: PasswordRese
 export async function weddingsCreatedToday(email: string): Promise<number> {
   return readCounter(`weddings:create:day:${await testAccountId(email)}`, 86_400);
 }
+
+/**
+ * TS-198: gives a test guest text the app's forms refuse today but older data can hold -- an RSVP
+ * note or private note with the "couldn't read this character" mark (U+FFFD), or a household name
+ * with a line break (allowed before TS-190). Written as plain text, which the app reads back as it
+ * reads notes saved before they were encrypted. Test weddings only.
+ */
+export async function plantOldGuestText(
+  guestId: string,
+  values: { rsvpNotes?: string; notes?: string; partyName?: string },
+): Promise<void> {
+  const { rowCount } = await testPool().query(
+    `UPDATE "guests" g SET
+       "rsvpNotes" = COALESCE($2, g."rsvpNotes"),
+       notes = COALESCE($3, g.notes),
+       "partyName" = COALESCE($4, g."partyName")
+     FROM "weddings" w JOIN "users" u ON u.id = w."ownerId"
+     WHERE g.id = $1 AND w.id = g."weddingId" AND u.email LIKE $5`,
+    [guestId, values.rsvpNotes ?? null, values.notes ?? null, values.partyName ?? null, TEST_EMAIL_PATTERN],
+  );
+  if (!rowCount) throw new Error(`testDatabase: no guest ${guestId} on a test wedding.`);
+}
