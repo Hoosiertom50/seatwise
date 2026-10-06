@@ -1,6 +1,7 @@
 import { z } from "zod";
 // TS-180: free text refuses hidden control characters (see ../safe-text).
 import { safeText } from "../safe-text";
+import { FIELD_LIMITS } from "../field-limits";
 import { expectedRevisionField } from "./common";
 import { PERSON_NAME_PATTERN, PERSON_NAME_MESSAGE, looksLikeWebAddress, NO_WEB_ADDRESS_MESSAGE, hasMixedScriptWord, NO_MIXED_SCRIPT_MESSAGE } from "../validation";
 
@@ -47,7 +48,7 @@ export const createGuestSchema = z.object({
     .string()
     .trim()
     .min(1, "First name is required")
-    .max(100)
+    .max(FIELD_LIMITS.personName)
     .regex(PERSON_NAME_PATTERN, PERSON_NAME_MESSAGE)
     // TS-163: a guest's name goes into their RSVP email, so -- like a planner's name (TS-156) -- it
     // can't read as a web address that the email app would turn into a link.
@@ -58,29 +59,29 @@ export const createGuestSchema = z.object({
     .string()
     .trim()
     .min(1, "Last name is required")
-    .max(100)
+    .max(FIELD_LIMITS.personName)
     .regex(PERSON_NAME_PATTERN, PERSON_NAME_MESSAGE)
     .refine((v) => !looksLikeWebAddress(v), NO_WEB_ADDRESS_MESSAGE)
     .refine((v) => !hasMixedScriptWord(v), NO_MIXED_SCRIPT_MESSAGE),
-  partyName: safeText(200).optional().nullable(),
+  partyName: safeText(FIELD_LIMITS.partyName).optional().nullable(),
   headcount: z.number().int().min(1).max(20).default(1),
   tier: guestTierEnum.default("OTHER"),
   rsvpStatus: rsvpStatusEnum.default("PENDING"),
   requiresAccessibleTable: z.boolean().default(false),
   isLocked: z.boolean().default(false),
   dayOfAttendance: dayOfAttendanceEnum.default("ATTENDING"),
-  notes: safeText(2000, { multiline: true }).optional().nullable(),
+  notes: safeText(FIELD_LIMITS.guestNotes, { multiline: true }).optional().nullable(),
   side: guestSideEnum.default("BOTH"),
   ageCategory: ageCategoryEnum.default("ADULT"),
   // TS-17 (FR-12.4): optional -- lets a planner send/resend this guest their own RSVP link. An
   // empty string (a form field left blank) is treated the same as omitting it entirely, not as an
   // invalid email.
   email: z
-    .union([z.string().trim().max(200).email("Not a valid email address"), z.literal(""), z.null()])
+    .union([z.string().trim().max(FIELD_LIMITS.email).email("Not a valid email address"), z.literal(""), z.null()])
     .optional()
     .transform((v) => (v === "" ? null : v)),
   // TS-17 (FR-12.1): free-text "who's coming with you", only meaningful when headcount > 1.
-  plusOneNames: safeText(500, { multiline: true }).optional().nullable(),
+  plusOneNames: safeText(FIELD_LIMITS.plusOneNames, { multiline: true }).optional().nullable(),
 });
 export type CreateGuestInput = z.infer<typeof createGuestSchema>;
 

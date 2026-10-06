@@ -85,7 +85,9 @@ export function RulesTab({
     const removed = relationships[index];
     setRelationships((cur) => cur.filter((r) => r.id !== id));
     try {
-      await api.delete(`/api/v1/weddings/${weddingId}/relationships/${id}`);
+      const res = await api.delete<{ ok: boolean; warnings?: string[] }>(`/api/v1/weddings/${weddingId}/relationships/${id}`);
+      // TS-188: removed, but the seats it affected couldn't be re-checked -- say so, as adding does.
+      setWarnings(res?.warnings ?? []);
     } catch (err) {
       if (err instanceof ApiError && err.status === 404) {
         setError("That rule was already removed — possibly by another collaborator.");

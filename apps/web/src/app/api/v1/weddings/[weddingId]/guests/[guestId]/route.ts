@@ -13,10 +13,12 @@ import {
   guestHasRsvpLink,
   GuestConflictError,
   GuestHeadcountError,
+  GuestAccessibleTableError,
+  AttendanceError,
   type NewlyFlaggedSeat,
 } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
-import { errorResponse, zodErrorResponse } from "@/lib/api-response";
+import { errorResponse, zodErrorResponse, concurrentChangeResponse } from "@/lib/api-response";
 import { requireAccess } from "@/lib/access";
 import { guestForViewer } from "@/lib/guest-privacy";
 import { rsvpEmailOutcome, sendGuestRsvpLink } from "@/lib/rsvp-email";
@@ -92,13 +94,26 @@ export async function PATCH(req: NextRequest, { params }: Params) {
     }
     // TS-181: a bigger party than their Restricted table can hold for its list -- nothing saved.
     if (err instanceof GuestHeadcountError) return errorResponse(err.message, 422);
+    // TS-188: needing an accessible table while required at a Restricted table that isn't one.
+    if (err instanceof GuestAccessibleTableError) return errorResponse(err.message, 422);
+    // TS-187: lost a race with another change (nothing saved) -- 409, not a server error.
+    const conflict = concurrentChangeResponse(err);
+    if (conflict) return conflict;
     throw err;
   }
 
   // An attendance change asked for in this edit *is* part of the save, so a failure there is still
   // an error.
   if (dayOfAttendance !== undefined) {
-    await setGuestAttendance(weddingId, guestId, dayOfAttendance, user.id);
+    try {
+      await setGuestAttendance(weddingId, guestId, dayOfAttendance, user.id);
+    } catch (err) {
+      // TS-188: e.g. bringing someone back would overfill their Restricted table's list.
+      if (err instanceof AttendanceError) return errorResponse(err.message, 422);
+      const conflict = concurrentChangeResponse(err);
+      if (conflict) return conflict;
+      throw err;
+    }
   }
 
   // TS-177: everything below follows from an edit that's already saved -- if any of it fails, the
@@ -126,8 +141,13 @@ export async function PATCH(req: NextRequest, { params }: Params) {
       newlyFlagged.push(...(await resyncGuestSeat(weddingId, guestId)).newlyFlagged);
     }
   } catch (err) {
-    console.error("Guest saved, but re-checking the seating plan failed", err);
-    warnings.push(SAVED_BUT_NOT_RECHECKED);
+    // TS-188: the answer is saved, but they couldn't be marked attending again -- say why.
+    if (err instanceof AttendanceError) {
+      warnings.push(`Saved, but they're still marked Not Attending: ${err.message}`);
+    } else {
+      console.error("Guest saved, but re-checking the seating plan failed", err);
+      warnings.push(SAVED_BUT_NOT_RECHECKED);
+    }
   }
   const seen = new Set<string>();
   const flagged = newlyFlagged.filter((f) => !seen.has(f.guestId) && !!seen.add(f.guestId));
@@ -165,13 +185,23 @@ export async function DELETE(req: NextRequest, { params }: Params) {
   const guest = await getGuestForWedding(guestId, weddingId);
   if (!guest) return errorResponse("Guest not found", 404);
 
-  const deleted = await deleteGuestForWedding(guestId, weddingId, user.id);
+  let deleted: boolean;
+  try {
+    deleted = await deleteGuestForWedding(guestId, weddingId, user.id);
+  } catch (err) {
+    // TS-187: lost a race with another change (nothing saved) -- 409, not a server error.
+    const conflict = concurrentChangeResponse(err);
+    if (conflict) return conflict;
+    throw err;
+  }
   if (!deleted) return errorResponse("Guest not found", 404);
 
   // FR-2.9: removing a guest cascades away their own seat_assignments row at the DB level, but
   // if they were counted as Unassigned this can flip the plan from incomplete to complete --
   // recompute so isComplete doesn't go stale.
-  await recomputeCurrentPlanCompleteness(weddingId);
+  // TS-189: an attending guest leaving changes the plan's list of guests waiting for a seat, so
+  // the plan's revision moves on too (anyone with the old copy refreshes before acting on it).
+  await recomputeCurrentPlanCompleteness(weddingId, { unassignedMayHaveChanged: guest.dayOfAttendance === "ATTENDING" });
 
   // FR-10.2: guest removal is only notification-worthy post-approval.
   const status = await getCurrentPlanVersionStatus(weddingId);

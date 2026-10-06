@@ -20,6 +20,8 @@ export async function GET(req: NextRequest, { params }: Params) {
       headers: {
         "Content-Type": "application/pdf",
         "Content-Disposition": `attachment; filename="place-cards.pdf"`,
+        // TS-190: guests' names -- not kept in the browser's or any shared cache.
+        "Cache-Control": "no-store",
       },
     });
   } catch (err) {

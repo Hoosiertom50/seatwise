@@ -5,6 +5,8 @@ import { useEffect, useMemo, useState, useRef } from "react";
 import { api, ApiError } from "@/lib/api-client";
 import type { CommentDTO, GuestDTO, SeatingTableDTO, TimelineEntryDTO } from "@seatwise/shared";
 import { useUnsavedChanges } from "@/lib/unsaved-changes";
+// TS-193: the same limits the server checks (packages/shared/src/field-limits.ts).
+import { FIELD_LIMITS } from "@seatwise/shared";
 
 // TS-13 (Collaboration & Notifications, FR-10.3): comments attached to a guest or table. A
 // dedicated tab (rather than inline per-row) keeps this tractable — pick a target, see its
@@ -40,9 +42,15 @@ export function CommentsTab({
   const [postingReply, setPostingReply] = useState<string | null>(null);
   // TS-159: tell the page this tab has input that leaving it would lose.
   // TS-182: only while the comment boxes are there (they're hidden without Comment access).
-  useUnsavedChanges("comments", canComment && !!(body.trim() || Object.values(replyBodies).some((b) => b.trim())));
+  // TS-191: only the reply box that's open counts. A draft left in a closed one is kept (it's back
+  // when Reply is opened again) but can't be seen, and asking about it puzzled people.
+  const openReplyDraft = replyingTo ? (replyBodies[replyingTo] ?? "") : "";
+  useUnsavedChanges("comments", canComment && !!(body.trim() || openReplyDraft.trim()));
   // Checked synchronously: a second click can land before React re-renders with postingReply set.
   const postingReplyNow = useRef(false);
+  // TS-191: comments whose Resolve is on its way, so a second press doesn't send it again.
+  const [resolving, setResolving] = useState<ReadonlySet<string>>(() => new Set());
+  const resolvingNow = useRef(new Set<string>());
 
   useEffect(() => {
     Promise.all([
@@ -138,6 +146,22 @@ export function CommentsTab({
   // TS-175: every update works on the list as it is at that moment. It used to put back a copy
   // taken when Resolve was clicked, so a reply posted while the resolve was saving disappeared.
   async function onResolve(commentId: string) {
+    if (resolvingNow.current.has(commentId)) return;
+    resolvingNow.current.add(commentId);
+    setResolving((cur) => new Set(cur).add(commentId));
+    try {
+      await resolveComment(commentId);
+    } finally {
+      resolvingNow.current.delete(commentId);
+      setResolving((cur) => {
+        const next = new Set(cur);
+        next.delete(commentId);
+        return next;
+      });
+    }
+  }
+
+  async function resolveComment(commentId: string) {
     const before = comments.find((c) => c.id === commentId);
     setComments((cur) => cur.map((c) => (c.id === commentId ? { ...c, resolvedAt: new Date().toISOString() } : c)));
     try {
@@ -217,6 +241,7 @@ export function CommentsTab({
               </select>
             </div>
             <textarea
+              maxLength={FIELD_LIMITS.comment}
               aria-label="Comment text"
               className="rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
               rows={2}
@@ -252,14 +277,15 @@ export function CommentsTab({
             return (
               <li key={root.id} className="rounded-lg border border-neutral-200 dark:border-neutral-700 p-4">
                 <div className="flex items-start justify-between gap-2">
-                  <div>
-                    <p className="text-sm font-medium">
+                  {/* TS-191: long unbroken text wraps instead of running off a phone screen. */}
+                  <div className="min-w-0">
+                    <p className="break-words text-sm font-medium [overflow-wrap:anywhere]">
                       {root.targetLabel}
                       {root.targetRemoved && (
                         <span className="ml-2 text-xs font-normal text-neutral-500 dark:text-neutral-400">(removed)</span>
                       )}
                     </p>
-                    <p className="mt-1 whitespace-pre-line break-words text-sm text-neutral-700 dark:text-neutral-300">{root.body}</p>
+                    <p className="mt-1 whitespace-pre-line break-words text-sm text-neutral-700 dark:text-neutral-300 [overflow-wrap:anywhere]">{root.body}</p>
                     <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
                       {root.authorName} · {formatDateTime(root.createdAt)}
                     </p>
@@ -272,9 +298,10 @@ export function CommentsTab({
                     canResolve && (
                       <button
                         onClick={() => onResolve(root.id)}
-                        className="shrink-0 rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-xs hover:bg-neutral-50 dark:hover:bg-neutral-800"
+                        disabled={resolving.has(root.id)}
+                        className="shrink-0 rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-xs hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50"
                       >
-                        Resolve
+                        {resolving.has(root.id) ? "Resolving…" : "Resolve"}
                       </button>
                     )
                   )}
@@ -283,8 +310,8 @@ export function CommentsTab({
                 {replies.length > 0 && (
                   <ul className="mt-3 flex flex-col gap-2 border-l-2 border-neutral-100 dark:border-neutral-800 pl-4">
                     {replies.map((r) => (
-                      <li key={r.id}>
-                        <p className="whitespace-pre-line break-words text-sm text-neutral-700 dark:text-neutral-300">{r.body}</p>
+                      <li key={r.id} className="min-w-0">
+                        <p className="whitespace-pre-line break-words text-sm text-neutral-700 dark:text-neutral-300 [overflow-wrap:anywhere]">{r.body}</p>
                         <p className="mt-0.5 text-xs text-neutral-500 dark:text-neutral-400">
                           {r.authorName} · {formatDateTime(r.createdAt)}
                         </p>
@@ -298,6 +325,9 @@ export function CommentsTab({
                     {replyingTo === root.id ? (
                       <div className="flex flex-col gap-2 sm:flex-row">
                         <input
+                          // TS-191: opening Reply puts focus in the box.
+                          autoFocus
+                          maxLength={FIELD_LIMITS.comment}
                           aria-label="Reply text"
                           className="flex-1 rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
                           placeholder="Write a reply..."

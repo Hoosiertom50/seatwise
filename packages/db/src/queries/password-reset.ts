@@ -1,5 +1,5 @@
 import { createHash, randomBytes, randomUUID } from "crypto";
-import { pool } from "../pool";
+import { pool, beginTransaction } from "../pool";
 
 // TS-142: "forgot password" links. The emailed token is 32 random bytes; only its SHA-256 hash is
 // stored. A link works once, for one hour, and asking for a new one cancels any older unused ones.
@@ -8,6 +8,19 @@ export const PASSWORD_RESET_TTL_MINUTES = 60;
 
 export function hashResetToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
+}
+
+// TS-187: how long a used or expired link is kept before it's cleared away (they're never read
+// again; keeping a month helps when looking into "my link didn't work").
+export const OLD_ACCOUNT_LINK_DAYS = 30;
+
+// TS-187: opportunistic cleanup, ~1 new link in 100 (like the rate-limit counters): links that
+// expired over a month ago are deleted. Runs in the background; a failure is harmless.
+export function pruneOldPasswordResetTokens(): void {
+  if (Math.random() >= 0.01) return;
+  pool
+    .query(`DELETE FROM "password_reset_tokens" WHERE "expiresAt" < now() - make_interval(days => $1)`, [OLD_ACCOUNT_LINK_DAYS])
+    .catch(() => {});
 }
 
 /**
@@ -19,16 +32,17 @@ export async function createPasswordResetToken(userId: string): Promise<string> 
   const token = randomBytes(32).toString("hex");
   const client = await pool.connect();
   try {
-    await client.query("BEGIN");
+    await beginTransaction(client);
     await client.query(
       `INSERT INTO "password_reset_tokens" (id, "userId", "tokenHash", "expiresAt")
        VALUES ($1, $2, $3, now() + make_interval(mins => $4))`,
       [randomUUID(), userId, hashResetToken(token), PASSWORD_RESET_TTL_MINUTES]
     );
     await client.query("COMMIT");
+    pruneOldPasswordResetTokens();
     return token;
   } catch (err) {
-    await client.query("ROLLBACK");
+    await client.query("ROLLBACK").catch(() => {});
     throw err;
   } finally {
     client.release();
@@ -76,7 +90,7 @@ export async function resetPasswordWithToken(
 ): Promise<{ id: string; email: string; sessionVersion: number } | null> {
   const client = await pool.connect();
   try {
-    await client.query("BEGIN");
+    await beginTransaction(client);
     const { rows } = await client.query<{ id: string; userId: string }>(
       `SELECT id, "userId" FROM "password_reset_tokens"
        WHERE "tokenHash" = $1 AND "usedAt" IS NULL AND "expiresAt" > now()
@@ -85,7 +99,7 @@ export async function resetPasswordWithToken(
     );
     const row = rows[0];
     if (!row) {
-      await client.query("ROLLBACK");
+      await client.query("ROLLBACK").catch(() => {});
       return null;
     }
     await client.query(`UPDATE "password_reset_tokens" SET "usedAt" = now() WHERE "userId" = $1 AND "usedAt" IS NULL`, [
@@ -102,18 +116,24 @@ export async function resetPasswordWithToken(
     await client.query("COMMIT");
     return users[0] ?? null;
   } catch (err) {
-    await client.query("ROLLBACK");
+    await client.query("ROLLBACK").catch(() => {});
     throw err;
   } finally {
     client.release();
   }
 }
 
-/** TS-153: once a new link has been emailed, every older unused link for that person stops working. */
+/**
+ * TS-153: once a new link has been emailed, every older unused link for that person stops working.
+ * TS-186: only links made *before* this one -- two requests at the same moment used to retire each
+ * other's link, leaving the person with two emails and no link that worked. Now the newer one
+ * always survives.
+ */
 export async function retireOlderResetTokens(userId: string, keepToken: string): Promise<void> {
   await pool.query(
     `UPDATE "password_reset_tokens" SET "usedAt" = now()
-     WHERE "userId" = $1 AND "usedAt" IS NULL AND "tokenHash" <> $2`,
+     WHERE "userId" = $1 AND "usedAt" IS NULL AND "tokenHash" <> $2
+       AND "createdAt" < (SELECT "createdAt" FROM "password_reset_tokens" WHERE "tokenHash" = $2)`,
     [userId, hashResetToken(keepToken)]
   );
 }

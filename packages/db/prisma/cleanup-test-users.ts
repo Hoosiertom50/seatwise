@@ -98,10 +98,25 @@ async function main() {
     return;
   }
 
-  const { rowCount } = await pool.query(`DELETE FROM "users" WHERE email LIKE '%' || $1`, [
-    TEST_ACCOUNT_EMAIL_DOMAIN,
-  ]);
-  console.log(`\nDeleted ${rowCount ?? 0} test account(s) (weddings and templates cascade-deleted with them).`);
+  // TS-187: the database no longer deletes a wedding along with its owner's account (ON DELETE
+  // RESTRICT), so the test accounts' weddings are deleted first, then the accounts -- together.
+  const client = await pool.connect();
+  let rowCount: number | null;
+  try {
+    await client.query("BEGIN");
+    await client.query(
+      `DELETE FROM "weddings" WHERE "ownerId" IN (SELECT id FROM "users" WHERE email LIKE '%' || $1)`,
+      [TEST_ACCOUNT_EMAIL_DOMAIN],
+    );
+    ({ rowCount } = await client.query(`DELETE FROM "users" WHERE email LIKE '%' || $1`, [TEST_ACCOUNT_EMAIL_DOMAIN]));
+    await client.query("COMMIT");
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+  console.log(`\nDeleted ${rowCount ?? 0} test account(s), with the weddings and templates they owned.`);
 
   const { rows: after } = await pool.query<{ users: number; weddings: number; templates: number }>(
     `SELECT (SELECT count(*)::int FROM "users") AS users,

@@ -1,5 +1,5 @@
 import { randomUUID } from "crypto";
-import { pool } from "../pool";
+import { pool, beginTransaction } from "../pool";
 
 // TS-150: every check of "does the Current Plan Version still keep the hard rules?" lives here, in
 // one place, so the guest edit, the guest import, a new or removed seating rule and a table edit
@@ -110,8 +110,11 @@ export async function resyncSeatsAtTable(
   planVersionId: string,
   tableId: string
 ): Promise<{ newlyFlagged: NewlyFlaggedSeat[]; changed: boolean }> {
+  // TS-187: NO KEY UPDATE (here and wherever a row's id isn't being changed or deleted) still lets
+  // only one change at a time touch the row, but doesn't stop Postgres's own "does this table
+  // still exist?" check when someone else saves a seat at it -- so the two don't wait on each other.
   const { rows: tableRows } = await client.query(
-    `SELECT capacity, "isRestricted", "isAccessible" FROM "seating_tables" WHERE id = $1 AND "weddingId" = $2 FOR UPDATE`,
+    `SELECT capacity, "isRestricted", "isAccessible" FROM "seating_tables" WHERE id = $1 AND "weddingId" = $2 FOR NO KEY UPDATE`,
     [tableId, weddingId]
   );
   const table = tableRows[0] as { capacity: number; isRestricted: boolean; isAccessible: boolean } | undefined;
@@ -128,7 +131,7 @@ export async function resyncSeatsAtTable(
      FROM "seat_assignments" sa JOIN "guests" g ON g.id = sa."guestId"
      WHERE sa."planVersionId" = $1 AND sa."seatingTableId" = $2
      ORDER BY ${SEAT_ORDER}
-     FOR UPDATE OF sa`,
+     FOR NO KEY UPDATE OF sa`,
     [planVersionId, tableId]
   );
   const seated = rows as {
@@ -190,13 +193,14 @@ export async function restrictedListsOverCapacity(
   const { rows: tables } = await q.query(
     `SELECT t.id, t.label, t.capacity FROM "seating_tables" t
      WHERE t."isRestricted" AND t.id IN (SELECT "tableId" FROM "restricted_table_guests" WHERE "guestId" = ANY($1::text[]))
-     ORDER BY t.id FOR UPDATE`,
+     ORDER BY t.id FOR NO KEY UPDATE`,
     [guestIds]
   );
   const over: { tableLabel: string; capacity: number; seats: number; guestNames: string[] }[] = [];
   for (const t of tables as { id: string; label: string; capacity: number }[]) {
+    // TS-188: only guests who are Attending need a seat; someone marked Not Attending doesn't count.
     const { rows } = await q.query(
-      `SELECT COALESCE(SUM(g.headcount), 0)::int AS seats,
+      `SELECT COALESCE(SUM(g.headcount) FILTER (WHERE g."dayOfAttendance" = 'ATTENDING'), 0)::int AS seats,
               array_agg(g."firstName" || ' ' || g."lastName" ORDER BY g."lastName", g."firstName")
                 FILTER (WHERE g.id = ANY($2::text[])) AS "guestNames"
        FROM "restricted_table_guests" rtg JOIN "guests" g ON g.id = rtg."guestId"
@@ -209,6 +213,29 @@ export async function restrictedListsOverCapacity(
     }
   }
   return over;
+}
+
+// TS-188: which of these guests is on the required-guest list of a Restricted table that isn't
+// accessible -- for a change that marks them as needing an accessible table (the planner's edit,
+// an import), checked on the same transaction so the caller can refuse it. Share-locks those
+// tables' rows (guests before tables, as everywhere), so switching a table's Accessible flag off
+// at the same moment waits for this change and then sees it.
+export async function requiredAtNonAccessibleTable(
+  q: Queryable,
+  guestIds: string[]
+): Promise<{ guestName: string; tableLabel: string }[]> {
+  if (guestIds.length === 0) return [];
+  const { rows } = await q.query(
+    `SELECT (g."firstName" || ' ' || g."lastName") AS "guestName", t.label AS "tableLabel"
+     FROM "restricted_table_guests" rtg
+     JOIN "seating_tables" t ON t.id = rtg."tableId"
+     JOIN "guests" g ON g.id = rtg."guestId"
+     WHERE rtg."guestId" = ANY($1::text[]) AND t."isRestricted" AND NOT t."isAccessible"
+     ORDER BY t.id, g."lastName", g."firstName"
+     FOR SHARE OF t`,
+    [guestIds]
+  );
+  return rows as { guestName: string; tableLabel: string }[];
 }
 
 // TS-165: every table a change to these guests' seats can affect -- the tables they're at now,
@@ -304,12 +331,33 @@ export async function refreshPlanCompleteness(
 // plan first and re-checks locked tables or guests first, so a guest declining by link while the
 // planner moved someone into their table could deadlock (and fail with a 500). Call this right
 // after BEGIN (and after any wedding lock); it returns the current plan's id, if there is one.
+// TS-187: when a Generate (or Restore) replaces the current plan while this waits for the old one's
+// lock, Postgres re-checks the old row once the lock is free, finds it's no longer current and
+// skips it -- and the new current plan, saved after this statement started, isn't seen by it. So
+// "no row" came back even though the wedding has a current plan, and the change went ahead as if
+// there were no plan (a table edit wasn't re-checked against the new one, say). Each new statement
+// sees everything saved before it starts, so asking again finds the new plan. A wedding with no plan
+// at all just gets "none" a few times over, which costs next to nothing.
+const LOCK_CURRENT_PLAN_ATTEMPTS = 4;
+
 export async function lockCurrentPlan(q: Queryable, weddingId: string): Promise<string | null> {
-  const { rows } = await q.query(
-    `SELECT id FROM "plan_versions" WHERE "weddingId" = $1 AND "isCurrent" FOR UPDATE`,
-    [weddingId]
-  );
-  return (rows[0]?.id as string | undefined) ?? null;
+  for (let attempt = 1; attempt <= LOCK_CURRENT_PLAN_ATTEMPTS; attempt++) {
+    // TS-187: NO KEY UPDATE -- see resyncSeatsAtTable.
+    const { rows } = await q.query(
+      `SELECT id FROM "plan_versions" WHERE "weddingId" = $1 AND "isCurrent" FOR NO KEY UPDATE`,
+      [weddingId]
+    );
+    if (rows[0]) return rows[0].id as string;
+    // Nothing current, even to a fresh look: the wedding really has no current plan.
+    const { rows: current } = await q.query(
+      `SELECT 1 FROM "plan_versions" WHERE "weddingId" = $1 AND "isCurrent" LIMIT 1`,
+      [weddingId]
+    );
+    if (!current[0]) return null;
+  }
+  // The current plan kept being replaced while this waited -- give up rather than act as if there
+  // were none. 40001 is Postgres's own "try again" code; routes answer it with a 409.
+  throw Object.assign(new Error("The current plan kept changing while this was being saved."), { code: "40001" });
 }
 
 // TS-181: taken (right after lockCurrentPlan) by everything that checks a new seating rule against
@@ -391,7 +439,7 @@ export async function resyncGuestsSeats(
   if (guestIds.length === 0) return { newlyFlagged: [] };
   const client = await pool.connect();
   try {
-    await client.query("BEGIN");
+    await beginTransaction(client);
     const planVersionId = await lockCurrentPlan(client, weddingId);
     if (!planVersionId) {
       await client.query("COMMIT");
@@ -415,7 +463,7 @@ export async function resyncGuestsSeats(
     await client.query("COMMIT");
     return { newlyFlagged };
   } catch (err) {
-    await client.query("ROLLBACK");
+    await client.query("ROLLBACK").catch(() => {});
     throw err;
   } finally {
     client.release();

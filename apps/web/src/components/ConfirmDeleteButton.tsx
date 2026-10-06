@@ -56,6 +56,12 @@ export function ConfirmDeleteButton({
     } finally {
       setBusy(false);
       setOpen(false);
+      // TS-191: if the thing is still listed (removing it failed), focus goes back to the trigger
+      // instead of falling to the top of the page. When the row is gone, the trigger went with it.
+      setTimeout(() => {
+        const trigger = triggerRef.current;
+        if (trigger && trigger.isConnected) trigger.focus();
+      }, 0);
     }
   }
 

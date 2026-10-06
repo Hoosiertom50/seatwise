@@ -78,6 +78,8 @@ defineQualityTest(
       const token = ((await link.json()) as { rsvp: { url: string } }).rsvp.url.split("/").pop()!;
       const rsvp = new GuestRsvpPage(page);
       await rsvp.goto(token);
+      // TS-191: a guest who hasn't answered starts with neither choice picked (and no party size).
+      await rsvp.choose("CONFIRMED");
       await rsvp.clearPartySize();
       await rsvp.submit({ attending: "DECLINED" });
       await expect(rsvp.successBanner()).toBeVisible();

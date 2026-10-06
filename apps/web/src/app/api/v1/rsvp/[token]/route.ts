@@ -1,6 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { submitGuestRsvpSchema, type GuestRsvpPreviewDTO, isRsvpCutoffPast } from "@seatwise/shared";
-import { getGuestByRsvpToken, hashLinkToken, submitGuestRsvp, RsvpSubmissionError, notifyWeddingCollaborators } from "@seatwise/db";
+import {
+  CHANGED_RSVP_EMAILS_PER_GUEST_PER_DAY,
+  getGuestByRsvpToken,
+  hashLinkToken,
+  submitGuestRsvp,
+  RsvpSubmissionError,
+  notifyWeddingCollaborators,
+} from "@seatwise/db";
 import { errorResponse, zodErrorResponse } from "@/lib/api-response";
 import { clientAddress, rateLimitOr429, RSVP_LIMITS, RSVP_LINK_TOO_MANY_SUBMITS } from "@/lib/rate-limit";
 
@@ -119,11 +126,19 @@ export async function POST(req: NextRequest, { params }: Params) {
           : "updated their RSVP";
     // TS-163: everyone is emailed about a guest's response at most once an hour, however often
     // their link is submitted; each response still shows in the app.
-    // TS-169: a changed answer is always emailed (the once-an-hour key only holds back repeats),
-    // so the planner's inbox never shows "coming" when they've since declined.
-    await notifyWeddingCollaborators(guest.weddingId, null, "RSVP_RECEIVED", `${guest.firstName} ${guest.lastName} ${answer}.${seatNote}`, {
-      emailOncePer: changedAnswer ? undefined : { key: `email:rsvp-notify:${guest.id}`, windowSeconds: 3600 },
-    });
+    // TS-169: a changed answer is emailed (the once-an-hour key only holds back repeats), so the
+    // planner's inbox never shows "coming" when they've since declined.
+    // TS-186 (Tom's decision): but at most 3 changed answers per guest per day -- after that the
+    // change only shows in the app, so one guest flipping their answer can't flood the planners.
+    await notifyWeddingCollaborators(
+      guest.weddingId,
+      null,
+      "RSVP_RECEIVED",
+      `${guest.firstName} ${guest.lastName} ${answer}.${seatNote}`,
+      changedAnswer
+        ? { emailAtMost: { key: `email:rsvp-changed:day:${guest.id}`, ...CHANGED_RSVP_EMAILS_PER_GUEST_PER_DAY } }
+        : { emailOncePer: { key: `email:rsvp-notify:${guest.id}`, windowSeconds: 3600 } }
+    );
   } catch (err) {
     console.error("RSVP saved, but notifying the planner failed:", err);
   }

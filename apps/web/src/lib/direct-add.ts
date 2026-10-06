@@ -7,7 +7,12 @@ export function directCollaboratorAddAllowed(env: {
   NODE_ENV?: string;
   ALLOW_DIRECT_COLLABORATOR_ADD?: string;
   NETLIFY?: string;
+  SITE_ID?: string;
+  DEPLOY_ID?: string;
+  URL?: string;
 }): boolean {
-  if (env.NETLIFY) return false;
+  // TS-192: NETLIFY isn't always present inside a deployed function, so the variables Netlify sets
+  // at runtime (SITE_ID, DEPLOY_ID, URL) count as "on Netlify" too.
+  if (env.NETLIFY || env.SITE_ID || env.DEPLOY_ID || env.URL) return false;
   return env.NODE_ENV !== "production" || env.ALLOW_DIRECT_COLLABORATOR_ADD === "1";
 }

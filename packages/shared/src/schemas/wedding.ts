@@ -1,6 +1,7 @@
 import { z } from "zod";
 // TS-180: free text refuses hidden control characters (see ../safe-text).
 import { safeText } from "../safe-text";
+import { FIELD_LIMITS } from "../field-limits";
 import { calendarDateField } from "./common";
 import {
   WEDDING_NAME_PATTERN,
@@ -18,7 +19,7 @@ export const weddingNameField = z
   .string()
   .trim()
   .min(1, "Wedding name is required")
-  .max(200)
+  .max(FIELD_LIMITS.weddingName)
   .regex(WEDDING_NAME_PATTERN, WEDDING_NAME_MESSAGE)
   // TS-156: the wedding name goes into RSVP and invite emails.
   .refine((v) => !looksLikeWebAddress(v), NO_WEB_ADDRESS_MESSAGE)
@@ -30,7 +31,7 @@ export const weddingNameField = z
 /** TS-168: the default name for a copy -- within the length limit and the allowed characters. */
 export function copiedWeddingName(original: string): string {
   const suffix = " - copy";
-  return `${original.trim().slice(0, 200 - suffix.length).trim()}${suffix}`;
+  return `${original.trim().slice(0, FIELD_LIMITS.weddingName - suffix.length).trim()}${suffix}`;
 }
 
 // FR-3.4: how much generation weights table composition toward mixing the two sides. Always a
@@ -38,21 +39,40 @@ export function copiedWeddingName(original: string): string {
 export const sideMixingEnum = z.enum(["KEEP_SEPARATE", "BALANCED_MIX", "FULLY_MIXED"]);
 export type SideMixing = z.infer<typeof sideMixingEnum>;
 
+// TS-190: a guest's side is exported as the wedding's own name for it, or "Both" -- so a side named
+// "Both", or two sides with the same name (in any case), can't be told apart when the file comes
+// back, and guests' sides were changed on re-import.
+export const SIDE_LABELS_MESSAGE = "Side names must be different from each other and from 'Both'.";
+
+/** TS-190: whether these side names would mix up sides on re-import (see SIDE_LABELS_MESSAGE). */
+export function sideLabelsClash(sideLabel1: string | null | undefined, sideLabel2: string | null | undefined): boolean {
+  const a = sideLabel1?.trim().toLowerCase();
+  const b = sideLabel2?.trim().toLowerCase();
+  if (a === "both" || b === "both") return true;
+  return !!a && !!b && a === b;
+}
+
+function checkSideLabels(data: { sideLabel1?: string | null; sideLabel2?: string | null }, ctx: z.RefinementCtx) {
+  if (!sideLabelsClash(data.sideLabel1, data.sideLabel2)) return;
+  const path = data.sideLabel1?.trim().toLowerCase() === "both" || data.sideLabel2 === undefined ? "sideLabel1" : "sideLabel2";
+  ctx.addIssue({ code: z.ZodIssueCode.custom, message: SIDE_LABELS_MESSAGE, path: [path] });
+}
+
 const weddingBaseSchema = z.object({
   // TS-171: the same rules as everywhere else a wedding is named (see weddingNameField).
   name: weddingNameField,
   // TS-174: a date the database can store (year 0000 used to be a server error).
   eventDate: calendarDateField.optional().nullable(),
-  venueName: safeText(200).optional().nullable(),
+  venueName: safeText(FIELD_LIMITS.venueName).optional().nullable(),
   // FR-1.3: "an optional note" -- always optional, blank is fine (AC: creating with the note left
   // blank saves with no error).
-  note: safeText(2000, { multiline: true }).optional().nullable(),
+  note: safeText(FIELD_LIMITS.weddingNote, { multiline: true }).optional().nullable(),
   sideMixing: sideMixingEnum.default("BALANCED_MIX"),
   // FR-1.3a: this wedding's own name for each side (e.g. "Bride"/"Groom") -- a display label
   // only. Renaming never touches the underlying GuestSide value (BRIDE/GROOM/BOTH) stored on any
   // guest, so no guest, rule, or assignment is recreated or lost when these change.
-  sideLabel1: safeText(40, { required: "Side label is required" }).default("Bride"),
-  sideLabel2: safeText(40, { required: "Side label is required" }).default("Groom"),
+  sideLabel1: safeText(FIELD_LIMITS.sideLabel, { required: "Side label is required" }).default("Bride"),
+  sideLabel2: safeText(FIELD_LIMITS.sideLabel, { required: "Side label is required" }).default("Groom"),
   // TS-17 (FR-12.2): the cutoff after which a guest's own RSVP link becomes read-only. Optional --
   // omitting it (or explicitly clearing it) means no cutoff at all, matching the FR's "or none"
   // language exactly.
@@ -71,6 +91,7 @@ export const createWeddingSchema = weddingBaseSchema
     applyTemplateRules: z.boolean().default(false),
   })
   .superRefine((data, ctx) => {
+    checkSideLabels(data, ctx);
     if (data.templateId && !data.applyTemplateTables && !data.applyTemplateRules) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -81,7 +102,9 @@ export const createWeddingSchema = weddingBaseSchema
   });
 export type CreateWeddingInput = z.infer<typeof createWeddingSchema>;
 
-export const updateWeddingSchema = weddingBaseSchema.partial();
+// TS-190: one side name can be saved on its own -- the route also checks it against the other,
+// stored one (see sideLabelsClash).
+export const updateWeddingSchema = weddingBaseSchema.partial().superRefine(checkSideLabels);
 export type UpdateWeddingInput = z.infer<typeof updateWeddingSchema>;
 
 export interface WeddingDTO {

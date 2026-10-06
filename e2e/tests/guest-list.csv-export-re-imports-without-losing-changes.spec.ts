@@ -26,7 +26,10 @@ type Guest = {
 };
 
 type ImportRow = { kind: string; guestId?: string; reason?: string; preview: { side?: string } };
-type Preview = { rows: ImportRow[]; summary: { newCount: number; updatingCount: number; conflictCount: number; errorCount: number } };
+type Preview = {
+  rows: ImportRow[];
+  summary: { newCount: number; updatingCount: number; unchangedCount: number; conflictCount: number; errorCount: number };
+};
 
 const EXPORT_MAPPING = {
   guestId: "Guest ID",
@@ -50,7 +53,7 @@ defineQualityTest(
     objective:
       "Confirms that for a wedding whose sides are named 'Groom' (first) and 'Bride' (second), the guest CSV export starts with a byte-order mark, is marked no-store, writes Side as Groom/Bride/Both and adds Plus-ones and Version columns; that committing that export back by Guest ID leaves every guest's side and plus-ones as they were; and that an older file's stored values BRIDE / GROOM are still read as those stored sides.",
     expectedOutcome:
-      "The response starts with bytes EF BB BF and has Cache-Control no-store. The last two headers are 'Plus-ones' and 'Version'. The BRIDE guest's Side cell is 'Groom', the GROOM guest's 'Bride', the BOTH guest's 'Both' with Plus-ones 'Jamie Lee' and Version equal to their revision. After the re-import the sides are still BRIDE, GROOM, BOTH and the plus-ones still 'Jamie Lee'. A preview of 'BRIDE' and 'GROOM' cells reads BRIDE and GROOM.",
+      "The response starts with bytes EF BB BF and has Cache-Control no-store. The last three headers are 'Plus-ones', 'Version' and 'Age category'. The BRIDE guest's Side cell is 'Groom', the GROOM guest's 'Bride', the BOTH guest's 'Both' with Plus-ones 'Jamie Lee' and Version equal to their revision. After the re-import the sides are still BRIDE, GROOM, BOTH and the plus-ones still 'Jamie Lee'. A preview of 'BRIDE' and 'GROOM' cells reads BRIDE and GROOM.",
     requirementIds: ["REQ-GUEST-LIST-MANAGEMENT"],
     tags: ["@mutating", "@feature:guests", "@risk:high", "@suite:regression"],
   },
@@ -73,7 +76,8 @@ defineQualityTest(
       exported = bytes.toString("utf-8");
 
       const { header, rows } = exportRows(exported);
-      expect(header.slice(-2)).toEqual(["Plus-ones", "Version"]);
+      // TS-190: Age category comes after them.
+      expect(header.slice(-3)).toEqual(["Plus-ones", "Version", "Age category"]);
       const cell = (guestId: string, column: string) => rows.find((r) => r[0] === guestId)![header.indexOf(column)];
       expect(cell(first.id, "Side")).toBe("Groom");
       expect(cell(second.id, "Side")).toBe("Bride");
@@ -109,9 +113,9 @@ defineQualityTest(
     id: "guest-list.csv-export-re-imports-without-losing-changes.changed-since-export",
     title: "re-importing an older export flags guests changed since it was exported and leaves them alone unless the planner ticks to overwrite",
     objective:
-      "Confirms that after a guest is renamed in Seatwise, a preview of the export taken before the rename classifies that guest's row as changed since the export (with the reason) while the others are updates; that the Guests tab shows the row and an 'Overwrite guests changed since the export' box that adds it to the import count; that committing without the overwrite flag skips that guest and reports it skipped; and that committing with the flag writes the file's values.",
+      "Confirms that after a guest is renamed in Seatwise, a preview of the export taken before the rename classifies that guest's row as changed since the export (with the reason) while the untouched guest's row is unchanged (TS-190); that the Guests tab shows the row and an 'Overwrite guests changed since the export' box that adds it to the import count; that committing without the overwrite flag skips that guest and reports it skipped; and that committing with the flag writes the file's values.",
     expectedOutcome:
-      "The preview has conflictCount 1 for the renamed guest, kind 'conflict', reason containing 'Changed in Seatwise since this file was exported'. On the Guests tab one 'changed' row shows, and ticking the box raises the Confirm count by one. The plain commit returns skippedCount 1 and the guest keeps the new name; the commit with overwriteChanged true puts the exported name back.",
+      "The preview has conflictCount 1 for the renamed guest, kind 'conflict', reason containing 'Changed in Seatwise since this file was exported', and unchangedCount 1 (updatingCount 0) for the other. On the Guests tab one 'changed' row shows, and ticking the box raises the Confirm count from 0 to 1. The plain commit returns updatedCount 0, unchangedCount 1, skippedCount 1 and the guest keeps the new name; the commit with overwriteChanged true puts the exported name back.",
     requirementIds: ["REQ-GUEST-LIST-MANAGEMENT"],
     tags: ["@mutating", "@feature:guests", "@risk:high", "@suite:regression"],
   },
@@ -133,11 +137,13 @@ defineQualityTest(
       expect(res.ok(), await res.text()).toBe(true);
       const { preview } = (await res.json()) as { preview: Preview };
       expect(preview.summary.conflictCount).toBe(1);
-      expect(preview.summary.updatingCount).toBe(1);
+      // TS-190: the untouched guest's row is the same as the guest already is.
+      expect(preview.summary.updatingCount).toBe(0);
+      expect(preview.summary.unchangedCount).toBe(1);
       const row = preview.rows.find((r) => r.guestId === renamed.id)!;
       expect(row.kind).toBe("conflict");
       expect(row.reason).toContain("Changed in Seatwise since this file was exported");
-      expect(preview.rows.find((r) => r.guestId === kept.id)!.kind).toBe("update");
+      expect(preview.rows.find((r) => r.guestId === kept.id)!.kind).toBe("unchanged");
     });
 
     await test.step("The Guests tab shows the changed row and the box to overwrite it", async () => {
@@ -145,17 +151,17 @@ defineQualityTest(
       await weddingGuestsPage.openGuestsTab();
       await weddingGuestsPage.importGuestsFromCsvAndPreview(exported);
       await expect(weddingGuestsPage.importChangedSinceExportRows()).toHaveCount(1);
-      await expect(weddingGuestsPage.confirmImportButtonLocator()).toHaveText("Confirm import (1 guest(s))");
+      await expect(weddingGuestsPage.confirmImportButtonLocator()).toHaveText("Confirm import (0 guest(s))");
       await weddingGuestsPage.overwriteChangedCheckbox().check();
-      await expect(weddingGuestsPage.confirmImportButtonLocator()).toHaveText("Confirm import (2 guest(s))");
+      await expect(weddingGuestsPage.confirmImportButtonLocator()).toHaveText("Confirm import (1 guest(s))");
       await weddingGuestsPage.cancelImport();
     });
 
     await test.step("Committing without the box leaves the changed guest alone and says so", async () => {
       const res = await context.request.post(api("guests/import/commit"), { data: { csv: exported, mapping: EXPORT_MAPPING } });
       expect(res.ok(), await res.text()).toBe(true);
-      const { result } = (await res.json()) as { result: { updatedCount: number; skippedCount: number } };
-      expect(result).toMatchObject({ updatedCount: 1, skippedCount: 1 });
+      const { result } = (await res.json()) as { result: { updatedCount: number; skippedCount: number; unchangedCount: number } };
+      expect(result).toMatchObject({ updatedCount: 0, unchangedCount: 1, skippedCount: 1 });
       expect((await guestsNow()).find((g) => g.id === renamed.id)!.firstName).toBe("Renamed");
     });
 

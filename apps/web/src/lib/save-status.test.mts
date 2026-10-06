@@ -60,6 +60,35 @@ test("a retried delete that finds nothing counts as deleted; a first-try 404 is 
   }
 });
 
+// TS-186: deleting one's own account, retried after a lost answer, finds nobody signed in -- it worked.
+test("a retried account deletion told 'not signed in' counts as deleted; a first-try 401 is still an error", async () => {
+  const { api, ApiError } = await import("./api-client");
+  const realFetch = globalThis.fetch;
+  try {
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls++;
+      if (calls === 1) throw new Error("connection dropped");
+      return new Response(JSON.stringify({ error: "Not authenticated" }), { status: 401 });
+    }) as typeof fetch;
+    assert.deepEqual(await api.delete("/api/v1/auth/me", { password: "x" }), {});
+    assert.equal(calls, 2);
+
+    globalThis.fetch = (async () => new Response(JSON.stringify({ error: "Not authenticated" }), { status: 401 })) as typeof fetch;
+    await assert.rejects(api.delete("/api/v1/auth/me", { password: "x" }), (err) => err instanceof ApiError && err.status === 401);
+    // Only for the account itself: elsewhere a retried 401 is still a lost session.
+    calls = 0;
+    globalThis.fetch = (async () => {
+      calls++;
+      if (calls === 1) throw new Error("connection dropped");
+      return new Response(JSON.stringify({ error: "Not authenticated" }), { status: 401 });
+    }) as typeof fetch;
+    await assert.rejects(api.delete("/api/v1/weddings/w1/guests/g1"), (err) => err instanceof ApiError && err.status === 401);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
 // TS-177: an edit whose first try got no answer, retried and told "changed since you loaded it",
 // did save if the fresh record already has every value that was sent.
 test("a retried edit refused only because its first try landed counts as saved", async () => {

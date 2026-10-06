@@ -46,7 +46,9 @@ export type GuestImportRequest = z.infer<typeof guestImportRequestSchema>;
 
 // TS-180: "conflict" -- an update row for a guest changed in Seatwise since the file was exported
 // (their revision is newer than the file's Version cell).
-export type GuestImportRowKind = "new" | "update" | "conflict" | "error";
+// TS-190: "unchanged" -- an update row whose values are the same as the guest's already; it's left
+// alone (not written, and the guest's revision isn't bumped).
+export type GuestImportRowKind = "new" | "update" | "unchanged" | "conflict" | "error";
 
 export interface GuestImportRowPreview {
   firstName?: string;
@@ -69,7 +71,7 @@ export interface GuestImportRow {
   rowNumber: number;
   kind: GuestImportRowKind;
   guestId?: string;
-  // TS-92: an "update" row's guest revision as of this preview -- sent back on commit so the
+  // TS-92: an "update" (TS-190: or "unchanged") row's guest revision as of this preview -- sent back on commit so the
   // commit can refuse if that guest changed in between.
   revision?: number;
   reason?: string;
@@ -80,7 +82,15 @@ export interface GuestImportPreview {
   headers: string[];
   rows: GuestImportRow[];
   // TS-180: conflictCount -- rows for guests changed since the export (see GuestImportRowKind).
-  summary: { newCount: number; updatingCount: number; conflictCount: number; errorCount: number; totalRows: number };
+  // TS-190: unchangedCount -- rows the same as the guest already is.
+  summary: {
+    newCount: number;
+    updatingCount: number;
+    unchangedCount: number;
+    conflictCount: number;
+    errorCount: number;
+    totalRows: number;
+  };
 }
 
 export interface GuestImportCommitResult {
@@ -88,6 +98,8 @@ export interface GuestImportCommitResult {
   updatedCount: number;
   // TS-180: conflict rows left alone because the planner didn't choose to overwrite them.
   skippedCount: number;
+  // TS-190: rows the same as the guest already is -- not written.
+  unchangedCount: number;
   // FR-2.9: guests whose current seat assignment was flagged Needs Reassignment as a result of
   // this import (an edited side/tier/household/requires-accessible-table field no longer fits a
   // hard rule at their current table).

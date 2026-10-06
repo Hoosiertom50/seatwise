@@ -13,6 +13,8 @@ import type {
   VendorSuggestionDTO,
 } from "@seatwise/shared";
 import { useUnsavedChanges } from "@/lib/unsaved-changes";
+// TS-193: the same limits the server checks (packages/shared/src/field-limits.ts).
+import { FIELD_LIMITS, CONTACT_PHONE_HTML_PATTERN, CONTACT_PHONE_MESSAGE } from "@seatwise/shared";
 
 // TS-20 (FR-15.1/FR-15.2): a per-wedding vendor list plus the wedding's overall budget figure and
 // a running total/remaining against it. Money is always handled here in whole dollars for
@@ -100,7 +102,9 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
   // TS-114: per-vendor feedback after a share-link action ("Link copied", or the bare link when
   // the clipboard isn't available), keyed by vendor id.
   const [shareResult, setShareResult] = useState<Record<string, string>>({});
-  const [shareBusy, setShareBusy] = useState<string | null>(null);
+  // TS-191: every vendor whose link is being fetched -- one at a time used to mean a second
+  // vendor's request cleared the first one's busy state while it was still working.
+  const [shareBusy, setShareBusy] = useState<ReadonlySet<string>>(() => new Set());
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editVendor, setEditVendor] = useState<Partial<VendorDTO>>({});
@@ -126,6 +130,13 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
     canEdit && !!(name.trim() || contactName.trim() || contactEmail.trim() || contactPhone.trim() || cost || contractNotes.trim() || arrivalTime || editChanged || budgetEdited)
   );
   const [saving, setSaving] = useState(false);
+  // TS-191: Edit access taken away while a vendor's edit was open -- it can't be saved any more,
+  // so it closes (and stops counting as unsaved).
+  useEffect(() => {
+    if (canEdit) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- TS-191: closes the edit box when Edit access goes.
+    setEditingId(null);
+  }, [canEdit]);
 
   useEffect(() => {
     (async () => {
@@ -340,7 +351,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
   // TS-114: get (or, with regenerate, replace) a vendor's private read-only link and copy it.
   async function onShareLink(vendorId: string, regenerate: boolean) {
     setError(null);
-    setShareBusy(vendorId);
+    setShareBusy((cur) => new Set(cur).add(vendorId));
     try {
       const { link } = await api.post<{ link: VendorShareLinkDTO }>(
         `/api/v1/weddings/${weddingId}/vendors/${vendorId}/share-link`,
@@ -361,7 +372,11 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't get that vendor's link.");
     } finally {
-      setShareBusy(null);
+      setShareBusy((cur) => {
+        const next = new Set(cur);
+        next.delete(vendorId);
+        return next;
+      });
     }
   }
 
@@ -415,6 +430,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
                 Budget ($)
               </label>
               <input
+                maxLength={FIELD_LIMITS.money}
                 id="budget-total"
                 // TS-175: a text box, not a number box -- a number box reports "1,500" as empty.
                 type="text"
@@ -475,6 +491,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
                 Vendor name
               </label>
               <input
+                maxLength={FIELD_LIMITS.vendorName}
                 id="vendor-name"
                 className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
                 value={name}
@@ -534,6 +551,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
               </select>
               {category === "OTHER" && (
                 <input
+                  maxLength={FIELD_LIMITS.vendorCategoryOther}
                   aria-label="Category label"
                   placeholder="e.g. Officiant"
                   className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
@@ -548,6 +566,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
                 Contact name (optional)
               </label>
               <input
+                maxLength={FIELD_LIMITS.vendorContactName}
                 id="vendor-contact-name"
                 className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
                 value={contactName}
@@ -559,6 +578,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
                 Cost ($, optional)
               </label>
               <input
+                maxLength={FIELD_LIMITS.money}
                 id="vendor-cost"
                 type="text"
                 inputMode="decimal"
@@ -572,6 +592,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
                 Contact email (optional)
               </label>
               <input
+                maxLength={FIELD_LIMITS.email}
                 id="vendor-contact-email"
                 type="email"
                 className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
@@ -584,6 +605,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
                 Contact phone (optional)
               </label>
               <input
+                maxLength={FIELD_LIMITS.vendorContactPhone} type="tel" inputMode="tel" autoComplete="tel" pattern={CONTACT_PHONE_HTML_PATTERN} title={CONTACT_PHONE_MESSAGE}
                 id="vendor-contact-phone"
                 className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
                 value={contactPhone}
@@ -607,6 +629,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
                 Contract details / notes (optional)
               </label>
               <textarea
+                maxLength={FIELD_LIMITS.vendorContractNotes}
                 id="vendor-notes"
                 rows={2}
                 placeholder="e.g. 50% deposit due 30 days before, final due day-of"
@@ -639,6 +662,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
                 <div className="flex flex-col gap-2">
                   <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                     <input
+                      maxLength={FIELD_LIMITS.vendorName}
                       aria-label="Edit vendor name"
                       className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm"
                       value={editVendor.name ?? ""}
@@ -658,6 +682,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
                     </select>
                     {editVendor.category === "OTHER" && (
                       <input
+                        maxLength={FIELD_LIMITS.vendorCategoryOther}
                         aria-label="Edit category label"
                         className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm"
                         value={editVendor.categoryOther ?? ""}
@@ -665,6 +690,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
                       />
                     )}
                     <input
+                      maxLength={FIELD_LIMITS.vendorContactName}
                       aria-label="Edit contact name"
                       placeholder="Contact name"
                       className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm"
@@ -672,6 +698,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
                       onChange={(e) => setEditVendor({ ...editVendor, contactName: e.target.value })}
                     />
                     <input
+                      maxLength={FIELD_LIMITS.email} inputMode="email"
                       aria-label="Edit contact email"
                       placeholder="Contact email"
                       className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm"
@@ -679,6 +706,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
                       onChange={(e) => setEditVendor({ ...editVendor, contactEmail: e.target.value })}
                     />
                     <input
+                      maxLength={FIELD_LIMITS.vendorContactPhone} type="tel" inputMode="tel" autoComplete="tel" pattern={CONTACT_PHONE_HTML_PATTERN} title={CONTACT_PHONE_MESSAGE}
                       aria-label="Edit contact phone"
                       placeholder="Contact phone"
                       className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm"
@@ -693,6 +721,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
                       onChange={(e) => setEditVendor({ ...editVendor, arrivalTime: e.target.value || null })}
                     />
                     <input
+                      maxLength={FIELD_LIMITS.money}
                       aria-label="Edit cost"
                       type="text"
                       inputMode="decimal"
@@ -703,6 +732,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
                     />
                   </div>
                   <textarea
+                    maxLength={FIELD_LIMITS.vendorContractNotes}
                     aria-label="Edit contract notes"
                     rows={2}
                     className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm"
@@ -727,20 +757,31 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
                 </div>
               ) : (
                 <div className="flex flex-wrap items-start justify-between gap-2">
-                  <div>
-                    <p className="font-medium">
+                  {/* TS-191: long unbroken names, addresses and notes wrap instead of running off a
+                      phone screen (an email address may break anywhere). */}
+                  <div className="min-w-0">
+                    <p className="break-words font-medium [overflow-wrap:anywhere]">
                       {v.name}
                       <span className="ml-2 rounded bg-neutral-100 dark:bg-neutral-800 px-1.5 py-0.5 text-xs text-neutral-600 dark:text-neutral-300">
                         {v.category === "OTHER" && v.categoryOther ? v.categoryOther : CATEGORY_LABEL[v.category]}
                       </span>
                     </p>
-                    <p className="text-sm text-neutral-500 dark:text-neutral-400">
-                      {[v.contactName, v.contactEmail, v.contactPhone].filter(Boolean).join(" · ") || "No contact info"}
+                    <p className="break-words text-sm text-neutral-500 dark:text-neutral-400 [overflow-wrap:anywhere]">
+                      {v.contactName || v.contactEmail || v.contactPhone
+                        ? [v.contactName, v.contactEmail, v.contactPhone]
+                            .filter((part): part is string => !!part)
+                            .map((part, i) => (
+                              <span key={i} className={part === v.contactEmail ? "break-all" : undefined}>
+                                {i > 0 ? " · " : ""}
+                                {part}
+                              </span>
+                            ))
+                        : "No contact info"}
                     </p>
                     {v.arrivalTime && (
                       <p className="text-sm text-neutral-500 dark:text-neutral-400">Arrives {formatClockTime(v.arrivalTime)}</p>
                     )}
-                    {v.contractNotes && <p className="mt-1 whitespace-pre-line text-sm text-neutral-500 dark:text-neutral-400">{v.contractNotes}</p>}
+                    {v.contractNotes && <p className="mt-1 whitespace-pre-line break-words text-sm text-neutral-500 dark:text-neutral-400 [overflow-wrap:anywhere]">{v.contractNotes}</p>}
                     {shareResult[v.id] && (
                       <p className="mt-1 break-all text-xs text-neutral-500 dark:text-neutral-400">{shareResult[v.id]}</p>
                     )}
@@ -753,7 +794,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
                             vendors' names and arrival times -- never costs or notes). */}
                         <button
                           onClick={() => onShareLink(v.id, false)}
-                          disabled={shareBusy === v.id}
+                          disabled={shareBusy.has(v.id)}
                           aria-label={`Share link for ${v.name}`}
                           title="Copies a private link to a read-only page for this vendor: the timeline, their details, and the other vendors' arrival times. Never costs or notes."
                           className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50"
@@ -764,7 +805,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
                           <>
                             <button
                               onClick={() => onShareLink(v.id, true)}
-                              disabled={shareBusy === v.id}
+                              disabled={shareBusy.has(v.id)}
                               aria-label={`New link for ${v.name}`}
                               title="Makes a new link; the old one stops working."
                               className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50"

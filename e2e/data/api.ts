@@ -34,6 +34,9 @@ export interface CreateWeddingOptions {
   templateId?: string;
   applyTemplateTables?: boolean;
   applyTemplateRules?: boolean;
+  /** TS-190: the wedding's own side names. */
+  sideLabel1?: string;
+  sideLabel2?: string;
 }
 
 // TS-51: the full wedding row (GET .../weddings/:id), as opposed to CreatedWedding's bare

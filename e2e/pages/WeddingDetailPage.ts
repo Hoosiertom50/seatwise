@@ -193,6 +193,31 @@ export class WeddingDetailPage extends BasePage {
     return asked;
   }
 
+  /**
+   * TS-191: reloads the page the way the browser's reload button would, and returns the type of
+   * the question the browser asked first ("beforeunload"), or null if it reloaded without asking.
+   * The question is answered "leave", so the page has reloaded afterwards.
+   */
+  async reloadAndCatchLeaveQuestion(): Promise<string | null> {
+    let asked: string | null = null;
+    const onDialog = async (dialog: { type(): string; accept(): Promise<void> }) => {
+      asked = dialog.type();
+      await dialog.accept();
+    };
+    this.page.on("dialog", onDialog);
+    try {
+      await this.page.reload();
+    } finally {
+      this.page.off("dialog", onDialog);
+    }
+    return asked;
+  }
+
+  /** TS-191: whichever element has keyboard focus, for checking where focus went back to. */
+  focusedElement() {
+    return this.page.locator(":focus");
+  }
+
   /** TS-166: the page's own "Back to dashboard" link. */
   backToDashboardLink() {
     return this.page.getByRole("link", { name: /Back to dashboard/ }).first();

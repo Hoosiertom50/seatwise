@@ -95,7 +95,8 @@ export async function storedInviteToken(inviteId: string): Promise<string> {
 /** Moves an invite's expiry one minute into the past, as if its 7 days had run out. */
 export async function expireInvite(inviteId: string): Promise<void> {
   const { rowCount } = await testPool().query(
-    `UPDATE "wedding_invites" SET "expiresAt" = now() - interval '1 minute' WHERE id = $1 AND email LIKE $2`,
+    // TS-187: in UTC, as the app now stores and compares it (whatever the database's time zone).
+    `UPDATE "wedding_invites" SET "expiresAt" = (now() AT TIME ZONE 'UTC') - interval '1 minute' WHERE id = $1 AND email LIKE $2`,
     [inviteId, TEST_EMAIL_PATTERN],
   );
   if (!rowCount) throw new Error(`testDatabase: no test invite ${inviteId}.`);
@@ -179,17 +180,75 @@ export async function plantPreHashingRsvpLink(guestId: string): Promise<string> 
 }
 
 /**
- * TS-163: how many times a test guest's responses have asked to email the planners this hour. Only
- * the first in the hour is emailed (the key's limit is 1), so 3 means one email and two skipped.
+ * TS-163: how many times a test guest's repeated (unchanged) responses have emailed the planners
+ * in the last hour. TS-186: the app keeps one row per email sent (the moment it was sent), and
+ * responses held back by the once-an-hour rule add nothing -- so this is at most 1.
  */
 export async function rsvpNotificationEmailRequests(guestId: string): Promise<number> {
   await storedGuestRsvpLink(guestId); // throws unless the guest is on a test wedding
   const { rows } = await testPool().query<{ n: number }>(
     `SELECT COALESCE(SUM(count), 0)::int AS n FROM "rate_limit_counters"
-     WHERE key = $1 AND "windowStart" > now() - interval '1 hour'`,
-    [`email:rsvp-notify:${guestId}`],
+     WHERE key = $1 AND "windowStart" > $2`,
+    [`email:rsvp-notify:${guestId}`, new Date(Date.now() - 3_600_000)],
   );
   return rows[0].n;
+}
+
+/**
+ * TS-186: when a test guest was emailed their RSVP link, as the app's once-an-hour rule keeps it
+ * (one row per email, for whichever link the guest had then), oldest first.
+ */
+export async function rsvpLinkEmailTimes(guestId: string): Promise<Date[]> {
+  await storedGuestRsvpLink(guestId); // throws unless the guest is on a test wedding
+  const { rows } = await testPool().query<{ windowStart: Date }>(
+    `SELECT "windowStart" FROM "rate_limit_counters"
+     WHERE key LIKE $1 AND count > 0 ORDER BY "windowStart"`,
+    [`email:rsvp-link:${guestId}:%`],
+  );
+  return rows.map((r) => new Date(r.windowStart));
+}
+
+/**
+ * TS-186: moves a test guest's RSVP-link email times `minutes` into the past -- as if that much
+ * time had gone by -- so a test can reach the end of the hour without waiting for it.
+ */
+export async function moveRsvpLinkEmailTimesBack(guestId: string, minutes: number): Promise<void> {
+  await storedGuestRsvpLink(guestId);
+  await testPool().query(
+    `UPDATE "rate_limit_counters" SET "windowStart" = "windowStart" - make_interval(mins => $2)
+     WHERE key LIKE $1`,
+    [`email:rsvp-link:${guestId}:%`, minutes],
+  );
+}
+
+/**
+ * TS-186: sets how many of a test guest's changed RSVP answers have been emailed to the planners
+ * today (CHANGED_RSVP_EMAILS_PER_GUEST_PER_DAY in packages/db/src/queries/notifications.ts).
+ */
+export async function setChangedRsvpEmailsToday(guestId: string, count: number): Promise<void> {
+  await storedGuestRsvpLink(guestId);
+  await setCounter(`email:rsvp-changed:day:${guestId}`, 86_400, count);
+}
+
+/** TS-186: sets how much of a test wedding's daily pool for guests' RSVP emails has been used today. */
+export async function setWeddingNotificationEmailsToday(weddingId: string, count: number): Promise<void> {
+  await weddingNotificationEmailsThisHour(weddingId); // throws unless it's a test wedding
+  await setCounter(`email:notify-wedding:86400:${weddingId}`, 86_400, count);
+}
+
+/** TS-186: how many of a test guest's changed RSVP answers have been emailed today. */
+export async function changedRsvpEmailsToday(guestId: string): Promise<number> {
+  await storedGuestRsvpLink(guestId);
+  return readCounter(`email:rsvp-changed:day:${guestId}`, 86_400);
+}
+
+/**
+ * TS-186: how many emails nobody signed in set off (guests' RSVPs) a test wedding has sent today,
+ * out of its own daily pool (NOTIFICATION_EMAILS_PER_WEDDING_WITHOUT_ACTOR).
+ */
+export async function weddingNotificationEmailsToday(weddingId: string): Promise<number> {
+  await weddingNotificationEmailsThisHour(weddingId); // throws unless it's a test wedding
+  return readCounter(`email:notify-wedding:86400:${weddingId}`, 86_400);
 }
 
 /**
@@ -409,6 +468,85 @@ export async function plantStaleSeatFlags(weddingId: string, planVersionId: stri
   );
   if (rowCount !== 1) throw new Error(`testDatabase: no plan version ${planVersionId} on test wedding ${weddingId}.`);
   await testPool().query(`UPDATE "seat_assignments" SET "needsReassignment" = false WHERE "planVersionId" = $1`, [planVersionId]);
+}
+
+/** TS-187: a wedding hand-off paused half-way, from outside the app -- see holdOwnershipHandOff. */
+export interface HeldHandOff {
+  /** Resolves once `count` of the app's own database sessions are waiting (directly or in turn) on this hold. */
+  waitForWaiters(count: number): Promise<void>;
+  /** Lets the paused hand-off finish. */
+  release(): Promise<void>;
+}
+
+/**
+ * TS-187: pauses a hand-off of a test wedding half-way -- after it has made the collaborator the
+ * owner, before it's saved. A hand-off's last step adds the old owner back as an Edit collaborator;
+ * this holds an unsaved collaborator row for that same person on that wedding, so that step waits
+ * for it (the database allows one row per person per wedding). release() drops the row unsaved and
+ * the hand-off finishes as normal. Test weddings and accounts only.
+ */
+export async function holdOwnershipHandOff(weddingId: string, ownerEmail: string): Promise<HeldHandOff> {
+  const { Client } = await import("pg");
+  const { randomUUID } = await import("node:crypto");
+  testPool(); // the same production refusal as every other helper here
+  const client = new Client({ connectionString: resolveDatabaseUrl() });
+  await client.connect();
+  await client.query("BEGIN");
+  const { rowCount } = await client.query(
+    `INSERT INTO "wedding_collaborators" (id, "weddingId", "userId", role, "permissionLevel")
+     SELECT $1, w.id, u.id, 'COLLABORATOR'::"CollaboratorRole", 'VIEW'::"CollaboratorPermission"
+     FROM "weddings" w JOIN "users" u ON u.id = w."ownerId"
+     WHERE w.id = $2 AND u.email = $3 AND u.email LIKE $4`,
+    [randomUUID(), weddingId, ownerEmail, TEST_EMAIL_PATTERN],
+  );
+  if (!rowCount) {
+    await client.query("ROLLBACK");
+    await client.end();
+    throw new Error(`testDatabase: no test wedding ${weddingId} owned by ${ownerEmail}.`);
+  }
+  const { rows: me } = await client.query<{ pid: number }>(`SELECT pg_backend_pid() AS pid`);
+  const pid = me[0].pid;
+  let open = true;
+  return {
+    async waitForWaiters(count: number) {
+      await waitForSessionsBlockedBy(pid, count, "the paused hand-off");
+    },
+    async release() {
+      if (!open) return;
+      open = false;
+      try {
+        await client.query("ROLLBACK");
+      } finally {
+        await client.end();
+      }
+    },
+  };
+}
+
+/**
+ * TS-187: tries to delete a test account straight in the database, the way a delete that skipped
+ * the app's own checks would, inside a transaction that's always rolled back -- so nothing is ever
+ * deleted. Returns the database's error code ("23503" when it refuses because the account still
+ * owns a wedding), or null if the database would have allowed it.
+ */
+export async function databaseErrorDeletingAccount(email: string): Promise<string | null> {
+  const { Client } = await import("pg");
+  testPool(); // the same production refusal as every other helper here
+  const client = new Client({ connectionString: resolveDatabaseUrl() });
+  await client.connect();
+  try {
+    await client.query("BEGIN");
+    const { rowCount } = await client.query(`DELETE FROM "users" WHERE email = $1 AND email LIKE $2`, [email, TEST_EMAIL_PATTERN]);
+    if (!rowCount) throw new Error(`testDatabase: no test account ${email}.`);
+    return null;
+  } catch (err) {
+    const code = (err as { code?: string }).code;
+    if (code) return code;
+    throw err;
+  } finally {
+    await client.query("ROLLBACK").catch(() => {});
+    await client.end();
+  }
 }
 
 /** TS-174: a test timeline entry's row lock, held from outside the app -- see holdTimelineEntry. */

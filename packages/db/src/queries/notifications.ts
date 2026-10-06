@@ -1,7 +1,7 @@
 import { randomUUID } from "crypto";
 import { ACCOUNT_EMAILS_PER_DAY, accountDailyEmailKey, emailDelivered, sendEmail, type EmailResult } from "../email";
 import { pool } from "../pool";
-import { hitRateLimit, undoRateLimitHit } from "./rate-limit";
+import { claimCooldown, hitRateLimit, releaseCooldown, undoRateLimitHit } from "./rate-limit";
 import { emailSafeWeddingName, looksLikePhoneNumber, looksLikeWebAddress } from "@seatwise/shared";
 
 // TS-163: how many notification emails one person's actions can set off (each recipient counts).
@@ -15,10 +15,17 @@ export const NOTIFICATION_EMAILS_PER_ACTOR = [
 
 // TS-168: the same idea for events nobody signed in caused (guests' RSVPs) -- a cap per wedding,
 // so many guest links submitted in turn can't flood the planners' inboxes either.
+// TS-186 (Tom's decision): these emails no longer count against the wedding owner's own daily
+// allowance -- guests' answers could use it up and stop the owner sending invites and RSVP links.
+// Each wedding has its own daily pool for them instead (50), on top of the hourly cap.
 export const NOTIFICATION_EMAILS_PER_WEDDING_WITHOUT_ACTOR = [
   { limit: 30, windowSeconds: 3600 },
-  { limit: 150, windowSeconds: 86_400 },
+  { limit: 50, windowSeconds: 86_400 },
 ] as const;
+
+// TS-186 (Tom's decision): a guest's changed RSVP answer is emailed to the planners at most this
+// many times per guest per day; after that it only shows in the app.
+export const CHANGED_RSVP_EMAILS_PER_GUEST_PER_DAY = { limit: 3, windowSeconds: 86_400 } as const;
 
 const NEUTRAL_NOTIFICATION_TEXT = "There's an update on a wedding you're part of — open Seatwise to see it.";
 
@@ -41,18 +48,19 @@ type Counter = { key: string; limit: number; windowSeconds: number };
  * TS-178: counts one notification email against every limit it falls under. Refused once any is
  * over -- and then every count is taken back, so a full window can't quietly drain the others.
  * When allowed, `giveBack` takes all the counts back -- for an email that then didn't go out.
+ * TS-186: each count is taken back from the window it was made in.
  */
 async function reserveNotificationEmail(counters: Counter[]): Promise<{ allowed: boolean; giveBack: () => Promise<void> }> {
   const results = await Promise.all(counters.map(({ key, limit, windowSeconds }) => hitRateLimit(key, limit, windowSeconds)));
   const giveBack = async () => {
-    await Promise.all(counters.map((c) => undoRateLimitHit(c.key, c.windowSeconds)));
+    await Promise.all(counters.map((c, i) => undoRateLimitHit(c.key, c.windowSeconds, results[i].windowStart)));
   };
   if (results.every((r) => r.allowed)) return { allowed: true, giveBack };
   await giveBack();
   return { allowed: false, giveBack: async () => {} };
 }
 
-function notificationEmailCounters(actorUserId: string | null, weddingId: string, ownerId: string): Counter[] {
+function notificationEmailCounters(actorUserId: string | null, weddingId: string): Counter[] {
   if (actorUserId) {
     return [
       ...NOTIFICATION_EMAILS_PER_ACTOR.map(({ limit, windowSeconds }) => ({
@@ -64,17 +72,45 @@ function notificationEmailCounters(actorUserId: string | null, weddingId: string
       { key: accountDailyEmailKey(actorUserId), ...ACCOUNT_EMAILS_PER_DAY },
     ];
   }
-  return [
-    ...NOTIFICATION_EMAILS_PER_WEDDING_WITHOUT_ACTOR.map(({ limit, windowSeconds }) => ({
-      key: `email:notify-wedding:${windowSeconds}:${weddingId}`,
-      limit,
-      windowSeconds,
-    })),
-    // TS-178: with nobody signed in behind it (a guest's RSVP), the email counts toward the
-    // wedding owner's daily allowance instead -- otherwise many weddings, each with its own cap,
-    // could send far more in a day than one account is allowed to.
-    { key: accountDailyEmailKey(ownerId), ...ACCOUNT_EMAILS_PER_DAY },
-  ];
+  // TS-186 (Tom's decision): with nobody signed in behind it (a guest's RSVP), only the wedding's
+  // own pool counts -- not the owner's daily allowance (see NOTIFICATION_EMAILS_PER_WEDDING_WITHOUT_ACTOR).
+  // The number of weddings one account can create in a day is capped (TS-178), and every email
+  // still counts against the site's daily ceiling.
+  return NOTIFICATION_EMAILS_PER_WEDDING_WITHOUT_ACTOR.map(({ limit, windowSeconds }) => ({
+    key: `email:notify-wedding:${windowSeconds}:${weddingId}`,
+    limit,
+    windowSeconds,
+  }));
+}
+
+/**
+ * TS-186: the rule a caller gave for whether this event may be emailed at all (once an hour, or a
+ * few times a day). Taken back with `release` if no email went out after all.
+ */
+async function claimEmailGate(
+  oncePer: { key: string; windowSeconds: number } | undefined,
+  atMost: { key: string; limit: number; windowSeconds: number } | undefined
+): Promise<{ allowed: boolean; release: () => Promise<void> }> {
+  const releases: (() => Promise<void>)[] = [];
+  const release = async () => {
+    for (const undo of releases.splice(0).reverse()) await undo();
+  };
+  if (oncePer) {
+    const claim = await claimCooldown(oncePer.key, oncePer.windowSeconds);
+    if (!claim.allowed || !claim.claimedAt) return { allowed: false, release: async () => {} };
+    const claimedAt = claim.claimedAt;
+    releases.push(() => releaseCooldown(oncePer.key, claimedAt));
+  }
+  if (atMost) {
+    const hit = await hitRateLimit(atMost.key, atMost.limit, atMost.windowSeconds);
+    releases.push(() => undoRateLimitHit(atMost.key, atMost.windowSeconds, hit.windowStart));
+    if (!hit.allowed) {
+      // Refused: nothing counted stays counted.
+      await release();
+      return { allowed: false, release: async () => {} };
+    }
+  }
+  return { allowed: true, release };
 }
 
 export interface NotificationRow {
@@ -118,14 +154,18 @@ export async function notifyWeddingCollaborators(
   message: string,
   {
     emailOncePer,
+    emailAtMost,
     emailMessage,
   }: {
     /**
      * TS-163: for events nobody signed in caused (a guest's RSVP): email at most once per
      * `windowSeconds` for this `key`, so one guest link submitted over and over can't flood
      * everyone's inbox. The in-app notification is still written every time.
+     * TS-186: a real `windowSeconds` since the last email -- refused tries don't push it back.
      */
     emailOncePer?: { key: string; windowSeconds: number };
+    /** TS-186: email at most `limit` times per `windowSeconds` for this `key` (in-app every time). */
+    emailAtMost?: { key: string; limit: number; windowSeconds: number };
     /** TS-168: what the email says, when it should say less than the in-app notification. */
     emailMessage?: string;
   } = {}
@@ -146,28 +186,37 @@ export async function notifyWeddingCollaborators(
     [wedding.ownerId, weddingId]
   );
 
-  let mayEmail: boolean = wedding.emailNotificationsEnabled;
-  if (mayEmail && emailOncePer) {
-    mayEmail = (await hitRateLimit(emailOncePer.key, 1, emailOncePer.windowSeconds)).allowed;
-  }
-
+  const notified: typeof recipients = [];
   for (const recipient of recipients) {
     if (recipient.id === actorUserId) continue;
-    await pool.query(
+    // TS-186: written only if they're still the owner or a collaborator at this moment -- someone
+    // removed while this was running (between the list above and here) gets neither the
+    // notification nor the email.
+    const { rowCount } = await pool.query(
       `INSERT INTO "notifications" (id, "weddingId", "recipientUserId", type, message)
-       VALUES ($1, $2, $3, $4::"NotificationType", $5)`,
+       SELECT $1, $2, $3, $4::"NotificationType", $5
+       WHERE EXISTS (SELECT 1 FROM "weddings" WHERE id = $2 AND "ownerId" = $3)
+          OR EXISTS (SELECT 1 FROM "wedding_collaborators" WHERE "weddingId" = $2 AND "userId" = $3)`,
       [randomUUID(), weddingId, recipient.id, type, message]
     );
-    // TS-168: only to an address its owner has confirmed (TS-164) -- otherwise anyone could sign
-    // up with a stranger's address and have Seatwise email them every time a guest responded.
-    if (!recipient.emailVerifiedAt) continue;
-    if (!mayEmail) continue;
-    const reservation = await reserveNotificationEmail(notificationEmailCounters(actorUserId, weddingId, wedding.ownerId));
-    if (!reservation.allowed) {
-      mayEmail = false;
-      continue;
-    }
-    const weddingName = emailSafeWeddingName(wedding.name);
+    if (rowCount) notified.push(recipient);
+  }
+
+  if (!wedding.emailNotificationsEnabled) return;
+  // TS-168: only to an address its owner has confirmed (TS-164) -- otherwise anyone could sign
+  // up with a stranger's address and have Seatwise email them every time a guest responded.
+  const toEmail = notified.filter((recipient) => recipient.emailVerifiedAt);
+  if (toEmail.length === 0) return;
+
+  // TS-186: checked only once there's someone to email, and given back if nobody was emailed --
+  // so an event that emailed no one doesn't hold back the next one.
+  const gate = await claimEmailGate(emailOncePer, emailAtMost);
+  if (!gate.allowed) return;
+  let anyEmailed = false;
+  const weddingName = emailSafeWeddingName(wedding.name);
+  for (const recipient of toEmail) {
+    const reservation = await reserveNotificationEmail(notificationEmailCounters(actorUserId, weddingId));
+    if (!reservation.allowed) break;
     const result = await sendEmailNotification(
       recipient.email,
       weddingName ? `Seatwise: ${weddingName}` : "Seatwise: a wedding update",
@@ -176,9 +225,11 @@ export async function notifyWeddingCollaborators(
       { toWeddingMember: true }
     );
     // TS-178: nothing went out (failed, held back by the day's limit, or no email service), so it
-    // doesn't use up the sender's, the wedding's or the owner's allowance.
-    if (!emailDelivered(result)) await reservation.giveBack();
+    // doesn't use up the sender's or the wedding's allowance.
+    if (emailDelivered(result)) anyEmailed = true;
+    else await reservation.giveBack();
   }
+  if (!anyEmailed) await gate.release();
 }
 
 export async function listNotificationsForUser(

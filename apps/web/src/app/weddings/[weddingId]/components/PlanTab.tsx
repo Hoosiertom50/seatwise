@@ -10,6 +10,8 @@ import { SAVED_AS_DRAFT_BECAUSE_APPROVED } from "@/lib/plan-approval-text";
 
 // TS-182: a change queued for one version, but another version is open by the time it runs.
 const VERSION_CLOSED_MESSAGE = "That version isn't open any more — nothing was saved.";
+// TS-189: a move tried while a new plan is being made or an old one restored.
+const VERSION_CHANGING_MESSAGE = "Wait for the new plan to finish — nothing was moved.";
 import { RULE_WEIGHT_CONFIG, compareTableLabels } from "@seatwise/shared";
 import type {
   GuestDTO,
@@ -21,6 +23,8 @@ import type {
   RestorePreviewDTO,
   SeatingTableDTO,
 } from "@seatwise/shared";
+// TS-193: the same limits the server checks (packages/shared/src/field-limits.ts).
+import { FIELD_LIMITS } from "@seatwise/shared";
 
 const COMPARISON_STATUS_LABEL: Record<PlanVersionComparisonDTO["guests"][number]["status"], string> = {
   unchanged: "Unchanged",
@@ -64,6 +68,8 @@ interface MoveGuestResult {
 // since MUST_SIT_TOGETHER membership is still live and unchanged, the backend sweeps the same
 // whole unit along again, exactly mirroring how the original action worked.
 interface UndoEntry {
+  /** TS-189: the version the move was made on -- an entry is never replayed on another one. */
+  versionId: string;
   guestId: string;
   priorTableId: string | null;
   toTableId: string;
@@ -140,7 +146,8 @@ export function PlanTab({
   const editingLabel = labelVersionId !== null && labelVersionId === detail?.id;
   const [labelInput, setLabelInput] = useState("");
   // TS-166: a version label being typed counts as unsaved input (TS-159).
-  useUnsavedChanges("plan-label", editingLabel && labelInput.trim() !== (detail?.label ?? ""));
+  // TS-191: only while the box is there -- it's hidden once Edit access goes.
+  useUnsavedChanges("plan-label", canEdit && editingLabel && labelInput.trim() !== (detail?.label ?? ""));
   const [savingLabel, setSavingLabel] = useState(false);
   const [showCompare, setShowCompare] = useState(false);
   const [compareFromId, setCompareFromId] = useState("");
@@ -158,6 +165,20 @@ export function PlanTab({
   // TS-182: while a move (or undo/redo) is queued or on its way, the version can't be switched
   // and a new plan can't be generated -- the move would land on a version no longer on screen.
   const planChangesPending = movingIds.size > 0 || undoRedoBusy;
+  // TS-189: while a new plan is being made (or an old one restored), the version on screen is about
+  // to stop being the current one -- moves, undo/redo and status changes wait.
+  const versionChanging = generating || restoring;
+  // TS-189: shown when another person (or another tab) made a newer plan while this one was open,
+  // and the page has switched to it.
+  const [supersededNotice, setSupersededNotice] = useState<string | null>(null);
+  // TS-189: undo/redo belong to the version they were made on -- whenever another version opens
+  // (picked, generated, restored, or a newer plan made elsewhere), they're cleared.
+  const openVersionId = detail?.id ?? null;
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- TS-189: clears undo/redo when the open version changes.
+    setUndoStack([]);
+    setRedoStack([]);
+  }, [openVersionId]);
   // TS-182: only the newest version picked is shown -- a slower answer for an earlier pick used to
   // replace it.
   const selectRequest = useRef(0);
@@ -200,6 +221,29 @@ export function PlanTab({
     }
   }
 
+  // TS-189: the open version (`supersededId`) was replaced as the current plan elsewhere. Reloads the
+  // version list and opens the new current one -- unless the planner has opened something else
+  // meanwhile, which is then left alone.
+  async function openNewerCurrentPlan(supersededId: string, isCancelled: () => boolean) {
+    const list = await api.get<{ planVersions: PlanVersionDTO[] }>(`/api/v1/weddings/${weddingId}/plan-versions`);
+    if (isCancelled() || detailRef.current?.id !== supersededId) return;
+    const newCurrent = list.planVersions.find((v) => v.isCurrent);
+    if (!newCurrent || newCurrent.id === supersededId) return;
+    const opened = await api.get<{ planVersion: PlanVersionDetailDTO }>(
+      `/api/v1/weddings/${weddingId}/plan-versions/${newCurrent.id}`
+    );
+    if (isCancelled() || detailRef.current?.id !== supersededId) return;
+    setVersions(list.planVersions);
+    detailRef.current = opened.planVersion;
+    setDetail(opened.planVersion);
+    // What was shown for the old version (warnings, a restore preview, a score report) is about it.
+    setMoveWarnings([]);
+    setRestorePreview(null);
+    setScoreReport(null);
+    setDraftNotice(null);
+    setSupersededNotice("A newer plan was made — you're now looking at it.");
+  }
+
   useEffect(() => {
     Promise.all([
       // eslint-disable-next-line react-hooks/set-state-in-effect -- TS-176: loads the versions and tables when the tab opens.
@@ -225,11 +269,22 @@ export function PlanTab({
     const planVersionId = detail.id;
     const busy = movingIds.size > 0 || undoRedoBusy || statusUpdating || savingLabel || restoring || generating;
     if (busy) return;
+    let cancelled = false;
     const interval = setInterval(async () => {
       try {
         const res = await api.get<{ planVersion: PlanVersionDetailDTO }>(
           `/api/v1/weddings/${weddingId}/plan-versions/${planVersionId}`
         );
+        if (cancelled) return;
+        // TS-189: the version on screen stopped being the current one -- someone (or another tab)
+        // made or restored a newer plan. Checked before the revision: it's news either way, and
+        // the server may or may not have bumped the old version's revision when it was replaced.
+        // The list is reloaded and the new current plan opened, with a note saying so; moves
+        // made here from now on go to the plan everyone else is looking at.
+        if (!res.planVersion.isCurrent) {
+          await openNewerCurrentPlan(planVersionId, () => cancelled);
+          return;
+        }
         // TS-166: a poll that set off before a move can come back after it -- only ever take a
         // newer copy, never an older one (the moved guest used to snap back).
         setDetail((cur) => {
@@ -244,7 +299,11 @@ export function PlanTab({
         // error; the next tick tries again.
       }
     }, 4000);
-    return () => clearInterval(interval);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- TS-189: openNewerCurrentPlan only uses setters and refs.
   }, [
     detail?.id,
     detail?.isCurrent,
@@ -260,6 +319,7 @@ export function PlanTab({
   async function onGenerate() {
     setError(null);
     setDraftNotice(null);
+    setSupersededNotice(null);
     setConflicts([]);
     setMoveWarnings([]);
     setRestorePreview(null);
@@ -273,7 +333,10 @@ export function PlanTab({
         planVersion: PlanVersionDetailDTO;
         scoreReport?: PlanVersionScoreReportDTO;
         savedAsDraftBecauseApproved?: boolean;
-      }>(`/api/v1/weddings/${weddingId}/plan-versions/generate`, { makeCurrent: !saveAsDraft });
+      }>(`/api/v1/weddings/${weddingId}/plan-versions/generate`, {
+        // TS-189: the very first plan is always the current one (the choice isn't offered then).
+        makeCurrent: versions.length === 0 || !saveAsDraft,
+      });
       window.dispatchEvent(new Event(PLAN_CHANGED_EVENT));
       // TS-182: the plan was made even if reloading the list then fails -- say that, not "Couldn't".
       // TS-179: the new version is opened either way -- as a comparison draft if it was kept back.
@@ -298,6 +361,7 @@ export function PlanTab({
   async function onSelectVersion(id: string) {
     setMoveWarnings([]);
     setDraftNotice(null);
+    setSupersededNotice(null);
     setRestorePreview(null);
     setScoreReport(null);
     setShowScoreDetail(false);
@@ -326,6 +390,8 @@ export function PlanTab({
   // so without forcing the user back up to the top-of-tab banner this also still populates.
   function onMoveGuest(guestId: string, tableId: string): Promise<MoveGuestResult> {
     if (!detail || !tableId) return Promise.resolve({});
+    // TS-189: not while a new plan is being made or an old one restored (see versionChanging).
+    if (versionChanging) return Promise.resolve({ error: VERSION_CHANGING_MESSAGE });
     markMoving(guestId, true);
     // TS-182: the version on screen at the click -- a queued move doesn't land on another one.
     const versionId = detail.id;
@@ -355,6 +421,7 @@ export function PlanTab({
         setUndoStack((s) => [
           ...s,
           {
+            versionId: current.id,
             guestId,
             priorTableId,
             toTableId: tableId,
@@ -387,12 +454,12 @@ export function PlanTab({
   // another tab, or a collaborator) has since moved them again, the stale entry is dropped
   // instead of blindly overwriting that newer change, and the current state is shown instead.
   async function onUndo() {
-    if (undoStack.length === 0 || !detail || undoRedoBusy) return;
+    if (undoStack.length === 0 || !detail || undoRedoBusy || versionChanging) return;
     await replay(undoStack[undoStack.length - 1], "undo");
   }
 
   async function onRedo() {
-    if (redoStack.length === 0 || !detail || undoRedoBusy) return;
+    if (redoStack.length === 0 || !detail || undoRedoBusy || versionChanging) return;
     await replay(redoStack[redoStack.length - 1], "redo");
   }
 
@@ -408,6 +475,13 @@ export function PlanTab({
       await queueMove(async () => {
         const current = detailRef.current;
         if (!current) return;
+        // TS-189: an entry made on another version is never replayed on this one.
+        if (current.id !== entry.versionId) {
+          setUndoStack([]);
+          setRedoStack([]);
+          setError(`Can't ${kind} that — it was made on a different version of the plan.`);
+          return;
+        }
         const fresh = await api.get<{ planVersion: PlanVersionDetailDTO }>(
           `/api/v1/weddings/${weddingId}/plan-versions/${current.id}`
         );
@@ -447,7 +521,7 @@ export function PlanTab({
   }
 
   async function onSetStatus(newStatus: PlanVersionStatusValue) {
-    if (!detail) return;
+    if (!detail || versionChanging) return;
     setError(null);
     setStatusUpdating(true);
     try {
@@ -497,6 +571,7 @@ export function PlanTab({
     if (!detail) return;
     setError(null);
     setDraftNotice(null);
+    setSupersededNotice(null);
     setRestoring(true);
     try {
       const res = await api.post<{
@@ -632,15 +707,19 @@ export function PlanTab({
             </button>
             {/* FR-5.6: chosen upfront, before the run -- an unsuccessful run (a hard-rule
                 conflict) only ever produces a conflict report either way, nothing is saved. */}
-            <label className="flex items-center gap-2 text-right text-xs text-neutral-600 dark:text-neutral-300">
-              <input
-                type="checkbox"
-                checked={saveAsDraft}
-                onChange={(e) => setSaveAsDraft(e.target.checked)}
-                disabled={generating}
-              />
-              Save as comparison draft (don&apos;t replace the current version)
-            </label>
+            {/* TS-189: with no plan yet there's nothing to compare against -- the first plan is
+                always the current one. */}
+            {versions.length > 0 && (
+              <label className="flex items-center gap-2 text-right text-xs text-neutral-600 dark:text-neutral-300">
+                <input
+                  type="checkbox"
+                  checked={saveAsDraft}
+                  onChange={(e) => setSaveAsDraft(e.target.checked)}
+                  disabled={generating}
+                />
+                Save as comparison draft (don&apos;t replace the current version)
+              </label>
+            )}
           </div>
         )}
       </div>
@@ -673,6 +752,21 @@ export function PlanTab({
           className="mb-4 rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950 p-3 text-sm text-amber-800 dark:text-amber-300"
         >
           {draftNotice}
+        </p>
+      )}
+      {supersededNotice && (
+        <p
+          role="status"
+          className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-950 p-3 text-sm text-blue-800 dark:text-blue-300"
+        >
+          <span>{supersededNotice}</span>
+          <button
+            type="button"
+            onClick={() => setSupersededNotice(null)}
+            className="shrink-0 underline hover:no-underline"
+          >
+            Dismiss
+          </button>
         </p>
       )}
 
@@ -895,7 +989,7 @@ export function PlanTab({
                   value={labelInput}
                   onChange={(e) => setLabelInput(e.target.value)}
                   placeholder="Version nickname"
-                  maxLength={100}
+                  maxLength={FIELD_LIMITS.planVersionLabel}
                   className="min-h-11 rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm"
                 />
                 <button
@@ -1030,7 +1124,7 @@ export function PlanTab({
               {canEdit && detail.status === "DRAFT" && (
                 <button
                   onClick={() => onSetStatus("IN_REVIEW")}
-                  disabled={statusUpdating}
+                  disabled={statusUpdating || versionChanging}
                   className="rounded-md border border-neutral-300 dark:border-neutral-600 min-h-11 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50"
                 >
                   Move to review
@@ -1041,7 +1135,7 @@ export function PlanTab({
                   {canEdit && (
                     <button
                       onClick={() => onSetStatus("DRAFT")}
-                      disabled={statusUpdating}
+                      disabled={statusUpdating || versionChanging}
                       className="rounded-md border border-neutral-300 dark:border-neutral-600 min-h-11 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50"
                     >
                       Move back to draft
@@ -1050,7 +1144,7 @@ export function PlanTab({
                   {canApprove && (
                     <button
                       onClick={() => onSetStatus("APPROVED")}
-                      disabled={statusUpdating || !detail.isComplete}
+                      disabled={statusUpdating || versionChanging || !detail.isComplete}
                       title={!detail.isComplete ? "Every guest must be seated, with nobody flagged Needs Reassignment, before a plan can be approved." : undefined}
                       className="rounded-md bg-green-700 dark:bg-green-600 min-h-11 px-3 py-1.5 text-sm font-medium text-white hover:bg-green-800 dark:hover:bg-green-500 disabled:opacity-50"
                     >
@@ -1068,7 +1162,7 @@ export function PlanTab({
               {canApprove && detail.status === "APPROVED" && (
                 <button
                   onClick={() => onSetStatus("IN_REVIEW")}
-                  disabled={statusUpdating}
+                  disabled={statusUpdating || versionChanging}
                   className="rounded-md border border-neutral-300 dark:border-neutral-600 min-h-11 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50"
                 >
                   Reopen for review
@@ -1131,7 +1225,7 @@ export function PlanTab({
               <button
                 data-testid="undo-button"
                 onClick={onUndo}
-                disabled={undoStack.length === 0 || undoRedoBusy || movingIds.size > 0}
+                disabled={undoStack.length === 0 || undoRedoBusy || movingIds.size > 0 || versionChanging}
                 title={undoStack.length > 0 ? `Undo: ${undoStack[undoStack.length - 1].description}` : undefined}
                 className="min-h-11 rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50"
               >
@@ -1140,7 +1234,7 @@ export function PlanTab({
               <button
                 data-testid="redo-button"
                 onClick={onRedo}
-                disabled={redoStack.length === 0 || undoRedoBusy || movingIds.size > 0}
+                disabled={redoStack.length === 0 || undoRedoBusy || movingIds.size > 0 || versionChanging}
                 title={redoStack.length > 0 ? `Redo: ${redoStack[redoStack.length - 1].description}` : undefined}
                 className="min-h-11 rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50"
               >
@@ -1165,7 +1259,7 @@ export function PlanTab({
                         aria-label={`Move ${guestName(id)} to a table`}
                         className="min-h-11 rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm disabled:opacity-50"
                         value=""
-                        disabled={movingIds.has(id)}
+                        disabled={movingIds.has(id) || versionChanging}
                         onChange={(e) => onMoveGuest(id, e.target.value)}
                       >
                         <option value="" disabled>
@@ -1204,7 +1298,7 @@ export function PlanTab({
                         aria-label={`Move ${g.guestName} to a different table`}
                         className="min-h-11 rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm disabled:opacity-50"
                         value=""
-                        disabled={movingIds.has(g.guestId)}
+                        disabled={movingIds.has(g.guestId) || versionChanging}
                         onChange={(e) => onMoveGuest(g.guestId, e.target.value)}
                       >
                         <option value="" disabled>
@@ -1304,7 +1398,7 @@ export function PlanTab({
                             aria-label={`Move ${g.guestName} to a different table`}
                             className="min-h-11 rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-xs disabled:opacity-50"
                             value=""
-                            disabled={movingIds.has(g.guestId)}
+                            disabled={movingIds.has(g.guestId) || versionChanging}
                             onChange={(e) => onMoveGuest(g.guestId, e.target.value)}
                           >
                             <option value="" disabled>

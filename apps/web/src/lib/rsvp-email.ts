@@ -1,6 +1,14 @@
-import { ensureGuestRsvpToken, regenerateGuestRsvpToken, sendEmailNotification, emailDelivered, hitRateLimit, undoRateLimitHit } from "@seatwise/db";
+import {
+  claimCooldown,
+  emailDelivered,
+  ensureGuestRsvpToken,
+  hashLinkToken,
+  regenerateGuestRsvpToken,
+  releaseCooldown,
+  sendEmailNotification,
+} from "@seatwise/db";
 import { isRsvpCutoffPast, type RsvpEmailOutcomeDTO } from "@seatwise/shared";
-import { releaseEmailSend, reserveEmailSend, RSVP_RESEND_COOLDOWN_SECONDS } from "./rate-limit";
+import { releaseEmailSend, reserveEmailSend, RSVP_RESEND_COOLDOWN_SECONDS, rsvpLinkCooldownKey } from "./rate-limit";
 import { rsvpEmailText } from "./outgoing-email-text";
 import { appBaseUrl } from "./app-url";
 
@@ -48,11 +56,13 @@ export async function sendGuestRsvpLink(
 
   // TS-171: the same link to the same address goes out at most once an hour (see
   // RSVP_RESEND_COOLDOWN_SECONDS); a new link always goes, and starts the hour again.
-  const cooldownKey = `email:rsvp-link:${guest.id}:${guest.email.trim().toLowerCase()}`;
-  const firstThisHour = (await hitRateLimit(cooldownKey, 1, RSVP_RESEND_COOLDOWN_SECONDS)).allowed;
-  if (!regenerate && !firstThisHour) return { url, emailed: false, emailFailed: false, recentlyEmailed: true };
+  // TS-186: a real hour since it was last emailed -- refused clicks don't push it back -- and kept
+  // per link, so after "Reset all guest and vendor links" the new link can be emailed at once.
+  const cooldownKey = rsvpLinkCooldownKey(guest.id, guest.email, hashLinkToken(token));
+  const cooldown = await claimCooldown(cooldownKey, RSVP_RESEND_COOLDOWN_SECONDS);
+  if (!regenerate && !cooldown.allowed) return { url, emailed: false, emailFailed: false, recentlyEmailed: true };
   const notSent = async () => {
-    if (firstThisHour) await undoRateLimitHit(cooldownKey, RSVP_RESEND_COOLDOWN_SECONDS);
+    if (cooldown.claimedAt) await releaseCooldown(cooldownKey, cooldown.claimedAt);
   };
 
   // TS-177: a refused reservation has already given back its own counts (see reserveEmailSend);
@@ -81,7 +91,7 @@ export async function sendGuestRsvpLink(
     await notSent();
     // TS-171 / TS-178: nothing went out -- whatever the reason (this address's share used up, the
     // day's limit, a failed send) -- so it doesn't use up the planner's allowance either.
-    await releaseEmailSend("rsvpEmails", sender.id);
+    await releaseEmailSend("rsvpEmails", sender.id, reservation);
   }
   if (result === "recipient-limited") return { url, emailed: false, emailFailed: true, recipientLimited: true };
   return { url, emailed, emailFailed: !emailed };

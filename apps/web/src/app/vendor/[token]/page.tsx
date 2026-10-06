@@ -81,7 +81,8 @@ export default function VendorViewPage() {
           {vendor.contactEmail && (
             <>
               <dt className="text-neutral-500 dark:text-neutral-400">Email</dt>
-              <dd>{vendor.contactEmail}</dd>
+              {/* TS-191: a long address wraps instead of running off a phone screen. */}
+              <dd className="min-w-0 break-all">{vendor.contactEmail}</dd>
             </>
           )}
           {vendor.contactPhone && (

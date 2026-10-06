@@ -9,6 +9,8 @@ import { formatDate, localTodayIso } from "@/lib/display-format";
 import { formatGuestCounts, type WeddingSummaryDTO, type SeatingTemplateDTO } from "@seatwise/shared";
 import { NotificationsBell } from "@/components/NotificationsBell";
 import { EmailVerificationNotice } from "@/components/EmailVerificationNotice";
+// TS-193: the same limits the server checks (packages/shared/src/field-limits.ts).
+import { FIELD_LIMITS } from "@seatwise/shared";
 
 // TS-19 (FR-14.2): human-readable labels for a template's captured rule-shape.
 const SIDE_MIXING_LABELS: Record<string, string> = {
@@ -89,6 +91,19 @@ export default function DashboardPage() {
   const [applyTemplateTables, setApplyTemplateTables] = useState(true);
   const [applyTemplateRules, setApplyTemplateRules] = useState(true);
   const [templatesError, setTemplatesError] = useState<string | null>(null);
+  // TS-191: the template list itself couldn't be loaded (shown in the templates section).
+  const [templatesLoadFailed, setTemplatesLoadFailed] = useState(false);
+  async function loadTemplates() {
+    try {
+      const res = await api.get<{ templates: SeatingTemplateDTO[] }>("/api/v1/templates");
+      setTemplates(res.templates);
+      setTemplatesLoadFailed(false);
+    } catch (err) {
+      // A signed-out session is handled by the wedding list's own load.
+      if (err instanceof ApiError && err.status === 401) return;
+      setTemplatesLoadFailed(true);
+    }
+  }
 
   // FR-11.1: search/filter/sort all operate on the already-fetched list client-side -- at the
   // portfolio scale this is built for (dozens, 15-50+ weddings per planner) that's instant, and
@@ -107,12 +122,11 @@ export default function DashboardPage() {
         const me = await api.get<{ user: { id: string; name: string } }>("/api/v1/auth/me");
         setUserName(me.user.name);
         setUserId(me.user.id);
-        const [list, templatesRes] = await Promise.all([
-          api.get<{ weddings: WeddingSummaryDTO[] }>("/api/v1/weddings"),
-          api.get<{ templates: SeatingTemplateDTO[] }>("/api/v1/templates"),
-        ]);
+        // TS-191: templates load on their own -- if only they fail, the weddings still show and
+        // the templates section says what went wrong (it used to be "Couldn't load your weddings").
+        void loadTemplates();
+        const list = await api.get<{ weddings: WeddingSummaryDTO[] }>("/api/v1/weddings");
         setWeddings(list.weddings);
-        setTemplates(templatesRes.templates);
         setLoadFailed(false);
       } catch (err) {
         if (err instanceof ApiError && err.status === 401) {
@@ -302,7 +316,7 @@ export default function DashboardPage() {
               value={newName}
               onChange={(e) => setNewName(e.target.value)}
               required
-              maxLength={200}
+              maxLength={FIELD_LIMITS.weddingName}
             />
           </div>
           <div>
@@ -322,6 +336,7 @@ export default function DashboardPage() {
               Venue
             </label>
             <input
+              maxLength={FIELD_LIMITS.venueName}
               id="new-wedding-venue"
               className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
               value={newVenue}
@@ -399,6 +414,7 @@ export default function DashboardPage() {
               Note (optional)
             </label>
             <textarea
+              maxLength={FIELD_LIMITS.weddingNote}
               id="new-wedding-note"
               className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
               rows={2}
@@ -422,6 +438,18 @@ export default function DashboardPage() {
         <p role="alert" className="mb-4 text-sm text-red-600 dark:text-red-400">
           {error}
         </p>
+      )}
+
+      {templatesLoadFailed && templates.length === 0 && (
+        <div className="mb-8 rounded-lg border border-neutral-200 dark:border-neutral-700 p-4">
+          <p className="text-sm font-medium">Your templates</p>
+          <p role="alert" className="mt-2 text-sm text-red-600 dark:text-red-400">
+            Couldn&apos;t load your templates.{" "}
+            <button type="button" onClick={() => void loadTemplates()} className="underline hover:no-underline">
+              Try again
+            </button>
+          </p>
+        </div>
       )}
 
       {templates.length > 0 && (
@@ -461,6 +489,7 @@ export default function DashboardPage() {
         <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex flex-1 flex-col gap-2 sm:flex-row">
             <input
+              maxLength={FIELD_LIMITS.search}
               type="search"
               aria-label="Search weddings"
               placeholder="Search by name or venue..."

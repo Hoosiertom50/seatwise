@@ -5,6 +5,8 @@ import { useParams } from "next/navigation";
 import { api, ApiError, apiErrorMessage } from "@/lib/api-client";
 import { formatDate } from "@/lib/display-format";
 import type { GuestRsvpPreviewDTO } from "@seatwise/shared";
+// TS-193: the same limits the server checks (packages/shared/src/field-limits.ts).
+import { FIELD_LIMITS } from "@seatwise/shared";
 
 // TS-17 (FR-12.1/FR-12.2/FR-12.3): the guest's own RSVP page, reached via their unique
 // unauthenticated link. No sign-in of any kind -- mirrors /invites/[token] structurally (a
@@ -23,7 +25,9 @@ export default function GuestRsvpPage() {
   // shown instead of "this link doesn't exist", which would wrongly tell a guest their link is dead.
   const [loadError, setLoadError] = useState<string | null>(null);
 
-  const [attending, setAttending] = useState<"CONFIRMED" | "DECLINED">("CONFIRMED");
+  // TS-191: null until the guest has answered -- a guest who hadn't answered used to be shown as
+  // "Joyfully attending", and on a closed page that read as an answer they never gave.
+  const [attending, setAttending] = useState<"CONFIRMED" | "DECLINED" | null>(null);
   // TS-182: kept as typed, so clearing the box to type a new number doesn't show 0.
   const [headcount, setHeadcount] = useState("1");
   const [plusOneNames, setPlusOneNames] = useState("");
@@ -35,7 +39,9 @@ export default function GuestRsvpPage() {
       const res = await api.get<{ rsvp: GuestRsvpPreviewDTO }>(`/api/v1/rsvp/${token}`);
       setPreview(res.rsvp);
       if (res.rsvp.status !== "NOT_FOUND") {
-        setAttending(res.rsvp.rsvpStatus === "DECLINED" ? "DECLINED" : "CONFIRMED");
+        setAttending(
+          res.rsvp.rsvpStatus === "DECLINED" ? "DECLINED" : res.rsvp.rsvpStatus === "CONFIRMED" ? "CONFIRMED" : null
+        );
         setHeadcount(String(res.rsvp.headcount ?? 1));
         setPlusOneNames(res.rsvp.plusOneNames ?? "");
         setNotes(res.rsvp.notes ?? "");
@@ -73,6 +79,11 @@ export default function GuestRsvpPage() {
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
+    // TS-191: nothing is sent until the guest has picked an answer.
+    if (attending === null) {
+      setError("Choose “Joyfully attending” or “Regretfully declining” first.");
+      return;
+    }
     setSubmitting(true);
     try {
       // TS-170: a cleared party-size box reads as 0 -- and once "declining" hides it, the browser
@@ -144,7 +155,7 @@ export default function GuestRsvpPage() {
   return (
     <main className="flex flex-1 items-center justify-center px-6 py-10">
       <div className="w-full max-w-md">
-        <h1 className="mb-1 text-2xl font-semibold">
+        <h1 className="mb-1 break-words text-2xl font-semibold [overflow-wrap:anywhere]">
           {preview.weddingName}
         </h1>
         <p className="mb-6 text-sm text-neutral-500 dark:text-neutral-400">
@@ -197,12 +208,16 @@ export default function GuestRsvpPage() {
                 Regretfully declining
               </button>
             </div>
+            {closed && attending === null && (
+              <p className="text-sm text-neutral-600 dark:text-neutral-300">No response on file.</p>
+            )}
 
             {attending === "CONFIRMED" && (
               <>
                 <label className="text-sm">
                   <span className="mb-1 block text-neutral-700 dark:text-neutral-300">Total in your party (including you)</span>
                   <input
+                    inputMode="numeric"
                     type="number"
                     min={1}
                     max={preview?.maxHeadcount ?? 20}
@@ -220,7 +235,7 @@ export default function GuestRsvpPage() {
                       value={plusOneNames}
                       onChange={(e) => setPlusOneNames(e.target.value)}
                       // TS-180: the most the server accepts, so typing stops there instead of failing on send.
-                      maxLength={500}
+                      maxLength={FIELD_LIMITS.plusOneNames}
                       placeholder="e.g. Jamie Lee"
                       className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
                     />
@@ -246,7 +261,7 @@ export default function GuestRsvpPage() {
                 value={notes}
                 onChange={(e) => setNotes(e.target.value)}
                 // TS-180: the most the server accepts.
-                maxLength={2000}
+                maxLength={FIELD_LIMITS.rsvpNotes}
                 rows={3}
                 className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
               />

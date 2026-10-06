@@ -1,18 +1,15 @@
 import { SignJWT, jwtVerify } from "jose";
 import type { NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
+import { isPlaceholderSecret } from "@seatwise/shared";
 import { appBaseUrl } from "./app-url";
 
 const JWT_SECRET = process.env.JWT_SECRET;
 
 // TS-179: values copied from the README or .env.example (or obvious stand-ins) that must never
 // sign real sessions -- anyone who has read this public repo would know them.
-const PLACEHOLDER_SECRETS = new Set([
-  "replace-with-a-long-random-secret",
-  "a long random string",
-  "changeme",
-  "secret",
-]);
+// TS-192: the list now lives in @seatwise/shared and is shared with the ENCRYPTION_KEY check
+// (packages/db/src/crypto.ts), so it also covers the published development encryption key.
 const MIN_SECRET_LENGTH = 32;
 
 /**
@@ -24,7 +21,7 @@ const MIN_SECRET_LENGTH = 32;
 export function jwtSecretProblem(secret: string | undefined, nodeEnv: string | undefined): string | null {
   if (!secret) return "JWT_SECRET environment variable is not set";
   if (nodeEnv !== "production") return null;
-  if (PLACEHOLDER_SECRETS.has(secret.trim().toLowerCase())) {
+  if (isPlaceholderSecret(secret)) {
     return "JWT_SECRET is still a placeholder value -- set it to a long random value (e.g. openssl rand -hex 32).";
   }
   if (secret.length < MIN_SECRET_LENGTH) {

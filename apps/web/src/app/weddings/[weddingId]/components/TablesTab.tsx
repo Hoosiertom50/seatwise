@@ -17,6 +17,8 @@ import { compareTableLabels, GUEST_TIER_LABELS, type GuestTier } from "@seatwise
 import { useUnsavedChanges } from "@/lib/unsaved-changes";
 import { useSerialTasks } from "@/lib/serial-tasks";
 import { OPEN_EDIT_MESSAGE } from "@/lib/display-format";
+// TS-193: the same limits the server checks (packages/shared/src/field-limits.ts).
+import { FIELD_LIMITS } from "@seatwise/shared";
 
 const SHAPES: TableShape[] = ["ROUND", "RECTANGULAR", "SQUARE", "OVAL", "OTHER"];
 
@@ -167,6 +169,28 @@ export function TablesTab({
   // TS-175: whether the open edit form has actually been changed -- just opening it isn't unsaved
   // input (it used to bring up "you have unsaved changes" on its own).
   const [editDirty, setEditDirty] = useState(false);
+  // TS-191: "Remove anyway" is working (a second press used to send the removal twice).
+  const [removingAnyway, setRemovingAnyway] = useState(false);
+  // TS-191: closes the open edit and puts focus back on that table's Edit button.
+  function closeEdit(id: string | null) {
+    setEditingId(null);
+    setEditDirty(false);
+    if (id) {
+      setTimeout(() => {
+        const button = document.getElementById(`edit-table-button-${id}`);
+        if (button && button.isConnected) button.focus();
+      }, 0);
+    }
+  }
+  // TS-191: Edit access taken away while a table's edit was open -- it can't be saved any more, so
+  // it closes (and stops counting as unsaved).
+  useEffect(() => {
+    if (canEdit) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- TS-191: closes the edit form when Edit access goes.
+    setEditingId(null);
+    setEditDirty(false);
+    setConfirmRemoval(null);
+  }, [canEdit]);
 
   // FR-4.2: quick-create a standard set of tables in one action.
   const [qcCount, setQcCount] = useState("12");
@@ -348,10 +372,15 @@ export function TablesTab({
 
   async function onRemove(id: string, confirmed = false) {
     setError(null);
+    if (confirmed) setRemovingAnyway(true);
     try {
       await api.delete(`/api/v1/weddings/${weddingId}/tables/${id}${confirmed ? "?confirm=true" : ""}`);
       setConfirmRemoval(null);
       setTables((current) => current.filter((t) => t.id !== id));
+      // TS-191: a removed table's open edit goes with it -- it used to keep counting as unsaved,
+      // with no form left on screen to save or cancel. (The form also reports "not changed" as it
+      // closes; see TableEditForm.)
+      setEditingId((cur) => (cur === id ? null : cur));
     } catch (err) {
       // TS-124: guests are seated here -- ask rather than silently unseat them.
       if (err instanceof ApiError && err.status === 409 && err.data?.needsConfirmation) {
@@ -360,6 +389,8 @@ export function TablesTab({
       }
       setConfirmRemoval(null);
       setError(apiErrorMessage(err, [], "Couldn't remove that table."));
+    } finally {
+      if (confirmed) setRemovingAnyway(false);
     }
   }
 
@@ -492,6 +523,7 @@ export function TablesTab({
             Table name
           </label>
           <input
+            maxLength={FIELD_LIMITS.tableLabel}
             id="table-name"
             className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
             placeholder="Table 1"
@@ -505,6 +537,7 @@ export function TablesTab({
             Capacity
           </label>
           <input
+            inputMode="numeric"
             id="table-capacity"
             type="number"
             min={1}
@@ -537,6 +570,7 @@ export function TablesTab({
             Purpose (optional)
           </label>
           <input
+            maxLength={FIELD_LIMITS.tablePurpose}
             id="table-purpose"
             className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
             placeholder="e.g. Kids table, Head table"
@@ -639,6 +673,7 @@ export function TablesTab({
               How many
             </label>
             <input
+              inputMode="numeric"
               id="qc-count"
               type="number"
               min={1}
@@ -653,6 +688,7 @@ export function TablesTab({
               Seats each
             </label>
             <input
+              inputMode="numeric"
               id="qc-capacity"
               type="number"
               min={1}
@@ -684,6 +720,7 @@ export function TablesTab({
               Name prefix
             </label>
             <input
+              maxLength={FIELD_LIMITS.tableLabelPrefix}
               id="qc-prefix"
               className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1.5 text-sm"
               value={qcPrefix}
@@ -718,6 +755,7 @@ export function TablesTab({
               Template name
             </label>
             <input
+              maxLength={FIELD_LIMITS.templateName}
               id="template-name"
               className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1.5 text-sm"
               placeholder="e.g. Standard reception layout"
@@ -887,8 +925,9 @@ export function TablesTab({
                 key={t.id}
                 className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-neutral-200 dark:border-neutral-700 px-4 py-3"
               >
-                <div>
-                  <p className="font-medium">
+                {/* TS-191: a long unbroken name wraps instead of running off a phone screen. */}
+                <div className="min-w-0">
+                  <p className="break-words font-medium [overflow-wrap:anywhere]">
                     {t.label}
                     <span className="ml-2 rounded bg-neutral-100 dark:bg-neutral-800 px-1.5 py-0.5 text-xs text-neutral-600 dark:text-neutral-300">
                       {t.shape.charAt(0) + t.shape.slice(1).toLowerCase()}
@@ -967,6 +1006,7 @@ export function TablesTab({
                           setEditingId(editingId === t.id ? null : t.id);
                           setEditDirty(false);
                         }}
+                        id={`edit-table-button-${t.id}`}
                         aria-label={`Edit ${t.label}`}
                         aria-expanded={editingId === t.id}
                         className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800"
@@ -996,17 +1036,18 @@ export function TablesTab({
                     onSaved={(saved, warnings) => {
                       setTables((current) => current.map((x) => (x.id === saved.id ? saved : x)));
                       setTableWarnings(warnings);
-                      setEditingId(null);
+                      // TS-191: also clears "changed" and puts focus back on Edit.
+                      closeEdit(t.id);
                     }}
                     onConflict={(fresh, message) => {
                       setTables((current) => current.map((x) => (x.id === fresh.id ? fresh : x)));
-                      setEditingId(null);
+                      closeEdit(t.id);
                       setError(
                         message ??
                           `"${fresh.label}" changed since you loaded it (maybe in another tab, or by someone else) — showing the latest. Open Edit again to make your change.`
                       );
                     }}
-                    onCancel={() => setEditingId(null)}
+                    onCancel={() => closeEdit(t.id)}
                   />
                 )}
                 {confirmRemoval?.id === t.id && (
@@ -1017,13 +1058,15 @@ export function TablesTab({
                     <span className="flex-1">{confirmRemoval.message}</span>
                     <button
                       onClick={() => onRemove(t.id, true)}
-                      className="rounded-md bg-red-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-red-800"
+                      disabled={removingAnyway}
+                      className="rounded-md bg-red-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-red-800 disabled:opacity-50"
                     >
-                      Remove anyway
+                      {removingAnyway ? "Removing…" : "Remove anyway"}
                     </button>
                     <button
                       onClick={() => setConfirmRemoval(null)}
-                      className="rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800"
+                      disabled={removingAnyway}
+                      className="rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50"
                     >
                       Keep table
                     </button>
@@ -1294,6 +1337,13 @@ function TableEditForm({
   useEffect(() => {
     onDirtyChange(dirty);
   }, [dirty, onDirtyChange]);
+  // TS-191: however the form closes (saved, cancelled, its table removed, Edit access gone), what
+  // was in it no longer counts as unsaved.
+  useEffect(() => () => onDirtyChange(false), [onDirtyChange]);
+  // TS-191: opening the form puts focus in its first box.
+  useEffect(() => {
+    document.getElementById(`${idBase}-label`)?.focus();
+  }, [idBase]);
 
   const criterionOptions =
     criterionType === "SIDE"
@@ -1342,11 +1392,12 @@ function TableEditForm({
     >
       <div>
         <label htmlFor={`${idBase}-label`} className="mb-1 block text-sm font-medium">Table name</label>
-        <input id={`${idBase}-label`} className={field} value={label} onChange={(e) => setLabel(e.target.value)} required maxLength={100} />
+        <input id={`${idBase}-label`} className={field} value={label} onChange={(e) => setLabel(e.target.value)} required maxLength={FIELD_LIMITS.tableLabel} />
       </div>
       <div>
         <label htmlFor={`${idBase}-capacity`} className="mb-1 block text-sm font-medium">Seats</label>
         <input
+          inputMode="numeric"
           id={`${idBase}-capacity`}
           type="number"
           min={1}
@@ -1369,7 +1420,7 @@ function TableEditForm({
       </div>
       <div>
         <label htmlFor={`${idBase}-purpose`} className="mb-1 block text-sm font-medium">Purpose (optional)</label>
-        <input id={`${idBase}-purpose`} className={field} value={purpose} onChange={(e) => setPurpose(e.target.value)} maxLength={200} />
+        <input id={`${idBase}-purpose`} className={field} value={purpose} onChange={(e) => setPurpose(e.target.value)} maxLength={FIELD_LIMITS.tablePurpose} />
       </div>
       <div className="sm:col-span-2">
         <label htmlFor={`${idBase}-criterion`} className="mb-1 block text-sm font-medium">Favors</label>

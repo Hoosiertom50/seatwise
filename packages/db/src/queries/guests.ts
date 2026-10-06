@@ -1,15 +1,17 @@
 import { randomUUID } from "crypto";
 import { isRsvpCutoffPast } from "@seatwise/shared";
-import { pool } from "../pool";
+import { pool, beginTransaction } from "../pool";
 import { encryptText, decryptText } from "../crypto";
 import {
   applyAttendanceChange,
   lockCurrentPlan,
+  lockRestrictedLists,
   recordRecheckIfApproved,
   refreshPlanCompleteness,
   resyncTables,
   restrictedListsOverCapacity,
   tablesAffectedBy,
+  requiredAtNonAccessibleTable,
   type TableSeatingFlagReason,
 } from "./seat-checks";
 import { hashLinkToken, isPlainStoredLinkToken, newLinkToken, readStoredLinkToken } from "../link-tokens";
@@ -82,6 +84,11 @@ export class GuestConflictError extends Error {
 // TS-181: thrown instead of saving a party size that a guest's Restricted table can't hold for
 // its required-guest list. Nothing is saved.
 export class GuestHeadcountError extends Error {}
+
+// TS-188: thrown instead of marking a guest as needing an accessible table while they're on the
+// required-guest list of a Restricted table that isn't accessible -- the only table they'd be
+// allowed at would be one they can't use. Nothing is saved.
+export class GuestAccessibleTableError extends Error {}
 
 export interface CreateGuestData {
   firstName: string;
@@ -195,17 +202,28 @@ export async function updateGuestForWedding(
 
   const client = await pool.connect();
   try {
-    await client.query("BEGIN");
+    await beginTransaction(client);
+    // TS-187: a party-size change may need the Restricted tables' lists checked (below), so it takes
+    // the locks in the usual order first -- the current plan, then the lists -- before the guest's
+    // row. Before, it locked the guest first and the tables after, the other way round from saving
+    // a list, so the two could each wait for the other.
+    if (input.headcount !== undefined) {
+      await lockCurrentPlan(client, weddingId);
+      await lockRestrictedLists(client, weddingId);
+    }
     const { rows } = await client.query(
-      `SELECT revision, headcount FROM "guests" WHERE id = $1 AND "weddingId" = $2 FOR UPDATE`,
+      // TS-187: NO KEY UPDATE -- see resyncSeatsAtTable in seat-checks.ts.
+      `SELECT revision, headcount FROM "guests" WHERE id = $1 AND "weddingId" = $2 FOR NO KEY UPDATE`,
       [id, weddingId]
     );
     const current = rows[0];
     if (!current) {
-      await client.query("ROLLBACK");
+      await client.query("ROLLBACK").catch(() => {});
       return false;
     }
     if (expectedRevision !== undefined && current.revision !== expectedRevision) {
+      // TS-187: the locks are let go before the fresh copy is read on another connection.
+      await client.query("ROLLBACK").catch(() => {});
       const fresh = await getGuestForWedding(id, weddingId);
       throw new GuestConflictError(
         "This guest changed since you loaded it (maybe in another tab, or by someone else). It's been refreshed with the latest — check it and make your change again if it's still needed.",
@@ -230,10 +248,21 @@ export async function updateGuestForWedding(
         );
       }
     }
+    // TS-188: nor can they be marked as needing an accessible table while they're required at a
+    // Restricted table that isn't accessible -- the only table they're allowed at would be one
+    // they can't use. (The same check the table's list already makes from the other side.)
+    if (input.requiresAccessibleTable === true) {
+      const [clash] = await requiredAtNonAccessibleTable(client, [id]);
+      if (clash) {
+        throw new GuestAccessibleTableError(
+          `${clash.guestName} is on "${clash.tableLabel}"'s required-guest list, and "${clash.tableLabel}" isn't marked Accessible — mark it Accessible first, or take them off its list.`
+        );
+      }
+    }
     await client.query("COMMIT");
     return true;
   } catch (err) {
-    await client.query("ROLLBACK");
+    await client.query("ROLLBACK").catch(() => {});
     throw err;
   } finally {
     client.release();
@@ -246,7 +275,7 @@ export async function deleteGuestForWedding(id: string, weddingId: string, actor
   // in the same transaction (the caller already recounts completeness).
   const client = await pool.connect();
   try {
-    await client.query("BEGIN");
+    await beginTransaction(client);
     // TS-173: the current plan's row first, then the guest's (see lockCurrentPlan).
     const planVersionId = await lockCurrentPlan(client, weddingId);
     const affected = planVersionId ? await tablesAffectedBy(client, weddingId, planVersionId, [id]) : [];
@@ -274,7 +303,7 @@ export async function deleteGuestForWedding(id: string, weddingId: string, actor
     await client.query("COMMIT");
     return deleted;
   } catch (err) {
-    await client.query("ROLLBACK");
+    await client.query("ROLLBACK").catch(() => {});
     throw err;
   } finally {
     client.release();
@@ -414,7 +443,7 @@ export async function submitGuestRsvp(token: string, input: SubmitGuestRsvpData)
   const tokenHash = hashLinkToken(token);
   const client = await pool.connect();
   try {
-    await client.query("BEGIN");
+    await beginTransaction(client);
     // Which wedding to lock -- read without a lock, then checked again under it below.
     const { rows: found } = await client.query<{ weddingId: string }>(
       `SELECT "weddingId" FROM "guests" WHERE "rsvpTokenHash" = $1`,
@@ -437,7 +466,7 @@ export async function submitGuestRsvp(token: string, input: SubmitGuestRsvpData)
     }>(
       `SELECT id, ("firstName" || ' ' || "lastName") AS name, "rsvpStatus", "dayOfAttendance",
               COALESCE("partySizeLimit", headcount) AS "partySizeLimit"
-       FROM "guests" WHERE "rsvpTokenHash" = $1 AND "weddingId" = $2 FOR UPDATE`,
+       FROM "guests" WHERE "rsvpTokenHash" = $1 AND "weddingId" = $2 FOR NO KEY UPDATE`,
       [tokenHash, weddingId]
     );
     const guest = locked[0];

@@ -14,6 +14,8 @@
  * Wedding names allow digits (`WEDDING_NAME_PATTERN`), so `uniqueTitle` can embed one directly.
  */
 
+import { randomInt } from "node:crypto";
+
 let counter = 0;
 
 /** Base-26 letters-only encoding of a non-negative integer (like spreadsheet column naming:
@@ -108,14 +110,53 @@ export function uniqueTitle(workerIndex: number, label: string): string {
 //
 // TS-176: no longer a fresh random pick each time -- 2^17 random addresses, with the app's
 // counters kept for a day, gave a run a 1-2% chance of two tests sharing one and tripping a limit.
-// An address is now this worker process's own number (picked once), the worker's index, and a
-// count of addresses it has handed out: never repeated within a process (128 of them), never
-// shared between the workers of a run, and shared with another run's same worker only when both
-// picked the same one of 64 numbers. (64 x 16 workers x 128 = the 2^17 test addresses.)
-const ADDRESS_RUN_NONCE = Math.floor(Math.random() * 64);
+//
+// TS-192: the TS-176 version still wrapped -- after 128 addresses a worker started handing out the
+// same ones again -- and a worker restarted after a failure (same parallel index, fresh counter)
+// repeated its predecessor's addresses. Now the 2^17 addresses are split into 256
+// blocks of 512. Each worker *process* of a run gets its own block -- the run's
+// random starting block (picked with crypto in globalSetup and handed to every worker through the
+// environment) plus the process's TEST_WORKER_INDEX, which Playwright never reuses within a run,
+// even for a restarted worker -- and hands its addresses out in order. Nothing wraps: a worker that
+// needs more than a block, or a run with more worker processes than there are blocks, fails loudly
+// instead of quietly sharing an address. Two runs only meet if their random blocks overlap, and
+// globalTeardown deletes every counter keyed on a test address after each run, so a later run
+// starts clean either way.
+export const TEST_ADDRESS_BLOCK_SIZE = 512;
+export const TEST_ADDRESS_BLOCKS = 2 ** 17 / TEST_ADDRESS_BLOCK_SIZE;
+/** Environment variable globalSetup sets so every worker of a run agrees on the starting block. */
+export const TEST_ADDRESS_RUN_ENV = "PW_TEST_ADDRESS_RUN_BLOCK";
+/** The two /16 prefixes of 198.18.0.0/15 -- what globalTeardown matches to clear test counters. */
+export const TEST_ADDRESS_PREFIXES = ["198.18.", "198.19."] as const;
+
+/** A random starting block for this run (globalSetup calls this once). */
+export function newTestAddressRunBlock(): string {
+  return String(randomInt(TEST_ADDRESS_BLOCKS));
+}
+
+function runStartBlock(): number {
+  const fromSetup = Number(process.env[TEST_ADDRESS_RUN_ENV]);
+  if (Number.isInteger(fromSetup) && fromSetup >= 0 && fromSetup < TEST_ADDRESS_BLOCKS) return fromSetup;
+  // Not started through globalSetup (shouldn't happen) -- pick once per process.
+  const picked = Number(newTestAddressRunBlock());
+  process.env[TEST_ADDRESS_RUN_ENV] = String(picked);
+  return picked;
+}
+
 let addressesHandedOut = 0;
 export function uniqueTestAddress(): string {
-  const worker = Number(process.env.TEST_PARALLEL_INDEX ?? process.env.TEST_WORKER_INDEX ?? 0) % 16;
-  const n = (ADDRESS_RUN_NONCE * 16 + worker) * 128 + (addressesHandedOut++ % 128);
+  const workerProcess = Number(process.env.TEST_WORKER_INDEX ?? 0);
+  if (!Number.isInteger(workerProcess) || workerProcess < 0 || workerProcess >= TEST_ADDRESS_BLOCKS) {
+    throw new Error(
+      `uniqueTestAddress: worker process ${process.env.TEST_WORKER_INDEX} is past the ${TEST_ADDRESS_BLOCKS} address blocks a run has -- refusing to reuse an address.`,
+    );
+  }
+  if (addressesHandedOut >= TEST_ADDRESS_BLOCK_SIZE) {
+    throw new Error(
+      `uniqueTestAddress: this worker has used all ${TEST_ADDRESS_BLOCK_SIZE} of its test addresses -- refusing to reuse one. Raise TEST_ADDRESS_BLOCK_SIZE in e2e/data/ids.ts.`,
+    );
+  }
+  const block = (runStartBlock() + workerProcess) % TEST_ADDRESS_BLOCKS;
+  const n = block * TEST_ADDRESS_BLOCK_SIZE + addressesHandedOut++;
   return `198.${18 + (n >> 16)}.${(n >> 8) & 255}.${n & 255}`;
 }

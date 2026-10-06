@@ -185,12 +185,46 @@ export class WeddingGuestsPage extends BasePage {
   async chooseImportFile(csvContent: string, name = "guests.csv"): Promise<void> {
     await this.importFileInput().setInputFiles({ name, mimeType: "text/csv", buffer: Buffer.from(csvContent, "utf-8") });
   }
+  /** TS-190: uploads a file's exact bytes (e.g. one saved in Excel's older Windows encoding) and
+   * requests a preview. */
+  async importGuestsFileBytesAndPreview(bytes: Buffer, name = "guests.csv"): Promise<void> {
+    await this.importFileInput().setInputFiles({ name, mimeType: "text/csv", buffer: bytes });
+    await this.previewImportButton().click();
+    await this.confirmImportButton().waitFor();
+  }
+  /** TS-190: chooses a file's exact bytes without previewing it. */
+  async chooseImportFileBytes(bytes: Buffer, name = "guests.csv"): Promise<void> {
+    await this.importFileInput().setInputFiles({ name, mimeType: "text/csv", buffer: bytes });
+  }
+  /** TS-190: the preview's summary line ("N new, N updating, N unchanged, ..."). */
+  importPreviewSummaryText() {
+    return this.page.getByText(/ new, \d+ updating, /);
+  }
+  /** TS-190: a preview row, by the guest's name in it. */
+  importPreviewRow(fullName: string) {
+    return this.page.locator("li").filter({ hasText: /^Row \d+/ }).filter({ hasText: fullName });
+  }
   /** TS-140: a column-mapping select, by its field label (e.g. "First name *"). */
   importMappingSelect(label: string | RegExp) {
     return this.page.getByLabel(label);
   }
   previewImportButtonLocator() {
     return this.previewImportButton();
+  }
+  /** TS-191: the file chooser itself, the import's Cancel button, and a preview's summary line --
+   * for checking what can be changed while a preview is being checked. */
+  importFileInputLocator() {
+    return this.importFileInput();
+  }
+  cancelImportButton() {
+    return this.page.getByRole("button", { name: "Cancel", exact: true });
+  }
+  importPreviewSummary() {
+    return this.page.getByText(/^\d+ new, \d+ updating,/);
+  }
+  /** TS-191: an import error line (a refused file, a failed preview), matched by its text. */
+  importError(text: string | RegExp) {
+    return this.page.getByRole("alert").filter({ hasText: text });
   }
   async cancelImport(): Promise<void> {
     await this.page.getByRole("button", { name: "Cancel", exact: true }).click();

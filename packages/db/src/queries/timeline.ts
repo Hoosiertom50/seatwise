@@ -1,5 +1,5 @@
 import { randomUUID } from "crypto";
-import { pool } from "../pool";
+import { pool, beginTransaction } from "../pool";
 
 // TS-18 (FR-13.1/FR-13.2): a per-wedding, chronological run-of-show -- its own record, entirely
 // independent of guests/tables/rules/seating plans. Always listed by (time, sortOrder): time is
@@ -110,18 +110,19 @@ export async function updateTimelineEntry(
   values.push(id, weddingId);
   const client = await pool.connect();
   try {
-    await client.query("BEGIN");
+    await beginTransaction(client);
     // TS-92: lock, then compare -- same pattern as guests/tables/vendors (FR-7.7).
     const { rows: current } = await client.query(
-      `SELECT ${COLUMNS} FROM "timeline_entries" WHERE id = $1 AND "weddingId" = $2 FOR UPDATE`,
+      // TS-187: NO KEY UPDATE -- the entry's id doesn't change here.
+      `SELECT ${COLUMNS} FROM "timeline_entries" WHERE id = $1 AND "weddingId" = $2 FOR NO KEY UPDATE`,
       [id, weddingId]
     );
     if (!current[0]) {
-      await client.query("ROLLBACK");
+      await client.query("ROLLBACK").catch(() => {});
       return null;
     }
     if (expectedRevision !== undefined && current[0].revision !== expectedRevision) {
-      await client.query("ROLLBACK");
+      await client.query("ROLLBACK").catch(() => {});
       throw new TimelineConflictError(current[0]);
     }
     // TS-153: moving an entry to a different time puts it last among that time's entries -- keeping
@@ -168,13 +169,13 @@ export async function reorderTimelineEntry(
 ): Promise<TimelineEntryRow | null> {
   const client = await pool.connect();
   try {
-    await client.query("BEGIN");
+    await beginTransaction(client);
     const { rows: entryRows } = await client.query(
       `SELECT time FROM "timeline_entries" WHERE id = $1 AND "weddingId" = $2`,
       [id, weddingId]
     );
     if (!entryRows[0]) {
-      await client.query("ROLLBACK");
+      await client.query("ROLLBACK").catch(() => {});
       return null;
     }
     // TS-153: lock the whole same-time group and work from its current order, so two reorders at
@@ -182,7 +183,7 @@ export async function reorderTimelineEntry(
     // repairs any ties left from before.
     const { rows: group } = await client.query<{ id: string; sortOrder: number }>(
       `SELECT id, "sortOrder" FROM "timeline_entries" WHERE "weddingId" = $1 AND time = $2
-       ORDER BY ${ENTRY_ORDER} FOR UPDATE`,
+       ORDER BY ${ENTRY_ORDER} FOR NO KEY UPDATE`,
       [weddingId, entryRows[0].time]
     );
     const index = group.findIndex((g) => g.id === id);
@@ -210,7 +211,7 @@ export async function reorderTimelineEntry(
     }
     await client.query("COMMIT");
   } catch (err) {
-    await client.query("ROLLBACK");
+    await client.query("ROLLBACK").catch(() => {});
     throw err;
   } finally {
     client.release();

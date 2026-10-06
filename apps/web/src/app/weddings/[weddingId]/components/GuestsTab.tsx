@@ -21,10 +21,15 @@ import {
   CsvParseError,
   findDuplicateCsvHeader,
   duplicateCsvHeaderMessage,
+  decodeCsvBytes,
+  hasUnreadableCharacters,
+  UNREADABLE_CHARACTERS_MESSAGE,
   GUEST_TIER_LABELS,
   RSVP_STATUS_LABELS,
 } from "@seatwise/shared";
 import { useUnsavedChanges, useUnsavedFields } from "@/lib/unsaved-changes";
+// TS-193: the same limits the server checks (packages/shared/src/field-limits.ts).
+import { FIELD_LIMITS } from "@seatwise/shared";
 
 const TIERS: GuestTier[] = ["VIP", "FAMILY", "FRIEND", "PLUS_ONE", "OTHER"];
 const RSVP_STATUSES: RsvpStatus[] = ["PENDING", "CONFIRMED", "DECLINED"];
@@ -213,6 +218,7 @@ export function GuestsTab({
     createdCount: number;
     updatedCount: number;
     skippedCount?: number;
+    unchangedCount?: number;
     warnings: string[];
   } | null>(null);
   // TS-180: the planner chose to overwrite guests changed in Seatwise since the file was exported.
@@ -232,7 +238,17 @@ export function GuestsTab({
     URL.revokeObjectURL(url);
   }
 
+  // TS-191: each preview request gets a number; an answer that comes back after the file, the
+  // column choices or Cancel changed things is dropped (it used to show a preview of the old
+  // choices, which the import then used).
+  const previewRequest = useRef(0);
+  function invalidatePreview() {
+    previewRequest.current++;
+    setPreviewing(false);
+  }
+
   function resetImport() {
+    invalidatePreview();
     setCsvText(null);
     setCsvFileName(null);
     setCsvHeaders([]);
@@ -249,8 +265,21 @@ export function GuestsTab({
     setImportError(null);
     setImportResult(null);
     setImportPreview(null);
+    // TS-191: the previous file is gone the moment another is chosen -- if the new one is refused
+    // below, the old file's columns and choices used to stay on screen, ready to import.
+    invalidatePreview();
+    setCsvText(null);
+    setCsvFileName(null);
+    setCsvHeaders([]);
+    setMapping({});
+    setOverwriteChanged(false);
     try {
-      const text = await file.text();
+      // TS-190: read as UTF-8, or as Excel's older Windows encoding when it isn't (see decodeCsvBytes).
+      const text = decodeCsvBytes(await file.arrayBuffer());
+      if (hasUnreadableCharacters(text)) {
+        setImportError(UNREADABLE_CHARACTERS_MESSAGE);
+        return;
+      }
       const { headers } = parseCsv(text);
       if (headers.length === 0) {
         setImportError("Couldn't find a header row in that file.");
@@ -297,6 +326,7 @@ export function GuestsTab({
       return next;
     });
     setImportPreview(null);
+    invalidatePreview();
   }
 
   function cleanMapping(): Partial<Record<GuestImportField, string>> {
@@ -313,16 +343,20 @@ export function GuestsTab({
     setImportResult(null);
     setOverwriteChanged(false);
     setPreviewing(true);
+    const request = ++previewRequest.current;
     try {
       const { preview } = await api.post<{ preview: GuestImportPreview }>(
         `/api/v1/weddings/${weddingId}/guests/import/preview`,
         { csv: csvText, mapping: cleanMapping() }
       );
+      if (request !== previewRequest.current) return;
       setImportPreview(preview);
     } catch (err) {
+      if (request !== previewRequest.current) return;
       setImportError(err instanceof ApiError ? err.message : "Couldn't preview that file.");
     } finally {
-      setPreviewing(false);
+      // A newer request (or Cancel) owns the busy state from here.
+      if (request === previewRequest.current) setPreviewing(false);
     }
   }
 
@@ -332,7 +366,7 @@ export function GuestsTab({
     setCommitting(true);
     try {
       const { result, guests: updatedGuests } = await api.post<{
-        result: { createdCount: number; updatedCount: number; skippedCount?: number; warnings: string[] };
+        result: { createdCount: number; updatedCount: number; skippedCount?: number; unchangedCount?: number; warnings: string[] };
         guests: GuestDTO[];
       }>(`/api/v1/weddings/${weddingId}/guests/import/commit`, {
         csv: csvText,
@@ -344,7 +378,8 @@ export function GuestsTab({
           (importPreview?.rows ?? [])
             .filter(
               (r) =>
-                (r.kind === "update" || (r.kind === "conflict" && overwriteChanged)) &&
+                // TS-190: and the guests it showed as unchanged.
+                (r.kind === "update" || r.kind === "unchanged" || (r.kind === "conflict" && overwriteChanged)) &&
                 r.guestId &&
                 r.revision !== undefined
             )
@@ -711,7 +746,7 @@ export function GuestsTab({
             value={firstName}
             onChange={(e) => setFirstName(e.target.value)}
             required
-            maxLength={100}
+            maxLength={FIELD_LIMITS.personName}
           />
         </div>
         <div>
@@ -724,7 +759,7 @@ export function GuestsTab({
             value={lastName}
             onChange={(e) => setLastName(e.target.value)}
             required
-            maxLength={100}
+            maxLength={FIELD_LIMITS.personName}
           />
         </div>
         {/* TS-112: only a name is required, so the other eight fields wait behind "More details"
@@ -732,7 +767,11 @@ export function GuestsTab({
         {!showMoreDetails ? (
           <button
             type="button"
-            onClick={() => setShowMoreDetails(true)}
+            onClick={() => {
+              setShowMoreDetails(true);
+              // TS-191: focus moves to the first of the new boxes (it used to be lost with the button).
+              setTimeout(() => document.getElementById("guest-party-name")?.focus(), 0);
+            }}
             aria-expanded={false}
             className="justify-self-start text-sm text-neutral-600 dark:text-neutral-300 underline hover:no-underline sm:col-span-2"
           >
@@ -745,6 +784,7 @@ export function GuestsTab({
               Party / household
             </label>
             <input
+              maxLength={FIELD_LIMITS.partyName}
               id="guest-party-name"
               className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
               placeholder="e.g. The Carter Family"
@@ -757,6 +797,7 @@ export function GuestsTab({
               Email
             </label>
             <input
+              maxLength={FIELD_LIMITS.email}
               id="guest-email"
               type="email"
               className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
@@ -773,7 +814,7 @@ export function GuestsTab({
             <textarea
               id="guest-notes"
               rows={2}
-              maxLength={2000}
+              maxLength={FIELD_LIMITS.guestNotes}
               aria-describedby="guest-notes-hint"
               className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
               placeholder="e.g. vegetarian, nut allergy, uses a wheelchair"
@@ -789,6 +830,7 @@ export function GuestsTab({
               Headcount
             </label>
             <input
+              inputMode="numeric"
               id="guest-headcount"
               type="number"
               min={1}
@@ -975,6 +1017,8 @@ export function GuestsTab({
           type="file"
           accept=".csv,text/csv"
           onChange={onFileSelected}
+          // TS-191: no new file while a preview is being checked.
+          disabled={previewing}
           // TS-175: never wider than the space it is in (with Linux fonts it ran 6px off a phone screen).
           className="mb-3 block w-full max-w-full text-sm"
           // TS-53 (AC-079): no visible <label> wraps this input (the paragraph/button above it are
@@ -1002,6 +1046,8 @@ export function GuestsTab({
                     className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1.5 text-sm"
                     value={mapping[field] ?? ""}
                     onChange={(e) => onMappingChange(field, e.target.value)}
+                    // TS-191: the columns stay as they are while the preview is checked.
+                    disabled={previewing}
                   >
                     <option value="">— not in file —</option>
                     {csvHeaders.map((h) => (
@@ -1023,7 +1069,8 @@ export function GuestsTab({
               </button>
               <button
                 onClick={resetImport}
-                className="rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800"
+                disabled={previewing}
+                className="rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50"
               >
                 Cancel
               </button>
@@ -1038,7 +1085,9 @@ export function GuestsTab({
               Import complete: {importResult.createdCount} guest(s) added, {importResult.updatedCount}{" "}
               updated
               {/* TS-180 */}
-              {importResult.skippedCount ? `, ${importResult.skippedCount} left as they are (changed since the export)` : ""}.
+              {importResult.skippedCount ? `, ${importResult.skippedCount} left as they are (changed since the export)` : ""}
+              {/* TS-190 */}
+              {importResult.unchangedCount ? `, ${importResult.unchangedCount} unchanged` : ""}.
             </p>
             {importResult.warnings.length > 0 && (
               <ul className="mt-1 list-inside list-disc text-sm text-amber-700 dark:text-amber-400">
@@ -1055,6 +1104,12 @@ export function GuestsTab({
             <p className="mb-2 text-sm">
               <strong>{importPreview.summary.newCount}</strong> new,{" "}
               <strong>{importPreview.summary.updatingCount}</strong> updating,{" "}
+              {/* TS-190: rows the same as the guest already is -- left alone. */}
+              {importPreview.summary.unchangedCount > 0 && (
+                <>
+                  <strong>{importPreview.summary.unchangedCount}</strong> unchanged,{" "}
+                </>
+              )}
               {/* TS-180 */}
               {importPreview.summary.conflictCount > 0 && (
                 <>
@@ -1102,7 +1157,7 @@ export function GuestsTab({
                   ) : (
                     <span>
                       {r.preview.firstName} {r.preview.lastName}
-                      {r.kind === "update" ? " (updating existing guest)" : ""}
+                      {r.kind === "update" ? " (updating existing guest)" : r.kind === "unchanged" ? " (no changes)" : ""}
                     </span>
                   )}
                 </li>
@@ -1184,7 +1239,7 @@ export function GuestsTab({
               key={g.id}
               className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-neutral-200 dark:border-neutral-700 px-4 py-3"
             >
-              <div>
+              <div className="min-w-0">
                 <div className="flex flex-wrap items-center font-medium">
                   {canEdit ? (
                     <span className="flex items-center gap-1">
@@ -1198,7 +1253,7 @@ export function GuestsTab({
                           rowFields.markDirty(`guest-row-${g.id}-firstName`, false);
                           onUpdateName(g.id, "firstName", e.currentTarget);
                         }}
-                        maxLength={100}
+                        maxLength={FIELD_LIMITS.personName}
                       />
                       <input
                         aria-label={`Last name for ${g.firstName} ${g.lastName}`}
@@ -1210,7 +1265,7 @@ export function GuestsTab({
                           rowFields.markDirty(`guest-row-${g.id}-lastName`, false);
                           onUpdateName(g.id, "lastName", e.currentTarget);
                         }}
-                        maxLength={100}
+                        maxLength={FIELD_LIMITS.personName}
                       />
                     </span>
                   ) : (
@@ -1261,66 +1316,10 @@ export function GuestsTab({
                     {g.rsvpRespondedAt ? "responded" : "no self-RSVP yet"}
                   </span>
                 </div>
-                <p className="text-sm text-neutral-500 dark:text-neutral-400">
-                  {g.partyName ? `${g.partyName} · ` : ""}
-                  {GUEST_TIER_LABELS[g.tier]}
-                  {g.side !== "BOTH" ? ` · ${sideLabelFor(g.side)}` : ""}
-                  {g.ageCategory !== "ADULT" ? ` · ${g.ageCategory.charAt(0)}${g.ageCategory.slice(1).toLowerCase()}` : ""}
-                  {g.plusOneNames ? ` · with ${g.plusOneNames}` : ""}
-                </p>
-                {/* TS-107: the guest's own note from their RSVP link -- read-only here, and kept
-                    apart from the planner's private notes, which the guest never sees. */}
-                {g.rsvpNotes && (
-                  <p className="whitespace-pre-line text-sm text-neutral-600 dark:text-neutral-400">
-                    <span className="font-medium">Guest&apos;s RSVP note:</span> {g.rsvpNotes}
-                  </p>
-                )}
-                {/* TS-129: the planner's private notes -- editable by Owner/Edit. TS-180: View and
-                    Comment collaborators don't get them at all (TS-154), here or in the CSV export. */}
-                {canEdit ? (
-                  <textarea
-                    aria-label={`Notes for ${g.firstName} ${g.lastName}`}
-                    title="Private to your planning team — the guest never sees this."
-                    rows={1}
-                    maxLength={2000}
-                    className="mt-1 block w-72 max-w-full rounded-md border border-neutral-200 dark:border-neutral-700 px-2 py-1 text-xs"
-                    placeholder="Private notes (dietary, accessibility…)"
-                    key={`${g.id}-notes-${g.notes ?? ""}`}
-                    defaultValue={g.notes ?? ""}
-                    onInput={(e) => rowFields.markDirty(`guest-row-${g.id}-notes`, (e.currentTarget.value.trim() || null) !== (g.notes ?? null))}
-                    onBlur={(e) => {
-                      rowFields.markDirty(`guest-row-${g.id}-notes`, false);
-                      onUpdateNotes(g.id, e.currentTarget);
-                    }}
-                  />
-                ) : (
-                  g.notes && (
-                    <p className="whitespace-pre-line text-sm text-neutral-600 dark:text-neutral-400">
-                      <span className="font-medium">Notes:</span> {g.notes}
-                    </p>
-                  )
-                )}
-                {canEdit ? (
-                  <input
-                    type="email"
-                    aria-label={`Email for ${g.firstName} ${g.lastName}`}
-                    className="mt-1 w-56 rounded-md border border-neutral-200 dark:border-neutral-700 px-2 py-1 text-xs"
-                    placeholder="Email (for their RSVP link)"
-                    key={`${g.id}-email-${g.email ?? ""}`}
-                    defaultValue={g.email ?? ""}
-                    onInput={(e) => rowFields.markDirty(`guest-row-${g.id}-email`, e.currentTarget.value !== (g.email ?? ""))}
-                    onBlur={(e) => {
-                      rowFields.markDirty(`guest-row-${g.id}-email`, false);
-                      if (e.target.value !== (g.email ?? "")) onUpdateEmail(g.id, e.currentTarget);
-                    }}
-                  />
-                ) : (
-                  g.email && <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">{g.email}</p>
-                )}
-                {rsvpLinkResult[g.id] && (
-                  <p role="status" className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">{rsvpLinkResult[g.id]}</p>
-                )}
               </div>
+              {/* TS-193: the row's buttons come right after the name, before the details below it, so
+                  Tab goes name -> buttons -> notes and email -- the order they read on screen (the
+                  buttons used to sit beside the whole block and were reached only after the email box). */}
               <div className="flex flex-wrap items-center gap-2">
                 {canEdit ? (
                   <>
@@ -1383,6 +1382,69 @@ export function GuestsTab({
                   </>
                 ) : (
                   <span className="text-sm text-neutral-500 dark:text-neutral-400">{RSVP_STATUS_LABELS[g.rsvpStatus]}</span>
+                )}
+              </div>
+              <div className="basis-full">
+                <p className="text-sm text-neutral-500 dark:text-neutral-400">
+                  {g.partyName ? `${g.partyName} · ` : ""}
+                  {GUEST_TIER_LABELS[g.tier]}
+                  {g.side !== "BOTH" ? ` · ${sideLabelFor(g.side)}` : ""}
+                  {g.ageCategory !== "ADULT" ? ` · ${g.ageCategory.charAt(0)}${g.ageCategory.slice(1).toLowerCase()}` : ""}
+                  {g.plusOneNames ? ` · with ${g.plusOneNames}` : ""}
+                </p>
+                {/* TS-107: the guest's own note from their RSVP link -- read-only here, and kept
+                    apart from the planner's private notes, which the guest never sees. */}
+                {g.rsvpNotes && (
+                  // TS-191: a long unbroken note wraps instead of running off a phone screen.
+                  <p className="whitespace-pre-line break-words text-sm text-neutral-600 dark:text-neutral-400 [overflow-wrap:anywhere]">
+                    <span className="font-medium">Guest&apos;s RSVP note:</span> {g.rsvpNotes}
+                  </p>
+                )}
+                {/* TS-129: the planner's private notes -- editable by Owner/Edit. TS-180: View and
+                    Comment collaborators don't get them at all (TS-154), here or in the CSV export. */}
+                {canEdit ? (
+                  <textarea
+                    aria-label={`Notes for ${g.firstName} ${g.lastName}`}
+                    title="Private to your planning team — the guest never sees this."
+                    rows={1}
+                    maxLength={FIELD_LIMITS.guestNotes}
+                    className="mt-1 block w-72 max-w-full rounded-md border border-neutral-200 dark:border-neutral-700 px-2 py-1 text-xs"
+                    placeholder="Private notes (dietary, accessibility…)"
+                    key={`${g.id}-notes-${g.notes ?? ""}`}
+                    defaultValue={g.notes ?? ""}
+                    onInput={(e) => rowFields.markDirty(`guest-row-${g.id}-notes`, (e.currentTarget.value.trim() || null) !== (g.notes ?? null))}
+                    onBlur={(e) => {
+                      rowFields.markDirty(`guest-row-${g.id}-notes`, false);
+                      onUpdateNotes(g.id, e.currentTarget);
+                    }}
+                  />
+                ) : (
+                  g.notes && (
+                    <p className="whitespace-pre-line text-sm text-neutral-600 dark:text-neutral-400">
+                      <span className="font-medium">Notes:</span> {g.notes}
+                    </p>
+                  )
+                )}
+                {canEdit ? (
+                  <input
+                    maxLength={FIELD_LIMITS.email}
+                    type="email"
+                    aria-label={`Email for ${g.firstName} ${g.lastName}`}
+                    className="mt-1 w-56 rounded-md border border-neutral-200 dark:border-neutral-700 px-2 py-1 text-xs"
+                    placeholder="Email (for their RSVP link)"
+                    key={`${g.id}-email-${g.email ?? ""}`}
+                    defaultValue={g.email ?? ""}
+                    onInput={(e) => rowFields.markDirty(`guest-row-${g.id}-email`, e.currentTarget.value !== (g.email ?? ""))}
+                    onBlur={(e) => {
+                      rowFields.markDirty(`guest-row-${g.id}-email`, false);
+                      if (e.target.value !== (g.email ?? "")) onUpdateEmail(g.id, e.currentTarget);
+                    }}
+                  />
+                ) : (
+                  g.email && <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">{g.email}</p>
+                )}
+                {rsvpLinkResult[g.id] && (
+                  <p role="status" className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">{rsvpLinkResult[g.id]}</p>
                 )}
               </div>
               {error && errorGuestId === g.id && (

@@ -10,6 +10,8 @@ import type {
   PlanVersionDetailDTO,
   SeatingTableDTO,
 } from "@seatwise/shared";
+// TS-193: the same limits the server checks (packages/shared/src/field-limits.ts).
+import { FIELD_LIMITS } from "@seatwise/shared";
 
 // TS-11 (Day-Of / Emergency Mode, FR-8.1/8.2/8.3/8.4): a phone-friendly view for the day of the
 // wedding — find a guest fast, mark a no-show or walk-in, re-seat or swap without digging through
@@ -114,6 +116,12 @@ export function DayOfTab({
     if (detail) for (const a of detail.assignments) map.set(a.guestId, a.tableLabel);
     return map;
   }, [detail]);
+  // TS-191: which table each seated guest is at, for the "Move to…" list.
+  const tableIdByGuestId = useMemo(() => {
+    const map = new Map<string, string>();
+    if (detail) for (const a of detail.assignments) map.set(a.guestId, a.tableId);
+    return map;
+  }, [detail]);
 
   const filteredGuests = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -190,13 +198,16 @@ export function DayOfTab({
     return null;
   }
 
-  function onSeatGuest(guestId: string, tableId: string) {
+  // TS-191 (Tom's decision): `moving` is a guest who already has a seat going to another table --
+  // the same move the Seating plan tab makes (one guest, nobody else's seat changes, the server
+  // checks room and the seating rules).
+  function onSeatGuest(guestId: string, tableId: string, moving = false) {
     if (!detail || !tableId) return;
     markBusy(guestId, true);
-    return queuePlanChange(() => seatGuest(guestId, tableId));
+    return queuePlanChange(() => seatGuest(guestId, tableId, moving));
   }
 
-  async function seatGuest(guestId: string, tableId: string) {
+  async function seatGuest(guestId: string, tableId: string, moving = false) {
     const current = detailRef.current;
     if (!current) return;
     setError(null);
@@ -207,14 +218,28 @@ export function DayOfTab({
         { guestId, tableId, expectedRevision: current.revision }
       );
       applyDetail(res.planVersion);
-      if (res.warnings.length > 0) setNotice(res.warnings.join(" "));
+      if (moving) {
+        const guest = guestsRef.current.find((g) => g.id === guestId);
+        const table = res.planVersion.assignments.find((a) => a.guestId === guestId)?.tableLabel;
+        const moved = guest && table ? `Moved ${guest.firstName} ${guest.lastName} to ${table}.` : "Moved.";
+        setNotice(res.warnings.length > 0 ? `${moved} ${res.warnings.join(" ")}` : moved);
+      } else if (res.warnings.length > 0) setNotice(res.warnings.join(" "));
     } catch (err) {
       const fresh = conflictPlanVersion(err);
       if (fresh) applyDetail(fresh);
-      setRowError(guestId, apiErrorMessage(err, [], "Couldn't seat that guest."));
+      setRowError(guestId, apiErrorMessage(err, [], moving ? "Couldn't move that guest." : "Couldn't seat that guest."));
     } finally {
       markBusy(guestId, false);
     }
+  }
+
+  // TS-189: the open plan as it is now, after adding a guest moved it on a revision.
+  async function refreshAfterGuestAdded(): Promise<PlanVersionDetailDTO> {
+    const { planVersion } = await api.get<{ planVersion: PlanVersionDetailDTO }>(
+      `/api/v1/weddings/${weddingId}/plan-versions/${detailRef.current!.id}`
+    );
+    applyDetail(planVersion);
+    return planVersion;
   }
 
   async function onAddWalkIn(e: React.FormEvent) {
@@ -239,8 +264,8 @@ export function DayOfTab({
       setWalkInLast("");
       if (walkInTableId && detail) {
         const tableId = walkInTableId;
-        const res = await queuePlanChange(() => {
-          const current = detailRef.current!;
+        const res = await queuePlanChange(async () => {
+          const current = await refreshAfterGuestAdded();
           return api.post<{ planVersion: PlanVersionDetailDTO; warnings: string[] }>(
             `/api/v1/weddings/${weddingId}/plan-versions/${current.id}/assignments`,
             { guestId: guest.id, tableId, expectedRevision: current.revision }
@@ -255,6 +280,10 @@ export function DayOfTab({
         setNotice(`Added walk-in ${guest.firstName} ${guest.lastName} — not yet seated.`);
       }
       setWalkInTableId("");
+      // TS-189: adding a guest moves the plan on a revision (they're a new unseated guest) -- take
+      // the plan as it is now, so a later "Seat at…" isn't refused as out of date.
+      // (If that reload fails, the next change is refused as out of date and refreshes then.)
+      if (detail && !walkInTableId) await queuePlanChange(refreshAfterGuestAdded).catch(() => {});
     } catch (err) {
       const fresh = conflictPlanVersion(err);
       if (fresh) applyDetail(fresh);
@@ -302,7 +331,7 @@ export function DayOfTab({
       <div>
         <h2 className="mb-1 text-lg font-medium">Day-of mode</h2>
         <p className="text-sm text-neutral-500 dark:text-neutral-400">
-          Mark no-shows and walk-ins, re-seat or swap guests fast — without a full regeneration.
+          Mark no-shows and walk-ins, move, re-seat or swap guests fast — without a full regeneration.
           Nobody else&apos;s seat changes unless you move them — except that guests who must sit
           together always move together.
         </p>
@@ -363,6 +392,7 @@ export function DayOfTab({
           Find a guest
         </label>
         <input
+          maxLength={FIELD_LIMITS.search}
           id="dayof-guest-search"
           className="min-h-11 w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-3 text-base"
           placeholder="Search by name or party..."
@@ -375,6 +405,11 @@ export function DayOfTab({
         {filteredGuests.map((g) => {
           const seatedAt = tableLabelByGuestId.get(g.id);
           const notAttending = g.dayOfAttendance === "NOT_ATTENDING";
+          // TS-191: the other tables with enough free seats for this guest's party.
+          const fromTableId = tableIdByGuestId.get(g.id);
+          const moveChoices = seatedAt
+            ? occupancy.filter(({ table, seated }) => table.id !== fromTableId && table.capacity - seated >= g.headcount)
+            : [];
           return (
             <li
               key={g.id}
@@ -415,6 +450,26 @@ export function DayOfTab({
                       ))}
                     </select>
                   )}
+                  {/* TS-191 (Tom's decision): a seated guest can be moved to any other table with
+                      enough free seats for their party. Swap (below) stays for full tables. */}
+                  {!notAttending && detail && seatedAt && (
+                    <select
+                      aria-label={`Move ${g.firstName} ${g.lastName} to another table`}
+                      className="min-h-11 rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-2 text-sm disabled:opacity-50"
+                      value=""
+                      disabled={busyIds.has(g.id) || moveChoices.length === 0}
+                      onChange={(e) => onSeatGuest(g.id, e.target.value, true)}
+                    >
+                      <option value="" disabled>
+                        {busyIds.has(g.id) ? "Moving..." : moveChoices.length === 0 ? "No other table has room" : "Move to..."}
+                      </option>
+                      {moveChoices.map(({ table, seated }) => (
+                        <option key={table.id} value={table.id}>
+                          {table.label} ({table.capacity - seated} free)
+                        </option>
+                      ))}
+                    </select>
+                  )}
                   <button
                     onClick={() => onToggleAttendance(g)}
                     disabled={busyIds.has(g.id)}
@@ -450,6 +505,7 @@ export function DayOfTab({
               First name
             </label>
             <input
+              maxLength={FIELD_LIMITS.personName}
               id="walkin-first-name"
               className="min-h-11 flex-1 rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-3 text-base"
               placeholder="First name"
@@ -461,6 +517,7 @@ export function DayOfTab({
               Last name
             </label>
             <input
+              maxLength={FIELD_LIMITS.personName}
               id="walkin-last-name"
               className="min-h-11 flex-1 rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-3 text-base"
               placeholder="Last name"

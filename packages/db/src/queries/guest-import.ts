@@ -1,11 +1,13 @@
 import { randomUUID } from "crypto";
-import { pool, STATEMENT_TIMEOUT_MS, IDLE_IN_TRANSACTION_TIMEOUT_MS } from "../pool";
-import { encryptText } from "../crypto";
+import { pool, beginTransaction } from "../pool";
+import { encryptText, decryptText } from "../crypto";
 import {
   lockCurrentPlan,
+  lockRestrictedLists,
   recordRecheckIfApproved,
   resyncSeatsAtTable,
   restrictedListsOverCapacity,
+  requiredAtNonAccessibleTable,
   tablesAffectedBy,
 } from "./seat-checks";
 import {
@@ -26,6 +28,12 @@ import {
   CsvParseError,
   findDuplicateCsvHeader,
   duplicateCsvHeaderMessage,
+  hasUnreadableCharacters,
+  UNREADABLE_CHARACTERS_MESSAGE,
+  LINE_BREAK_MESSAGE,
+  changedImportFields,
+  importRowChangesNothing,
+  type GuestImportCurrentValues,
   type GuestImportMapping,
   type GuestImportRow,
   type GuestImportRowPreview,
@@ -71,13 +79,19 @@ function isClearToken(value: string): boolean {
 }
 
 // TS-180: the same hidden-character rule as the app's forms (see safeText), for free-text cells.
-function checkFreeText(label: string, value: string, max: number, errors: string[]): boolean {
-  if (value.length > max) {
+// TS-190: the length is counted after Windows line endings become plain ones (what's saved), and a
+// single-line value (the household) can't hold a line break -- the same rules as safeText.
+function checkFreeText(label: string, value: string, max: number, errors: string[], singleLine = false): boolean {
+  if (value.replace(/\r\n/g, "\n").length > max) {
     errors.push(`${label} can be at most ${max} characters.`);
     return false;
   }
   if (hasForbiddenControlCharacter(value)) {
     errors.push(`${label}: ${CONTROL_CHARACTER_MESSAGE.toLowerCase()}.`);
+    return false;
+  }
+  if (singleLine && /[\r\n]/.test(value)) {
+    errors.push(`${label}: ${LINE_BREAK_MESSAGE.toLowerCase()}.`);
     return false;
   }
   return true;
@@ -144,7 +158,7 @@ function parseRow(
   if (partyName !== undefined && partyName !== "") {
     // TS-152: the same limit as adding a guest by hand.
     if (isClearToken(partyName)) data.partyName = null;
-    else if (checkFreeText("Household name", partyName, 200, errors)) data.partyName = partyName;
+    else if (checkFreeText("Household name", partyName, 200, errors, true)) data.partyName = partyName;
   }
 
   const headcountRaw = cellFor("headcount");
@@ -238,9 +252,21 @@ export async function classifyGuestImport(
   csv: string,
   mapping: GuestImportMapping
 ): Promise<GuestImportPreview> {
+  return (await classifyRows(weddingId, csv, mapping)).preview;
+}
+
+// TS-190: also hands back the rows whose Guest ID isn't (or is no longer) in the wedding, so the
+// commit can tell a guest deleted since the preview from a mistyped ID.
+async function classifyRows(
+  weddingId: string,
+  csv: string,
+  mapping: GuestImportMapping
+): Promise<{ preview: GuestImportPreview; unknownGuestIds: { guestId: string; name: string }[] }> {
   if (!mapping.firstName || !mapping.lastName) {
     throw new GuestImportError('Map "First name" and "Last name" to a column before importing.');
   }
+  // TS-190: a file whose letters were already lost (see hasUnreadableCharacters) isn't imported.
+  if (hasUnreadableCharacters(csv)) throw new GuestImportError(UNREADABLE_CHARACTERS_MESSAGE);
 
   let parsed: ReturnType<typeof parseCsv>;
   try {
@@ -267,10 +293,15 @@ export async function classifyGuestImport(
   }
   const rows = numbered.map((r) => r.cells);
 
-  const { rows: existingGuests } = await pool.query<{ id: string; revision: number }>(
-    `SELECT id, revision FROM "guests" WHERE "weddingId" = $1`,
+  // TS-190: with each guest's current values, so a row that changes nothing shows as unchanged.
+  const { rows: existingGuests } = await pool.query<
+    { id: string; revision: number } & Omit<GuestImportCurrentValues, "notes"> & { notes: string | null }
+  >(
+    `SELECT id, revision, ${CURRENT_VALUE_COLUMNS} FROM "guests" WHERE "weddingId" = $1`,
     [weddingId]
   );
+  const existingById = new Map(existingGuests.map((g) => [g.id, g]));
+  const unknownGuestIds: { guestId: string; name: string }[] = [];
   const existingIds = new Set(existingGuests.map((g) => g.id));
   // TS-177: the wedding's own side names, so a "Side" column can use them. Read here, so the
   // preview and the commit (which re-runs this) always read a row the same way.
@@ -319,6 +350,10 @@ export async function classifyGuestImport(
           errors.push(`Guest ID "${raw}" is referenced by more than one row in this file.`);
         } else if (!existingIds.has(raw)) {
           errors.push(`No guest with ID "${raw}" exists in this wedding.`);
+          unknownGuestIds.push({
+            guestId: raw,
+            name: `${data.firstName ?? ""} ${data.lastName ?? ""}`.trim() || `row ${rowNumber}`,
+          });
         } else {
           guestId = raw;
         }
@@ -330,6 +365,12 @@ export async function classifyGuestImport(
     }
     if (guestId) {
       const revision = revisionById.get(guestId);
+      // TS-190: a row the same as the guest already is changes nothing -- not even when the guest
+      // was changed since the export (the file already says what they are now).
+      const existing = existingById.get(guestId);
+      if (existing && importRowChangesNothing(data, currentValuesOf(existing))) {
+        return { rowNumber, kind: "unchanged", guestId, revision, preview: data };
+      }
       // TS-180: the guest was changed in Seatwise after this file was exported -- writing the
       // file's (older) row would quietly undo that change.
       if (exportedVersion !== undefined && revision !== undefined && revision > exportedVersion) {
@@ -347,16 +388,40 @@ export async function classifyGuestImport(
     return { rowNumber, kind: "new", preview: data };
   });
 
-  return {
+  const preview: GuestImportPreview = {
     headers,
     rows: classified,
     summary: {
       newCount: classified.filter((r) => r.kind === "new").length,
       updatingCount: classified.filter((r) => r.kind === "update").length,
+      unchangedCount: classified.filter((r) => r.kind === "unchanged").length,
       conflictCount: classified.filter((r) => r.kind === "conflict").length,
       errorCount: classified.filter((r) => r.kind === "error").length,
       totalRows: classified.length,
     },
+  };
+  return { preview, unknownGuestIds };
+}
+
+// TS-190: the guest columns an import row is compared with (see changedImportFields).
+const CURRENT_VALUE_COLUMNS = `"firstName", "lastName", "partyName", headcount, tier, "rsvpStatus",
+  "requiresAccessibleTable", "dayOfAttendance", side, "ageCategory", notes, "plusOneNames"`;
+
+function currentValuesOf(g: Omit<GuestImportCurrentValues, "notes"> & { notes: string | null }): GuestImportCurrentValues {
+  return {
+    firstName: g.firstName,
+    lastName: g.lastName,
+    partyName: g.partyName,
+    headcount: g.headcount,
+    tier: g.tier,
+    rsvpStatus: g.rsvpStatus,
+    requiresAccessibleTable: g.requiresAccessibleTable,
+    dayOfAttendance: g.dayOfAttendance,
+    side: g.side,
+    ageCategory: g.ageCategory,
+    // Stored encrypted.
+    notes: decryptText(g.notes),
+    plusOneNames: g.plusOneNames,
   };
 }
 
@@ -373,7 +438,13 @@ export async function commitGuestImport(
   /** TS-180: also write rows for guests changed since the file was exported (the planner ticked to overwrite). */
   overwriteChanged = false
 ): Promise<GuestImportCommitResult> {
-  const preview = await classifyGuestImport(weddingId, csv, mapping);
+  const { preview, unknownGuestIds } = await classifyRows(weddingId, csv, mapping);
+  // TS-190: a guest the preview showed (so their ID is in expectedRevisions) but who is gone now
+  // was deleted since the preview -- say so, rather than "No guest with ID ... exists".
+  if (expectedRevisions) {
+    const deleted = unknownGuestIds.filter((u) => expectedRevisions[u.guestId] !== undefined);
+    if (deleted.length > 0) throw new GuestImportConflictError(deleted.map((u) => u.name), "deleted");
+  }
   if (preview.summary.totalRows === 0) {
     throw new GuestImportError("The file has no data rows to import.");
   }
@@ -388,22 +459,25 @@ export async function commitGuestImport(
   // the planner chose to overwrite those guests.
   const rowsToWrite = preview.rows.filter((r) => r.kind !== "conflict" || overwriteChanged);
   const skippedCount = preview.rows.length - rowsToWrite.length;
-  const isUpdateRow = (r: GuestImportRow) => (r.kind === "update" || r.kind === "conflict") && !!r.guestId;
+  // TS-190: an "unchanged" row is locked and checked like an update -- whether it still changes
+  // nothing is decided again below, under the lock.
+  const isUpdateRow = (r: GuestImportRow) =>
+    (r.kind === "update" || r.kind === "unchanged" || r.kind === "conflict") && !!r.guestId;
 
   const client = await pool.connect();
   try {
-    await client.query("BEGIN");
-    // TS-180: this transaction locks the whole wedding, so it's held to the same limits as the
-    // pool's (set here too, as the pooled connection may not keep session settings).
-    await client.query(
-      `SET LOCAL statement_timeout = ${STATEMENT_TIMEOUT_MS}; SET LOCAL idle_in_transaction_session_timeout = ${IDLE_IN_TRANSACTION_TIMEOUT_MS}`
-    );
+    // TS-180/TS-187: this transaction locks the whole wedding, so it's held to the app's time
+    // limits (beginTransaction sets them for this transaction).
+    await beginTransaction(client);
     // TS-173: the same wedding lock Generate, Restore and attendance changes take, then the
     // current plan's row (see lockCurrentPlan) -- and the current plan read under them. Before,
     // it was read before the transaction, so an import racing a Generate could leave guests it
     // marked Not Attending seated in the new version.
     await client.query(`SELECT id FROM "weddings" WHERE id = $1 FOR NO KEY UPDATE`, [weddingId]);
     const planVersionId: string | undefined = (await lockCurrentPlan(client, weddingId)) ?? undefined;
+    // TS-187: then the Restricted tables' lists (a party that grows is checked against them below),
+    // before any guest's row -- the same order a list save takes them in.
+    await lockRestrictedLists(client, weddingId);
 
     // TS-92: refuse the whole import (it's all-or-nothing already) if any guest it would update
     // was changed by someone else after the planner previewed it -- otherwise the import would
@@ -417,6 +491,7 @@ export async function commitGuestImport(
       string,
       { revision: number; name: string; headcount: number; rsvpStatus: string; dayOfAttendance: string }
     >();
+    const currentValuesById = new Map<string, GuestImportCurrentValues>();
     if (updateIds.length > 0) {
       const { rows: locked } = await client.query<{
         id: string;
@@ -427,7 +502,7 @@ export async function commitGuestImport(
         dayOfAttendance: string;
       }>(
         `SELECT id, revision, ("firstName" || ' ' || "lastName") AS name, headcount, "rsvpStatus", "dayOfAttendance"
-         FROM "guests" WHERE "weddingId" = $1 AND id = ANY($2::text[]) ORDER BY id FOR UPDATE`,
+         FROM "guests" WHERE "weddingId" = $1 AND id = ANY($2::text[]) ORDER BY id FOR NO KEY UPDATE`,
         [weddingId, updateIds]
       );
       for (const g of locked) currentById.set(g.id, g);
@@ -446,10 +521,21 @@ export async function commitGuestImport(
           throw new GuestImportConflictError(changed.map((g) => g.name));
         }
       }
+      // TS-190: every value of these guests as they are now (already locked above), so a row only
+      // writes what it really changes.
+      const { rows: values } = await client.query<
+        { id: string } & Omit<GuestImportCurrentValues, "notes"> & { notes: string | null }
+      >(`SELECT id, ${CURRENT_VALUE_COLUMNS} FROM "guests" WHERE "weddingId" = $1 AND id = ANY($2::text[])`, [
+        weddingId,
+        updateIds,
+      ]);
+      for (const g of values) currentValuesById.set(g.id, currentValuesOf(g));
     }
 
     let createdCount = 0;
     let updatedCount = 0;
+    // TS-190: rows that would leave their guest exactly as they are -- not written.
+    let unchangedCount = 0;
     // FR-2.9: names of guests whose current assignment was flagged Needs Reassignment by this
     // import, surfaced to the caller the same way TS-7's table-side re-check surfaces warnings.
     const reassignmentWarnings: string[] = [];
@@ -479,6 +565,12 @@ export async function commitGuestImport(
       // Attending -- the same rule as everywhere else a guest declines (TS-167). For an existing
       // guest, only when this changes their answer.
       const current = isUpdateRow(row) ? currentById.get(row.guestId!) : undefined;
+      // TS-190: an export always carries Attendance, mostly unchanged -- and an unchanged value
+      // isn't the planner setting it, so it mustn't stop the rules below (as for the party size).
+      // Before, changing only the RSVP in an exported file never freed (or gave back) the seat.
+      if (current && p.dayOfAttendance !== undefined && p.dayOfAttendance === current.dayOfAttendance) {
+        p = { ...p, dayOfAttendance: undefined };
+      }
       if (p.rsvpStatus === "DECLINED" && p.dayOfAttendance === undefined) {
         const changes = current ? current.rsvpStatus !== "DECLINED" : true;
         if (changes) p = { ...p, dayOfAttendance: "NOT_ATTENDING" };
@@ -501,6 +593,9 @@ export async function commitGuestImport(
       if (current && p.headcount !== undefined && p.headcount === current.headcount) {
         p = { ...p, headcount: undefined };
       }
+      // TS-190: and only what really changes is written (see changedImportFields).
+      const currentValues = isUpdateRow(row) ? currentValuesById.get(row.guestId!) : undefined;
+      if (currentValues) p = changedImportFields(p, currentValues);
       if (row.kind === "new") {
         inserts.push(p);
         createdCount++;
@@ -520,7 +615,13 @@ export async function commitGuestImport(
           p.ageCategory !== undefined ||
           "notes" in p ||
           "plusOneNames" in p;
-        if (changesSomething) updates.push({ guestId, p });
+        // TS-190: a row that changes nothing is left alone -- not written, not counted as updated,
+        // and the guest's revision isn't bumped.
+        if (!changesSomething) {
+          unchangedCount++;
+          continue;
+        }
+        updates.push({ guestId, p });
         // TS-181: checked against their Restricted table's list (if any) once every row is in.
         if (p.headcount !== undefined && (!current || p.headcount > current.headcount)) grownGuestIds.add(guestId);
         updatedCount++;
@@ -652,6 +753,17 @@ export async function commitGuestImport(
         `Nothing was imported: ${listOver.guestNames.join(", ") || "a guest"} ${listOver.guestNames.length === 1 ? "is" : "are"} on "${listOver.tableLabel}"'s required-guest list, and the party sizes in this file would need ${listOver.seats} seats there — it has ${listOver.capacity}. Give that table more seats, or take them off its list first.`
       );
     }
+    // TS-188: nor can the file mark a listed guest as needing an accessible table when their
+    // Restricted table isn't accessible -- refused the same way.
+    const [notAccessible] = await requiredAtNonAccessibleTable(
+      client,
+      updates.filter((u) => u.p.requiresAccessibleTable === true).map((u) => u.guestId)
+    );
+    if (notAccessible) {
+      throw new GuestImportError(
+        `Nothing was imported: ${notAccessible.guestName} is on "${notAccessible.tableLabel}"'s required-guest list, and this file marks them as needing an accessible table — "${notAccessible.tableLabel}" isn't marked Accessible. Mark it Accessible first, or take them off its list.`
+      );
+    }
 
     // TS-150: re-check every table an updated guest sits at -- rules *and* room -- inside this
     // same transaction, so a capacity flag is never cleared by mistake and a bigger party is caught.
@@ -706,9 +818,9 @@ export async function commitGuestImport(
     }
 
     await client.query("COMMIT");
-    return { createdCount, updatedCount, skippedCount, warnings: reassignmentWarnings };
+    return { createdCount, updatedCount, skippedCount, unchangedCount, warnings: reassignmentWarnings };
   } catch (err) {
-    await client.query("ROLLBACK");
+    await client.query("ROLLBACK").catch(() => {});
     throw err;
   } finally {
     client.release();

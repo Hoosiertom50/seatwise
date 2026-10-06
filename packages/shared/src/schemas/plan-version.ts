@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { FIELD_LIMITS } from "../field-limits";
 import { expectedRevisionField } from "./common";
 import type { SideMixing } from "./wedding";
 
@@ -17,7 +18,7 @@ export const planVersionStatusSchema = z.object({
 // "Post-RSVP final") to tell versions apart at a glance beyond the auto-incrementing number.
 // Empty string clears the label back to none.
 export const setPlanVersionLabelSchema = z.object({
-  label: z.string().trim().max(100),
+  label: z.string().trim().max(FIELD_LIMITS.planVersionLabel),
   expectedRevision: expectedRevisionField,
 });
 export type SetPlanVersionLabelInput = z.infer<typeof setPlanVersionLabelSchema>;

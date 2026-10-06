@@ -7,6 +7,12 @@
 // site's own https:// address -- or an http:// one on this machine (localhost), for a production
 // build run locally. The one exception: with EMAIL_TRANSPORT=log (CI's e2e jobs) nothing is really
 // emailed, so the local fallback is allowed there too.
+//
+// TS-192: on Netlify neither allowance applies. A copied EMAIL_TRANSPORT=log or a leftover
+// http://localhost APP_URL in the site's settings would otherwise be accepted there, and every
+// link and the session cookie would be built for the wrong address. Netlify always sets at least
+// one of NETLIFY, CONTEXT, SITE_ID or DEPLOY_ID; `netlify dev` (NETLIFY_DEV) runs on this machine
+// and keeps the local rules.
 
 type Env = Record<string, string | undefined>;
 
@@ -19,6 +25,12 @@ export class AppUrlNotConfiguredError extends Error {
   }
 }
 
+/** TS-192: true when running on Netlify (a build or a deployed function), not `netlify dev`. */
+export function runningOnNetlify(env: Env): boolean {
+  if (env.NETLIFY_DEV) return false;
+  return Boolean(env.NETLIFY || env.CONTEXT || env.SITE_ID || env.DEPLOY_ID);
+}
+
 function isLocalHost(hostname: string): boolean {
   return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]" || hostname.endsWith(".localhost");
 }
@@ -27,9 +39,10 @@ function isLocalHost(hostname: string): boolean {
  * production build when APP_URL is missing or isn't https:// (see above). */
 export function appBaseUrl(env: Env = process.env): string {
   const configured = env.APP_URL?.trim().replace(/\/+$/, "");
-  if (env.NODE_ENV !== "production") return configured || LOCAL_FALLBACK;
+  const onNetlify = runningOnNetlify(env);
+  if (env.NODE_ENV !== "production" && !onNetlify) return configured || LOCAL_FALLBACK;
   if (!configured) {
-    if (env.EMAIL_TRANSPORT === "log") return LOCAL_FALLBACK;
+    if (env.EMAIL_TRANSPORT === "log" && !onNetlify) return LOCAL_FALLBACK;
     throw new AppUrlNotConfiguredError("is not set");
   }
   let url: URL;
@@ -38,6 +51,7 @@ export function appBaseUrl(env: Env = process.env): string {
   } catch {
     throw new AppUrlNotConfiguredError("is not a web address");
   }
-  if (url.protocol === "https:" || (url.protocol === "http:" && isLocalHost(url.hostname))) return configured;
-  throw new AppUrlNotConfiguredError("is not an https:// address");
+  if (url.protocol === "https:" && !(onNetlify && isLocalHost(url.hostname))) return configured;
+  if (url.protocol === "http:" && isLocalHost(url.hostname) && !onNetlify) return configured;
+  throw new AppUrlNotConfiguredError(onNetlify ? "is not the site's own https:// address (running on Netlify)" : "is not an https:// address");
 }

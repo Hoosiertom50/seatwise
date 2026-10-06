@@ -1,6 +1,7 @@
 import { z } from "zod";
 // TS-180: free text refuses hidden control characters (see ../safe-text).
 import { safeText } from "../safe-text";
+import { FIELD_LIMITS } from "../field-limits";
 
 // TS-17 (FR-12.1-FR-12.4): the guest-facing RSVP flow, reached via a unique unauthenticated
 // token link rather than the normal (authenticated, planner-facing) guest schemas in guest.ts.
@@ -42,8 +43,8 @@ export interface GuestRsvpPreviewDTO {
 export const submitGuestRsvpSchema = z.object({
   rsvpStatus: z.enum(["CONFIRMED", "DECLINED"]),
   headcount: z.number().int().min(1).max(20).default(1),
-  plusOneNames: safeText(500, { multiline: true }).optional().nullable(),
-  notes: safeText(2000, { multiline: true }).optional().nullable(),
+  plusOneNames: safeText(FIELD_LIMITS.plusOneNames, { multiline: true }).optional().nullable(),
+  notes: safeText(FIELD_LIMITS.rsvpNotes, { multiline: true }).optional().nullable(),
   requiresAccessibleTable: z.boolean().default(false),
 });
 export type SubmitGuestRsvpInput = z.infer<typeof submitGuestRsvpSchema>;

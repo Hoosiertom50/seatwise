@@ -6,6 +6,8 @@ import Link from "next/link";
 import { api, ApiError } from "@/lib/api-client";
 import type { AuthResponse } from "@seatwise/shared";
 import { safeNextPath, withCurrentNext } from "@/lib/safe-next";
+// TS-193: the same limits the server checks (packages/shared/src/field-limits.ts).
+import { FIELD_LIMITS } from "@seatwise/shared";
 
 export default function SignupPage() {
   const router = useRouter();
@@ -51,6 +53,7 @@ export default function SignupPage() {
               Name
             </label>
             <input
+              maxLength={FIELD_LIMITS.personName}
               id="signup-name"
               // TS-175: lets the browser and password managers fill these in.
               autoComplete="name"
@@ -65,6 +68,7 @@ export default function SignupPage() {
               Email
             </label>
             <input
+              maxLength={FIELD_LIMITS.email}
               id="signup-email"
               autoComplete="email"
               type="email"
@@ -79,6 +83,7 @@ export default function SignupPage() {
               Password
             </label>
             <input
+              maxLength={FIELD_LIMITS.password}
               id="signup-password"
               autoComplete="new-password"
               type="password"
