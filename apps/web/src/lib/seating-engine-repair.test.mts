@@ -195,7 +195,7 @@ function mulberry32(seed: number) {
   };
 }
 
-test("2,000 random weddings: hard rules always hold, and the repair never seats fewer guests", () => {
+test("2,000 random weddings: hard rules always hold, and the repair never seats fewer people", () => {
   const rnd = mulberry32(196);
   const ri = (n: number) => Math.floor(rnd() * n);
   const pick = <T,>(a: readonly T[]) => a[ri(a.length)];
@@ -249,11 +249,14 @@ test("2,000 random weddings: hard rules always hold, and the repair never seats 
     if (result.errors.length > 0) continue;
     assert.deepEqual(generateSeatingPlan(guests, rels, tables, mix), result, `not deterministic: ${input}`);
     const plain = generateSeatingPlan(guests, rels, tables, mix, { repair: false });
+    // The engine keeps the plan that leaves the fewest PEOPLE unseated (party sizes), so that is
+    // what the repair must never make worse.
+    const people = (ids: string[]) => ids.reduce((n, id) => n + (guests.find((g) => g.id === id)?.headcount ?? 0), 0);
     assert.ok(
-      result.unassignedGuestIds.length <= plain.unassignedGuestIds.length,
-      `repair seated fewer guests: ${input}`
+      people(result.unassignedGuestIds) <= people(plain.unassignedGuestIds),
+      `repair seated fewer people: ${input}`
     );
-    if (result.unassignedGuestIds.length < plain.unassignedGuestIds.length) repairedMore++;
+    if (people(result.unassignedGuestIds) < people(plain.unassignedGuestIds)) repairedMore++;
 
     const seatedAt = new Map(result.assignments.map((a) => [a.guestId, a.tableId]));
     const unseated = new Set(result.unassignedGuestIds);

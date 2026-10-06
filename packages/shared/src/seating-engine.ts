@@ -997,14 +997,19 @@ export function generateSeatingPlan(
   }
 
   // TS-196: if the normal order leaves anyone unseated, also try a repaired plan, the plain
-  // largest-first order, and that order repaired, and keep whichever seats the most guests (a tie
+  // largest-first order, and that order repaired, and keep whichever seats the most people (a tie
   // keeps the earlier one, so the normal plan wins unless another really seats more). Every one of
   // them keeps every hard rule, so the choice only ever seats more people.
   const primary = runPlacement("accessibleFirst", null);
   let best = primary;
   if (primary.unassignedGuestIds.length > 0 && options.repair !== false) {
+    // Compared by people left unseated (party sizes), then by parties -- a plan that leaves one
+    // party of 6 unseated is worse than one that leaves two singles.
+    const peopleUnseated = (x: Attempt) =>
+      x.unassignedGuestIds.reduce((sum, id) => sum + (guestById.get(id)?.headcount ?? 0), 0);
     const better = (a: Attempt) => {
-      if (a.unassignedGuestIds.length < best.unassignedGuestIds.length) best = a;
+      const diff = peopleUnseated(a) - peopleUnseated(best);
+      if (diff < 0 || (diff === 0 && a.unassignedGuestIds.length < best.unassignedGuestIds.length)) best = a;
     };
     const repaired = repair(primary);
     if (repaired) better(runPlacement("accessibleFirst", repaired));
