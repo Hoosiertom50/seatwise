@@ -1,6 +1,7 @@
 import { SignJWT, jwtVerify } from "jose";
 import type { NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
+import { appBaseUrl } from "./app-url";
 
 const JWT_SECRET = process.env.JWT_SECRET;
 
@@ -38,23 +39,23 @@ export const AUTH_COOKIE_NAME = "seatwise_token";
 // issue (a settle-wait candidate fix was tried and disproved first -- see the TS-62 spike branch's
 // own commit history for that ruled-out iteration).
 //
-// Derived from APP_URL instead -- the same env var and fallback the rsvp-link and invites routes
-// already use for this app's own canonical URL (apps/web/src/app/api/v1/weddings/[weddingId]/
-// guests/[guestId]/rsvp-link/route.ts, .../invites/route.ts) -- so this reflects the scheme the app
-// is actually being served over rather than guessing from the build mode. Unset in CI (defaults to
-// the same "http://localhost:3000" those two routes fall back to), so this resolves to `false`
-// there; a real deployment already sets APP_URL to its own https:// origin for those two routes, so
-// this resolves to `true` there with no new config needed.
+// Derived from the app's own address instead (TS-178: appBaseUrl in ./app-url, the same one every
+// emailed link uses), so this reflects the scheme the app is actually being served over rather than
+// guessing from the build mode. In CI that's http://localhost:3000, so this resolves to `false`
+// there; a real deployment sets APP_URL to its own https:// origin, so this resolves to `true`.
 let warnedNoAppUrl = false;
 export function isSecureCookieContext(): boolean {
-  // TS-149: on a real deployment APP_URL must be set, or the cookie quietly loses Secure and
-  // emailed links point at localhost -- say so loudly in the logs.
-  if (!process.env.APP_URL && process.env.NETLIFY && !warnedNoAppUrl) {
-    warnedNoAppUrl = true;
-    console.error("APP_URL is not set: session cookies won't be marked Secure and emailed links will be wrong.");
+  try {
+    return appBaseUrl().startsWith("https://");
+  } catch (err) {
+    // TS-149 / TS-178: a production build without a proper APP_URL -- say so loudly in the logs,
+    // and keep the cookie Secure (the safe choice for a real site) rather than failing every sign-in.
+    if (!warnedNoAppUrl) {
+      warnedNoAppUrl = true;
+      console.error(`${err instanceof Error ? err.message : String(err)} Session cookies stay Secure; emailed links won't work.`);
+    }
+    return true;
   }
-  const appUrl = process.env.APP_URL || "http://localhost:3000";
-  return appUrl.startsWith("https://");
 }
 
 export interface TokenPayload {

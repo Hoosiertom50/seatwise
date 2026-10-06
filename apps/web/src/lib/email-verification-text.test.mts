@@ -5,12 +5,12 @@ import assert from "node:assert/strict";
 import { confirmEmailFirstMessage, confirmEmailToAcceptMessage, verificationEmailBody } from "./email-verification-text";
 
 test("the confirmation email says what waits on confirming, notifications included", () => {
-  const body = verificationEmailBody({ name: "Tom", link: "https://seatwise.example/verify-email/abc", hours: 48 });
-  assert.match(body, /^Hi Tom,/);
+  const body = verificationEmailBody({ link: "https://seatwise.example/verify-email/abc", hours: 48 });
+  // TS-178: no name in the greeting -- whoever signed up typed it, and may not own the address.
+  assert.match(body, /^Hi,\n/);
   assert.match(body, /https:\/\/seatwise\.example\/verify-email\/abc/);
   assert.match(body, /works for 48 hours/);
   assert.match(body, /won't send invites or RSVP emails from your account, or email you notifications\./);
-  assert.match(verificationEmailBody({ name: null, link: "x", hours: 48 }), /^Hi,/);
 });
 
 test("the confirm-first messages never claim a link was sent", () => {

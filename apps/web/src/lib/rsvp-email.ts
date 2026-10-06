@@ -2,10 +2,12 @@ import { ensureGuestRsvpToken, regenerateGuestRsvpToken, sendEmailNotification, 
 import { isRsvpCutoffPast, type RsvpEmailOutcomeDTO } from "@seatwise/shared";
 import { releaseEmailSend, reserveEmailSend, RSVP_RESEND_COOLDOWN_SECONDS } from "./rate-limit";
 import { rsvpEmailText } from "./outgoing-email-text";
+import { appBaseUrl } from "./app-url";
 
 // TS-17 / TS-143: email a guest their own RSVP link. Shared by the "RSVP link" button and by
 // adding a guest with an email (or giving an existing guest their first email), so the message is
-// identical either way. Never throws: a failed email is reported, never fatal.
+// identical either way. A failed email is reported, never fatal (TS-178: it throws only when the
+// live site has no proper APP_URL to build the link from).
 //
 // TS-156: `senderId` is the signed-in planner; once they've sent too many RSVP emails in a short
 // time, the link is still made but not emailed (`emailLimited`), so they can send it themselves.
@@ -26,12 +28,14 @@ export async function sendGuestRsvpLink(
   recipientLimited?: boolean;
   rsvpClosed?: boolean;
 } | null> {
+  // TS-178: worked out first -- on a live site without a proper APP_URL this throws before any
+  // link is changed (see ./app-url).
+  const appUrl = appBaseUrl();
   const token = regenerate
     ? await regenerateGuestRsvpToken(guest.id, wedding.id)
     : await ensureGuestRsvpToken(guest.id, wedding.id);
   if (!token) return null;
 
-  const appUrl = process.env.APP_URL || "http://localhost:3000";
   const url = `${appUrl}/rsvp/${token}`;
   if (!guest.email) return { url, emailed: false, emailFailed: false };
   // TS-177 (Tom's decision): once the RSVP cutoff has passed, the link would only open a "closed"
@@ -73,12 +77,13 @@ export async function sendGuestRsvpLink(
   });
   const result = await sendEmailNotification(guest.email, subject, text);
   const emailed = emailDelivered(result);
-  if (!emailed) await notSent();
-  if (result === "recipient-limited") {
-    // TS-171: nothing went out, so it doesn't use up the planner's allowance either.
+  if (!emailed) {
+    await notSent();
+    // TS-171 / TS-178: nothing went out -- whatever the reason (this address's share used up, the
+    // day's limit, a failed send) -- so it doesn't use up the planner's allowance either.
     await releaseEmailSend("rsvpEmails", sender.id);
-    return { url, emailed: false, emailFailed: true, recipientLimited: true };
   }
+  if (result === "recipient-limited") return { url, emailed: false, emailFailed: true, recipientLimited: true };
   return { url, emailed, emailFailed: !emailed };
 }
 

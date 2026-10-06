@@ -7,6 +7,8 @@ import {
   NO_WEB_ADDRESS_MESSAGE,
   looksLikePhoneNumber,
   NO_PHONE_NUMBER_MESSAGE,
+  hasMixedScriptWord,
+  NO_MIXED_SCRIPT_MESSAGE,
 } from "../validation";
 
 // TS-168: the rules for a wedding's name, wherever one is given (creating, renaming, copying).
@@ -19,7 +21,9 @@ export const weddingNameField = z
   // TS-156: the wedding name goes into RSVP and invite emails.
   .refine((v) => !looksLikeWebAddress(v), NO_WEB_ADDRESS_MESSAGE)
   // TS-171: nor can it carry a phone number.
-  .refine((v) => !looksLikePhoneNumber(v), NO_PHONE_NUMBER_MESSAGE);
+  .refine((v) => !looksLikePhoneNumber(v), NO_PHONE_NUMBER_MESSAGE)
+  // TS-178: nor mix look-alike letters from different alphabets in one word.
+  .refine((v) => !hasMixedScriptWord(v), NO_MIXED_SCRIPT_MESSAGE);
 
 /** TS-168: the default name for a copy -- within the length limit and the allowed characters. */
 export function copiedWeddingName(original: string): string {

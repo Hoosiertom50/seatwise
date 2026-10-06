@@ -13,6 +13,8 @@ import {
   PERSON_NAME_MESSAGE,
   looksLikeWebAddress,
   NO_WEB_ADDRESS_MESSAGE,
+  hasMixedScriptWord,
+  NO_MIXED_SCRIPT_MESSAGE,
   type GuestImportMapping,
   type GuestImportRow,
   type GuestImportRowPreview,
@@ -87,6 +89,9 @@ function parseRow(
     } else if (looksLikeWebAddress(firstName)) {
       // TS-168: same rule as adding a guest by hand (names go into emails).
       errors.push(`First name "${firstName}" is invalid: ${NO_WEB_ADDRESS_MESSAGE.toLowerCase()}.`);
+    } else if (hasMixedScriptWord(firstName)) {
+      // TS-178: same rule as adding a guest by hand.
+      errors.push(`First name "${firstName}" is invalid: ${NO_MIXED_SCRIPT_MESSAGE.toLowerCase()}.`);
     } else {
       data.firstName = firstName;
     }
@@ -96,6 +101,8 @@ function parseRow(
       errors.push(`Last name "${lastName}" is invalid: ${PERSON_NAME_MESSAGE.toLowerCase()}.`);
     } else if (looksLikeWebAddress(lastName)) {
       errors.push(`Last name "${lastName}" is invalid: ${NO_WEB_ADDRESS_MESSAGE.toLowerCase()}.`);
+    } else if (hasMixedScriptWord(lastName)) {
+      errors.push(`Last name "${lastName}" is invalid: ${NO_MIXED_SCRIPT_MESSAGE.toLowerCase()}.`);
     } else {
       data.lastName = lastName;
     }

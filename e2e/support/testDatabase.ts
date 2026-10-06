@@ -453,3 +453,75 @@ export async function setAccountEmailCount(email: string, counter: AccountEmailC
     [`${prefix}${await testAccountId(email)}`, currentWindowStart(windowSeconds), count],
   );
 }
+
+/** TS-178: sets one counter's value in its current window. Every caller below checks first that the
+ * key belongs to a test address or test account. */
+async function setCounter(key: string, windowSeconds: number, count: number): Promise<void> {
+  await testPool().query(
+    `INSERT INTO "rate_limit_counters" (key, "windowStart", count) VALUES ($1, $2, $3)
+     ON CONFLICT (key, "windowStart") DO UPDATE SET count = $3`,
+    [key, currentWindowStart(windowSeconds), count],
+  );
+}
+
+async function readCounter(key: string, windowSeconds: number): Promise<number> {
+  const { rows } = await testPool().query<{ count: number }>(
+    `SELECT count FROM "rate_limit_counters" WHERE key = $1 AND "windowStart" = $2`,
+    [key, currentWindowStart(windowSeconds)],
+  );
+  return rows[0]?.count ?? 0;
+}
+
+function requireTestEmail(email: string): string {
+  const lowered = email.trim().toLowerCase();
+  if (!lowered.endsWith(TEST_ACCOUNT_EMAIL_DOMAIN)) throw new Error(`testDatabase: ${email} isn't a test address.`);
+  return lowered;
+}
+
+/**
+ * TS-178: sets how many emails a test address has had from Seatwise today (the per-address daily
+ * cap, EMAILS_PER_RECIPIENT_PER_DAY in packages/db/src/email.ts), so a test can reach the cap
+ * without sending them. Test addresses (@example.invalid, no "+tag") only.
+ */
+export async function setEmailsToAddressToday(email: string, count: number): Promise<void> {
+  const address = requireTestEmail(email);
+  if (address.includes("+")) throw new Error("testDatabase: use a test address without a +tag.");
+  await setCounter(`email:to:day:${address}`, 86_400, count);
+}
+
+/** TS-178: how many emails a test address has had from Seatwise today (see setEmailsToAddressToday). */
+export async function emailsToAddressToday(email: string): Promise<number> {
+  return readCounter(`email:to:day:${requireTestEmail(email)}`, 86_400);
+}
+
+/**
+ * TS-178: sets a test account's count of wrong passwords from everywhere in the current window
+ * (LOGIN_LIMITS.failuresPerAccount in apps/web/src/lib/rate-limit.ts) -- `count` at that limit
+ * locks the account, as many wrong guesses would.
+ */
+export async function setSignInFailuresForAccount(email: string, count: number): Promise<void> {
+  await testAccountId(email); // throws unless it's a test account
+  await setCounter(`login:account:${requireTestEmail(email)}`, 900, count);
+}
+
+/** TS-178: the "Forgot password?" counters for one test email (PASSWORD_RESET_LIMITS), by window. */
+export type PasswordResetCounter = "per-email-15-minutes" | "per-email-day";
+const PASSWORD_RESET_COUNTERS: Record<PasswordResetCounter, { prefix: string; windowSeconds: number }> = {
+  "per-email-15-minutes": { prefix: "pw-reset:email:", windowSeconds: 900 },
+  "per-email-day": { prefix: "pw-reset:email:day:", windowSeconds: 86_400 },
+};
+
+export async function passwordResetCount(email: string, counter: PasswordResetCounter): Promise<number> {
+  const { prefix, windowSeconds } = PASSWORD_RESET_COUNTERS[counter];
+  return readCounter(`${prefix}${requireTestEmail(email)}`, windowSeconds);
+}
+
+export async function setPasswordResetCount(email: string, counter: PasswordResetCounter, count: number): Promise<void> {
+  const { prefix, windowSeconds } = PASSWORD_RESET_COUNTERS[counter];
+  await setCounter(`${prefix}${requireTestEmail(email)}`, windowSeconds, count);
+}
+
+/** TS-178: how many weddings a test account has created today (WEDDING_CREATE_LIMITS). */
+export async function weddingsCreatedToday(email: string): Promise<number> {
+  return readCounter(`weddings:create:day:${await testAccountId(email)}`, 86_400);
+}
