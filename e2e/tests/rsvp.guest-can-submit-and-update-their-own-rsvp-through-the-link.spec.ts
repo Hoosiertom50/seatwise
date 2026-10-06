@@ -108,6 +108,16 @@ defineQualityTest(
         await expect(guestPage.locator("body")).not.toContainText(PLANNER_NOTE);
       });
 
+      await test.step("Assert (TS-191): a guest who hasn't answered sees neither answer picked, and Submit without picking one sends nothing and asks for a choice", async () => {
+        expect(await rsvpPage.chosenAnswer()).toBeNull();
+        await rsvpPage.pressSubmit();
+        // The page only shows this when it stopped before sending anything.
+        await expect(rsvpPage.chooseAnswerFirstError()).toBeVisible();
+        await expect(rsvpPage.successBanner()).toHaveCount(0);
+        const res = await guestPage.request.get(`/api/v1/rsvp/${rsvpToken}`);
+        expect(((await res.json()) as { rsvp: { rsvpStatus: string } }).rsvp.rsvpStatus).toBe("PENDING");
+      });
+
       await test.step("Act + Assert: the guest submits an attending RSVP with party details, and sees the success banner", async () => {
         await rsvpPage.submit({
           attending: "CONFIRMED",

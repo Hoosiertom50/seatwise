@@ -11,7 +11,7 @@ import type {
   WeddingDTO,
   WeddingInviteDTO,
 } from "@seatwise/shared";
-import { useUnsavedChanges } from "@/lib/unsaved-changes";
+import { useUnsavedChanges, useUnsavedFields } from "@/lib/unsaved-changes";
 
 // TS-179: guest RSVP and vendor links someone copied while they had access aren't tied to them,
 // so taking access away doesn't stop those links -- the owner's reset below does.
@@ -105,18 +105,22 @@ export function CollaboratorsTab({
   // TS-182: the settings that save when you leave the box count too while they differ from what's
   // saved (a reload or Back with a half-typed name or note used to lose it without a word). Only
   // the owner sees these boxes.
+  // TS-191: the boxes that save when you leave them (name, side labels, note, RSVP cutoff) count
+  // only while they are being typed in. Leaving one starts its save, so it stops counting right
+  // then -- before, it counted until the save answered, and clicking another tab straight after
+  // typing asked "leave and lose them?" about something that was already being saved. Date and
+  // venue only save with their button, so they count while changed, until Save is pressed.
+  const settingFields = useUnsavedFields();
+  useEffect(() => {
+    if (!isOwner) settingFields.clearAll();
+  }, [isOwner, settingFields]);
   useUnsavedChanges(
     "collaborators",
     isOwner &&
       (!!email.trim() ||
         (!!wedding &&
-          (eventDate !== (wedding.eventDate ?? "") ||
-            venueName !== (wedding.venueName ?? "") ||
-            weddingName.trim() !== wedding.name ||
-            (sideLabel1.trim() || "Bride") !== wedding.sideLabel1 ||
-            (sideLabel2.trim() || "Groom") !== wedding.sideLabel2 ||
-            note.trim() !== (wedding.note ?? "") ||
-            rsvpCutoffDate.trim() !== (wedding.rsvpCutoffDate ?? ""))))
+          !savingDetails &&
+          (eventDate !== (wedding.eventDate ?? "") || venueName !== (wedding.venueName ?? ""))))
   );
 
   useEffect(() => {
@@ -587,8 +591,14 @@ export function CollaboratorsTab({
                 aria-label="Wedding name"
                 className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm disabled:opacity-50"
                 value={weddingName}
-                onChange={(e) => setWeddingName(e.target.value)}
-                onBlur={onSaveName}
+                onChange={(e) => {
+                  setWeddingName(e.target.value);
+                  settingFields.markDirty("setting-name", e.target.value.trim() !== wedding.name);
+                }}
+                onBlur={() => {
+                  settingFields.markDirty("setting-name", false);
+                  void onSaveName();
+                }}
                 maxLength={200}
                 disabled={savingName}
               />
@@ -673,8 +683,14 @@ export function CollaboratorsTab({
                     id="side-label-1"
                     className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
                     value={sideLabel1}
-                    onChange={(e) => setSideLabel1(e.target.value)}
-                    onBlur={() => onSaveSideLabel(1)}
+                    onChange={(e) => {
+                      setSideLabel1(e.target.value);
+                      settingFields.markDirty("setting-side-1", (e.target.value.trim() || "Bride") !== wedding.sideLabel1);
+                    }}
+                    onBlur={() => {
+                      settingFields.markDirty("setting-side-1", false);
+                      void onSaveSideLabel(1);
+                    }}
                     maxLength={40}
                   />
                 </div>
@@ -686,8 +702,14 @@ export function CollaboratorsTab({
                     id="side-label-2"
                     className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
                     value={sideLabel2}
-                    onChange={(e) => setSideLabel2(e.target.value)}
-                    onBlur={() => onSaveSideLabel(2)}
+                    onChange={(e) => {
+                      setSideLabel2(e.target.value);
+                      settingFields.markDirty("setting-side-2", (e.target.value.trim() || "Groom") !== wedding.sideLabel2);
+                    }}
+                    onBlur={() => {
+                      settingFields.markDirty("setting-side-2", false);
+                      void onSaveSideLabel(2);
+                    }}
                     maxLength={40}
                   />
                 </div>
@@ -709,8 +731,14 @@ export function CollaboratorsTab({
                 rows={3}
                 maxLength={2000}
                 value={note}
-                onChange={(e) => setNote(e.target.value)}
-                onBlur={onSaveNote}
+                onChange={(e) => {
+                  setNote(e.target.value);
+                  settingFields.markDirty("setting-note", e.target.value.trim() !== (wedding.note ?? ""));
+                }}
+                onBlur={() => {
+                  settingFields.markDirty("setting-note", false);
+                  void onSaveNote();
+                }}
                 disabled={savingNote}
                 placeholder="Nothing noted yet"
               />
@@ -730,8 +758,14 @@ export function CollaboratorsTab({
                 type="date"
                 className="w-full max-w-xs rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm disabled:opacity-50"
                 value={rsvpCutoffDate}
-                onChange={(e) => setRsvpCutoffDate(e.target.value)}
-                onBlur={(e) => void onSaveRsvpCutoff(e.currentTarget)}
+                onChange={(e) => {
+                  setRsvpCutoffDate(e.target.value);
+                  settingFields.markDirty("setting-rsvp-cutoff", e.target.value.trim() !== (wedding.rsvpCutoffDate ?? ""));
+                }}
+                onBlur={(e) => {
+                  settingFields.markDirty("setting-rsvp-cutoff", false);
+                  void onSaveRsvpCutoff(e.currentTarget);
+                }}
                 disabled={savingRsvpCutoff}
               />
             </div>
@@ -753,9 +787,10 @@ export function CollaboratorsTab({
               key={c.id}
               className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-neutral-200 dark:border-neutral-700 px-4 py-3"
             >
-              <div>
-                <p className="font-medium">{c.userName}</p>
-                {c.userEmail && <p className="text-sm text-neutral-500 dark:text-neutral-400">{c.userEmail}</p>}
+              {/* TS-191: a long name or address wraps instead of pushing the controls off a phone screen. */}
+              <div className="min-w-0">
+                <p className="break-words font-medium [overflow-wrap:anywhere]">{c.userName}</p>
+                {c.userEmail && <p className="break-all text-sm text-neutral-500 dark:text-neutral-400">{c.userEmail}</p>}
               </div>
               {isOwner ? (
                 <div className="flex flex-wrap items-center gap-2">

@@ -100,7 +100,9 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
   // TS-114: per-vendor feedback after a share-link action ("Link copied", or the bare link when
   // the clipboard isn't available), keyed by vendor id.
   const [shareResult, setShareResult] = useState<Record<string, string>>({});
-  const [shareBusy, setShareBusy] = useState<string | null>(null);
+  // TS-191: every vendor whose link is being fetched -- one at a time used to mean a second
+  // vendor's request cleared the first one's busy state while it was still working.
+  const [shareBusy, setShareBusy] = useState<ReadonlySet<string>>(() => new Set());
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editVendor, setEditVendor] = useState<Partial<VendorDTO>>({});
@@ -126,6 +128,13 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
     canEdit && !!(name.trim() || contactName.trim() || contactEmail.trim() || contactPhone.trim() || cost || contractNotes.trim() || arrivalTime || editChanged || budgetEdited)
   );
   const [saving, setSaving] = useState(false);
+  // TS-191: Edit access taken away while a vendor's edit was open -- it can't be saved any more,
+  // so it closes (and stops counting as unsaved).
+  useEffect(() => {
+    if (canEdit) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- TS-191: closes the edit box when Edit access goes.
+    setEditingId(null);
+  }, [canEdit]);
 
   useEffect(() => {
     (async () => {
@@ -340,7 +349,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
   // TS-114: get (or, with regenerate, replace) a vendor's private read-only link and copy it.
   async function onShareLink(vendorId: string, regenerate: boolean) {
     setError(null);
-    setShareBusy(vendorId);
+    setShareBusy((cur) => new Set(cur).add(vendorId));
     try {
       const { link } = await api.post<{ link: VendorShareLinkDTO }>(
         `/api/v1/weddings/${weddingId}/vendors/${vendorId}/share-link`,
@@ -361,7 +370,11 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't get that vendor's link.");
     } finally {
-      setShareBusy(null);
+      setShareBusy((cur) => {
+        const next = new Set(cur);
+        next.delete(vendorId);
+        return next;
+      });
     }
   }
 
@@ -727,20 +740,31 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
                 </div>
               ) : (
                 <div className="flex flex-wrap items-start justify-between gap-2">
-                  <div>
-                    <p className="font-medium">
+                  {/* TS-191: long unbroken names, addresses and notes wrap instead of running off a
+                      phone screen (an email address may break anywhere). */}
+                  <div className="min-w-0">
+                    <p className="break-words font-medium [overflow-wrap:anywhere]">
                       {v.name}
                       <span className="ml-2 rounded bg-neutral-100 dark:bg-neutral-800 px-1.5 py-0.5 text-xs text-neutral-600 dark:text-neutral-300">
                         {v.category === "OTHER" && v.categoryOther ? v.categoryOther : CATEGORY_LABEL[v.category]}
                       </span>
                     </p>
-                    <p className="text-sm text-neutral-500 dark:text-neutral-400">
-                      {[v.contactName, v.contactEmail, v.contactPhone].filter(Boolean).join(" · ") || "No contact info"}
+                    <p className="break-words text-sm text-neutral-500 dark:text-neutral-400 [overflow-wrap:anywhere]">
+                      {v.contactName || v.contactEmail || v.contactPhone
+                        ? [v.contactName, v.contactEmail, v.contactPhone]
+                            .filter((part): part is string => !!part)
+                            .map((part, i) => (
+                              <span key={i} className={part === v.contactEmail ? "break-all" : undefined}>
+                                {i > 0 ? " · " : ""}
+                                {part}
+                              </span>
+                            ))
+                        : "No contact info"}
                     </p>
                     {v.arrivalTime && (
                       <p className="text-sm text-neutral-500 dark:text-neutral-400">Arrives {formatClockTime(v.arrivalTime)}</p>
                     )}
-                    {v.contractNotes && <p className="mt-1 whitespace-pre-line text-sm text-neutral-500 dark:text-neutral-400">{v.contractNotes}</p>}
+                    {v.contractNotes && <p className="mt-1 whitespace-pre-line break-words text-sm text-neutral-500 dark:text-neutral-400 [overflow-wrap:anywhere]">{v.contractNotes}</p>}
                     {shareResult[v.id] && (
                       <p className="mt-1 break-all text-xs text-neutral-500 dark:text-neutral-400">{shareResult[v.id]}</p>
                     )}
@@ -753,7 +777,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
                             vendors' names and arrival times -- never costs or notes). */}
                         <button
                           onClick={() => onShareLink(v.id, false)}
-                          disabled={shareBusy === v.id}
+                          disabled={shareBusy.has(v.id)}
                           aria-label={`Share link for ${v.name}`}
                           title="Copies a private link to a read-only page for this vendor: the timeline, their details, and the other vendors' arrival times. Never costs or notes."
                           className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50"
@@ -764,7 +788,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
                           <>
                             <button
                               onClick={() => onShareLink(v.id, true)}
-                              disabled={shareBusy === v.id}
+                              disabled={shareBusy.has(v.id)}
                               aria-label={`New link for ${v.name}`}
                               title="Makes a new link; the old one stops working."
                               className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50"

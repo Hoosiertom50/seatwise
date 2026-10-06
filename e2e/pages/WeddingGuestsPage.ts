@@ -192,6 +192,21 @@ export class WeddingGuestsPage extends BasePage {
   previewImportButtonLocator() {
     return this.previewImportButton();
   }
+  /** TS-191: the file chooser itself, the import's Cancel button, and a preview's summary line --
+   * for checking what can be changed while a preview is being checked. */
+  importFileInputLocator() {
+    return this.importFileInput();
+  }
+  cancelImportButton() {
+    return this.page.getByRole("button", { name: "Cancel", exact: true });
+  }
+  importPreviewSummary() {
+    return this.page.getByText(/^\d+ new, \d+ updating,/);
+  }
+  /** TS-191: an import error line (a refused file, a failed preview), matched by its text. */
+  importError(text: string | RegExp) {
+    return this.page.getByRole("alert").filter({ hasText: text });
+  }
   async cancelImport(): Promise<void> {
     await this.page.getByRole("button", { name: "Cancel", exact: true }).click();
   }

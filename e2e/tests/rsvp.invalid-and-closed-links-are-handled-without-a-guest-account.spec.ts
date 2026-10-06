@@ -99,6 +99,10 @@ defineQualityTest(
           // TS-177: the deadline is shown as MM-DD-YYYY.
           await expect(rsvpPage.closedMessage()).toContainText("09-05-2026");
           expect(await rsvpPage.isFormDisabled()).toBe(true);
+          // TS-191: the guest never answered (still Pending) -- neither answer is shown as picked,
+          // and the page says there's no response on file rather than showing "attending".
+          expect(await rsvpPage.chosenAnswer()).toBeNull();
+          await expect(rsvpPage.noResponseOnFile()).toBeVisible();
           await guestPage.close();
         });
       } finally {

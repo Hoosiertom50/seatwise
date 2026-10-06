@@ -383,8 +383,13 @@ export class PlanTabPage extends BasePage {
    * to its ready label, which only happens after the request settles either way (success or a
    * reported conflict), so callers never race the async request. */
   async generate(saveAsDraft = false): Promise<void> {
+    // TS-189: the checkbox is only offered once a plan exists (the first plan is always current),
+    // so wait for the tab to finish loading before deciding whether it's there.
+    await this.generateButton().waitFor();
     const checkbox = this.saveAsDraftCheckbox();
-    if ((await checkbox.isChecked()) !== saveAsDraft) {
+    if ((await checkbox.count()) === 0) {
+      if (saveAsDraft) throw new Error("PlanTabPage.generate: no comparison-draft choice before the first plan exists.");
+    } else if ((await checkbox.isChecked()) !== saveAsDraft) {
       await checkbox.click();
     }
     await this.generateButton().click();
@@ -417,6 +422,21 @@ export class PlanTabPage extends BasePage {
   /** TS-179: shown after Generate or Restore by someone who can't replace an approved plan. */
   savedAsDraftNotice() {
     return this.page.getByRole("status").filter({ hasText: "saved as a comparison draft" });
+  }
+
+  /** TS-189: shown when a newer plan was made elsewhere and the tab switched to it. */
+  newerPlanNotice() {
+    return this.page.getByRole("status").filter({ hasText: "A newer plan was made — you're now looking at it." });
+  }
+
+  /** TS-189: the open version's badge, "Version N — complete/incomplete". */
+  openVersionBadge(versionNumber: number) {
+    return this.page.getByText(new RegExp(`^Version ${versionNumber} — (complete|incomplete)$`));
+  }
+
+  /** TS-189: the "Save as comparison draft" choice (offered only once a plan exists). */
+  comparisonDraftChoice() {
+    return this.saveAsDraftCheckbox();
   }
 
   /** TS-179: the approved plan's PDF export links (shown only on the current, approved version). */

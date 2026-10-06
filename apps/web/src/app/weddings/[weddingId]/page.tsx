@@ -77,19 +77,45 @@ export default function WeddingDetailPage() {
   const [tab, setTab] = useState<Tab>("guests");
   // TS-159: a tab change waiting on "you have unsaved changes" -- see goToTab.
   // TS-170: the browser's Back button with unsaved input asks first, like the links do.
-  const unsaved = useUnsavedChangesProvider({ onBackRequested: () => setPendingHref(BACK) });
+  const unsaved = useUnsavedChangesProvider({
+    onBackRequested: () => {
+      rememberOpener();
+      setPendingHref(BACK);
+    },
+  });
   const [pendingTab, setPendingTab] = useState<Tab | null>(null);
   // TS-166: leaving the wedding page itself ("Back to dashboard") asks the same question; the
   // browser's own prompt only covers closing or reloading the page, not links inside the app.
   const [pendingHref, setPendingHref] = useState<string | null>(null);
+  // TS-191: the control that brought up the "unsaved changes" question, so focus can go back to it
+  // when the question closes (it used to fall to the top of the page).
+  const questionOpener = useRef<HTMLElement | null>(null);
+  function rememberOpener(preferred?: HTMLElement | null) {
+    const active = document.activeElement;
+    questionOpener.current =
+      preferred ?? (active instanceof HTMLElement && active !== document.body ? active : null);
+  }
+  function restoreFocus(target: HTMLElement | null) {
+    setTimeout(() => {
+      if (target && target.isConnected) target.focus();
+    }, 0);
+  }
   function goToTab(next: Tab) {
     if (next === tab) return;
-    if (unsaved.hasUnsaved()) setPendingTab(next);
-    else setTab(next);
+    if (unsaved.hasUnsaved()) {
+      // A tab click asks about that tab, so that tab is the opener (Safari doesn't focus a clicked
+      // button); anything else (Getting started) is whatever has focus.
+      const clickedTab = document.getElementById(`tab-${next}`);
+      const active = document.activeElement;
+      const fromTabList = active instanceof HTMLElement && active.getAttribute("role") === "tab";
+      rememberOpener(fromTabList || active === document.body ? clickedTab : undefined);
+      setPendingTab(next);
+    } else setTab(next);
   }
   /** True to follow the link now; false when the question is being asked first. */
   function requestLeavePage(href: string): boolean {
     if (!unsaved.hasUnsaved()) return true;
+    rememberOpener();
     setPendingHref(href);
     return false;
   }
@@ -113,6 +139,9 @@ export default function WeddingDetailPage() {
     unsaved.clear();
     setTab(pendingTab);
     setPendingTab(null);
+    // TS-191: the tab that was asked for has focus once it opens.
+    questionOpener.current = null;
+    restoreFocus(document.getElementById(`tab-${pendingTab}`));
   }
   // TS-182: arrow keys move along the tab list (and open that tab, asking first if needed).
   function onTabKeyDown(e: React.KeyboardEvent<HTMLDivElement>) {
@@ -131,6 +160,10 @@ export default function WeddingDetailPage() {
   function stayOnTab() {
     setPendingTab(null);
     setPendingHref(null);
+    // TS-191: back to whatever brought the question up -- the clicked tab, the link, or the field
+    // that was being typed in when Back was pressed.
+    restoreFocus(questionOpener.current);
+    questionOpener.current = null;
   }
   const [startCounts, setStartCounts] = useState<GettingStartedCounts | null>(null);
   // FR-1.6: "a change [to a collaborator's access] takes effect within five seconds, even for a
@@ -308,7 +341,7 @@ export default function WeddingDetailPage() {
           </button>
         </div>
       )}
-      <h1 className="mt-2 mb-1 text-2xl font-semibold">{wedding?.name}</h1>
+      <h1 className="mt-2 mb-1 text-2xl font-semibold break-words [overflow-wrap:anywhere]">{wedding?.name}</h1>
       <p className="mb-6 text-sm text-neutral-500 dark:text-neutral-400">
         {wedding?.eventDate ? formatDate(wedding.eventDate) : "No date set"}
         {wedding?.venueName ? ` · ${wedding.venueName}` : ""}

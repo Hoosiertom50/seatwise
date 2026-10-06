@@ -36,6 +36,11 @@ export class CollaboratorsTabPage extends BasePage {
     await this.page.getByRole("button", { name: "Send invite", exact: true }).click();
   }
 
+  /** TS-191: the invite form's email box (it only saves with Send invite, so typing in it is unsaved). */
+  inviteEmailInput() {
+    return this.page.getByLabel("Email address", { exact: true });
+  }
+
   inviteSentMessage(email: string) {
     return this.page.getByText(`Invite sent to ${email}.`, { exact: true });
   }
