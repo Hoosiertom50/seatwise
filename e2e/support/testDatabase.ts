@@ -188,8 +188,8 @@ export async function rsvpNotificationEmailRequests(guestId: string): Promise<nu
   await storedGuestRsvpLink(guestId); // throws unless the guest is on a test wedding
   const { rows } = await testPool().query<{ n: number }>(
     `SELECT COALESCE(SUM(count), 0)::int AS n FROM "rate_limit_counters"
-     WHERE key = $1 AND "windowStart" > $2`,
-    [`email:rsvp-notify:${guestId}`, new Date(Date.now() - 3_600_000)],
+     WHERE key = $1 AND "windowStart" > $2::timestamp`,
+    [`email:rsvp-notify:${guestId}`, utc(new Date(Date.now() - 3_600_000))],
   );
   return rows[0].n;
 }
@@ -200,12 +200,12 @@ export async function rsvpNotificationEmailRequests(guestId: string): Promise<nu
  */
 export async function rsvpLinkEmailTimes(guestId: string): Promise<Date[]> {
   await storedGuestRsvpLink(guestId); // throws unless the guest is on a test wedding
-  const { rows } = await testPool().query<{ windowStart: Date }>(
-    `SELECT "windowStart" FROM "rate_limit_counters"
+  const { rows } = await testPool().query<{ startMs: number }>(
+    `SELECT (EXTRACT(EPOCH FROM "windowStart") * 1000)::float8 AS "startMs" FROM "rate_limit_counters"
      WHERE key LIKE $1 AND count > 0 ORDER BY "windowStart"`,
     [`email:rsvp-link:${guestId}:%`],
   );
-  return rows.map((r) => new Date(r.windowStart));
+  return rows.map((r) => new Date(Number(r.startMs)));
 }
 
 /**
@@ -302,7 +302,7 @@ export async function weddingNotificationEmailsThisHour(weddingId: string): Prom
   if (!owned[0]) throw new Error(`testDatabase: no test wedding ${weddingId}.`);
   const { rows } = await testPool().query<{ n: number }>(
     `SELECT COALESCE(SUM(count), 0)::int AS n FROM "rate_limit_counters"
-     WHERE key = $1 AND "windowStart" > now() - interval '1 hour'`,
+     WHERE key = $1 AND "windowStart" > (now() AT TIME ZONE 'UTC') - interval '1 hour'`,
     [`email:notify-wedding:3600:${weddingId}`],
   );
   return rows[0].n;
@@ -614,9 +614,9 @@ export async function useUpAccountEmailAllowance(address: string, limit: number,
   if (!/^198\.(18|19)\.\d+\.\d+$/.test(address)) throw new Error(`testDatabase: ${address} isn't a test address.`);
   const day = 86_400_000;
   await testPool().query(
-    `INSERT INTO "rate_limit_counters" (key, "windowStart", count) VALUES ($1, $2, $3)
+    `INSERT INTO "rate_limit_counters" (key, "windowStart", count) VALUES ($1, $2::timestamp, $3)
      ON CONFLICT (key, "windowStart") DO UPDATE SET count = $3`,
-    [`account-email:addr:day:${address}`, new Date(Math.floor(Date.now() / day) * day), limit - remaining],
+    [`account-email:addr:day:${address}`, utc(new Date(Math.floor(Date.now() / day) * day)), limit - remaining],
   );
 }
 
@@ -647,12 +647,21 @@ function currentWindowStart(windowSeconds: number): Date {
   return new Date(Math.floor(Date.now() / ms) * ms);
 }
 
+/**
+ * TS-194: the app stores rate-limit windows as UTC (the column has no time zone), so the helpers
+ * do too -- as text, whose "Z" the column ignores. A JavaScript date would be stored in this
+ * machine's local time and land in a different window whenever it isn't UTC.
+ */
+function utc(date: Date): string {
+  return date.toISOString();
+}
+
 /** TS-177: how many emails a test account has counted against one of its limits in the current window. */
 export async function accountEmailCount(email: string, counter: AccountEmailCounter): Promise<number> {
   const { prefix, windowSeconds } = ACCOUNT_EMAIL_COUNTERS[counter];
   const { rows } = await testPool().query<{ count: number }>(
-    `SELECT count FROM "rate_limit_counters" WHERE key = $1 AND "windowStart" = $2`,
-    [`${prefix}${await testAccountId(email)}`, currentWindowStart(windowSeconds)],
+    `SELECT count FROM "rate_limit_counters" WHERE key = $1 AND "windowStart" = $2::timestamp`,
+    [`${prefix}${await testAccountId(email)}`, utc(currentWindowStart(windowSeconds))],
   );
   return rows[0]?.count ?? 0;
 }
@@ -662,9 +671,9 @@ export async function accountEmailCount(email: string, counter: AccountEmailCoun
 export async function setAccountEmailCount(email: string, counter: AccountEmailCounter, count: number): Promise<void> {
   const { prefix, windowSeconds } = ACCOUNT_EMAIL_COUNTERS[counter];
   await testPool().query(
-    `INSERT INTO "rate_limit_counters" (key, "windowStart", count) VALUES ($1, $2, $3)
+    `INSERT INTO "rate_limit_counters" (key, "windowStart", count) VALUES ($1, $2::timestamp, $3)
      ON CONFLICT (key, "windowStart") DO UPDATE SET count = $3`,
-    [`${prefix}${await testAccountId(email)}`, currentWindowStart(windowSeconds), count],
+    [`${prefix}${await testAccountId(email)}`, utc(currentWindowStart(windowSeconds)), count],
   );
 }
 
@@ -675,16 +684,16 @@ async function setCounter(key: string, windowSeconds: number, count: number, win
   // TS-184: "previous" is the window just before the current one, which shorter limits still count.
   if (window === "previous") start.setTime(start.getTime() - windowSeconds * 1000);
   await testPool().query(
-    `INSERT INTO "rate_limit_counters" (key, "windowStart", count) VALUES ($1, $2, $3)
+    `INSERT INTO "rate_limit_counters" (key, "windowStart", count) VALUES ($1, $2::timestamp, $3)
      ON CONFLICT (key, "windowStart") DO UPDATE SET count = $3`,
-    [key, start, count],
+    [key, utc(start), count],
   );
 }
 
 async function readCounter(key: string, windowSeconds: number): Promise<number> {
   const { rows } = await testPool().query<{ count: number }>(
-    `SELECT count FROM "rate_limit_counters" WHERE key = $1 AND "windowStart" = $2`,
-    [key, currentWindowStart(windowSeconds)],
+    `SELECT count FROM "rate_limit_counters" WHERE key = $1 AND "windowStart" = $2::timestamp`,
+    [key, utc(currentWindowStart(windowSeconds))],
   );
   return rows[0]?.count ?? 0;
 }
@@ -709,6 +718,89 @@ export async function setEmailsToAddressToday(email: string, count: number): Pro
 /** TS-178: how many emails a test address has had from Seatwise today (see setEmailsToAddressToday). */
 export async function emailsToAddressToday(email: string): Promise<number> {
   return readCounter(`email:to:day:${requireTestEmail(email)}`, 86_400);
+}
+
+/**
+ * TS-194: the per-address counts kept apart from the planner-sent one above (packages/db/src/email.ts):
+ * "anonymous" -- emails anyone can ask for (sign-up confirmations, "Resend link"), and
+ * "unconfirmed-reset" -- password resets for an account that hasn't confirmed its address.
+ */
+export type OtherAddressCount = "anonymous" | "unconfirmed-reset";
+const OTHER_ADDRESS_COUNT_PREFIX: Record<OtherAddressCount, string> = {
+  anonymous: "email:to:anon:day:",
+  "unconfirmed-reset": "email:to:reset:day:",
+};
+
+/** TS-194: sets one of a test address's other per-address counts for today. */
+export async function setOtherEmailsToAddressToday(email: string, kind: OtherAddressCount, count: number): Promise<void> {
+  const address = requireTestEmail(email);
+  if (address.includes("+")) throw new Error("testDatabase: use a test address without a +tag.");
+  await setCounter(`${OTHER_ADDRESS_COUNT_PREFIX[kind]}${address}`, 86_400, count);
+}
+
+/** TS-194: reads one of a test address's other per-address counts for today. */
+export async function otherEmailsToAddressToday(email: string, kind: OtherAddressCount): Promise<number> {
+  return readCounter(`${OTHER_ADDRESS_COUNT_PREFIX[kind]}${requireTestEmail(email)}`, 86_400);
+}
+
+/**
+ * TS-194: sets how much of a test account's daily pool for emails nobody signed in set off (guests'
+ * RSVPs, across all the weddings it owns) has been used today
+ * (NOTIFICATION_EMAILS_PER_OWNER_WITHOUT_ACTOR in packages/db/src/queries/notifications.ts).
+ */
+export async function setOwnerNotificationEmailsToday(email: string, count: number): Promise<void> {
+  await setCounter(`email:notify-owner:86400:${await testAccountId(email)}`, 86_400, count);
+}
+
+/** TS-194: how much of a test account's owner pool (see setOwnerNotificationEmailsToday) is used today. */
+export async function ownerNotificationEmailsToday(email: string): Promise<number> {
+  return readCounter(`email:notify-owner:86400:${await testAccountId(email)}`, 86_400);
+}
+
+/**
+ * TS-194: makes a test account `days` older (moves when it was created back), so a test can reach
+ * the larger daily email allowance a new account only gets after its first week.
+ */
+export async function ageTestAccount(email: string, days: number): Promise<void> {
+  const { rowCount } = await testPool().query(
+    `UPDATE "users" SET "createdAt" = "createdAt" - make_interval(days => $3) WHERE email = $1 AND email LIKE $2`,
+    [email.toLowerCase(), TEST_EMAIL_PATTERN, days],
+  );
+  if (!rowCount) throw new Error(`testDatabase: no test account ${email}.`);
+}
+
+export interface BrokenNotifications {
+  /** Puts things back. Always call it (in a finally). */
+  restore(): Promise<void>;
+}
+
+/**
+ * TS-194: from now until `restore`, writing an in-app notification for this test account fails
+ * the way it does when the account was deleted a moment earlier (a foreign-key error, 23503) --
+ * so a test can check that a change that sets off notifications is still saved and reported as
+ * saved. Only this one test account is affected (a trigger named after it, removed by restore).
+ */
+export async function breakNotificationsFor(email: string): Promise<BrokenNotifications> {
+  const id = await testAccountId(email);
+  if (!/^[0-9a-f-]{36}$/i.test(id)) throw new Error("testDatabase: unexpected account id.");
+  const name = `pw_fail_notify_${id.replace(/-/g, "")}`;
+  await testPool().query(
+    `CREATE OR REPLACE FUNCTION ${name}() RETURNS trigger LANGUAGE plpgsql AS $fn$
+     BEGIN
+       IF NEW."recipientUserId" = '${id}' THEN
+         RAISE EXCEPTION 'test: this recipient was just deleted' USING ERRCODE = 'foreign_key_violation';
+       END IF;
+       RETURN NEW;
+     END $fn$`,
+  );
+  await testPool().query(`DROP TRIGGER IF EXISTS ${name} ON "notifications"`);
+  await testPool().query(`CREATE TRIGGER ${name} BEFORE INSERT ON "notifications" FOR EACH ROW EXECUTE FUNCTION ${name}()`);
+  return {
+    async restore() {
+      await testPool().query(`DROP TRIGGER IF EXISTS ${name} ON "notifications"`);
+      await testPool().query(`DROP FUNCTION IF EXISTS ${name}()`);
+    },
+  };
 }
 
 /**

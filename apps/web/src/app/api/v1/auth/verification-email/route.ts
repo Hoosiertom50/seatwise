@@ -16,8 +16,8 @@ export async function POST(req: NextRequest) {
     { key: `verify-email:resend:${user.id}`, ...EMAIL_VERIFICATION_LIMITS.resendsPerAccount },
     // TS-168: per day too, per account and per network address.
     { key: `verify-email:resend:day:${user.id}`, ...EMAIL_VERIFICATION_LIMITS.resendsPerAccountDay },
-    { key: `verify-email:resend:addr:day:${address}`, ...EMAIL_VERIFICATION_LIMITS.resendsPerAddressDay },
-    // TS-171: counted with sign-ups and password resets from the same address.
+    // TS-171: counted with sign-ups and password resets from the same address. TS-194: this is now
+    // the only per-address count for resends (10 a day, with sign-ups and resets).
     { key: accountEmailAddressKey(address), ...ACCOUNT_EMAIL_LIMITS.perAddressDay },
   ];
   // TS-186: each count can be given back from exactly the window it was made in -- and all of them
@@ -35,9 +35,11 @@ export async function POST(req: NextRequest) {
 
   const result = await sendVerificationEmail(user);
   if (!emailDelivered(result)) {
-    // TS-178: nothing went out, so this try doesn't use up any of the four allowances above.
+    // TS-178: nothing went out, so this try doesn't use up any of the allowances above.
     await giveBackAll();
-    return errorResponse(emailNotSentMessage(result), result === "limited" || result === "recipient-limited" ? 429 : 502);
+    // TS-194: no email service set up is a 503 (the site can't send), not a passing hiccup.
+    const status = result === "limited" || result === "recipient-limited" ? 429 : result === "not-configured" ? 503 : 502;
+    return errorResponse(emailNotSentMessage(result), status);
   }
   return NextResponse.json({ sent: true });
 }

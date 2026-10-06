@@ -173,15 +173,21 @@ export async function createComment(
     // FR-10.2: a reply notifies everyone (owner + collaborators) except whoever wrote it —
     // including the original commenter, who is just another recipient of the general fan-out.
     void parentAuthorId; // kept for clarity of intent; notifyWeddingCollaborators already excludes the actor
-    await notifyWeddingCollaborators(
-      weddingId,
-      authorUserId,
-      "COMMENT_REPLY",
-      `New reply on "${targetLabel}": ${input.body.slice(0, 120)}`,
-      // TS-168: the email doesn't carry the comment itself (text anyone with Comment access typed,
-      // arriving as if from Seatwise) -- it points to the app, where the reply is shown.
-      { emailMessage: `There's a new reply on "${targetLabel}" — open Seatwise to read it.` }
-    );
+    // TS-194: the change above is already saved -- telling people about it is best effort, so a
+    // failure is logged and never turns the saved change into an error.
+    try {
+      await notifyWeddingCollaborators(
+        weddingId,
+        authorUserId,
+        "COMMENT_REPLY",
+        `New reply on "${targetLabel}": ${input.body.slice(0, 120)}`,
+        // TS-168: the email doesn't carry the comment itself (text anyone with Comment access typed,
+        // arriving as if from Seatwise) -- it points to the app, where the reply is shown.
+        { emailMessage: `There's a new reply on "${targetLabel}" — open Seatwise to read it.` }
+      );
+    } catch (err) {
+      console.error("Saved, but notifying the wedding's members failed:", err);
+    }
   }
 
   const { rows } = await pool.query(`${SELECT_COMMENT} WHERE c.id = $1`, [id]);

@@ -63,12 +63,18 @@ export async function POST(req: NextRequest, { params }: Params) {
   // FR-10.2: guest addition is only notification-worthy post-approval.
   const status = await getCurrentPlanVersionStatus(weddingId);
   if (status === "APPROVED") {
-    await notifyWeddingCollaborators(
-      weddingId,
-      user.id,
-      "GUEST_ADDED",
-      `${guest.firstName} ${guest.lastName} was added to the guest list.`
-    );
+    // TS-194: the change above is already saved -- telling people about it is best effort, so a
+    // failure is logged and never turns the saved change into an error.
+    try {
+      await notifyWeddingCollaborators(
+        weddingId,
+        user.id,
+        "GUEST_ADDED",
+        `${guest.firstName} ${guest.lastName} was added to the guest list.`
+      );
+    } catch (err) {
+      console.error("Saved, but notifying the wedding's members failed:", err);
+    }
   }
 
   // TS-143 (Tom, 2026-10-02): a guest added with an email gets their RSVP link straight away. (A

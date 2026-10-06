@@ -25,6 +25,10 @@ test("a refused email names the limit that actually refused it", () => {
     "account-day"
   );
   assert.equal(emailLimitReason([{ windowSeconds: 86_400, accountDaily: false }]), "day");
+  // TS-194: a new account's smaller allowance says so.
+  assert.equal(emailLimitReason([{ windowSeconds: 86_400, accountDaily: true, newAccount: true }]), "new-account-day");
+  assert.match(emailSendRefusedMessage("rsvpEmails", "new-account-day"), /^New accounts can send up to 20 emails a day in their first week/);
+  assert.match(emailSendRefusedMessage("invites", "new-account-day"), /tomorrow/);
   assert.equal(emailLimitReason([{ windowSeconds: 3600, accountDaily: false }]), "short");
 
   assert.equal(

@@ -747,19 +747,25 @@ export async function setPlanVersionStatus(
   // TS-189: except an approval being undone back to In review -- that's not a plan being shared,
   // it's an approval taken back, and it says so.
   const reopened = previousStatus === "APPROVED" && newStatus === "IN_REVIEW";
-  await notifyWeddingCollaborators(
-    weddingId,
-    actorUserId,
-    newStatus === "IN_REVIEW" && !reopened ? "PLAN_SHARED" : "STATUS_CHANGED",
-    reopened
-      ? "The seating plan's approval was undone — it's back in review."
-      : newStatus === "IN_REVIEW"
-        ? "The seating plan was shared for review."
-        : // TS-177: in words, not the status codes (it read "changed to APPROVED").
-          newStatus === "APPROVED"
-          ? "The seating plan was approved."
-          : "The seating plan was moved back to draft."
-  );
+  // TS-194: the change above is already saved -- telling people about it is best effort, so a
+  // failure is logged and never turns the saved change into an error.
+  try {
+    await notifyWeddingCollaborators(
+      weddingId,
+      actorUserId,
+      newStatus === "IN_REVIEW" && !reopened ? "PLAN_SHARED" : "STATUS_CHANGED",
+      reopened
+        ? "The seating plan's approval was undone — it's back in review."
+        : newStatus === "IN_REVIEW"
+          ? "The seating plan was shared for review."
+          : // TS-177: in words, not the status codes (it read "changed to APPROVED").
+            newStatus === "APPROVED"
+            ? "The seating plan was approved."
+            : "The seating plan was moved back to draft."
+    );
+  } catch (err) {
+    console.error("Saved, but notifying the wedding's members failed:", err);
+  }
 
   return getPlanVersionDetail(id, weddingId);
 }
@@ -1164,12 +1170,18 @@ export async function moveGuestAssignment(
   // FR-10.2: table changes are only notification-worthy once the plan has been approved (a Draft
   // is expected to be edited constantly and would otherwise spam everyone).
   if (planVersion.status === "APPROVED") {
-    await notifyWeddingCollaborators(
-      weddingId,
-      actorUserId,
-      "TABLE_CHANGED",
-      `${unit.map((g) => g.name).join(", ")} moved to "${targetTable.label}".`
-    );
+    // TS-194: the change above is already saved -- telling people about it is best effort, so a
+    // failure is logged and never turns the saved change into an error.
+    try {
+      await notifyWeddingCollaborators(
+        weddingId,
+        actorUserId,
+        "TABLE_CHANGED",
+        `${unit.map((g) => g.name).join(", ")} moved to "${targetTable.label}".`
+      );
+    } catch (err) {
+      console.error("Saved, but notifying the wedding's members failed:", err);
+    }
   }
 
   return { planVersion, warnings };
@@ -1305,12 +1317,18 @@ export async function unassignGuestFromPlan(
   planVersion.warnings = [];
 
   if (planVersion.status === "APPROVED") {
-    await notifyWeddingCollaborators(
-      weddingId,
-      actorUserId,
-      "TABLE_CHANGED",
-      `${unit.map((g) => g.name).join(", ")} unassigned from their table.`
-    );
+    // TS-194: the change above is already saved -- telling people about it is best effort, so a
+    // failure is logged and never turns the saved change into an error.
+    try {
+      await notifyWeddingCollaborators(
+        weddingId,
+        actorUserId,
+        "TABLE_CHANGED",
+        `${unit.map((g) => g.name).join(", ")} unassigned from their table.`
+      );
+    } catch (err) {
+      console.error("Saved, but notifying the wedding's members failed:", err);
+    }
   }
 
   return { planVersion, warnings: [] };
@@ -1402,14 +1420,20 @@ export async function setGuestAttendance(
 
   // FR-10.2: attendance changes are only notification-worthy once the plan has been approved.
   if (notify && detail?.status === "APPROVED") {
-    await notifyWeddingCollaborators(
-      weddingId,
-      actorUserId,
-      "ATTENDANCE_CHANGED",
-      attendance === "NOT_ATTENDING"
-        ? `${guest.name} was marked not attending.`
-        : `${guest.name} was marked attending again.`
-    );
+    // TS-194: the change above is already saved -- telling people about it is best effort, so a
+    // failure is logged and never turns the saved change into an error.
+    try {
+      await notifyWeddingCollaborators(
+        weddingId,
+        actorUserId,
+        "ATTENDANCE_CHANGED",
+        attendance === "NOT_ATTENDING"
+          ? `${guest.name} was marked not attending.`
+          : `${guest.name} was marked attending again.`
+      );
+    } catch (err) {
+      console.error("Saved, but notifying the wedding's members failed:", err);
+    }
   }
 
   return detail;
@@ -1710,12 +1734,18 @@ export async function swapGuestAssignments(
 
   // FR-10.2: same "only once approved" gating as a plain move.
   if (planVersion.status === "APPROVED") {
-    await notifyWeddingCollaborators(
-      weddingId,
-      actorUserId,
-      "TABLE_CHANGED",
-      `Swapped ${unitA.map((g) => g.name).join(", ")} with ${unitB.map((g) => g.name).join(", ")}.`
-    );
+    // TS-194: the change above is already saved -- telling people about it is best effort, so a
+    // failure is logged and never turns the saved change into an error.
+    try {
+      await notifyWeddingCollaborators(
+        weddingId,
+        actorUserId,
+        "TABLE_CHANGED",
+        `Swapped ${unitA.map((g) => g.name).join(", ")} with ${unitB.map((g) => g.name).join(", ")}.`
+      );
+    } catch (err) {
+      console.error("Saved, but notifying the wedding's members failed:", err);
+    }
   }
 
   return { planVersion, warnings };

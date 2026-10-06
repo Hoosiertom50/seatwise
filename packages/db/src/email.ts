@@ -1,6 +1,7 @@
 import nodemailer from "nodemailer";
 import { Resend } from "resend";
-import { hitRateLimitCount, undoRateLimitHit } from "./queries/rate-limit";
+import { pool } from "./pool";
+import { hitRateLimitCount, hitRollingCount, ROLLING_BUCKET_SECONDS, undoRateLimitHit } from "./queries/rate-limit";
 
 // TS-132: how Seatwise sends email, chosen from the environment:
 //
@@ -86,28 +87,30 @@ const realSender: Sender = async (config, message) => {
 
 let sender: Sender = realSender;
 
-// TS-163: a ceiling on how many emails Seatwise sends in a day, whoever triggers them. Everything
-// goes out through one Gmail account (about 500 recipients a day); hitting Gmail's own limit gets
-// the account throttled or suspended, which would stop password resets too. Per-person limits
-// (TS-156) can be got round with many accounts; this can't. Password-reset emails ("essential")
-// get extra headroom above the everyday ceiling, so they still go out on a busy day. Only real
-// sends count -- the "log" transport used locally and in CI never touches this.
+// TS-163: a ceiling on how many emails Seatwise sends, whoever triggers them. Everything goes out
+// through one Gmail account; hitting Gmail's own limit gets the account throttled or suspended,
+// which would stop password resets too. Per-person limits (TS-156) can be got round with many
+// accounts; this can't. Only real sends count -- the "log" transport used locally and in CI never
+// touches this.
 //
-// TS-171: the headroom is for password resets only. Email-confirmation links used to share it,
-// and anyone can sign up with someone else's address -- so a few sources could use it all up and
-// stop everyone's password resets. Confirmations now come out of the everyday allowance.
+// TS-171: email-confirmation links come out of the everyday allowance, not the resets' budget.
+// TS-186: password resets for confirmed accounts have a budget of their own, so everyday emails
+// can never use it up -- and resets can never use up the everyday allowance that invites and RSVP
+// emails need. Total real sends: everyday + resets.
 //
-// TS-186: password resets now have a budget of their own instead of headroom on top of the
-// everyday count. A confirmed account's reset counts only against RESET_EMAILS_PER_DAY, so
-// everyday emails can never use it up -- and resets can never use up the everyday allowance that
-// invites and RSVP emails need. Total real sends stay under Gmail's limit: everyday + resets.
+// TS-194 (Tom's decision, 2026-10-06: keep Gmail, simpler and stricter limits): Gmail counts about 500
+// recipients over any 24 hours -- a rolling window, not a calendar day. These counts now roll too
+// (the current hour plus the 24 before it, see hitRollingCount), and the total is about 300 --
+// everyday 240 + resets 60 -- well clear of Gmail's limit. EMAIL_DAILY_LIMIT can still change the
+// everyday number, but never so far that everyday + resets goes over 450.
+export const EVERYDAY_EMAILS_PER_24_HOURS = 240;
 const DAILY_WINDOW_SECONDS = 86_400;
-const DAILY_KEY = "email:global:day";
-export const RESET_EMAILS_PER_DAY = 80;
+export const RESET_EMAILS_PER_24_HOURS = 60;
+export const MAX_EMAILS_PER_24_HOURS = 450;
 
 // TS-178: an email-address confirmation (anyone can sign up with any address) may only use this
 // share of the everyday allowance, so a burst of sign-ups can't leave nothing for invites and RSVP
-// emails. Past it the account is still made; "Resend link" works again tomorrow.
+// emails. Past it the account is still made; "Resend link" works again in a few hours.
 export const CONFIRMATION_SHARE_OF_EVERYDAY = 0.25;
 // TS-186: a reset for an account that hasn't confirmed its address is an everyday email (anyone
 // can sign up with any address), held to this smaller share of the everyday allowance -- so resets
@@ -121,10 +124,12 @@ export function dailyEmailLimits(env: EmailEnv = process.env): {
   unconfirmedResets: number;
 } {
   const configured = Number(env.EMAIL_DAILY_LIMIT);
-  const everyday = Number.isInteger(configured) && configured > 0 ? configured : 400;
+  const asked = Number.isInteger(configured) && configured > 0 ? configured : EVERYDAY_EMAILS_PER_24_HOURS;
+  // TS-194: clamped, so everyday + resets can never go over MAX_EMAILS_PER_24_HOURS.
+  const everyday = Math.min(asked, MAX_EMAILS_PER_24_HOURS - RESET_EMAILS_PER_24_HOURS);
   return {
     everyday,
-    resets: RESET_EMAILS_PER_DAY,
+    resets: RESET_EMAILS_PER_24_HOURS,
     confirmations: Math.max(1, Math.floor(everyday * CONFIRMATION_SHARE_OF_EVERYDAY)),
     unconfirmedResets: Math.max(1, Math.floor(everyday * UNCONFIRMED_RESET_SHARE_OF_EVERYDAY)),
   };
@@ -133,15 +138,17 @@ export function dailyEmailLimits(env: EmailEnv = process.env): {
 // TS-186: a hit returns the window it was counted in, and undo takes exactly that one back.
 type Counted = { count: number; windowStart: Date };
 type DailyCounter = { hit: () => Promise<Counted>; undo: (windowStart: Date) => Promise<void> };
-const dailyCounterFor = (key: string): DailyCounter => ({
-  hit: () => hitRateLimitCount(key, DAILY_WINDOW_SECONDS),
-  undo: (windowStart) => undoRateLimitHit(key, DAILY_WINDOW_SECONDS, windowStart),
+// TS-194: the site-wide counts roll over the last 24 hours (new keys, so the old calendar-day rows
+// are never mistaken for an hour's count).
+const rollingCounterFor = (key: string): DailyCounter => ({
+  hit: () => hitRollingCount(key),
+  undo: (windowStart) => undoRateLimitHit(key, ROLLING_BUCKET_SECONDS, windowStart),
 });
-const realDailyCounter = dailyCounterFor(DAILY_KEY);
+const realDailyCounter = rollingCounterFor("email:global:24h:everyday");
 let dailyCounter: DailyCounter = realDailyCounter;
 
 // TS-178: the confirmations' own share, counted the same way (real sends only).
-const realConfirmationCounter = dailyCounterFor("email:global:confirmations:day");
+const realConfirmationCounter = rollingCounterFor("email:global:24h:confirmations");
 let confirmationCounter: DailyCounter = realConfirmationCounter;
 
 /** Tests only: replace the counter for the confirmations' share (pass nothing to restore it). */
@@ -151,9 +158,9 @@ export function setConfirmationEmailCounterForTests(fake?: DailyCounter): void {
 
 // TS-186: confirmed accounts' resets (their own budget), and unconfirmed accounts' resets (their
 // share of the everyday allowance) -- real sends only, like the rest.
-const realResetCounter = dailyCounterFor("email:global:resets:day");
+const realResetCounter = rollingCounterFor("email:global:24h:resets");
 let resetCounter: DailyCounter = realResetCounter;
-const realUnconfirmedResetCounter = dailyCounterFor("email:global:unconfirmed-resets:day");
+const realUnconfirmedResetCounter = rollingCounterFor("email:global:24h:unconfirmed-resets");
 let unconfirmedResetCounter: DailyCounter = realUnconfirmedResetCounter;
 
 /** Tests only: replace the counters for password resets (pass nothing to restore them). */
@@ -163,11 +170,27 @@ export function setResetEmailCountersForTests(fakes?: { confirmed: DailyCounter;
 }
 
 // TS-171: at most a few emails a day to any one address, however they're asked for and by however
-// many accounts -- so nobody can use Seatwise to fill a stranger's inbox. Password resets have
-// their own per-address limits (see the forgot-password route), and notifications only go to
-// confirmed members of a wedding who can turn them off, so neither counts here. Unlike the daily
-// ceiling this also counts with the "log" transport, so it behaves the same locally and in CI.
+// many accounts -- so nobody can use Seatwise to fill a stranger's inbox. Confirmed accounts'
+// password resets have their own per-address limits (see the forgot-password route), and
+// notifications only go to confirmed members of a wedding who can turn them off, so neither counts
+// here. Unlike the site-wide ceiling this also counts with the "log" transport, so it behaves the
+// same locally and in CI.
+//
+// TS-194: split by who can ask for the email. Emails a planner sends (invites, RSVP links) have
+// their own count, so a stranger asking for confirmation emails can't use up a guest's invites.
+// Emails anyone can ask for (sign-up confirmations and "Resend link") have a small count of their
+// own. A reset for an account that hasn't confirmed its address has a third count -- so whoever
+// signed up with someone else's address can't use "Resend link" to stop the address's real owner
+// getting the reset that lets them take the account back (the reset limits per email still hold).
 export const EMAILS_PER_RECIPIENT_PER_DAY = 5;
+export const ANONYMOUS_EMAILS_PER_RECIPIENT_PER_DAY = 3;
+export const UNCONFIRMED_RESETS_PER_RECIPIENT_PER_DAY = 3;
+export type RecipientCount = "planner" | "anonymous" | "unconfirmed-reset";
+const RECIPIENT_LIMITS: Record<RecipientCount, number> = {
+  planner: EMAILS_PER_RECIPIENT_PER_DAY,
+  anonymous: ANONYMOUS_EMAILS_PER_RECIPIENT_PER_DAY,
+  "unconfirmed-reset": UNCONFIRMED_RESETS_PER_RECIPIENT_PER_DAY,
+};
 
 /**
  * TS-178: the mailbox an address really reaches, for the per-address count only (the email still
@@ -186,7 +209,13 @@ export function recipientCountAddress(to: string): string {
   if (domain === "gmail.com") local = local.replace(/\./g, "");
   return `${local}@${domain}`;
 }
-const recipientKey = (to: string) => `email:to:day:${recipientCountAddress(to)}`;
+/** TS-194: the key each per-address count is kept under (the planner one is unchanged). */
+export function recipientCountKey(kind: RecipientCount, to: string): string {
+  const address = recipientCountAddress(to);
+  if (kind === "anonymous") return `email:to:anon:day:${address}`;
+  if (kind === "unconfirmed-reset") return `email:to:reset:day:${address}`;
+  return `email:to:day:${address}`;
+}
 
 /** TS-178: an address as the logs show it -- "v***@gmail.com" -- so logs don't collect people's addresses. */
 export function maskEmailAddress(address: string): string {
@@ -196,10 +225,13 @@ export function maskEmailAddress(address: string): string {
   return `${trimmed[0]}***${trimmed.slice(at)}`;
 }
 
-type RecipientCounter = { hit: (to: string) => Promise<Counted>; undo: (to: string, windowStart: Date) => Promise<void> };
+type RecipientCounter = {
+  hit: (to: string, kind: RecipientCount) => Promise<Counted>;
+  undo: (to: string, kind: RecipientCount, windowStart: Date) => Promise<void>;
+};
 const realRecipientCounter: RecipientCounter = {
-  hit: (to) => hitRateLimitCount(recipientKey(to), DAILY_WINDOW_SECONDS),
-  undo: (to, windowStart) => undoRateLimitHit(recipientKey(to), DAILY_WINDOW_SECONDS, windowStart),
+  hit: (to, kind) => hitRateLimitCount(recipientCountKey(kind, to), DAILY_WINDOW_SECONDS),
+  undo: (to, kind, windowStart) => undoRateLimitHit(recipientCountKey(kind, to), DAILY_WINDOW_SECONDS, windowStart),
 };
 let recipientCounter: RecipientCounter = realRecipientCounter;
 
@@ -212,8 +244,26 @@ export function setRecipientEmailCounterForTests(fake?: RecipientCounter): void 
 // (invites, RSVP emails, notifications its actions set off), counted together. Without it, the
 // separate per-kind limits added up to more than the whole day's allowance, so one account could
 // stop email for everyone.
+// TS-194 (Tom's decision): a new account -- in its first 7 days -- gets 20 a day instead of 100, so
+// a batch of fresh accounts can't spend the site's allowance between them.
 export const ACCOUNT_EMAILS_PER_DAY = { limit: 100, windowSeconds: DAILY_WINDOW_SECONDS } as const;
+export const NEW_ACCOUNT_EMAILS_PER_DAY = { limit: 20, windowSeconds: DAILY_WINDOW_SECONDS } as const;
+export const NEW_ACCOUNT_DAYS = 7;
 export const accountDailyEmailKey = (userId: string) => `email:account:day:${userId}`;
+
+/**
+ * TS-194: the account's daily email allowance -- NEW_ACCOUNT_EMAILS_PER_DAY in its first
+ * NEW_ACCOUNT_DAYS days (by when it was created), ACCOUNT_EMAILS_PER_DAY after. An account that
+ * can't be found gets the smaller one.
+ */
+export async function accountDailyEmailLimit(userId: string): Promise<{ limit: number; windowSeconds: number; newAccount: boolean }> {
+  const { rows } = await pool.query<{ isNew: boolean }>(
+    `SELECT "createdAt" > now() - make_interval(days => $2) AS "isNew" FROM "users" WHERE id = $1`,
+    [userId, NEW_ACCOUNT_DAYS]
+  );
+  const newAccount = rows[0]?.isNew ?? true;
+  return { ...(newAccount ? NEW_ACCOUNT_EMAILS_PER_DAY : ACCOUNT_EMAILS_PER_DAY), newAccount };
+}
 
 /** Tests only: replace the daily email counter (pass nothing to restore it). */
 export function setDailyEmailCounterForTests(fake?: DailyCounter): void {
@@ -238,14 +288,20 @@ export async function sendEmail(
   }: {
     /**
      * A password reset for an account that has confirmed its address: counted only against the
-     * resets' own daily budget (TS-186), and held to its own per-address limits.
+     * resets' own budget (TS-186), and held to its own per-address limits.
      */
     essential?: boolean;
     /** TS-171: a notification to a confirmed member of the wedding -- not a stranger. */
     toWeddingMember?: boolean;
-    /** TS-178: an email-address confirmation -- limited to its own share of the everyday allowance. */
+    /**
+     * TS-178: an email-address confirmation (sign-up or "Resend link") -- limited to its own share
+     * of the everyday allowance. TS-194: and to the per-address count for emails anyone can ask for.
+     */
     confirmation?: boolean;
-    /** TS-186: a password reset for an unconfirmed account -- its own, smaller share of the everyday allowance. */
+    /**
+     * TS-186: a password reset for an unconfirmed account -- its own, smaller share of the everyday
+     * allowance. TS-194: and its own per-address count.
+     */
     unconfirmedReset?: boolean;
   } = {}
 ): Promise<EmailResult> {
@@ -256,7 +312,9 @@ export async function sendEmail(
     console.warn(`[email] not sent to ${shown}: no email service is configured (set SMTP_USER and SMTP_PASSWORD).`);
     return "not-configured";
   }
-  const recipientCapped = !essential && !toWeddingMember;
+  // TS-194: which per-address count this email goes on, if any.
+  const recipientKind: RecipientCount | null =
+    essential || toWeddingMember ? null : unconfirmedReset ? "unconfirmed-reset" : confirmation ? "anonymous" : "planner";
   const recipient = recipientCountAddress(to);
   // TS-178: everything this attempt has counted so far, so all of it is given back (once) when
   // nothing goes out -- refused, or failed to send.
@@ -270,13 +328,13 @@ export async function sendEmail(
   // TS-178: sending never throws -- not even when the counters (in the database) can't be reached.
   // The email just isn't sent, and the caller hears "failed".
   try {
-    if (recipientCapped) {
-      const toThisAddress = await recipientCounter.hit(recipient);
-      counted.push(() => recipientCounter.undo(recipient, toThisAddress.windowStart));
-      if (toThisAddress.count > EMAILS_PER_RECIPIENT_PER_DAY) {
+    if (recipientKind) {
+      const toThisAddress = await recipientCounter.hit(recipient, recipientKind);
+      counted.push(() => recipientCounter.undo(recipient, recipientKind, toThisAddress.windowStart));
+      if (toThisAddress.count > RECIPIENT_LIMITS[recipientKind]) {
         // Taken back, so refused attempts don't pile up on the count.
         await giveBack();
-        console.warn(`[email] not sent to ${shown}: this address has had ${EMAILS_PER_RECIPIENT_PER_DAY} emails from Seatwise today.`);
+        console.warn(`[email] not sent to ${shown}: this address has had its ${recipientKind} emails from Seatwise today.`);
         return "recipient-limited";
       }
     }
@@ -294,11 +352,11 @@ export async function sendEmail(
     // Counts one send against `counter`; false (with everything counted so far given back) when
     // that takes it over `limit`.
     const fits = async (counter: DailyCounter, limit: number, what: string) => {
-      const today = await counter.hit();
-      counted.push(() => counter.undo(today.windowStart));
-      if (today.count <= limit) return true;
+      const counts = await counter.hit();
+      counted.push(() => counter.undo(counts.windowStart));
+      if (counts.count <= limit) return true;
       await giveBack();
-      console.warn(`[email] not sent to ${shown}: today's ${what} of ${limit} has been used.`);
+      console.warn(`[email] not sent to ${shown}: the last 24 hours' ${what} of ${limit} has been used.`);
       return false;
     };
     // TS-186: a confirmed account's reset counts only against the resets' own budget.
@@ -313,7 +371,7 @@ export async function sendEmail(
     }
   } catch (err) {
     await giveBack();
-    console.error(`[email] not sent to ${shown}: today's email counts couldn't be checked: ${errorText(err)}`);
+    console.error(`[email] not sent to ${shown}: the email counts couldn't be checked: ${errorText(err)}`);
     return "failed";
   }
   try {
@@ -322,7 +380,7 @@ export async function sendEmail(
   } catch (err) {
     // Never log the password or the message body -- just who and why.
     console.error(`[email] failed to send to ${shown} via ${config.kind}: ${errorText(err)}`);
-    // TS-178: nothing went out, so it doesn't use up the day's allowance or the address's share.
+    // TS-178: nothing went out, so it doesn't use up the allowance or the address's share.
     await giveBack();
     return "failed";
   }
