@@ -21,6 +21,9 @@ import {
   CsvParseError,
   findDuplicateCsvHeader,
   duplicateCsvHeaderMessage,
+  decodeCsvBytes,
+  hasUnreadableCharacters,
+  UNREADABLE_CHARACTERS_MESSAGE,
   GUEST_TIER_LABELS,
   RSVP_STATUS_LABELS,
 } from "@seatwise/shared";
@@ -213,6 +216,7 @@ export function GuestsTab({
     createdCount: number;
     updatedCount: number;
     skippedCount?: number;
+    unchangedCount?: number;
     warnings: string[];
   } | null>(null);
   // TS-180: the planner chose to overwrite guests changed in Seatwise since the file was exported.
@@ -250,7 +254,12 @@ export function GuestsTab({
     setImportResult(null);
     setImportPreview(null);
     try {
-      const text = await file.text();
+      // TS-190: read as UTF-8, or as Excel's older Windows encoding when it isn't (see decodeCsvBytes).
+      const text = decodeCsvBytes(await file.arrayBuffer());
+      if (hasUnreadableCharacters(text)) {
+        setImportError(UNREADABLE_CHARACTERS_MESSAGE);
+        return;
+      }
       const { headers } = parseCsv(text);
       if (headers.length === 0) {
         setImportError("Couldn't find a header row in that file.");
@@ -332,7 +341,7 @@ export function GuestsTab({
     setCommitting(true);
     try {
       const { result, guests: updatedGuests } = await api.post<{
-        result: { createdCount: number; updatedCount: number; skippedCount?: number; warnings: string[] };
+        result: { createdCount: number; updatedCount: number; skippedCount?: number; unchangedCount?: number; warnings: string[] };
         guests: GuestDTO[];
       }>(`/api/v1/weddings/${weddingId}/guests/import/commit`, {
         csv: csvText,
@@ -344,7 +353,8 @@ export function GuestsTab({
           (importPreview?.rows ?? [])
             .filter(
               (r) =>
-                (r.kind === "update" || (r.kind === "conflict" && overwriteChanged)) &&
+                // TS-190: and the guests it showed as unchanged.
+                (r.kind === "update" || r.kind === "unchanged" || (r.kind === "conflict" && overwriteChanged)) &&
                 r.guestId &&
                 r.revision !== undefined
             )
@@ -1038,7 +1048,9 @@ export function GuestsTab({
               Import complete: {importResult.createdCount} guest(s) added, {importResult.updatedCount}{" "}
               updated
               {/* TS-180 */}
-              {importResult.skippedCount ? `, ${importResult.skippedCount} left as they are (changed since the export)` : ""}.
+              {importResult.skippedCount ? `, ${importResult.skippedCount} left as they are (changed since the export)` : ""}
+              {/* TS-190 */}
+              {importResult.unchangedCount ? `, ${importResult.unchangedCount} unchanged` : ""}.
             </p>
             {importResult.warnings.length > 0 && (
               <ul className="mt-1 list-inside list-disc text-sm text-amber-700 dark:text-amber-400">
@@ -1055,6 +1067,12 @@ export function GuestsTab({
             <p className="mb-2 text-sm">
               <strong>{importPreview.summary.newCount}</strong> new,{" "}
               <strong>{importPreview.summary.updatingCount}</strong> updating,{" "}
+              {/* TS-190: rows the same as the guest already is -- left alone. */}
+              {importPreview.summary.unchangedCount > 0 && (
+                <>
+                  <strong>{importPreview.summary.unchangedCount}</strong> unchanged,{" "}
+                </>
+              )}
               {/* TS-180 */}
               {importPreview.summary.conflictCount > 0 && (
                 <>
@@ -1102,7 +1120,7 @@ export function GuestsTab({
                   ) : (
                     <span>
                       {r.preview.firstName} {r.preview.lastName}
-                      {r.kind === "update" ? " (updating existing guest)" : ""}
+                      {r.kind === "update" ? " (updating existing guest)" : r.kind === "unchanged" ? " (no changes)" : ""}
                     </span>
                   )}
                 </li>

@@ -101,6 +101,12 @@ export async function createComment(
     if (parent.parentCommentId) {
       throw new CommentError("Reply to the comment that starts the thread, not to a reply.", "INVALID_TARGET");
     }
+    // TS-190: the thread's guest, table or timeline entry was removed since -- a reply would have
+    // nothing to be about (it used to fail with "guestId is required").
+    if (!parent.guestId && !parent.tableId && !parent.timelineEntryId) {
+      const what = parent.targetType === "GUEST" ? "guest" : parent.targetType === "TABLE" ? "table" : "timeline entry";
+      throw new CommentError(`That comment's ${what} was removed, so it can't take replies.`, "INVALID_TARGET");
+    }
     parentAuthorId = parent.authorUserId;
     input = {
       ...input,

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { updateWeddingSchema } from "@seatwise/shared";
+import { updateWeddingSchema, sideLabelsClash, SIDE_LABELS_MESSAGE } from "@seatwise/shared";
 import { getWeddingById, updateWeddingForOwner, deleteWeddingForOwner, getWeddingAccessDetail } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
 import { errorResponse, zodErrorResponse } from "@/lib/api-response";
@@ -34,6 +34,14 @@ export async function PATCH(req: NextRequest, { params }: Params) {
   const body = await req.json().catch(() => null);
   const parsed = updateWeddingSchema.safeParse(body);
   if (!parsed.success) return zodErrorResponse(parsed.error);
+  // TS-190: a side name saved on its own must still differ from the other, stored one.
+  const { sideLabel1, sideLabel2 } = parsed.data;
+  if (
+    (sideLabel1 !== undefined || sideLabel2 !== undefined) &&
+    sideLabelsClash(sideLabel1 ?? access.wedding.sideLabel1, sideLabel2 ?? access.wedding.sideLabel2)
+  ) {
+    return errorResponse(SIDE_LABELS_MESSAGE, 422, { [sideLabel1 !== undefined ? "sideLabel1" : "sideLabel2"]: [SIDE_LABELS_MESSAGE] });
+  }
 
   await updateWeddingForOwner(weddingId, user.id, parsed.data);
   const wedding = await getWeddingById(weddingId);
