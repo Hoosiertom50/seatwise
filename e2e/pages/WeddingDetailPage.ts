@@ -48,7 +48,10 @@ export class WeddingDetailPage extends BasePage {
   /** One step button in the strip, by its leading label (e.g. "2. Add tables"). Its accessible
    * name includes "(done)" once the step is complete. */
   gettingStartedStep(label: string) {
-    return this.gettingStarted().getByRole("button", { name: new RegExp(`^[✓○]?\\s*${label.replace(/[.()]/g, "\\$&")}`) });
+    // TS-200: every character with a meaning in a regular expression is escaped (backslash first,
+    // so the escapes added here aren't escaped again) -- not just . ( and ).
+    const escaped = label.replace(/[\\^$.*+?()[\]{}|/-]/g, "\\$&");
+    return this.gettingStarted().getByRole("button", { name: new RegExp(`^[✓○]?\\s*${escaped}`) });
   }
 
   /** TS-115: the tab row's vertical position (its first tab's top edge), for checking nothing

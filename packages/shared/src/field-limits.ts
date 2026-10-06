@@ -46,10 +46,18 @@ export type FieldLimitName = keyof typeof FIELD_LIMITS;
 /**
  * TS-193: a phone number for a vendor contact -- digits, spaces and + - ( ) . only, optionally
  * followed by an extension ("ext. 12", "ext 12" or "x12").
+ *
+ * TS-200: written so checking it takes time in step with the length, however long the value. It
+ * used to be `^[0-9+().\-\s]*(\s*(ext\.?|x)\s*[0-9]+)?$` -- spaces could belong to either the
+ * first part or the extension's leading `\s*`, so a long run of spaces followed by a wrong
+ * character was tried every possible way (time growing with the square of the length). Spaces
+ * before "ext"/"x" already fit the first part, so that `\s*` is gone: it accepts exactly the same
+ * values (field-limits.test.mts compares the two on random values).
  */
 // TS-198: spaces after an extension ("ext. 12 ") are fine too -- the server trims them, and the
-// box's HTML pattern below, which sees the untrimmed value, now accepts them as well.
-export const CONTACT_PHONE_PATTERN = /^[0-9+().\-\s]*(\s*(ext\.?|x)\s*[0-9]+)?\s*$/i;
+// box's HTML pattern below, which sees the untrimmed value, accepts them as well.
+// TS-200: written so it can't backtrack on long input (no overlapping spaces before "ext").
+export const CONTACT_PHONE_PATTERN = /^[0-9+().\-\s]*(?:(?:ext\.?|x)\s*[0-9]+\s*)?$/i;
 export const CONTACT_PHONE_MESSAGE = "Use digits and + - ( ) . only (ext. allowed)";
 /**
  * The same rule written for an HTML `pattern` attribute (browsers test it against the whole value,

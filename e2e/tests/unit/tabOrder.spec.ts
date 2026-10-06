@@ -4,7 +4,7 @@
  */
 
 import { test, expect } from "@playwright/test";
-import { tabOrderProblems, type TabStop } from "../../support/tabOrder.js";
+import { tabOrderProblems, tabWalkProblems, type TabStop, type TabWalk } from "../../support/tabOrder.js";
 
 let n = 0;
 function stop(description: string, left: number, top: number, extra: Partial<TabStop> = {}): TabStop {
@@ -54,5 +54,44 @@ test.describe("tabOrderProblems", () => {
     const stops = [stop("name", 0, 0), stop("skip link", 0, 0, { width: 0, height: 0 }), stop("email", 0, 60), stop("venue", 200, 0)];
     expect(tabOrderProblems(stops)).toHaveLength(1);
     expect(tabOrderProblems(stops, { allow: [{ from: /email/, to: /venue/, reason: "unit test" }] })).toEqual([]);
+  });
+});
+
+// TS-200: whether a walk can be trusted -- it ended cleanly and stopped on exactly the visible controls.
+test.describe("tabWalkProblems", () => {
+  const walk = (extra: Partial<TabWalk> = {}): TabWalk => ({
+    stops: [stop("name", 0, 0), stop("save", 0, 60)],
+    end: "left-page",
+    maxStops: 250,
+    focusableCount: 2,
+    unreached: [],
+    uncounted: [],
+    ...extra,
+  });
+
+  test("a walk that left the page, came round or left its region, and reached every control, is fine", () => {
+    for (const end of ["left-page", "came-round", "left-region"] as const) {
+      expect(tabWalkProblems(walk({ end }))).toEqual([]);
+    }
+  });
+
+  test("giving up at the stop limit, losing focus or looping is reported", () => {
+    expect(tabWalkProblems(walk({ end: "max-stops" }))[0]).toContain("gave up after 250 stops");
+    expect(tabWalkProblems(walk({ end: "lost-focus" }))[0]).toContain("focus fell to the page itself");
+    expect(tabWalkProblems(walk({ end: "trapped" }))[0]).toContain("came back to a control in the middle");
+    expect(tabWalkProblems(walk({ end: "nothing-focusable", stops: [], focusableCount: 0 }))[0]).toContain("no control to start");
+  });
+
+  test("a control Tab skips, or a stop that isn't a control, is reported unless allow-listed", () => {
+    const skipped = walk({ focusableCount: 3, unreached: ['button "Delete"'] });
+    expect(tabWalkProblems(skipped)).toEqual(['Tab never reached button "Delete"']);
+    expect(tabWalkProblems(skipped, [{ matches: /Delete/, reason: "unit test" }])).toEqual([]);
+    const extra = walk({ stops: [stop("name", 0, 0), stop("list", 0, 30), stop("save", 0, 60)], uncounted: ['div "list"'] });
+    expect(tabWalkProblems(extra)).toEqual(['Tab stopped on div "list", which isn\'t a control']);
+    expect(tabWalkProblems(extra, [{ matches: /list/, reason: "unit test" }])).toEqual([]);
+  });
+
+  test("a count that doesn't match the stops is reported", () => {
+    expect(tabWalkProblems(walk({ focusableCount: 3 }))[0]).toContain("2 visible stops, but there are 3 visible controls");
   });
 });

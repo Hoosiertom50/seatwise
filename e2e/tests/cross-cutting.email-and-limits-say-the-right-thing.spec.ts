@@ -11,17 +11,18 @@
  *   someone else's password resets.
  * - Other people's wrong passwords (which can lock sign-in) don't stop someone deleting their own
  *   account, and the "too many" message doesn't say whose tries they were.
- * Counters are set directly, never waited out, so nothing here depends on the time of day.
+ * Counters are set directly, never waited out. TS-200: a test that sets or reads a daily counter
+ * first makes sure UTC midnight won't pass while it runs (waitUntilSafelyInsideUtcDay).
  * The Retry-After arithmetic and the email budgets are unit-tested (rate-limit-retry.test.mts,
  * email-delivery.test.mts).
  */
 
 import { randomBytes } from "node:crypto";
 import { expect, defineQualityTest, test } from "../fixtures/index.js";
+import { waitUntilSafelyInsideUtcDay } from "../support/utcDay.js";
 import { uniquePersonName, uniqueTestAddress, uniqueToken } from "../data/ids.js";
 import { signUpFreshAccountInNewContext, TEST_ACCOUNT_EMAIL_DOMAIN } from "../support/auth.js";
 import { AccountPage } from "../pages/AccountPage.js";
-import { waitUntilSafelyInsideUtcDay } from "../support/utcDay.js";
 import {
   accountEmailCount,
   changedRsvpEmailsToday,
@@ -110,6 +111,9 @@ defineQualityTest(
     tags: ["@mutating", "@feature:rsvp", "@risk:high", "@suite:regression"],
   },
   async ({ account, managedWedding, weddingData, context, playwright }, testInfo) => {
+    // TS-200: this test sets a guest's changed-answer count for today and reads the daily
+    // counters -- they must all be in one UTC day.
+    await waitUntilSafelyInsideUtcDay(testInfo);
     const baseURL = testInfo.project.use.baseURL;
     const w = managedWedding.id;
     const guest = await weddingData.createGuest(w, uniquePersonName(testInfo.workerIndex));
@@ -161,7 +165,8 @@ defineQualityTest(
     tags: ["@mutating", "@feature:authentication", "@risk:high", "@suite:regression"],
   },
   async ({ browser, playwright }, testInfo) => {
-    // TS-194: the daily counter this test sets must be read in the same UTC day.
+    // TS-194, TS-200: this test uses up an address's daily allowance and reads the per-day reset
+    // count -- they must all be in one UTC day.
     await waitUntilSafelyInsideUtcDay(testInfo);
     const baseURL = testInfo.project.use.baseURL;
     const usedUp = uniqueTestAddress();

@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { AUTH_COOKIE_NAME, setAuthCookie, signToken, verifyToken } from "@/lib/auth";
 import { RENEWED_TOKEN_HEADER, shouldRenew } from "@/lib/session-renewal";
-import { isNonJsonBody } from "@/lib/json-body";
+import { BODY_TOO_LARGE_MESSAGE, declaresBodyTooLarge, isNonJsonBody } from "@/lib/json-body";
 
 // TS-94: sliding session renewal. Runs ahead of every /api/v1 request; when the caller's token is
 // valid but old enough (see session-renewal.ts), the response carries a freshly issued one -- as a
@@ -55,6 +55,12 @@ function refuseCrossSiteWrite(req: NextRequest): NextResponse | null {
   // (Generate, log out) needs no type. TS-179: the rule lives in json-body.ts, shared with readJson.
   if (isNonJsonBody(req.headers)) {
     return NextResponse.json({ error: "Send this request as JSON." }, { status: 415 });
+  }
+  // TS-200: nor be bigger than any real request (see MAX_JSON_BODY_BYTES) -- refused by its
+  // Content-Length before any route reads it. readJson() also stops reading a body without one
+  // once it passes the limit.
+  if (declaresBodyTooLarge(req.headers)) {
+    return NextResponse.json({ error: BODY_TOO_LARGE_MESSAGE }, { status: 413 });
   }
   return null;
 }
