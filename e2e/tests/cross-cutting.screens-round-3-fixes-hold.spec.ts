@@ -1,6 +1,6 @@
 /**
  * TS-175 (REQ-NON-FUNCTIONAL) — screen fixes from the third deep dive.
- * - Marking a guest on Day-of, then editing them on the Guests tab, saves (no false "edited elsewhere").
+ * - Marking a guest on Day-of, then editing them on the Guests tab, saves (no false "changed since you loaded it").
  * - A vendor edit that loses to someone else's change closes, and never writes over it.
  * - A version nickname being typed is never saved onto another version.
  * - "1,500" in a cost box is $1,500.00; something that isn't an amount is refused, not dropped.
@@ -25,7 +25,7 @@ defineQualityTest(
     objective:
       "Confirms that after marking a guest not attending on Day-of, renaming them on the Guests tab saves with no conflict; that a vendor edit saved after someone else changed the vendor shows the conflict, closes, and leaves their change in place; that a nickname typed for one version and then a switch to another version saves nothing onto either; that a vendor cost typed as 1,500 is stored as 150000 cents and 12abc is refused with a message; and that at 375px a table placed at x=600 moves to x=610 on one arrow press and form fields render at 16px or more.",
     expectedOutcome:
-      "The guest's new first name is saved and no 'edited elsewhere' message shows. The vendor keeps the other person's name and the editor is closed. Neither version gains the typed nickname. costCents 150000; the 12abc save shows 'must be an amount in dollars'. The table's x is 610; the email field's font size is at least 16px.",
+      "The guest's new first name is saved and no 'changed since you loaded it' message shows. The vendor keeps the other person's name and the editor is closed. Neither version gains the typed nickname. costCents 150000; the 12abc save shows 'must be an amount in dollars'. The table's x is 610; the email field's font size is at least 16px.",
     requirementIds: ["REQ-NON-FUNCTIONAL"],
     tags: ["@mutating", "@feature:guests", "@feature:tables", "@feature:seating-plan", "@risk:normal", "@suite:regression"],
   },
@@ -46,7 +46,7 @@ defineQualityTest(
       const guests = new WeddingGuestsPage(page);
       await guests.guestRow(fullName).editFirstName("Renamed");
       await expect.poll(async () => (await weddingData.listGuests(w)).some((g) => g.firstName === "Renamed")).toBe(true);
-      await expect(guests.message(/edited elsewhere/)).toHaveCount(0);
+      await expect(guests.message(/changed since you loaded it/)).toHaveCount(0);
     });
 
     await test.step("A vendor edit that loses to someone else's change closes and doesn't overwrite it", async () => {
@@ -60,7 +60,7 @@ defineQualityTest(
       expect((await context.request.patch(api(`vendors/${vendorId}`), { data: { name: "Bloom Florist", expectedRevision: current.revision } })).status()).toBe(200);
       await budget.setEditCost("200");
       await budget.saveEdit();
-      await expect(budget.errorText()).toContainText("was just edited elsewhere");
+      await expect(budget.errorText()).toContainText("changed since you loaded it");
       await expect(budget.allEditButtons()).toHaveCount(1);
       await expect.poll(async () => budget.editCostInputCount()).toBe(0);
       const after = ((await (await context.request.get(api("vendors"))).json()) as { vendors: { id: string; name: string; costCents: number | null }[] }).vendors.find((v) => v.id === vendorId)!;

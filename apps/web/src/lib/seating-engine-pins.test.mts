@@ -85,3 +85,73 @@ test("a locked guest whose table is gone is still seated automatically", () => {
   assert.equal(tableOf(result, "A"), "T1");
   assert.match(result.warnings.join("\n"), /locked to a table that no longer exists/);
 });
+
+// TS-177 (Tom's decision): a locked table keeps the people already at it and seats nobody new.
+test("everyone seated at a locked table stays there, and nobody new is seated there", () => {
+  const result = generateSeatingPlan(
+    [
+      guest("A", { currentTableId: "Locked" }),
+      guest("B", { currentTableId: "Locked" }),
+      guest("C", { currentTableId: "T1" }),
+      guest("D"),
+    ],
+    [],
+    [table("Locked", { isLocked: true }), table("T1")]
+  );
+  assert.equal(tableOf(result, "A"), "Locked");
+  assert.equal(tableOf(result, "B"), "Locked");
+  assert.equal(tableOf(result, "C"), "T1");
+  assert.equal(tableOf(result, "D"), "T1");
+  assert.equal(result.isComplete, true);
+  assert.doesNotMatch(result.warnings.join("\n"), /locked to/);
+});
+
+test("a must-sit-together partner of someone at a locked table joins them there", () => {
+  const result = generateSeatingPlan(
+    [guest("A", { currentTableId: "Locked" }), guest("B")],
+    [{ guestAId: "A", guestBId: "B", type: "MUST_SIT_TOGETHER" }],
+    [table("Locked", { isLocked: true }), table("T1")]
+  );
+  assert.equal(tableOf(result, "A"), "Locked");
+  assert.equal(tableOf(result, "B"), "Locked");
+});
+
+test("a required-table pin still wins over sitting at a locked table", () => {
+  const result = generateSeatingPlan(
+    [guest("A", { currentTableId: "Locked", requiredTableId: "VIP" })],
+    [],
+    [table("Locked", { isLocked: true }), table("VIP", { isRestricted: true }), table("T1")]
+  );
+  assert.equal(tableOf(result, "A"), "VIP");
+});
+
+test("a locked table that shrank keeps who still fits; the rest are seated automatically, with a warning", () => {
+  const result = generateSeatingPlan(
+    [guest("A", { currentTableId: "Locked", headcount: 2 }), guest("B", { currentTableId: "Locked", headcount: 2 })],
+    [],
+    [table("Locked", { isLocked: true, capacity: 3 }), table("T1")]
+  );
+  assert.deepEqual(["A", "B"].map((id) => tableOf(result, id)).sort(), ["Locked", "T1"]);
+  assert.match(result.warnings.join("\n"), /locked to "Locked", but that's no longer possible — seated automatically instead/);
+  assert.equal(result.isComplete, true);
+});
+
+test("someone at a locked table who now needs an accessible seat is moved, with a warning", () => {
+  const result = generateSeatingPlan(
+    [guest("A", { currentTableId: "Locked", requiresAccessibleTable: true })],
+    [],
+    [table("Locked", { isLocked: true }), table("Ramp", { isAccessible: true })]
+  );
+  assert.equal(tableOf(result, "A"), "Ramp");
+  assert.match(result.warnings.join("\n"), /locked to "Locked", but that's no longer possible/);
+});
+
+test("guests at two different locked tables who must sit together are kept together at the first one", () => {
+  const result = generateSeatingPlan(
+    [guest("A", { currentTableId: "L1" }), guest("B", { currentTableId: "L2" })],
+    [{ guestAId: "A", guestBId: "B", type: "MUST_SIT_TOGETHER" }],
+    [table("L1", { isLocked: true }), table("L2", { isLocked: true }), table("T1")]
+  );
+  assert.equal(tableOf(result, "A"), "L1");
+  assert.equal(tableOf(result, "B"), "L1");
+});

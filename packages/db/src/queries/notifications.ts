@@ -33,7 +33,7 @@ async function weddingMayEmailWithoutActor(weddingId: string): Promise<boolean> 
 // labels) only goes out if it can't read as a web address; otherwise the email just says there's
 // an update, and the details stay in the app.
 export function emailSafeNotificationText(message: string): string {
-  return looksLikeWebAddress(message) ? "There's an update on your wedding — open Seatwise to see it." : message;
+  return looksLikeWebAddress(message) ? "There's an update on a wedding you're part of — open Seatwise to see it." : message;
 }
 
 async function actorMayEmail(actorUserId: string): Promise<boolean> {
@@ -137,7 +137,7 @@ export async function notifyWeddingCollaborators(
       const weddingName = emailSafeWeddingName(wedding.name);
       await sendEmailNotification(
         recipient.email,
-        weddingName ? `Seatwise: ${weddingName}` : "Seatwise: an update on your wedding",
+        weddingName ? `Seatwise: ${weddingName}` : "Seatwise: a wedding update",
         emailSafeNotificationText(emailMessage ?? message),
         // TS-171: a confirmed member of this wedding, so not held to the per-address daily cap.
         { toWeddingMember: true }

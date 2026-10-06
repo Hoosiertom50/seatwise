@@ -7,17 +7,33 @@ import {
   getCurrentPlanVersionStatus,
   notifyWeddingCollaborators,
   setGuestAttendance,
-  revalidateGuestAssignment,
+  resyncGuestsSeats,
   recomputeCurrentPlanCompleteness,
   resyncGuestSeat,
   guestHasRsvpLink,
   GuestConflictError,
+  type NewlyFlaggedSeat,
 } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
 import { errorResponse, zodErrorResponse } from "@/lib/api-response";
 import { requireAccess } from "@/lib/access";
 import { guestForViewer } from "@/lib/guest-privacy";
-import { sendGuestRsvpLink } from "@/lib/rsvp-email";
+import { rsvpEmailOutcome, sendGuestRsvpLink } from "@/lib/rsvp-email";
+import { SAVED_BUT_NOT_RECHECKED } from "@/lib/post-save";
+
+// TS-177: why a guest edit just flagged someone, in the words that fit the reason.
+function flaggedWarning({ name, reason }: NewlyFlaggedSeat): string {
+  switch (reason) {
+    case "capacity":
+      return `${name} no longer fits at their table — flagged as Needs Reassignment.`;
+    case "accessible":
+      return `${name} needs an accessible table and their current table isn't one — flagged as Needs Reassignment.`;
+    case "restricted":
+      return `${name} isn't on their table's required list — flagged as Needs Reassignment.`;
+    default:
+      return `${name}'s current table no longer fits a hard rule for them — flagged as Needs Reassignment.`;
+  }
+}
 
 type Params = { params: Promise<{ weddingId: string; guestId: string }> };
 
@@ -76,34 +92,43 @@ export async function PATCH(req: NextRequest, { params }: Params) {
     throw err;
   }
 
+  // An attendance change asked for in this edit *is* part of the save, so a failure there is still
+  // an error.
   if (dayOfAttendance !== undefined) {
     await setGuestAttendance(weddingId, guestId, dayOfAttendance, user.id);
-  } else if (rest.rsvpStatus === "DECLINED" && before?.rsvpStatus !== "DECLINED") {
-    // TS-167: marking a guest Declined frees their seat, the same as when they decline themselves.
-    // (setGuestAttendance does nothing if they're already Not Attending.)
-    await setGuestAttendance(weddingId, guestId, "NOT_ATTENDING", user.id);
-  } else if (rest.rsvpStatus && rest.rsvpStatus !== "DECLINED" && before?.rsvpStatus === "DECLINED") {
-    // TS-169: and changing them back from Declined brings them back -- Attending, waiting for a seat.
-    await setGuestAttendance(weddingId, guestId, "ATTENDING", user.id);
   }
 
+  // TS-177: everything below follows from an edit that's already saved -- if any of it fails, the
+  // planner is told the edit is saved but the plan couldn't be re-checked, not that it failed.
   const warnings: string[] = [];
-  if (REASSIGNMENT_TRIGGER_FIELDS.some((f) => parsed.data[f] !== undefined)) {
-    const result = await revalidateGuestAssignment(weddingId, guestId);
-    if (result?.flagged) {
-      warnings.push(
-        `${result.guestName}'s current table no longer fits a hard rule for them — flagged as Needs Reassignment.`
-      );
+  const newlyFlagged: NewlyFlaggedSeat[] = [];
+  try {
+    if (dayOfAttendance === undefined && rest.rsvpStatus === "DECLINED" && before?.rsvpStatus !== "DECLINED") {
+      // TS-167: marking a guest Declined frees their seat, the same as when they decline themselves.
+      // (setGuestAttendance does nothing if they're already Not Attending.)
+      await setGuestAttendance(weddingId, guestId, "NOT_ATTENDING", user.id);
+    } else if (dayOfAttendance === undefined && rest.rsvpStatus && rest.rsvpStatus !== "DECLINED" && before?.rsvpStatus === "DECLINED") {
+      // TS-169: and changing them back from Declined brings them back -- Attending, waiting for a seat.
+      await setGuestAttendance(weddingId, guestId, "ATTENDING", user.id);
     }
-  }
 
-  // TS-134: a bigger party can outgrow the table they're seated at -- re-check its room.
-  if (parsed.data.headcount !== undefined) {
-    const { newlyFlagged } = await resyncGuestSeat(weddingId, guestId);
-    for (const f of newlyFlagged) {
-      warnings.push(`${f.name} no longer fits at their table — flagged as Needs Reassignment.`);
+    // TS-177: only a flag this edit newly set is reported. Before, a guest already flagged (or
+    // flagged because their table is over capacity) got "no longer fits a hard rule" on every edit.
+    if (REASSIGNMENT_TRIGGER_FIELDS.some((f) => parsed.data[f] !== undefined)) {
+      newlyFlagged.push(...(await resyncGuestsSeats(weddingId, [guestId])).newlyFlagged);
     }
+
+    // TS-134: a bigger party can outgrow the table they're seated at -- re-check its room.
+    if (parsed.data.headcount !== undefined) {
+      newlyFlagged.push(...(await resyncGuestSeat(weddingId, guestId)).newlyFlagged);
+    }
+  } catch (err) {
+    console.error("Guest saved, but re-checking the seating plan failed", err);
+    warnings.push(SAVED_BUT_NOT_RECHECKED);
   }
+  const seen = new Set<string>();
+  const flagged = newlyFlagged.filter((f) => !seen.has(f.guestId) && !!seen.add(f.guestId));
+  warnings.unshift(...flagged.map(flaggedWarning));
 
   const guest = await getGuestForWedding(guestId, weddingId);
   const firstEmail = !!guest?.email && !!before && !before.email;
@@ -122,7 +147,7 @@ export async function PATCH(req: NextRequest, { params }: Params) {
   return NextResponse.json({
     guest,
     warnings,
-    ...(rsvpEmail ? { rsvpEmail: { emailed: rsvpEmail.emailed, emailFailed: rsvpEmail.emailFailed, emailLimited: rsvpEmail.emailLimited ?? false, confirmEmailFirst: rsvpEmail.confirmEmailFirst ?? false, recentlyEmailed: rsvpEmail.recentlyEmailed ?? false, recipientLimited: rsvpEmail.recipientLimited ?? false } } : {}),
+    ...(rsvpEmail ? { rsvpEmail: rsvpEmailOutcome(rsvpEmail) } : {}),
   });
 }
 

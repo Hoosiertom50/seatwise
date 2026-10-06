@@ -231,6 +231,8 @@ export interface RestorePreview {
   droppedGuests: { guestId: string; guestName: string; reason: string }[];
   unassignedGuestIds: string[];
   isComplete: boolean;
+  // TS-177: of keptCount, how many will be flagged Needs Reassignment once restored.
+  needsFixingCount: number;
   warnings: string[];
 }
 
@@ -603,7 +605,16 @@ export class WeddingDataSetup {
   /** TS-42: updates wedding-level settings (PATCH .../weddings/:weddingId) -- currently only
    * needed for sideMixing, which has no UI control at all (see RulesTab/TablesTab investigation
    * notes); OWNER-only access, which the managedWedding fixture's own account always has. */
-  async updateWedding(weddingId: string, input: { sideMixing?: "KEEP_SEPARATE" | "BALANCED_MIX" | "FULLY_MIXED" }): Promise<void> {
+  // TS-177: also the RSVP cutoff (to close RSVPs) and the wedding's own side names.
+  async updateWedding(
+    weddingId: string,
+    input: {
+      sideMixing?: "KEEP_SEPARATE" | "BALANCED_MIX" | "FULLY_MIXED";
+      rsvpCutoffDate?: string | null;
+      sideLabel1?: string;
+      sideLabel2?: string;
+    },
+  ): Promise<void> {
     const res = await this.request.patch(`/api/v1/weddings/${weddingId}`, { data: input });
     await assertOk(res, `updateWedding(${weddingId}, ${JSON.stringify(input)})`);
   }

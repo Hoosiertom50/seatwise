@@ -1,5 +1,6 @@
 "use client";
 
+import { formatDateTime, formatMomentDate } from "@/lib/display-format";
 import { useEffect, useRef, useState } from "react";
 import { api, ApiError } from "@/lib/api-client";
 import { useSerialTasks } from "@/lib/serial-tasks";
@@ -33,7 +34,7 @@ const COMPARISON_STATUS_CLASS: Record<PlanVersionComparisonDTO["guests"][number]
 function versionOptionLabel(v: PlanVersionDTO): string {
   // FR-5.6: a Comparison Draft can be *newer* than the Current version (list order alone no
   // longer implies which one is current), so the picker always says explicitly which is which.
-  return `v${v.versionNumber}${v.label ? ` — ${v.label}` : ""}${v.isCurrent ? " (current)" : ""} (${new Date(v.createdAt).toLocaleDateString()})`;
+  return `v${v.versionNumber}${v.label ? ` — ${v.label}` : ""}${v.isCurrent ? " (current)" : ""} (${formatMomentDate(v.createdAt)})`;
 }
 
 // FR-7.1: the floor-plan boxes reuse each table's saved (positionX, positionY) from the Tables
@@ -563,8 +564,9 @@ export function PlanTab({
             than silently dropped.
           </p>
         </div>
+        {/* TS-177: the Generate column may shrink (it was shrink-0) -- the long draft label pushed a phone screen sideways. */}
         {canEdit && (
-          <div className="flex shrink-0 flex-col items-end gap-2">
+          <div className="flex min-w-0 max-w-full flex-col items-end gap-2">
             <button
               onClick={onGenerate}
               disabled={generating}
@@ -574,7 +576,7 @@ export function PlanTab({
             </button>
             {/* FR-5.6: chosen upfront, before the run -- an unsuccessful run (a hard-rule
                 conflict) only ever produces a conflict report either way, nothing is saved. */}
-            <label className="flex items-center gap-2 text-xs text-neutral-600 dark:text-neutral-300">
+            <label className="flex items-center gap-2 text-right text-xs text-neutral-600 dark:text-neutral-300">
               <input
                 type="checkbox"
                 checked={saveAsDraft}
@@ -681,7 +683,7 @@ export function PlanTab({
                 {v.label ? ` — ${v.label}` : ""}
                 {v.restoredFromVersionNumber ? ` (restored from v${v.restoredFromVersionNumber})` : ""} —{" "}
                 {v.isComplete ? "complete" : "incomplete"}, {STATUS_LABEL[v.status]} (
-                {new Date(v.createdAt).toLocaleString()})
+                {formatDateTime(v.createdAt)})
               </option>
             ))}
           </select>
@@ -796,8 +798,10 @@ export function PlanTab({
 
       {!detail ? (
         <p className="text-sm text-neutral-500 dark:text-neutral-400">
-          No plan generated yet — add guests and tables, then click &ldquo;Generate new
-          plan&rdquo;.
+          {/* TS-177: only people who can edit have that button. */}
+          {canEdit
+            ? <>No plan generated yet — add guests and tables, then click &ldquo;Generate new plan&rdquo;.</>
+            : "No plan generated yet. Someone with Edit access can generate one."}
         </p>
       ) : (
         <>
@@ -889,7 +893,9 @@ export function PlanTab({
           {!detail.isCurrent && (
             <div className="mb-6 rounded-lg border border-neutral-200 dark:border-neutral-700 p-4">
               <p className="mb-2 text-sm text-neutral-500 dark:text-neutral-400">
-                This is a past version — status can only be changed on the current one. Restoring
+                {/* TS-177: also shown for a comparison draft, which can be newer than the current version. */}
+                This isn&apos;t the current version (it&apos;s an older one, or a comparison draft) — status can
+                only be changed on the current one. Restoring
                 it makes a brand-new current version with a copy of its assignments,
                 re-checked against today&apos;s guests/tables/rules — it never rewrites this version or
                 anything newer.
@@ -908,8 +914,12 @@ export function PlanTab({
                   <p className="mb-2 text-sm font-medium text-amber-800 dark:text-amber-300">
                     Restoring version {restorePreview.sourceVersionNumber} will create a new
                     version {restorePreview.isComplete ? "(complete)" : "(incomplete)"}: {restorePreview.keptCount}{" "}
-                    guest(s) kept exactly as seated, {restorePreview.unassignedGuestIds.length} left
-                    unassigned.
+                    {/* TS-177: guests kept at their tables but about to be flagged aren't "kept
+                        exactly as seated" -- say they'll need fixing. */}
+                    {restorePreview.needsFixingCount > 0
+                      ? `guest(s) kept at their tables (${restorePreview.needsFixingCount} will need fixing: see below)`
+                      : "guest(s) kept exactly as seated"}
+                    , {restorePreview.unassignedGuestIds.length} left unassigned.
                   </p>
                   {restorePreview.droppedGuests.length > 0 && (
                     <ul className="mb-2 list-inside list-disc text-sm text-amber-700 dark:text-amber-400">
@@ -974,7 +984,7 @@ export function PlanTab({
                     <button
                       onClick={() => onSetStatus("APPROVED")}
                       disabled={statusUpdating || !detail.isComplete}
-                      title={!detail.isComplete ? "Every guest must be seated before a plan can be approved." : undefined}
+                      title={!detail.isComplete ? "Every guest must be seated, with nobody flagged Needs Reassignment, before a plan can be approved." : undefined}
                       className="rounded-md bg-green-700 dark:bg-green-600 min-h-11 px-3 py-1.5 text-sm font-medium text-white hover:bg-green-800 dark:hover:bg-green-500 disabled:opacity-50"
                     >
                       Approve
@@ -982,12 +992,13 @@ export function PlanTab({
                   )}
                   {canApprove && !detail.isComplete && (
                     <span className="text-sm text-neutral-500 dark:text-neutral-400">
-                      Seat every guest before this can be approved.
+                      Seat every guest, and sort out anyone flagged Needs Reassignment, before this can be approved.
                     </span>
                   )}
                 </>
               )}
-              {canEdit && detail.status === "APPROVED" && (
+              {/* TS-177: only the people the server lets undo an approval (TS-172) see this. */}
+              {canApprove && detail.status === "APPROVED" && (
                 <button
                   onClick={() => onSetStatus("IN_REVIEW")}
                   disabled={statusUpdating}
@@ -1005,8 +1016,8 @@ export function PlanTab({
                 Modified since approval
               </p>
               <p className="text-sm text-amber-700 dark:text-amber-400">
-                First change {new Date(detail.modifiedSinceApproval.firstModifiedAt!).toLocaleString()},
-                latest {new Date(detail.modifiedSinceApproval.latestModifiedAt!).toLocaleString()}.
+                First change {formatDateTime(detail.modifiedSinceApproval.firstModifiedAt!)},
+                latest {formatDateTime(detail.modifiedSinceApproval.latestModifiedAt!)}.
                 Approval doesn&apos;t lock anything — this plan is still Approved, but review what
                 changed.
               </p>
@@ -1039,9 +1050,12 @@ export function PlanTab({
 
           {!canEditThisVersion && (
             <p className="mb-4 text-sm text-neutral-500 dark:text-neutral-400">
+              {/* TS-177: an approver without Edit access isn't "view-only"; a non-current version is the reason for an editor. */}
               {canEdit
-                ? "This is a past version — guests can only be manually moved on the current one."
-                : "You have view-only access to this wedding's seating plan — manual moves are turned off."}
+                ? "This isn't the current version (it's an older one, or a comparison draft) — guests can only be moved on the current version."
+                : canApprove
+                  ? "You can review and approve this plan, but not move guests."
+                  : "You have view-only access to this wedding's seating plan — manual moves are turned off."}
             </p>
           )}
 
@@ -1173,6 +1187,13 @@ export function PlanTab({
               guestName={guestName}
               onMoveGuest={onMoveGuest}
               canEditThisVersion={canEditThisVersion}
+              readOnlyNote={
+                canEdit
+                  ? "Guests can only be moved on the current version."
+                  : canApprove
+                    ? "You can approve this plan, but not move guests."
+                    : "View-only — dragging guests between tables is turned off for your access level."
+              }
               movingIds={movingIds}
             />
           ) : (
@@ -1268,6 +1289,7 @@ function PlanFloorPlan({
   guestName,
   onMoveGuest,
   canEditThisVersion,
+  readOnlyNote,
   movingIds,
 }: {
   tables: SeatingTableDTO[];
@@ -1277,6 +1299,8 @@ function PlanFloorPlan({
   guestName: (id: string) => string;
   onMoveGuest: (guestId: string, tableId: string) => Promise<MoveGuestResult>;
   canEditThisVersion: boolean;
+  /** TS-177: why guests can't be dragged, when they can't (access level, or not the current version). */
+  readOnlyNote: string;
   movingIds: ReadonlySet<string>;
 }) {
   const [dragOverTableId, setDragOverTableId] = useState<string | null>(null);
@@ -1431,7 +1455,7 @@ function PlanFloorPlan({
       <p className="mb-3 text-sm text-neutral-500 dark:text-neutral-400">
         {canEditThisVersion
           ? "Drag a guest onto a different table to move them — or tap or press Enter on a guest, then on a table. Hard rules are enforced exactly as with the dropdowns above."
-          : "View-only — dragging guests between tables is turned off for your access level."}
+          : readOnlyNote}
       </p>
       <p role="status" aria-live="polite" className="sr-only">
         {pickedGuestId ? `${guestName(pickedGuestId)} picked up. Choose a table, or press Escape to cancel.` : ""}

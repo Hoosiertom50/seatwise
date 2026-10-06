@@ -48,7 +48,7 @@ defineQualityTest(
       expect((await weddingData.getPlanVersionDetail(w, plan.id)).isComplete).toBe(false);
       const approved = await approve(w, plan);
       expect(approved.status).not.toBe(200);
-      expect(approved.body.error).toContain("unassigned");
+      expect(approved.body.error).toContain("aren't seated");
     });
 
     await test.step("Moving one of a flagged must-not-sit-together pair away un-flags the partner", async () => {

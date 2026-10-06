@@ -8,10 +8,12 @@ import {
   RestrictedTableError,
   removeSeatingTable,
   TableConflictError,
+  type NewlyFlaggedSeat,
 } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
 import { errorResponse, zodErrorResponse } from "@/lib/api-response";
 import { requireAccess } from "@/lib/access";
+import { SAVED_BUT_NOT_RECHECKED } from "@/lib/post-save";
 
 type Params = { params: Promise<{ weddingId: string; tableId: string }> };
 
@@ -47,7 +49,7 @@ export async function PATCH(req: NextRequest, { params }: Params) {
   // TS-120: the required-guest list goes in after the table itself (it can only be set once the
   // table is Restricted). The table's other changes are already saved by then, so a list that
   // can't be saved says exactly that rather than pretending the whole edit failed.
-  const newlyFlagged: { name: string; reason: string }[] = [];
+  const newlyFlagged: NewlyFlaggedSeat[] = [];
   if (requiredGuestIds !== undefined) {
     try {
       newlyFlagged.push(...(await setRequiredGuestsForTable(tableId, weddingId, requiredGuestIds)).newlyFlagged);
@@ -69,18 +71,37 @@ export async function PATCH(req: NextRequest, { params }: Params) {
   // (or clearing) Needs Reassignment and keeping completeness in sync. Nobody is ever unseated.
   // TS-173: a table that stops being Restricted loses its list, so the guests who were on it (and
   // flagged for sitting elsewhere) are re-checked where they sit too.
+  // TS-177: the edit itself is saved by now -- a failed re-check mustn't make it look unsaved.
+  const recheckWarnings: string[] = [];
   if (data.isAccessible !== undefined || data.capacity !== undefined || data.isRestricted !== undefined) {
-    newlyFlagged.push(...(await resyncTableSeating(weddingId, tableId, formerRequiredGuestIds)).newlyFlagged);
+    try {
+      newlyFlagged.push(...(await resyncTableSeating(weddingId, tableId, formerRequiredGuestIds)).newlyFlagged);
+    } catch (err) {
+      console.error("Table saved, but re-checking its seating failed", err);
+      recheckWarnings.push(SAVED_BUT_NOT_RECHECKED);
+    }
   }
-  const warnings = newlyFlagged.map(({ name, reason }) =>
-    reason === "capacity"
-      ? `${name} no longer fits at this table${data.capacity !== undefined ? ` (it now seats ${data.capacity})` : ""} — flagged as Needs Reassignment.`
-      : reason === "accessible"
-        ? `${name} requires an accessible table and this one no longer is one — flagged as Needs Reassignment.`
-        : reason === "restricted"
-          ? `${name} isn't on this table's required list any more — flagged as Needs Reassignment.`
-          : `${name} can no longer sit where they are under the seating rules — flagged as Needs Reassignment.`
-  );
+  // TS-177: a required-guest list change re-checks the tables those guests sit at too, so "this
+  // table" (and its new seat count) is only said of guests actually seated at this one.
+  const warnings = [
+    ...newlyFlagged.map(({ name, reason, tableId: flaggedAt }) => {
+      const here = flaggedAt === tableId;
+      return reason === "capacity"
+        ? here
+          ? `${name} no longer fits at this table${data.capacity !== undefined ? ` (it now seats ${data.capacity})` : ""} — flagged as Needs Reassignment.`
+          : `${name} no longer fits at their table — flagged as Needs Reassignment.`
+        : reason === "accessible"
+          ? here
+            ? `${name} requires an accessible table and this one no longer is one — flagged as Needs Reassignment.`
+            : `${name} requires an accessible table and their table isn't one — flagged as Needs Reassignment.`
+          : reason === "restricted"
+            ? here
+              ? `${name} isn't on this table's required list any more — flagged as Needs Reassignment.`
+              : `${name} isn't on their table's required list — flagged as Needs Reassignment.`
+            : `${name} can no longer sit where they are under the seating rules — flagged as Needs Reassignment.`;
+    }),
+    ...recheckWarnings,
+  ];
 
   const table = await getSeatingTableForWedding(tableId, weddingId);
   return NextResponse.json({ ok: true, table, warnings });
@@ -103,7 +124,7 @@ export async function DELETE(req: NextRequest, { params }: Params) {
     const guests = result.seatedCount === 1 ? "1 guest is" : `${result.seatedCount} guests are`;
     return NextResponse.json(
       {
-        error: `${guests} seated at "${result.label}" in the current plan. Removing it will leave them unassigned.`,
+        error: `${guests} seated at "${result.label}" in the current plan. Removing it will leave them unassigned, and removes its seats from saved past versions too.`,
         needsConfirmation: true,
         seatedCount: result.seatedCount,
       },

@@ -39,7 +39,7 @@ defineQualityTest(
       await planTab.goto(managedWedding.id);
       await planTab.moveToReview();
       await expect(planTab.approveControl()).toBeDisabled();
-      await expect(planTab.textLocator("Seat every guest before this can be approved.")).toBeVisible();
+      await expect(planTab.textLocator("Seat every guest, and sort out anyone flagged Needs Reassignment, before this can be approved.")).toBeVisible();
     });
 
     await test.step("On the server: approving it anyway is refused, and it stays in review", async () => {

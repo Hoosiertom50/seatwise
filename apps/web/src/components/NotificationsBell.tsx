@@ -1,5 +1,6 @@
 "use client";
 
+import { formatDateTime } from "@/lib/display-format";
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { api } from "@/lib/api-client";
@@ -141,7 +142,7 @@ export function NotificationsBell({
                   </div>
                   <span className="text-sm text-neutral-800 dark:text-neutral-200">{n.message}</span>
                   <span className="text-xs text-neutral-500 dark:text-neutral-400">
-                    {new Date(n.createdAt).toLocaleString()}
+                    {formatDateTime(n.createdAt)}
                   </span>
                 </button>
               ))

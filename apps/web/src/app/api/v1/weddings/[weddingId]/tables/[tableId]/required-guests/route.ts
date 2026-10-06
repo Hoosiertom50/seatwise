@@ -27,8 +27,9 @@ export async function PUT(req: NextRequest, { params }: Params) {
     // TS-173: so is someone put on the list while seated at another table (re-checked in the same
     // transaction as the save).
     const { table, newlyFlagged } = await setRequiredGuestsForTable(tableId, weddingId, parsed.data.guestIds);
-    const warnings = newlyFlagged.map(({ name, reason }) =>
-      reason === "restricted"
+    // TS-177: "this table" only for a guest actually seated at this one.
+    const warnings = newlyFlagged.map(({ name, reason, tableId: flaggedAt }) =>
+      reason === "restricted" && flaggedAt === tableId
         ? `${name} isn't on this table's required list any more — flagged as Needs Reassignment.`
         : `${name} can no longer sit where they are — flagged as Needs Reassignment.`
     );

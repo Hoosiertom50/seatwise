@@ -58,6 +58,11 @@ export interface RsvpLinkDTO {
   url: string;
   // TS-156: not emailed because the planner has sent a lot of RSVP emails in a short time.
   emailLimited?: boolean;
+  // TS-177: with emailLimited -- it was the account's daily allowance, so more can go tomorrow.
+  emailLimitedToday?: boolean;
+  // TS-177 (Tom's decision): not emailed because the wedding's RSVP cutoff has passed -- the link
+  // would only open a "closed" page. It's still made, so the planner can copy it if they choose.
+  rsvpClosed?: boolean;
   // TS-164: not emailed because the planner hasn't confirmed their own email address yet.
   confirmEmailFirst?: boolean;
   // TS-171: not emailed again because this link already went to this address within the hour.
@@ -71,3 +76,7 @@ export interface RsvpLinkDTO {
   // so the planner knows to send the link themselves.
   emailFailed: boolean;
 }
+
+// TS-143 / TS-177: what adding or editing a guest reports about the RSVP email it sent (or didn't)
+// -- the same outcome as RsvpLinkDTO, without the link itself.
+export type RsvpEmailOutcomeDTO = Required<Omit<RsvpLinkDTO, "url">>;

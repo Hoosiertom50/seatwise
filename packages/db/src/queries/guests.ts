@@ -203,7 +203,7 @@ export async function updateGuestForWedding(
     if (expectedRevision !== undefined && current.revision !== expectedRevision) {
       const fresh = await getGuestForWedding(id, weddingId);
       throw new GuestConflictError(
-        "This guest changed since you loaded them — someone else's edit landed first. It's been refreshed with the latest — please try again.",
+        "This guest changed since you loaded it (maybe in another tab, or by someone else). It's been refreshed with the latest — check it and make your change again if it's still needed.",
         fresh!
       );
     }

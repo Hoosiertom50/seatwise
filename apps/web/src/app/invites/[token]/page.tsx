@@ -109,7 +109,9 @@ export default function InviteAcceptPage() {
           <p className="text-sm text-neutral-600 dark:text-neutral-300">This invite link doesn&apos;t exist.</p>
         )}
         {preview.status === "REVOKED" && (
-          <p className="text-sm text-neutral-600 dark:text-neutral-300">This invite has been revoked by the wedding&apos;s owner.</p>
+          <p className="text-sm text-neutral-600 dark:text-neutral-300">{/* TS-177: also what an older link shows once a newer invite was sent -- not only a cancelled one. */}
+            This invite link is no longer active. If you were sent a newer invite, use the link in that email; otherwise
+            ask the person who invited you for a new one.</p>
         )}
         {preview.status === "EXPIRED" && (
           <p className="text-sm text-neutral-600 dark:text-neutral-300">

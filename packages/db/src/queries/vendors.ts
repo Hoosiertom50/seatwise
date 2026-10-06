@@ -164,7 +164,7 @@ export async function updateVendorForWedding(
     if (expectedRevision !== undefined && current.revision !== expectedRevision) {
       const fresh = await getVendorForWedding(id, weddingId);
       throw new VendorConflictError(
-        "This vendor changed since you loaded it — someone else's edit landed first. It's been refreshed with the latest — please try again.",
+        "This vendor changed since you loaded it (maybe in another tab, or by someone else). It's been refreshed with the latest — check it and make your change again if it's still needed.",
         fresh!
       );
     }
@@ -204,7 +204,7 @@ export interface BudgetSummaryRow {
 // TS-92: thrown instead of applying a budget change based on a stale budgetRevision.
 export class BudgetConflictError extends Error {
   constructor() {
-    super("Someone else changed the budget figure after you opened it — showing the latest. Your change wasn't saved; enter it again if it's still needed.");
+    super("The budget figure changed since you opened it (maybe in another tab, or by someone else) — showing the latest. Your change wasn't saved; enter it again if it's still needed.");
   }
 }
 

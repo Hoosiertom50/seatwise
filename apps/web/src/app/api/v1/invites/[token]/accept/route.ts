@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getInviteByToken, acceptInvite } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
 import { errorResponse } from "@/lib/api-response";
+import { confirmEmailToAcceptMessage } from "@/lib/email-verification-text";
 
 type Params = { params: Promise<{ token: string }> };
 
@@ -29,7 +30,7 @@ export async function POST(req: NextRequest, { params }: Params) {
   if (user.emailVerifiedAt === null && user.email.toLowerCase() === invite.email.toLowerCase()) {
     return NextResponse.json(
       {
-        error: `Confirm your email address to accept this invite — we sent a link to ${user.email}. Then come back to this page.`,
+        error: confirmEmailToAcceptMessage(),
         status: "EMAIL_NOT_VERIFIED",
       },
       { status: 403 }

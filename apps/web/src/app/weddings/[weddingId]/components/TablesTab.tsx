@@ -374,7 +374,7 @@ export function TablesTab({
       const fresh = conflictTable(err);
       if (fresh) {
         setTables((cur) => cur.map((t) => (t.id === id ? fresh : t)));
-        setError(`"${fresh.label}" was just edited elsewhere — showing the latest. Try again if you still want to make this change.`);
+        setError(`"${fresh.label}" changed since you loaded it (maybe in another tab, or by someone else) — showing the latest. Try again if you still want to make this change.`);
       } else {
         // TS-151: put back only this table -- other rows may have changed meanwhile.
         setTables((cur) => cur.map((t) => (t.id === id ? (prev.find((p) => p.id === id) ?? t) : t)));
@@ -397,7 +397,7 @@ export function TablesTab({
       const fresh = conflictTable(err);
       if (fresh) {
         setTables((cur) => cur.map((t) => (t.id === id ? fresh : t)));
-        setError(`"${fresh.label}" was just edited elsewhere — showing the latest. Try again if you still want to make this change.`);
+        setError(`"${fresh.label}" changed since you loaded it (maybe in another tab, or by someone else) — showing the latest. Try again if you still want to make this change.`);
       } else {
         // TS-151: put back only this table -- other rows may have changed meanwhile.
         setTables((cur) => cur.map((t) => (t.id === id ? (prev.find((p) => p.id === id) ?? t) : t)));
@@ -418,7 +418,7 @@ export function TablesTab({
       const fresh = conflictTable(err);
       if (fresh) {
         setTables((cur) => cur.map((t) => (t.id === id ? fresh : t)));
-        setError(`"${fresh.label}" was just edited elsewhere — showing the latest. Try again if you still want to make this change.`);
+        setError(`"${fresh.label}" changed since you loaded it (maybe in another tab, or by someone else) — showing the latest. Try again if you still want to make this change.`);
       } else {
         // TS-151: put back only this table -- other rows may have changed meanwhile.
         setTables((cur) => cur.map((t) => (t.id === id ? (prev.find((p) => p.id === id) ?? t) : t)));
@@ -443,7 +443,7 @@ export function TablesTab({
       if (fresh) {
         setTables((cur) => cur.map((t) => (t.id === id ? fresh : t)));
         setError(
-          `"${fresh.label}" was moved by someone else just before you — showing where they put it. Drag it again if you still want it moved.`
+          `"${fresh.label}" was moved since you loaded it (maybe in another tab, or by someone else) — showing where it is now. Drag it again if you still want it moved.`
         );
       } else {
         // TS-110: put the table back where the server still has it -- leaving it at the dropped
@@ -814,7 +814,8 @@ export function TablesTab({
           <p className="text-lg font-medium">{totalAssigned}</p>
         </div>
         <div>
-          <p className="text-neutral-500 dark:text-neutral-400">Remaining capacity</p>
+          {/* TS-177: seats left after everyone attending, not after who's seated (each table row's "remaining"). */}
+          <p className="text-neutral-500 dark:text-neutral-400">Spare seats (after everyone attending)</p>
           <p className={`text-lg font-medium ${shortfall > 0 ? "text-red-600 dark:text-red-400" : ""}`}>
             {totalCapacity - attendingHeadcount}
           </p>
@@ -889,7 +890,7 @@ export function TablesTab({
                     {t.isLocked && (
                       <span
                         className="ml-2 rounded bg-neutral-800 dark:bg-neutral-700 px-1.5 py-0.5 text-xs text-white"
-                        title="Locked — automated seating won't assign new guests here."
+                        title="Locked: new plans keep the people already here and seat nobody new here."
                       >
                         locked
                       </span>
@@ -934,7 +935,7 @@ export function TablesTab({
                       </label>
                       <button
                         onClick={() => onToggleLock(t.id, !t.isLocked)}
-                        title="Locking reserves this table for its current guests during automated seating."
+                        title="Locked: new plans keep the people already here and seat nobody new here."
                         className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800"
                       >
                         {t.isLocked ? "Unlock" : "Lock"}
@@ -955,7 +956,7 @@ export function TablesTab({
                           again with how many (TS-124) before anyone is unseated. */}
                       <ConfirmDeleteButton
                         ariaLabel={`Remove ${t.label}`}
-                        question={`Remove the table "${t.label}"? This can't be undone.`}
+                        question={`Remove the table "${t.label}"? Anyone seated at it, in the current plan or in saved past versions, loses that seat. This can't be undone.`}
                         confirmLabel="Yes, remove table"
                         onConfirm={() => onRemove(t.id)}
                       />
@@ -981,7 +982,7 @@ export function TablesTab({
                       setEditingId(null);
                       setError(
                         message ??
-                          `"${fresh.label}" was just edited elsewhere — showing the latest. Open Edit again to make your change.`
+                          `"${fresh.label}" changed since you loaded it (maybe in another tab, or by someone else) — showing the latest. Open Edit again to make your change.`
                       );
                     }}
                     onCancel={() => setEditingId(null)}

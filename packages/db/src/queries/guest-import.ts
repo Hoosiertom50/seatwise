@@ -7,7 +7,7 @@ import {
   guestTierEnum,
   rsvpStatusEnum,
   dayOfAttendanceEnum,
-  guestSideEnum,
+  parseGuestSide,
   ageCategoryEnum,
   PERSON_NAME_PATTERN,
   PERSON_NAME_MESSAGE,
@@ -57,7 +57,8 @@ function normalizeEnumValue(raw: string, allowed: readonly string[]): string | n
 function parseRow(
   cells: string[],
   headers: string[],
-  mapping: GuestImportMapping
+  mapping: GuestImportMapping,
+  sideLabels: { sideLabel1: string; sideLabel2: string }
 ): { errors: string[]; data: GuestImportRowPreview } {
   const errors: string[] = [];
   const data: GuestImportRowPreview = {};
@@ -155,14 +156,13 @@ function parseRow(
     }
   }
 
+  // TS-177: the wedding's own side names (what the Guests tab tells planners to use) as well as
+  // "Both" and the stored BRIDE / GROOM -- see parseGuestSide.
   const sideRaw = cellFor("side");
   if (sideRaw !== undefined && sideRaw !== "") {
-    const normalized = normalizeEnumValue(sideRaw, guestSideEnum.options);
-    if (!normalized) {
-      errors.push(`Side "${sideRaw}" isn't one of ${guestSideEnum.options.join(", ")}.`);
-    } else {
-      data.side = normalized;
-    }
+    const side = parseGuestSide(sideRaw, sideLabels.sideLabel1, sideLabels.sideLabel2);
+    if ("error" in side) errors.push(side.error);
+    else data.side = side.side;
   }
 
   const ageCategoryRaw = cellFor("ageCategory");
@@ -215,6 +215,13 @@ export async function classifyGuestImport(
     [weddingId]
   );
   const existingIds = new Set(existingGuests.map((g) => g.id));
+  // TS-177: the wedding's own side names, so a "Side" column can use them. Read here, so the
+  // preview and the commit (which re-runs this) always read a row the same way.
+  const { rows: weddingRows } = await pool.query<{ sideLabel1: string; sideLabel2: string }>(
+    `SELECT "sideLabel1", "sideLabel2" FROM "weddings" WHERE id = $1`,
+    [weddingId]
+  );
+  const sideLabels = weddingRows[0] ?? { sideLabel1: "Bride", sideLabel2: "Groom" };
   const revisionById = new Map(existingGuests.map((g) => [g.id, g.revision]));
 
   // A guestId cell referenced by more than one row is ambiguous -- FR-2.4a calls this out as its
@@ -229,7 +236,7 @@ export async function classifyGuestImport(
   }
 
   const classified: GuestImportRow[] = numbered.map(({ cells, rowNumber }) => {
-    const { errors, data } = parseRow(cells, headers, mapping);
+    const { errors, data } = parseRow(cells, headers, mapping, sideLabels);
 
     let guestId: string | undefined;
     if (guestIdColumnIndex !== -1) {

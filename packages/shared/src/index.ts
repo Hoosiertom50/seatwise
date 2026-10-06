@@ -22,3 +22,5 @@ export interface ApiErrorResponse {
 }
 export * from "./rsvp-cutoff";
 export * from "./email-safe-names";
+export * from "./guest-side";
+export * from "./guest-counts";

@@ -155,6 +155,8 @@ export interface RestorePreviewDTO {
   droppedGuests: { guestId: string; guestName: string; reason: string }[];
   unassignedGuestIds: string[];
   isComplete: boolean;
+  // TS-177: of keptCount, how many will be flagged Needs Reassignment once restored.
+  needsFixingCount: number;
   warnings: string[];
 }
 

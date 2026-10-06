@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api-client";
+import { formatGuestCounts } from "@seatwise/shared";
 
 // TS-96: a new wedding opens on ten tabs with nothing saying where to start. This is the order that
 // actually gets a planner to a seating plan -- guests, tables, (optionally) rules, generate -- with
@@ -33,12 +34,15 @@ export function loadGettingStartedCounts(weddingId: string): Promise<GettingStar
 export function GettingStarted({
   weddingId,
   guestCount,
+  peopleCount,
   initialCounts,
   refreshKey,
   onGoTo,
 }: {
   weddingId: string;
   guestCount: number;
+  // TS-177: the sum of headcounts, shown beside the number of invitations.
+  peopleCount: number;
   initialCounts: GettingStartedCounts | null;
   // Changes whenever the planner switches tabs, so counts made on another tab are picked up.
   refreshKey: string;
@@ -68,7 +72,7 @@ export function GettingStarted({
       tab: "guests",
       label: "1. Add your guests",
       done: guestCount > 0,
-      detail: guestCount > 0 ? `${guestCount} added` : "one at a time, or import a CSV",
+      detail: guestCount > 0 ? `${formatGuestCounts(guestCount, peopleCount)} added` : "one at a time, or import a CSV",
     },
     {
       tab: "tables",

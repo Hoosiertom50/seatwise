@@ -98,7 +98,7 @@ defineQualityTest(
       await test.step("A used link is refused", async () => {
         await verify.goto(link);
         await verify.confirmButton().click();
-        await expect(verify.errorMessage()).toContainText("expired or has already been used");
+        await expect(verify.errorMessage()).toContainText("expired or was already used");
       });
 
       await test.step("A password reset also confirms the address", async () => {

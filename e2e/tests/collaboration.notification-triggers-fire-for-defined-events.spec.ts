@@ -143,9 +143,10 @@ defineQualityTest(
         expect(res.status).toBe(200);
 
         const collabNotifs = await notifications(collabCtx);
-        const match = collabNotifs.find((n) => n.type === "STATUS_CHANGED" && n.message.includes("APPROVED"));
+        const match = collabNotifs.find((n) => n.type === "STATUS_CHANGED" && n.message.includes("approved"));
         expect(match).toBeTruthy();
-        expect(match!.message).toBe("The seating plan status changed to APPROVED.");
+        // TS-177: in words, not the status code.
+        expect(match!.message).toBe("The seating plan was approved.");
       });
 
       await test.step("Act + Assert: a post-approval manual move notifies the collaborator (TABLE_CHANGED)", async () => {
@@ -199,7 +200,7 @@ defineQualityTest(
         const toDraft = await weddingData.setPlanVersionStatus(managedWedding.id, planVersionId, "DRAFT");
         expect(toDraft.status).toBe(200);
         const collabNotifsAfterDraft = await notifications(collabCtx);
-        expect(collabNotifsAfterDraft.find((n) => n.type === "STATUS_CHANGED" && n.message.includes("DRAFT"))).toBeTruthy();
+        expect(collabNotifsAfterDraft.find((n) => n.type === "STATUS_CHANGED" && n.message.includes("moved back to draft"))).toBeTruthy();
 
         const beforeCount = collabNotifsAfterDraft.filter((n) => n.type === "TABLE_CHANGED").length;
         const move = await weddingData.moveGuestAssignment(managedWedding.id, planVersionId, guestAId, tableAId);
@@ -217,14 +218,14 @@ defineQualityTest(
         expect(settingsRes.status()).toBe(200);
 
         const beforeCount = (await notifications(collabCtx)).filter(
-          (n) => n.type === "STATUS_CHANGED" && n.message.includes("APPROVED"),
+          (n) => n.type === "STATUS_CHANGED" && n.message.includes("approved"),
         ).length;
 
         const reApprove = await weddingData.setPlanVersionStatus(managedWedding.id, planVersionId, "APPROVED");
         expect(reApprove.status).toBe(200);
 
         const afterCount = (await notifications(collabCtx)).filter(
-          (n) => n.type === "STATUS_CHANGED" && n.message.includes("APPROVED"),
+          (n) => n.type === "STATUS_CHANGED" && n.message.includes("approved"),
         ).length;
         expect(afterCount, "the in-app notification must still be delivered with email notifications disabled").toBe(
           beforeCount + 1,

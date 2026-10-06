@@ -145,7 +145,7 @@ async function checkPlanVersionRevision(
   if (expectedRevision !== undefined && currentRevision !== expectedRevision) {
     const fresh = await getPlanVersionDetail(planVersionId, weddingId);
     throw new PlanVersionConflictError(
-      "This plan changed since you loaded it — someone else's change landed first. It's been refreshed with the latest — please try again.",
+      "This plan changed since you loaded it (maybe in another tab, or by someone else). It's been refreshed with the latest — check it and make your change again if it's still needed.",
       fresh!
     );
   }
@@ -157,6 +157,8 @@ export interface RestorePreview {
   droppedGuests: { guestId: string; guestName: string; reason: string }[];
   unassignedGuestIds: string[];
   isComplete: boolean;
+  // TS-177: of keptCount, how many will be flagged Needs Reassignment once restored.
+  needsFixingCount: number;
   warnings: string[];
 }
 
@@ -457,7 +459,7 @@ export async function setPlanVersionStatus(
       await client.query("ROLLBACK");
       const fresh = await getPlanVersionDetail(id, weddingId);
       throw new PlanVersionConflictError(
-        "This plan changed since you loaded it — someone else's change landed first. It's been refreshed with the latest — please try again.",
+        "This plan changed since you loaded it (maybe in another tab, or by someone else). It's been refreshed with the latest — check it and make your change again if it's still needed.",
         fresh!
       );
     }
@@ -471,7 +473,8 @@ export async function setPlanVersionStatus(
     }
     if (newStatus === "APPROVED" && !current.isComplete) {
       throw new PlanVersionStatusError(
-        "This plan can't be approved yet — some guests are unassigned. Fix that first."
+        // TS-177: a plan is held back by flagged guests too, not just unseated ones.
+        "This plan can't be approved yet — some guests aren't seated, or are flagged Needs Reassignment. Sort those out first."
       );
     }
     if (current.status === newStatus) {
@@ -511,7 +514,10 @@ export async function setPlanVersionStatus(
     newStatus === "IN_REVIEW" ? "PLAN_SHARED" : "STATUS_CHANGED",
     newStatus === "IN_REVIEW"
       ? "The seating plan was shared for review."
-      : `The seating plan status changed to ${newStatus}.`
+      : // TS-177: in words, not the status codes (it read "changed to APPROVED").
+        newStatus === "APPROVED"
+        ? "The seating plan was approved."
+        : "The seating plan was moved back to draft."
   );
 
   return getPlanVersionDetail(id, weddingId);
@@ -1554,6 +1560,10 @@ async function computeRestorePlacement(sourceVersionId: string, weddingId: strin
 
   const warnings: string[] = [];
   const warnedPairs = new Set<string>();
+  // TS-177: guests kept at a table who'll be flagged Needs Reassignment once restored (the real
+  // restore re-checks every table -- see checkNewVersion -- and a must-sit-together pair kept at
+  // different tables fails that check).
+  const needsFixing = new Set<string>();
   for (const [guestId, others] of mustTogetherByGuest) {
     if (!keptIds.has(guestId)) continue;
     for (const otherId of others) {
@@ -1562,12 +1572,14 @@ async function computeRestorePlacement(sourceVersionId: string, weddingId: strin
       if (warnedPairs.has(pairKey)) continue;
       if (tableByKeptGuest.get(guestId) !== tableByKeptGuest.get(otherId)) {
         warnedPairs.add(pairKey);
+        needsFixing.add(guestId);
+        needsFixing.add(otherId);
         const a = guestsById.get(guestId);
         const b = guestsById.get(otherId);
         warnings.push(
           `${a?.name ?? guestId} and ${b?.name ?? otherId} are now required to sit together, but ` +
             `this restored version keeps them at different tables (that rule didn't exist when ` +
-            `this version was made) — move one of them manually if they should be reunited.`
+            `this version was made) — they'll be flagged Needs Reassignment until one of them is moved.`
         );
       }
     }
@@ -1580,7 +1592,10 @@ async function computeRestorePlacement(sourceVersionId: string, weddingId: strin
     kept,
     droppedGuests,
     unassignedGuestIds,
-    isComplete: unassignedGuestIds.length === 0,
+    // TS-177: complete only if the restored version will be -- nobody unseated, and nobody kept
+    // somewhere the re-check will flag. Before, the preview could say "complete" when it wasn't.
+    isComplete: unassignedGuestIds.length === 0 && needsFixing.size === 0,
+    needsFixingCount: needsFixing.size,
     warnings,
   };
 }
@@ -1599,6 +1614,7 @@ export async function previewPlanVersionRestore(
     droppedGuests: result.droppedGuests,
     unassignedGuestIds: result.unassignedGuestIds,
     isComplete: result.isComplete,
+    needsFixingCount: result.needsFixingCount,
     warnings: result.warnings,
   };
 }

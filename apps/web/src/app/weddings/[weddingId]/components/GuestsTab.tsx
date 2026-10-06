@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ConfirmDeleteButton } from "@/components/ConfirmDeleteButton";
 import { api, ApiError, apiErrorMessage } from "@/lib/api-client";
+import { formatMomentDate } from "@/lib/display-format";
 import type {
   AgeCategory,
   GuestDTO,
@@ -13,7 +14,7 @@ import type {
   RsvpStatus,
   WeddingDTO,
 } from "@seatwise/shared";
-import { parseCsv, toCsv, GUEST_TIER_LABELS, RSVP_STATUS_LABELS } from "@seatwise/shared";
+import { formatGuestCounts, parseCsv, toCsv, GUEST_TIER_LABELS, RSVP_STATUS_LABELS } from "@seatwise/shared";
 import { useUnsavedChanges } from "@/lib/unsaved-changes";
 
 const TIERS: GuestTier[] = ["VIP", "FAMILY", "FRIEND", "PLUS_ONE", "OTHER"];
@@ -32,6 +33,9 @@ interface RsvpEmailOutcome {
   emailFailed: boolean;
   // TS-156
   emailLimited?: boolean;
+  // TS-177
+  emailLimitedToday?: boolean;
+  rsvpClosed?: boolean;
   // TS-164
   confirmEmailFirst?: boolean;
   // TS-171
@@ -39,9 +43,16 @@ interface RsvpEmailOutcome {
   recipientLimited?: boolean;
 }
 
-// TS-156: shown when the planner has hit their email limit. (TS-171: it now counts every kind of
-// email the account sends in a day.)
-const EMAIL_LIMITED_NOTE = "You've sent a lot of emails today, so this one wasn't sent";
+// TS-156: shown when the planner has hit their email limit. TS-177: says which one -- the
+// account's daily allowance (every kind of email together) or the hourly limit on RSVP emails.
+function emailLimitedNote(outcome: RsvpEmailOutcome): string {
+  return outcome.emailLimitedToday
+    ? "You've reached today's email limit for your account, so this one wasn't sent"
+    : "You've sent a lot of emails in the last hour, so this one wasn't sent";
+}
+// TS-177 (Tom's decision): after the RSVP cutoff, Seatwise doesn't email the link.
+const RSVP_CLOSED_NOTE =
+  "RSVPs have closed, so this guest wasn't emailed — use \"RSVP link\" to copy it if you still want to send it.";
 // TS-171: this address has already had its share of Seatwise email today.
 const RECIPIENT_LIMITED_NOTE = "This address has already had several emails from Seatwise today, so this one wasn't sent";
 // TS-164
@@ -313,7 +324,7 @@ export function GuestsTab({
     setError(null);
     setAdding(true);
     try {
-      const { guest, rsvpEmail } = await api.post<{ guest: GuestDTO; rsvpEmail?: RsvpEmailOutcome }>(`/api/v1/weddings/${weddingId}/guests`, {
+      const { guest, rsvpEmail, warnings } = await api.post<{ guest: GuestDTO; rsvpEmail?: RsvpEmailOutcome; warnings?: string[] }>(`/api/v1/weddings/${weddingId}/guests`, {
         firstName,
         lastName,
         partyName: partyName || null,
@@ -330,6 +341,8 @@ export function GuestsTab({
       setGuests((cur) => [...cur, guest].sort((a, b) => a.lastName.localeCompare(b.lastName)));
       // TS-143: a guest added with an email was just sent their RSVP link -- say so on their row.
       if (rsvpEmail && guest.email) showAutoRsvpResult(guest.id, guest.email, rsvpEmail);
+      // TS-177: e.g. the guest was saved but the plan couldn't be re-checked just then.
+      setWarning(warnings?.length ? warnings.join(" ") : null);
       setFirstName("");
       setLastName("");
       setPartyName("");
@@ -417,7 +430,7 @@ export function GuestsTab({
   function showConflict(fresh: GuestDTO) {
     putGuest(fresh);
     setRowError(fresh.id, 
-      `${fresh.firstName} ${fresh.lastName} was just edited elsewhere — showing the latest. Try again if you still want to make this change.`
+      `${fresh.firstName} ${fresh.lastName} changed since you loaded it (maybe in another tab, or by someone else) — showing the latest. Try again if you still want to make this change.`
     );
   }
 
@@ -459,10 +472,12 @@ export function GuestsTab({
       ...prev,
       [guestId]: outcome.emailed
         ? `Emailed RSVP link to ${email}`
-        : outcome.confirmEmailFirst
+        : outcome.rsvpClosed
+          ? RSVP_CLOSED_NOTE
+          : outcome.confirmEmailFirst
           ? `${CONFIRM_EMAIL_NOTE} — or use "RSVP link" to copy it and send it yourself.`
           : outcome.emailLimited
-          ? `${EMAIL_LIMITED_NOTE} — use "RSVP link" later, or copy it and send it yourself.`
+          ? `${emailLimitedNote(outcome)} — use "RSVP link" later, or copy it and send it yourself.`
           : outcome.recipientLimited
           ? `${RECIPIENT_LIMITED_NOTE} — use "RSVP link" to copy it and send it yourself.`
           : outcome.recentlyEmailed
@@ -573,10 +588,12 @@ export function GuestsTab({
         { regenerate }
       );
       // TS-132: if the email couldn't be sent, say so -- the planner then sends the link themselves.
-      const notEmailed = rsvp.confirmEmailFirst
+      const notEmailed = rsvp.rsvpClosed
+        ? `${RSVP_CLOSED_NOTE} `
+        : rsvp.confirmEmailFirst
         ? `${CONFIRM_EMAIL_NOTE} — send ${guestEmail} the link yourself. `
         : rsvp.emailLimited
-        ? `${EMAIL_LIMITED_NOTE} — send ${guestEmail} the link yourself. `
+        ? `${emailLimitedNote(rsvp)} — send ${guestEmail} the link yourself. `
         : rsvp.recipientLimited
         ? `${RECIPIENT_LIMITED_NOTE} — send ${guestEmail} the link yourself. `
         : rsvp.recentlyEmailed
@@ -1040,8 +1057,10 @@ export function GuestsTab({
       )}
 
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        {/* TS-177: invitations and people, the same as the dashboard -- "Guests (N)" counted people
+            while the dashboard's "N guests" counted invitations. */}
         <h2 className="text-lg font-medium">
-          Guests ({guests.reduce((sum, g) => sum + g.headcount, 0)})
+          Guests ({formatGuestCounts(guests.length, guests.reduce((sum, g) => sum + g.headcount, 0))})
         </h2>
         {/* TS-170: a download, not a page change -- so it doesn't set off "leave this page?" for
             half-typed input, or replace the page with an error if the session has run out. */}
@@ -1100,7 +1119,7 @@ export function GuestsTab({
                   {g.isLocked && (
                     <span
                       className="ml-2 rounded bg-neutral-800 dark:bg-neutral-700 px-1.5 py-0.5 text-xs text-white"
-                      title="Locked — automated seating won't move this guest to a different table."
+                      title="Locked — new plans keep this guest at their table when the rules allow. You'll see a note if they had to move."
                     >
                       locked
                     </span>
@@ -1108,7 +1127,7 @@ export function GuestsTab({
                   {g.dayOfAttendance === "NOT_ATTENDING" && (
                     <span
                       className="ml-2 rounded bg-red-50 dark:bg-red-950 px-1.5 py-0.5 text-xs text-red-700 dark:text-red-400"
-                      title="Marked not attending in Day-of mode — their seat has been freed."
+                      title="Not attending (they declined, or were marked on the day) — they don't take a seat."
                     >
                       not attending
                     </span>
@@ -1127,7 +1146,7 @@ export function GuestsTab({
                     }`}
                     title={
                       g.rsvpRespondedAt
-                        ? `Responded via their RSVP link on ${new Date(g.rsvpRespondedAt).toLocaleDateString()}`
+                        ? `Responded via their RSVP link on ${formatMomentDate(g.rsvpRespondedAt)}`
                         : "Hasn't responded via their own RSVP link yet"
                     }
                   >
@@ -1217,7 +1236,7 @@ export function GuestsTab({
                     </select>
                     <button
                       onClick={() => onToggleLock(g.id, !g.isLocked)}
-                      title="Locking keeps this guest at their current table when a new plan is generated."
+                      title="Locking keeps this guest at their current table when a new plan is generated, whenever the rules allow."
                       className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800"
                     >
                       {g.isLocked ? "Unlock" : "Lock"}
@@ -1236,14 +1255,14 @@ export function GuestsTab({
                     <button
                       onClick={() => onRsvpLink(g.id, g.email, true)}
                       disabled={rsvpLinkBusy === g.id}
-                      title="Issues a brand new RSVP link, invalidating this guest's old one."
+                      title="Makes a new RSVP link (the old one stops working) and emails it to the guest if they have an email address and RSVPs are still open."
                       className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50"
                     >
                       New link
                     </button>
                     <ConfirmDeleteButton
                       ariaLabel={`Remove ${g.firstName} ${g.lastName}`}
-                      question={`Remove ${g.firstName} ${g.lastName} from the guest list? Their seat and any seating rules involving them are removed too. This can't be undone.`}
+                      question={`Remove ${g.firstName} ${g.lastName} from the guest list? Their seat and any seating rules involving them are removed too, including from saved past versions of the plan. This can't be undone.`}
                       confirmLabel="Yes, remove guest"
                       onConfirm={() => onDeleteGuest(g.id)}
                     />

@@ -1,4 +1,5 @@
 import { emailSafePersonName, emailSafeWeddingName } from "./email-safe-names";
+import { formatDate } from "./display-format";
 
 // TS-171: what Seatwise says to people outside a wedding -- a guest getting their RSVP link, someone
 // invited to help plan. The subject line is always fixed: it's what shows in an inbox before
@@ -23,10 +24,13 @@ export function rsvpEmailText(input: {
 }): { subject: string; text: string } {
   // TS-163: names saved before today's rules only go into the email if they still pass them.
   const firstName = emailSafePersonName(input.guestFirstName);
-  const cutoffNote = input.rsvpCutoffDate ? ` Please respond by ${input.rsvpCutoffDate}.` : "";
+  // TS-177: answers can be changed only while RSVPs are open -- with a cutoff, until that date.
+  const changeNote = input.rsvpCutoffDate
+    ? `Please respond by ${formatDate(input.rsvpCutoffDate)}. You can use this same link to see or change your answer until then.`
+    : "You can use this same link to see or change your answer while RSVPs are open.";
   return {
     subject: RSVP_EMAIL_SUBJECT,
-    text: `${firstName ? `Hi ${firstName}` : "Hi"},\n\nYou've been asked to RSVP for ${quotedWeddingName(input.weddingName)} on Seatwise. Respond here: ${input.url}\n\nIf you've already responded, this same link shows what you submitted and lets you update it.${cutoffNote}`,
+    text: `${firstName ? `Hi ${firstName}` : "Hi"},\n\nYou've been asked to RSVP for ${quotedWeddingName(input.weddingName)} on Seatwise. Respond here: ${input.url}\n\n${changeNote}`,
   };
 }
 
@@ -36,12 +40,14 @@ export function inviteEmailText(input: {
   roleLabel: string;
   permissionLevel: string;
   acceptUrl: string;
+  /** TS-177: how long the link lasts (INVITE_TTL_DAYS), so the email never states a stale number. */
+  expiresInDays: number;
 }): { subject: string; text: string } {
   // TS-156: the inviter's own name only goes into the email if it reads as a name -- accounts
   // made before the signup rule tightened could hold anything.
   const inviter = emailSafePersonName(input.inviterName);
   return {
     subject: INVITE_EMAIL_SUBJECT,
-    text: `${inviter ? `${inviter} invited you` : "You've been invited"} to join ${quotedWeddingName(input.weddingName)} on Seatwise as ${input.roleLabel} with ${input.permissionLevel.toLowerCase()} access.\n\nAccept the invite: ${input.acceptUrl}\n\nThis link expires in 7 days. If you weren't expecting this, you can ignore it.`,
+    text: `${inviter ? `${inviter} invited you` : "You've been invited"} to join ${quotedWeddingName(input.weddingName)} on Seatwise as ${input.roleLabel} with ${input.permissionLevel.toLowerCase()} access.\n\nAccept the invite: ${input.acceptUrl}\n\nTo accept, sign in or create a Seatwise account with this email address. This link works for ${input.expiresInDays} days, unless ${inviter ?? "the person who invited you"} cancels it or sends a new invite. If you weren't expecting this, you can ignore it.`,
   };
 }

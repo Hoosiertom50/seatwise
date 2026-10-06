@@ -2,11 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { createInviteSchema } from "@seatwise/shared";
 import { inviteEmailText } from "@/lib/outgoing-email-text";
 import { confirmEmailFirstMessage } from "@/lib/email-verification";
-import { createInvite, listInvitesForWedding, sendEmailNotification, emailDelivered, InviteError } from "@seatwise/db";
+import { createInvite, listInvitesForWedding, sendEmailNotification, emailDelivered, InviteError, INVITE_TTL_DAYS } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
 import { errorResponse, zodErrorResponse } from "@/lib/api-response";
 import { requireAccess } from "@/lib/access";
-import { releaseEmailSend, reserveEmailSend, TOO_MANY_INVITES } from "@/lib/rate-limit";
+import { emailSendRefusedMessage, releaseEmailSend, reserveEmailSend } from "@/lib/rate-limit";
 
 type Params = { params: Promise<{ weddingId: string }> };
 
@@ -38,10 +38,12 @@ export async function POST(req: NextRequest, { params }: Params) {
   if (!parsed.success) return zodErrorResponse(parsed.error);
 
   // TS-164: only an account that has confirmed its own address can have Seatwise email people.
-  if (user.emailVerifiedAt === null) return errorResponse(confirmEmailFirstMessage(user.email), 403);
+  if (user.emailVerifiedAt === null) return errorResponse(confirmEmailFirstMessage(), 403);
 
   // TS-156: every invite sends an email, so invites are capped per sender.
-  if (!(await reserveEmailSend("invites", user.id))) return errorResponse(TOO_MANY_INVITES, 429);
+  // TS-177: the message says which limit it was -- the account's daily allowance means tomorrow.
+  const reservation = await reserveEmailSend("invites", user.id);
+  if (!reservation.allowed) return errorResponse(emailSendRefusedMessage("invites", reservation.reason), 429);
 
   try {
     const invite = await createInvite(
@@ -65,6 +67,7 @@ export async function POST(req: NextRequest, { params }: Params) {
       roleLabel,
       permissionLevel: invite.permissionLevel,
       acceptUrl,
+      expiresInDays: INVITE_TTL_DAYS,
     });
     const sent = await sendEmailNotification(invite.email, subject, text);
     // TS-171: the invite was made but nothing went out (this address has had its share of email

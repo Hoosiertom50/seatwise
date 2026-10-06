@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { signupSchema } from "@seatwise/shared";
-import { createUser, findUserByEmail, hitRateLimit } from "@seatwise/db";
+import { createUser, emailDelivered, findUserByEmail, hitRateLimit } from "@seatwise/db";
 import { hashPassword, signToken, setAuthCookie, wantsBearerToken } from "@/lib/auth";
 import { errorResponse, zodErrorResponse } from "@/lib/api-response";
 import { accountEmailAddressKey, ACCOUNT_EMAIL_LIMITS, clientAddress, rateLimitOr429, SIGNUP_LIMITS } from "@/lib/rate-limit";
@@ -47,7 +47,7 @@ export async function POST(req: NextRequest) {
     ACCOUNT_EMAIL_LIMITS.perAddressDay.limit,
     ACCOUNT_EMAIL_LIMITS.perAddressDay.windowSeconds
   );
-  const verificationEmailSent = mayEmail ? await sendVerificationEmail(user) : false;
+  const verificationEmailSent = mayEmail ? emailDelivered(await sendVerificationEmail(user)) : false;
 
   const response = NextResponse.json(
     {

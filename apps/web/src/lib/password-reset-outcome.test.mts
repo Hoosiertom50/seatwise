@@ -18,3 +18,14 @@ test("a failed or unconfigured email says it couldn't be sent -- never 'we've se
     assert.deepEqual(resetOutcome(true, result), { sent: false, emailFailed: true, message: RESET_EMAIL_FAILED_MESSAGE });
   }
 });
+
+// TS-177
+test("asking again while a link still works says it was already sent; a used-up day says tomorrow", async () => {
+  const { RESET_ALREADY_SENT_MESSAGE, RESET_EMAIL_LIMITED_MESSAGE } = await import("./password-reset-outcome");
+  assert.deepEqual(resetOutcome(true, "already-sent"), { sent: true, alreadySent: true, message: RESET_ALREADY_SENT_MESSAGE });
+  assert.match(RESET_ALREADY_SENT_MESSAGE, /already sent you a link/);
+  for (const result of ["limited", "recipient-limited"] as const) {
+    assert.deepEqual(resetOutcome(true, result), { sent: false, emailFailed: true, message: RESET_EMAIL_LIMITED_MESSAGE });
+  }
+  assert.match(RESET_EMAIL_LIMITED_MESSAGE, /try again tomorrow/);
+});

@@ -766,7 +766,8 @@ export function CollaboratorsTab({
         <div className="mt-8 rounded-lg border border-neutral-200 dark:border-neutral-700 p-4">
           <h3 className="mb-1 text-sm font-medium">Hand off this wedding</h3>
           <p className="mb-3 text-sm text-neutral-500 dark:text-neutral-400">
-            Make someone with access the owner. You&apos;ll stay on with Edit access, and they&apos;ll
+            Make someone with access the owner. You&apos;ll stay on as a collaborator with Edit access (ask the new
+            owner to make you a Couple member if you need to approve the plan), and they&apos;ll
             manage who has access from then on.
           </p>
           <div className="flex flex-wrap items-center gap-2">
@@ -786,7 +787,7 @@ export function CollaboratorsTab({
             <ConfirmDeleteButton
               label="Hand off"
               disabled={!handOffTo}
-              question={`Make ${collaborators.find((c) => c.id === handOffTo)?.userName ?? "them"} the owner of this wedding? You'll stay on with Edit access. Only the new owner can undo this.`}
+              question={`Make ${collaborators.find((c) => c.id === handOffTo)?.userName ?? "them"} the owner of this wedding? You'll stay on as a collaborator with Edit access. Only the new owner can undo this.`}
               confirmLabel="Yes, hand it off"
               busyLabel="Handing off…"
               className="rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50"

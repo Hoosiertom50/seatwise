@@ -74,7 +74,7 @@ defineQualityTest(
       expect(theirs.ok()).toBe(true);
 
       await weddingGuestsPage.guestRow(fullName).editFirstName("Mine");
-      await expect(weddingGuestsPage.message(/was just edited elsewhere/)).toBeVisible();
+      await expect(weddingGuestsPage.message(/changed since you loaded it .*— showing the latest/)).toBeVisible();
       await expect.poll(() => weddingGuestsPage.guestRow(`Theirs ${name.lastName}`).firstName()).toBe("Theirs");
     });
   },

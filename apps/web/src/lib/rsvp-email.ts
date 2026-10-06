@@ -1,4 +1,5 @@
 import { ensureGuestRsvpToken, regenerateGuestRsvpToken, sendEmailNotification, emailDelivered, hitRateLimit, undoRateLimitHit } from "@seatwise/db";
+import { isRsvpCutoffPast, type RsvpEmailOutcomeDTO } from "@seatwise/shared";
 import { releaseEmailSend, reserveEmailSend, RSVP_RESEND_COOLDOWN_SECONDS } from "./rate-limit";
 import { rsvpEmailText } from "./outgoing-email-text";
 
@@ -18,9 +19,12 @@ export async function sendGuestRsvpLink(
   emailed: boolean;
   emailFailed: boolean;
   emailLimited?: boolean;
+  // TS-177: it was the account's daily allowance that was used up -- more can go out tomorrow.
+  emailLimitedToday?: boolean;
   confirmEmailFirst?: boolean;
   recentlyEmailed?: boolean;
   recipientLimited?: boolean;
+  rsvpClosed?: boolean;
 } | null> {
   const token = regenerate
     ? await regenerateGuestRsvpToken(guest.id, wedding.id)
@@ -30,6 +34,10 @@ export async function sendGuestRsvpLink(
   const appUrl = process.env.APP_URL || "http://localhost:3000";
   const url = `${appUrl}/rsvp/${token}`;
   if (!guest.email) return { url, emailed: false, emailFailed: false };
+  // TS-177 (Tom's decision): once the RSVP cutoff has passed, the link would only open a "closed"
+  // page, so Seatwise doesn't email it -- the planner can still copy it and send it if they choose.
+  // Checked before any limit, so it uses up neither the allowance nor the hourly cooldown.
+  if (isRsvpCutoffPast(wedding.rsvpCutoffDate)) return { url, emailed: false, emailFailed: false, rsvpClosed: true };
   // TS-164: an account that hasn't confirmed its own address can't have Seatwise email people. The
   // link is still made, so the planner can send it themselves.
   if (sender.emailVerifiedAt === null) return { url, emailed: false, emailFailed: true, confirmEmailFirst: true };
@@ -43,9 +51,18 @@ export async function sendGuestRsvpLink(
     if (firstThisHour) await undoRateLimitHit(cooldownKey, RSVP_RESEND_COOLDOWN_SECONDS);
   };
 
-  if (!(await reserveEmailSend("rsvpEmails", sender.id))) {
+  // TS-177: a refused reservation has already given back its own counts (see reserveEmailSend);
+  // only the hourly cooldown needs giving back here.
+  const reservation = await reserveEmailSend("rsvpEmails", sender.id);
+  if (!reservation.allowed) {
     await notSent();
-    return { url, emailed: false, emailFailed: true, emailLimited: true };
+    return {
+      url,
+      emailed: false,
+      emailFailed: true,
+      emailLimited: true,
+      emailLimitedToday: reservation.reason !== "short",
+    };
   }
 
   const { subject, text } = rsvpEmailText({
@@ -63,4 +80,21 @@ export async function sendGuestRsvpLink(
     return { url, emailed: false, emailFailed: true, recipientLimited: true };
   }
   return { url, emailed, emailFailed: !emailed };
+}
+
+// TS-143 / TS-177: the outcome as the guest routes report it (every flag spelled out), so adding a
+// guest and editing one say exactly the same things.
+export function rsvpEmailOutcome(
+  sent: NonNullable<Awaited<ReturnType<typeof sendGuestRsvpLink>>>
+): RsvpEmailOutcomeDTO {
+  return {
+    emailed: sent.emailed,
+    emailFailed: sent.emailFailed,
+    emailLimited: sent.emailLimited ?? false,
+    emailLimitedToday: sent.emailLimitedToday ?? false,
+    confirmEmailFirst: sent.confirmEmailFirst ?? false,
+    recentlyEmailed: sent.recentlyEmailed ?? false,
+    recipientLimited: sent.recipientLimited ?? false,
+    rsvpClosed: sent.rsvpClosed ?? false,
+  };
 }

@@ -10,6 +10,7 @@ import {
 import { getAuthUser } from "@/lib/session";
 import { errorResponse, zodErrorResponse } from "@/lib/api-response";
 import { requireAccess } from "@/lib/access";
+import { SAVED_BUT_NOT_RECHECKED } from "@/lib/post-save";
 
 type Params = { params: Promise<{ weddingId: string }> };
 
@@ -49,10 +50,15 @@ export async function POST(req: NextRequest, { params }: Params) {
     const relationship = await createRelationship(weddingId, parsed.data);
     // TS-150: a new rule is checked against how people are seated right now -- two guests who
     // must not sit together but already do (or must, but don't) are flagged Needs Reassignment.
-    const { newlyFlagged } = await resyncGuestsSeats(weddingId, [parsed.data.guestAId, parsed.data.guestBId]);
-    const warnings = newlyFlagged.map(
-      (f) => `${f.name}'s current seat breaks this rule — flagged as Needs Reassignment.`
-    );
+    // TS-177: the rule is saved by now -- a failed re-check mustn't make it look unsaved.
+    let warnings: string[];
+    try {
+      const { newlyFlagged } = await resyncGuestsSeats(weddingId, [parsed.data.guestAId, parsed.data.guestBId]);
+      warnings = newlyFlagged.map((f) => `${f.name}'s current seat breaks this rule — flagged as Needs Reassignment.`);
+    } catch (resyncErr) {
+      console.error("Seating rule saved, but re-checking seats failed", resyncErr);
+      warnings = [SAVED_BUT_NOT_RECHECKED];
+    }
     return NextResponse.json({ relationship, warnings }, { status: 201 });
   } catch (err) {
     if (err instanceof RelationshipConflictError) {

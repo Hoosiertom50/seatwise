@@ -4,7 +4,7 @@
  * - Day-of: marking two guests Not Attending in quick succession keeps both marked (the second
  *   reply used to undo the first on screen), and seating two guests quickly seats both (the second
  *   used to be refused as if someone else had changed the plan).
- * - Tables: ticking Accessible and then Single-side quickly saves both, with no "edited elsewhere".
+ * - Tables: ticking Accessible and then Single-side quickly saves both, with no "changed since you loaded it".
  * - RSVP page: a failed load says so and offers Try again -- it used to say the link didn't exist.
  * - "Back to dashboard" with half-typed input asks first, like switching tabs (TS-159).
  * - Budget: if only the totals refresh fails after adding a vendor, the vendor is still shown as

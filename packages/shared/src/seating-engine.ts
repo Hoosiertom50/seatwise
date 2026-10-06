@@ -17,7 +17,8 @@
 //     list, so those tables are reserved for manual assignment (a later story).
 //   - Locked guests (FR-7.4) keep their current table when regenerating rather than being
 //     reshuffled, and locked tables are reserved — excluded from the general candidate pool —
-//     so automatic generation doesn't fill them with new guests. If a lock can no longer be
+//     so automatic generation doesn't fill them with new guests -- and (TS-177) everyone already
+//     seated at a locked table stays there, as if each were locked. If a lock can no longer be
 //     honored (the table's gone, or honoring it would break a hard rule), the affected guests
 //     fall back to normal automatic placement with a warning explaining why, rather than being
 //     left unassigned just because a stale lock couldn't be kept.
@@ -413,7 +414,10 @@ export function generateSeatingPlan(
       unit.pinnedTableId = g.requiredTableId;
       unit.pinReason = "required";
     } else if (
-      g.isLocked &&
+      // TS-177 (Tom's decision): a locked *table* keeps the people already at it -- everyone seated
+      // there in the current plan is pinned to it, just like a locked guest. (Nobody new is seated
+      // there: locked tables are left out of the general pool below.)
+      (g.isLocked || (!!g.currentTableId && !!tablesById.get(g.currentTableId)?.isLocked)) &&
       g.currentTableId &&
       !unit.pinnedTableId &&
       // TS-150: a lock never keeps someone at a Restricted table -- if they belong there, their

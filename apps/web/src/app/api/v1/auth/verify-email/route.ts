@@ -19,7 +19,9 @@ export async function POST(req: NextRequest) {
 
   const result = await verifyEmailWithToken(parsed.data.token);
   if (!result) {
-    return errorResponse("This confirmation link has expired or has already been used. Sign in and ask for a new one.", 400);
+    return errorResponse(// TS-177: confirming uses up every older link too, so an older email's link lands here even
+    // though there's nothing left to do.
+    "This confirmation link has expired or was already used. If you've already confirmed your email, you're all set — otherwise sign in and use \"Resend link\" to get a new one.", 400);
   }
   return NextResponse.json({ verified: true });
 }

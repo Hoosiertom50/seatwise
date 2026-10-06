@@ -96,7 +96,8 @@ export class TablesTabPage extends BasePage {
   }
 
   async remainingCapacity(): Promise<number> {
-    return Number(await this.statValue("Remaining capacity").innerText());
+    // TS-177: labelled "Spare seats (after everyone attending)".
+    return Number(await this.statValue("Spare seats (after everyone attending)").innerText());
   }
 
   /** The non-blocking shortfall warning ("Short N seat(s) for everyone attending — ..."), only
@@ -128,7 +129,7 @@ export class TablesTabPage extends BasePage {
 
   /** TS-124: the in-row question shown when guests are seated at the table being removed. */
   removalConfirmation() {
-    return this.page.getByRole("alert").filter({ hasText: "in the current plan. Removing it will leave them unassigned." });
+    return this.page.getByRole("alert").filter({ hasText: "in the current plan. Removing it will leave them unassigned" });
   }
 
   async confirmTableRemoval(): Promise<void> {

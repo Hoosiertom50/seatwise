@@ -6,7 +6,7 @@ import {
   refreshPlanCompleteness,
   lockCurrentPlan,
   recordRecheckIfApproved,
-  type TableSeatingFlagReason,
+  type NewlyFlaggedSeat,
 } from "./seat-checks";
 
 export interface SeatingTableRow {
@@ -292,7 +292,7 @@ export async function updateSeatingTableForWedding(
     if (expectedRevision !== undefined && current.revision !== expectedRevision) {
       const fresh = await getSeatingTableForWedding(id, weddingId);
       throw new TableConflictError(
-        "This table changed since you loaded it — someone else's edit landed first. It's been refreshed with the latest — please try again.",
+        "This table changed since you loaded it (maybe in another tab, or by someone else). It's been refreshed with the latest — check it and make your change again if it's still needed.",
         fresh!
       );
     }
@@ -433,9 +433,9 @@ export async function setRequiredGuestsForTable(
   tableId: string,
   weddingId: string,
   guestIds: string[]
-): Promise<{ table: SeatingTableRow; newlyFlagged: { name: string; reason: TableSeatingFlagReason }[] }> {
+): Promise<{ table: SeatingTableRow; newlyFlagged: NewlyFlaggedSeat[] }> {
   const client = await pool.connect();
-  let newlyFlagged: { name: string; reason: TableSeatingFlagReason }[] = [];
+  let newlyFlagged: NewlyFlaggedSeat[] = [];
   try {
     await client.query("BEGIN");
     // TS-173: the current plan's row first, then the table (see lockCurrentPlan).
@@ -572,7 +572,7 @@ export async function resyncTableSeating(
   tableId: string,
   /** TS-173: also re-check the tables these guests are seated at. */
   alsoGuestIds: string[] = []
-): Promise<{ newlyFlagged: { name: string; reason: TableSeatingFlagReason }[] }> {
+): Promise<{ newlyFlagged: NewlyFlaggedSeat[] }> {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -610,7 +610,7 @@ export async function resyncTableSeating(
 export async function resyncGuestSeat(
   weddingId: string,
   guestId: string
-): Promise<{ newlyFlagged: { name: string; reason: TableSeatingFlagReason }[] }> {
+): Promise<{ newlyFlagged: NewlyFlaggedSeat[] }> {
   const { rows } = await pool.query<{ tableId: string }>(
     `SELECT sa."seatingTableId" AS "tableId"
      FROM "seat_assignments" sa JOIN "plan_versions" pv ON pv.id = sa."planVersionId"

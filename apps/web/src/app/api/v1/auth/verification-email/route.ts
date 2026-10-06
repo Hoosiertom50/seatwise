@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { getAuthUser } from "@/lib/session";
 import { errorResponse } from "@/lib/api-response";
 import { accountEmailAddressKey, ACCOUNT_EMAIL_LIMITS, clientAddress, EMAIL_VERIFICATION_LIMITS, rateLimitOr429 } from "@/lib/rate-limit";
-import { sendVerificationEmail } from "@/lib/email-verification";
+import { emailNotSentMessage, sendVerificationEmail } from "@/lib/email-verification";
+import { emailDelivered } from "@seatwise/db";
 
 // TS-164: "Resend link" -- emails the signed-in account a fresh confirmation link.
 export async function POST(req: NextRequest) {
@@ -19,7 +20,9 @@ export async function POST(req: NextRequest) {
     (await rateLimitOr429(accountEmailAddressKey(clientAddress(req)), ACCOUNT_EMAIL_LIMITS.perAddressDay));
   if (limited) return limited;
 
-  const sent = await sendVerificationEmail(user);
-  if (!sent) return errorResponse("We couldn't send the email just now — please try again in a few minutes.", 502);
+  const result = await sendVerificationEmail(user);
+  if (!emailDelivered(result)) {
+    return errorResponse(emailNotSentMessage(result), result === "limited" || result === "recipient-limited" ? 429 : 502);
+  }
   return NextResponse.json({ sent: true });
 }

@@ -68,7 +68,7 @@ export const createWeddingSchema = weddingBaseSchema
     if (data.templateId && !data.applyTemplateTables && !data.applyTemplateRules) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: "Pick at least one part of the template to use: its table layout, its rule-shape, or both.",
+        message: "Pick at least one part of the template to use: its table layout, its side-mixing setting, or both.",
         path: ["templateId"],
       });
     }
@@ -87,6 +87,8 @@ export interface WeddingDTO {
   // FR-1.3
   note: string | null;
   guestCount: number;
+  // TS-177: everyone the guests bring (the sum of headcounts) -- guestCount counts invitations.
+  peopleCount: number;
   // FR-10.2: per-wedding opt-out for the email side of notifications (the in-app notification
   // itself always fires regardless).
   emailNotificationsEnabled: boolean;
