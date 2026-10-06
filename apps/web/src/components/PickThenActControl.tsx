@@ -53,12 +53,16 @@ export function PickThenActControl({
     } finally {
       // Back to this guest's list (found by id: the row may have been drawn again elsewhere),
       // unless the planner has already moved on to another control.
-      setTimeout(() => {
+      // Checked again a moment later too: the row is often drawn again just after the move, and
+      // Safari leaves focus on the list itself (it doesn't focus a clicked button).
+      const restore = () => {
         const active = document.activeElement;
         const lost = !active || active === document.body || !active.isConnected;
-        const stillHere = active instanceof HTMLElement && active.id === `${id}-act`;
+        const stillHere = active instanceof HTMLElement && (active.id === `${id}-act` || active.id === id);
         if (lost || stillHere) document.getElementById(id)?.focus();
-      }, 0);
+      };
+      setTimeout(restore, 0);
+      setTimeout(restore, 150);
     }
   }
 

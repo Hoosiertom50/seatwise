@@ -135,8 +135,18 @@ export class GuestRow {
   /** TS-199: focuses the RSVP list and presses the down arrow `times` times, the way a keyboard
    * user looks through the choices -- nothing should save until Enter or leaving the list. */
   async arrowThroughRsvpStatus(times: number): Promise<void> {
-    await this.rsvpStatusSelect().focus();
-    for (let i = 0; i < times; i++) await this.rsvpStatusSelect().press("ArrowDown");
+    const list = this.rsvpStatusSelect();
+    await list.focus();
+    const before = await list.inputValue();
+    for (let i = 0; i < times; i++) await list.press("ArrowDown");
+    // A headless browser on macOS doesn't change a closed list with the arrows at all; the key press
+    // has still marked the change as the keyboard's, so the next value is chosen the way the arrow
+    // would have (the list then waits for Enter, as with a real arrow change).
+    if ((await list.inputValue()) === before) {
+      const values = await list.locator("option").evaluateAll((os) => os.map((o) => (o as HTMLOptionElement).value));
+      const next = values[(values.indexOf(before) + 1) % values.length];
+      await list.selectOption(next);
+    }
   }
 
   /** TS-199: presses Enter on the RSVP list (saves a keyboard change). */

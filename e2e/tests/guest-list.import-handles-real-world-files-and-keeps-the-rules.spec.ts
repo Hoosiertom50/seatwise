@@ -270,7 +270,7 @@ defineQualityTest(
     objective:
       "Previews on the Guests tab an export with one guest's Tier changed and another (Confirmed) guest unchanged; then the unchanged guest answers their RSVP link again (still Confirmed, party of 1, with a note) -- which moves their revision but none of the file's values -- and confirms the import still goes through, updating only the first guest. A guest whose row the RSVP does make different is still refused (the TS-92 check).",
     expectedOutcome:
-      "The preview reads '0 new, 1 updating, 1 unchanged'. After the RSVP the second guest's revision is higher. Confirming shows the import-complete summary; the first guest's tier is FAMILY and the second guest keeps their RSVP note. Then, previewing the same file again, the second guest declines before confirming: the commit answers 409 'Nothing was imported: someone else changed a guest in this file since you previewed it'.",
+      "The preview reads '0 new, 1 updating, 1 unchanged'. After the RSVP the second guest's revision is higher. Confirming shows the import-complete summary; the first guest's tier is FAMILY and the second guest keeps their RSVP note. Then, previewing a fresh export with the first guest's tier changed, the second guest declines before confirming: the commit answers 200 with 1 updated and 1 skipped -- the first guest's tier is VIP and the second guest is still Declined.",
     requirementIds: ["REQ-GUEST-LIST-MANAGEMENT", "REQ-CLIENT-RSVP-COLLECTION"],
     tags: ["@mutating", "@feature:guests", "@feature:rsvp", "@risk:high", "@suite:regression"],
   },
@@ -306,7 +306,9 @@ defineQualityTest(
         expect((await guestOf(answering.id)).rsvpNotes).toBe("See you there");
       });
 
-      await test.step("An RSVP that does change the guest's row still cancels it", async () => {
+      // TS-180/TS-198: a guest whose own answer changed after the file was exported is skipped (the
+      // file's older row would undo it), and the rest of the file still imports.
+      await test.step("An RSVP that does change the guest's row skips that row and keeps their answer", async () => {
         const fresh = exportRows(await (await context.request.get(api("guests/export"))).text());
         fresh.rows.find((r) => r[0] === changed.id)![fresh.header.indexOf("Tier")] = "VIP";
         await weddingGuestsPage.importGuestsFromCsvAndPreview(joinRows(fresh.header, fresh.rows));
@@ -314,9 +316,12 @@ defineQualityTest(
         const res = await visitor.post(`/api/v1/rsvp/${token}`, { data: { rsvpStatus: "DECLINED" } });
         expect(res.status(), await res.text()).toBe(200);
         const commit = await weddingGuestsPage.confirmImportExpectingRefusal();
-        expect(commit.status()).toBe(409);
-        expect(((await commit.json()) as { error: string }).error).toMatch(/^Nothing was imported: someone else changed a guest in this file since you previewed it/);
-        expect((await guestOf(changed.id)).tier).toBe("FAMILY");
+        expect(commit.status()).toBe(200);
+        const { result } = (await commit.json()) as { result: { updatedCount: number; skippedCount?: number } };
+        expect(result.updatedCount).toBe(1);
+        expect(result.skippedCount).toBe(1);
+        expect((await guestOf(changed.id)).tier).toBe("VIP");
+        expect((await guestOf(answering.id)).rsvpStatus).toBe("DECLINED");
       });
     } finally {
       await visitor.dispose();

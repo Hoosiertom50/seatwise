@@ -156,11 +156,12 @@ defineQualityTest(
       expect(await saved()).toEqual(["Alex", "Groom"]);
     });
 
-    await test.step("The settings say why and put the saved name back", async () => {
+    await test.step("The settings say why, keep what was typed to fix, and save nothing", async () => {
       await collaboratorsTabPage.goto(w);
       await collaboratorsTabPage.setAndLeave(collaboratorsTabPage.sideLabelInput(2), "BOTH");
       await expect(collaboratorsTabPage.message(SIDE_LABELS_MESSAGE)).toBeVisible();
-      await expect(collaboratorsTabPage.sideLabelInput(2)).toHaveValue("Groom");
+      // TS-199: a refused value stays in the box with the reason, for the owner to fix.
+      await expect(collaboratorsTabPage.sideLabelInput(2)).toHaveValue("BOTH");
       expect(await saved()).toEqual(["Alex", "Groom"]);
     });
   },

@@ -133,9 +133,11 @@ defineQualityTest(
       await row.arrowThroughRsvpStatus(2);
       expect(await rsvpSent, "no RSVP save is sent while arrowing").toBe(false);
       expect((await weddingData.listGuests(w)).find((g) => g.id === moverId)?.rsvpStatus).toBe("PENDING");
+      // Read after Enter: on Linux the arrows change a closed list's value as they go, while on
+      // macOS they open the list and move its highlight -- either way Enter takes the answer.
+      await row.confirmRsvpStatusWithEnter();
       const shown = await row.rsvpStatus();
       expect(shown).not.toBe("PENDING");
-      await row.confirmRsvpStatusWithEnter();
       await expect.poll(async () => (await weddingData.listGuests(w)).find((g) => g.id === moverId)?.rsvpStatus).toBe(shown);
     });
   },

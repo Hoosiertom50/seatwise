@@ -178,13 +178,13 @@ async function focusedStop(page: Page, index: number): Promise<(TabStop & { key:
   return page.evaluate((i) => {
     const el = document.activeElement as HTMLElement | null;
     if (!el || el === document.body || el === document.documentElement) return null;
-    // A stable identity for "already visited": the element's path from the document root.
+    // A stable identity for each control: a tag set the first time it's seen (its position in the
+    // page shifts when the tab finishes loading or a notice appears, so positions don't match up).
     const pathOf = (e: Element) => {
-      const path: number[] = [];
-      for (let n: Element | null = e; n && n.parentElement; n = n.parentElement) {
-        path.unshift(Array.prototype.indexOf.call(n.parentElement.children, n));
-      }
-      return path.join(".");
+      const w = window as unknown as { __tabWalkId?: number };
+      const el = e as HTMLElement;
+      if (!el.dataset.tabWalkId) el.dataset.tabWalkId = String((w.__tabWalkId = (w.__tabWalkId ?? 0) + 1));
+      return el.dataset.tabWalkId;
     };
     const key = pathOf(el);
     // TS-200: a radio group is one Tab stop, whichever of its radios has focus.
@@ -224,12 +224,13 @@ async function focusedStop(page: Page, index: number): Promise<(TabStop & { key:
 async function visibleControls(page: Page, root: ElementHandle<Element> | null): Promise<{ countKey: string; description: string }[]> {
   return page.evaluate((r) => {
     const scope: Element = r ?? document.body;
+    // A stable identity for each control: a tag set the first time it's seen (its position in the
+    // page shifts when the tab finishes loading or a notice appears, so positions don't match up).
     const pathOf = (e: Element) => {
-      const path: number[] = [];
-      for (let n: Element | null = e; n && n.parentElement; n = n.parentElement) {
-        path.unshift(Array.prototype.indexOf.call(n.parentElement.children, n));
-      }
-      return path.join(".");
+      const w = window as unknown as { __tabWalkId?: number };
+      const el = e as HTMLElement;
+      if (!el.dataset.tabWalkId) el.dataset.tabWalkId = String((w.__tabWalkId = (w.__tabWalkId ?? 0) + 1));
+      return el.dataset.tabWalkId;
     };
     const found = new Map<string, string>();
     const candidates = scope.querySelectorAll<HTMLElement>(
@@ -237,6 +238,10 @@ async function visibleControls(page: Page, root: ElementHandle<Element> | null):
     );
     for (const el of Array.from(candidates)) {
       if (el.tabIndex < 0 || el.matches(":disabled") || el.closest("[inert]")) continue;
+      // TS-200: inside a folded-shut <details> (other than its own summary) a control can't be
+      // reached until it's unfolded -- it isn't one of the page's controls yet.
+      const folded = el.closest("details:not([open])");
+      if (folded && !el.closest("summary")) continue;
       if (el instanceof HTMLInputElement && el.type === "hidden") continue;
       const rect = el.getBoundingClientRect();
       if (rect.width === 0 || rect.height === 0 || getComputedStyle(el).visibility === "hidden") continue;
@@ -261,8 +266,10 @@ async function visibleControls(page: Page, root: ElementHandle<Element> | null):
  */
 export async function walkTabOrderDetailed(page: Page, options: WalkOptions = {}): Promise<TabWalk> {
   const maxStops = options.maxStops ?? DEFAULT_MAX_STOPS;
+  // TS-200: the walk and the count must see the same page -- wait until it has finished loading
+  // (some controls stay switched off until their data arrives).
+  await page.waitForLoadState("networkidle");
   const region = options.region ? await options.region.elementHandle() : null;
-  const controls = await visibleControls(page, region);
   const focusedFirst = await page.evaluate((root) => {
     window.scrollTo(0, 0);
     const scope: Element = root ?? document.body;
@@ -271,6 +278,10 @@ export async function walkTabOrderDetailed(page: Page, options: WalkOptions = {}
     );
     for (const el of Array.from(candidates)) {
       if (el.tabIndex < 0 || el.matches(":disabled") || el.closest("[inert]")) continue;
+      // TS-200: inside a folded-shut <details> (other than its own summary) a control can't be
+      // reached until it's unfolded -- it isn't one of the page's controls yet.
+      const folded = el.closest("details:not([open])");
+      if (folded && !el.closest("summary")) continue;
       if (el instanceof HTMLInputElement && el.type === "hidden") continue;
       const rect = el.getBoundingClientRect();
       if (rect.width === 0 || rect.height === 0 || getComputedStyle(el).visibility === "hidden") continue;
@@ -288,6 +299,7 @@ export async function walkTabOrderDetailed(page: Page, options: WalkOptions = {}
   } else {
     const seen = new Set<string>();
     let firstKey = "";
+    let previousKey = "";
     for (let i = 0; i < maxStops; i++) {
       if (i > 0) await page.keyboard.press("Tab");
       let stop = await focusedStop(page, i);
@@ -303,6 +315,9 @@ export async function walkTabOrderDetailed(page: Page, options: WalkOptions = {}
         end = !stop || seen.has(stop.key) ? "left-page" : "lost-focus";
         break;
       }
+      // A date or time box keeps focus while Tab moves through its parts (month, day, year), so the
+      // same control again straight after itself is still that one stop, not a loop.
+      if (stop.key === previousKey) continue;
       if (seen.has(stop.key)) {
         end = stop.key === firstKey ? "came-round" : "trapped";
         break;
@@ -312,12 +327,15 @@ export async function walkTabOrderDetailed(page: Page, options: WalkOptions = {}
         break;
       }
       if (i === 0) firstKey = stop.key;
+      previousKey = stop.key;
       seen.add(stop.key);
       const { key: _key, countKey, ...rest } = stop;
       stops.push(rest);
       if (rest.width > 0 && rest.height > 0) reached.set(countKey, rest.description);
     }
   }
+  // TS-200: counted after the walk, once the page has settled (see pathOf).
+  const controls = await visibleControls(page, region);
   await region?.dispose();
 
   const counted = new Set(controls.map((c) => c.countKey));
@@ -344,6 +362,15 @@ export async function checkTabOrder(
   page: Page,
   options: TabOrderOptions & WalkOptions & { allowCount?: readonly TabCountException[] } = {},
 ): Promise<{ stops: TabStop[]; problems: string[]; walk: TabWalk; walkProblems: string[] }> {
-  const walk = await walkTabOrderDetailed(page, options);
-  return { stops: walk.stops, problems: tabOrderProblems(walk.stops, options), walk, walkProblems: tabWalkProblems(walk, options.allowCount) };
+  // TS-200: a tab still drawing its data can be walked before its controls are in place (they
+  // arrive, or switch on, a moment later). A real problem shows on every walk; one that only shows
+  // on a page that had not settled does not -- so the walk is tried up to three times, a moment apart.
+  let walk = await walkTabOrderDetailed(page, options);
+  let walkProblems = tabWalkProblems(walk, options.allowCount);
+  for (let attempt = 1; attempt < 3 && walkProblems.length > 0; attempt++) {
+    await page.waitForTimeout(750);
+    walk = await walkTabOrderDetailed(page, options);
+    walkProblems = tabWalkProblems(walk, options.allowCount);
+  }
+  return { stops: walk.stops, problems: tabOrderProblems(walk.stops, options), walk, walkProblems };
 }
