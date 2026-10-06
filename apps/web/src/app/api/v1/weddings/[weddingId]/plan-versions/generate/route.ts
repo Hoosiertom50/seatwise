@@ -20,7 +20,7 @@ import {
 import { getAuthUser } from "@/lib/session";
 import { errorResponse, zodErrorResponse, concurrentChangeResponse } from "@/lib/api-response";
 import { requireAccess, canManageApproval } from "@/lib/access";
-import { SAVED_AS_DRAFT_BECAUSE_APPROVED } from "@/lib/plan-approval-text";
+import { SAVED_AS_DRAFT_BECAUSE_APPROVED, MADE_CURRENT_BECAUSE_NO_CURRENT_PLAN } from "@/lib/plan-approval-text";
 
 type Params = { params: Promise<{ weddingId: string }> };
 
@@ -123,10 +123,13 @@ export async function POST(req: NextRequest, { params }: Params) {
 
   let planVersionId: string;
   let savedAsDraftBecauseApproved: boolean;
+  let madeCurrentBecauseNoCurrentPlan: boolean;
   try {
     // TS-173: the new version is re-checked table by table and recounted as it's saved, since
     // tables, rules or lists can change while the plan above was being worked out.
-    ({ planVersionId, savedAsDraftBecauseApproved } = await createPlanVersionWithAssignments(weddingId, {
+    // TS-189: a comparison draft asked for when there's no current plan is made current instead
+    // (madeCurrentBecauseNoCurrentPlan) -- decided as it's saved, under the wedding lock.
+    ({ planVersionId, savedAsDraftBecauseApproved, madeCurrentBecauseNoCurrentPlan } = await createPlanVersionWithAssignments(weddingId, {
       isComplete: result.isComplete,
       warnings: result.warnings,
       assignments: result.assignments,
@@ -155,7 +158,12 @@ export async function POST(req: NextRequest, { params }: Params) {
       planVersion,
       scoreReport: result.scoreReport,
       savedAsDraftBecauseApproved,
-      ...(savedAsDraftBecauseApproved ? { notice: SAVED_AS_DRAFT_BECAUSE_APPROVED } : {}),
+      madeCurrentBecauseNoCurrentPlan,
+      ...(savedAsDraftBecauseApproved
+        ? { notice: SAVED_AS_DRAFT_BECAUSE_APPROVED }
+        : madeCurrentBecauseNoCurrentPlan
+          ? { notice: MADE_CURRENT_BECAUSE_NO_CURRENT_PLAN }
+          : {}),
     },
     { status: 201 }
   );

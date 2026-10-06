@@ -109,13 +109,13 @@ defineQualityTest(
       // Newest-first: the very first entry is the last thing that happened -- the IN_REVIEW ->
       // APPROVED status change -- and the very last (oldest) is the initial generation.
       expect(entries[0].action).toBe("STATUS_CHANGE");
-      expect(entries[0].description).toBe("Status changed from IN_REVIEW to APPROVED");
+      expect(entries[0].description).toBe("Status changed from In review to Approved");
       expect(entries[entries.length - 1].action).toBe("GENERATE");
 
       const statusChanges = entries.filter((e) => e.action === "STATUS_CHANGE");
       expect(statusChanges).toHaveLength(2);
       expect(statusChanges.map((e) => e.description).sort()).toEqual(
-        ["Status changed from DRAFT to IN_REVIEW", "Status changed from IN_REVIEW to APPROVED"].sort(),
+        ["Status changed from Draft to In review", "Status changed from In review to Approved"].sort(),
       );
 
       const manualMove = entries.find((e) => e.action === "MANUAL_MOVE");

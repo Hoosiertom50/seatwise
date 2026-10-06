@@ -1,5 +1,5 @@
 import { randomUUID } from "crypto";
-import { pool } from "../pool";
+import { pool, beginTransaction } from "../pool";
 import { lockCurrentPlan, lockRestrictedLists } from "./seat-checks";
 
 export type RelationshipType =
@@ -127,7 +127,7 @@ export async function createRelationship(
   const id = randomUUID();
   const client = await pool.connect();
   try {
-    await client.query("BEGIN");
+    await beginTransaction(client);
     // TS-181: the current plan's row (see lockCurrentPlan), then the lists -- the same locks a
     // Restricted table's list save takes -- so a new rule and a new list can't each pass their
     // checks against the other's old state. That also puts two new rules for the same wedding
@@ -219,7 +219,7 @@ export async function createRelationship(
     );
     await client.query("COMMIT");
   } catch (err) {
-    await client.query("ROLLBACK");
+    await client.query("ROLLBACK").catch(() => {});
     // The database's own one-of-each-rule check, if a duplicate slipped in some other way.
     if ((err as { code?: string }).code === "23505") {
       throw new RelationshipConflictError("That rule already exists for these two guests.");

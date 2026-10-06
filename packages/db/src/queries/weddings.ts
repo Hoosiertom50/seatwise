@@ -1,5 +1,5 @@
 import { randomUUID } from "crypto";
-import { pool } from "../pool";
+import { pool, beginTransaction } from "../pool";
 import { TemplateNotFoundError } from "./templates";
 
 export interface WeddingRow {
@@ -116,7 +116,7 @@ export async function createWedding(
 ): Promise<WeddingRow> {
   const client = await pool.connect();
   try {
-    await client.query("BEGIN");
+    await beginTransaction(client);
 
     let sideMixing = input.sideMixing ?? null;
     let templateTables: Array<{
@@ -207,7 +207,7 @@ export async function createWedding(
     await client.query("COMMIT");
     return { ...wedding, guestCount: 0, peopleCount: 0 };
   } catch (err) {
-    await client.query("ROLLBACK");
+    await client.query("ROLLBACK").catch(() => {});
     throw err;
   } finally {
     client.release();

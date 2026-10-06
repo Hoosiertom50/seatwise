@@ -169,6 +169,12 @@ export default async function globalTeardown(): Promise<void> {
     // TS-103: accounts last. User is the root of the cascade, so this also catches any wedding or
     // template belonging to a test account that the marker-scoped statements above did not match
     // (e.g. a row created before the marker existed, or one named outside ids.ts entirely).
+    // TS-187: the database no longer deletes a wedding along with its owner's account (ON DELETE
+    // RESTRICT), so any wedding a test account still owns goes first.
+    await pool.query(
+      `DELETE FROM "weddings" WHERE "ownerId" IN (SELECT id FROM "users" WHERE email LIKE '%' || $1)`,
+      [TEST_ACCOUNT_EMAIL_DOMAIN],
+    );
     const { rowCount: usersDeleted } = await pool.query(
       `DELETE FROM "users" WHERE email LIKE '%' || $1`,
       [TEST_ACCOUNT_EMAIL_DOMAIN],

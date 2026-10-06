@@ -1,5 +1,5 @@
 import { randomUUID } from "crypto";
-import { pool } from "../pool";
+import { pool, beginTransaction } from "../pool";
 import { encryptText } from "../crypto";
 import { hashLinkToken, isPlainStoredLinkToken, newLinkToken, readStoredLinkToken } from "../link-tokens";
 
@@ -152,17 +152,20 @@ export async function updateVendorForWedding(
 
   const client = await pool.connect();
   try {
-    await client.query("BEGIN");
+    await beginTransaction(client);
     const { rows } = await client.query(
-      `SELECT revision FROM "vendors" WHERE id = $1 AND "weddingId" = $2 FOR UPDATE`,
+      // TS-187: NO KEY UPDATE -- the row's id and link don't change here.
+      `SELECT revision FROM "vendors" WHERE id = $1 AND "weddingId" = $2 FOR NO KEY UPDATE`,
       [id, weddingId]
     );
     const current = rows[0];
     if (!current) {
-      await client.query("ROLLBACK");
+      await client.query("ROLLBACK").catch(() => {});
       return false;
     }
     if (expectedRevision !== undefined && current.revision !== expectedRevision) {
+      // TS-187: the lock is let go before the fresh copy is read on another connection.
+      await client.query("ROLLBACK").catch(() => {});
       const fresh = await getVendorForWedding(id, weddingId);
       throw new VendorConflictError(
         "This vendor changed since you loaded it (maybe in another tab, or by someone else). It's been refreshed with the latest — check it and make your change again if it's still needed.",
@@ -180,7 +183,7 @@ export async function updateVendorForWedding(
     await client.query("COMMIT");
     return true;
   } catch (err) {
-    await client.query("ROLLBACK");
+    await client.query("ROLLBACK").catch(() => {});
     throw err;
   } finally {
     client.release();

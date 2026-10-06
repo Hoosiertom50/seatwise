@@ -64,7 +64,9 @@ enum SideMixingSetting {
 model Wedding {
   id        String        @id @default(cuid())
   ownerId   String
-  owner     User          @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  // TS-187: Restrict -- an account that owns a wedding can't be deleted (it hands its weddings off
+  // first), and the database refuses it too, so a wedding is never deleted along with an account.
+  owner     User          @relation(fields: [ownerId], references: [id], onDelete: Restrict)
   name      String
   eventDate DateTime?     @db.Date
   venueName String?

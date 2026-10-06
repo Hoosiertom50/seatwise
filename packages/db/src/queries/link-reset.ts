@@ -1,4 +1,4 @@
-import { pool } from "../pool";
+import { pool, beginTransaction } from "../pool";
 import { newLinkToken } from "../link-tokens";
 
 export interface ResetLinksResult {
@@ -15,9 +15,9 @@ export interface ResetLinksResult {
 export async function resetWeddingLinkTokens(weddingId: string): Promise<ResetLinksResult> {
   const client = await pool.connect();
   try {
-    await client.query("BEGIN");
+    await beginTransaction(client);
     const { rows: guests } = await client.query(
-      `SELECT id FROM "guests" WHERE "weddingId" = $1 AND ("rsvpTokenHash" IS NOT NULL OR "rsvpToken" IS NOT NULL) FOR UPDATE`,
+      `SELECT id FROM "guests" WHERE "weddingId" = $1 AND ("rsvpTokenHash" IS NOT NULL OR "rsvpToken" IS NOT NULL) FOR NO KEY UPDATE`,
       [weddingId]
     );
     for (const g of guests) {
@@ -29,7 +29,7 @@ export async function resetWeddingLinkTokens(weddingId: string): Promise<ResetLi
       ]);
     }
     const { rows: vendors } = await client.query(
-      `SELECT id FROM "vendors" WHERE "weddingId" = $1 AND ("shareTokenHash" IS NOT NULL OR "shareToken" IS NOT NULL) FOR UPDATE`,
+      `SELECT id FROM "vendors" WHERE "weddingId" = $1 AND ("shareTokenHash" IS NOT NULL OR "shareToken" IS NOT NULL) FOR NO KEY UPDATE`,
       [weddingId]
     );
     for (const v of vendors) {
@@ -43,7 +43,7 @@ export async function resetWeddingLinkTokens(weddingId: string): Promise<ResetLi
     await client.query("COMMIT");
     return { guestLinks: guests.length, vendorLinks: vendors.length };
   } catch (err) {
-    await client.query("ROLLBACK");
+    await client.query("ROLLBACK").catch(() => {});
     throw err;
   } finally {
     client.release();
