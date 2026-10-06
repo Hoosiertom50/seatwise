@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import type { ZodError } from "zod";
 import { PlanSourceChangedError } from "@seatwise/db";
-import { isNonJsonBody } from "./json-body";
+import { BODY_TOO_LARGE_MESSAGE, declaresBodyTooLarge, isNonJsonBody, readBodyTextWithin } from "./json-body";
 
 export function errorResponse(
   message: string,
@@ -22,7 +22,18 @@ export async function readJson(
   req: Request
 ): Promise<{ ok: true; body: unknown } | { ok: false; response: NextResponse }> {
   if (isNonJsonBody(req.headers)) return { ok: false, response: errorResponse(SEND_AS_JSON, 415) };
-  const body: unknown = await req.json().catch(() => null);
+  // TS-200: a body over MAX_JSON_BODY_BYTES is refused (413) -- by its Content-Length before it's
+  // read, or part-way through reading when it came without one.
+  const tooLarge = { ok: false as const, response: errorResponse(BODY_TOO_LARGE_MESSAGE, 413) };
+  if (declaresBodyTooLarge(req.headers)) return tooLarge;
+  const text = await readBodyTextWithin(req.body).catch(() => "");
+  if (text === null) return tooLarge;
+  let body: unknown = null;
+  try {
+    body = text ? JSON.parse(text) : null;
+  } catch {
+    body = null;
+  }
   return { ok: true, body };
 }
 

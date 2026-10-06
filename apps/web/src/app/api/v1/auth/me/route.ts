@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
+import { MAX_PASSWORD_INPUT } from "@seatwise/shared";
 import { deleteUserAccount, findUserById } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
 import { errorResponse, readJson, zodErrorResponse } from "@/lib/api-response";
@@ -15,7 +16,9 @@ export async function GET(req: NextRequest) {
   });
 }
 
-const deleteSchema = z.object({ password: z.string().min(1, "Enter your password to confirm") });
+// TS-200: capped like the sign-in password (loginSchema in packages/shared) -- longer than any
+// password can be, only a guard against a huge value being hashed.
+const deleteSchema = z.object({ password: z.string().min(1, "Enter your password to confirm").max(MAX_PASSWORD_INPUT) });
 
 // TS-105: delete my own account. Needs the password, and is refused (409, with the list) while
 // the account still owns any wedding -- those must be handed off first, so no wedding is ever

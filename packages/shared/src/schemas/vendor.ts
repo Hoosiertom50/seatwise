@@ -64,8 +64,10 @@ const vendorBaseSchema = z.object({
     .optional()
     .transform((v) => (v === "" ? null : v)),
   // TS-193: only the characters a phone number is written with (see ../field-limits).
+  // TS-200: through .pipe, so the phone rule only runs on a value that passed safeText's checks
+  // (its length first) -- a .refine here would also run on a value that was far too long.
   contactPhone: safeText(FIELD_LIMITS.vendorContactPhone)
-    .refine(isAllowedContactPhone, CONTACT_PHONE_MESSAGE)
+    .pipe(z.string().refine(isAllowedContactPhone, CONTACT_PHONE_MESSAGE))
     .optional()
     .nullable(),
   costCents: costCentsField,

@@ -20,13 +20,22 @@
  *     nothing. A sticky/fixed control met later in the walk is reported, unless allow-listed.
  *   - Invisible controls (zero size, e.g. a visually hidden skip link) are skipped.
  *
+ * TS-200: the walk itself is checked too (`tabWalkProblems`). It must end cleanly -- by leaving
+ * the page or region, or coming back to its first control -- not by giving up at `maxStops`, by
+ * focus dropping to the page part-way, or by going round in a loop; otherwise it didn't see
+ * everything. And it must stop on exactly the visible controls in the walked page or region
+ * (disabled, hidden, inert and tabindex="-1" ones aren't counted; a radio group counts once): a
+ * control Tab skips can't be used from the keyboard, and a stop that isn't a control (a box that
+ * only scrolls) is a wasted step. Known exceptions go in a `TabCountException` list, each with its
+ * reason -- same rules as the allow-list below.
+ *
  * Allow-list (`TabOrderException`): a known, accepted exception is written down where the check
  * is run, with its reason -- matched on the two stops' descriptions (role/tag plus accessible
  * name or label), never on a selector, so no selector leaves the page objects. Keep it short:
  * every entry is a place a keyboard user is sent somewhere unexpected.
  */
 
-import type { Locator, Page } from "@playwright/test";
+import type { ElementHandle, Locator, Page } from "@playwright/test";
 
 export interface TabStop {
   /** 0-based position in the walk. */
@@ -102,16 +111,87 @@ export function tabOrderProblems(stops: readonly TabStop[], options: TabOrderOpt
   return problems;
 }
 
+/**
+ * TS-200: how a walk ended. Only the first three are a clean end -- the walk saw every control:
+ *   - "left-region": Tab moved focus out of the region being walked;
+ *   - "came-round": Tab came back to the first control of the walk;
+ *   - "left-page": Tab moved focus off the page (to the browser), or round to the page's start;
+ *   - "trapped": Tab came back to a control in the middle of the walk, not the first one;
+ *   - "lost-focus": focus fell to the page itself part-way through, and the next Tab went on to a
+ *     control not yet seen (a control removed from under the focus, say);
+ *   - "max-stops": the walk gave up after `maxStops` stops;
+ *   - "nothing-focusable": there was no control to start from.
+ */
+export type TabWalkEnd = "left-region" | "came-round" | "left-page" | "trapped" | "lost-focus" | "max-stops" | "nothing-focusable";
+
+/** TS-200: everything one walk found (see walkTabOrderDetailed). */
+export interface TabWalk {
+  stops: TabStop[];
+  end: TabWalkEnd;
+  maxStops: number;
+  /** How many visible controls Tab should reach in the walked page or region (a radio group counts once). */
+  focusableCount: number;
+  /** Visible controls that were counted but Tab never reached. */
+  unreached: string[];
+  /** Visible stops Tab reached that weren't counted (e.g. a box that only scrolls). */
+  uncounted: string[];
+}
+
+/**
+ * TS-200: a control allowed to be missed by Tab, or reached without being counted -- matched on
+ * its description, with the reason it's acceptable. Same spirit as TabOrderException: short, and
+ * each entry agreed.
+ */
+export interface TabCountException {
+  matches: RegExp;
+  reason: string;
+}
+
+/**
+ * TS-200: whether the walk itself can be trusted (empty when it can). A walk that gave up at
+ * `maxStops`, or lost focus part-way, or went round in a loop, didn't see the whole page -- so
+ * "no reading-order problems" from it would mean nothing. And Tab must reach exactly the visible
+ * controls there are: one it skips can't be used from the keyboard at all. Pure, so it is
+ * unit-tested without a browser.
+ */
+export function tabWalkProblems(walk: TabWalk, allow: readonly TabCountException[] = []): string[] {
+  const problems: string[] = [];
+  const excused = (description: string) => allow.some((e) => e.matches.test(description));
+  if (walk.end === "max-stops") problems.push(`the walk gave up after ${walk.maxStops} stops without leaving the page -- raise maxStops or walk a smaller region`);
+  if (walk.end === "lost-focus") problems.push(`focus fell to the page itself after stop ${walk.stops.length}, and Tab then went on to a control not yet seen`);
+  if (walk.end === "trapped") problems.push(`Tab came back to a control in the middle of the walk (after stop ${walk.stops.length}) instead of moving on`);
+  if (walk.end === "nothing-focusable") problems.push("there was no control to start the walk from");
+  const unreached = walk.unreached.filter((d) => !excused(d));
+  const uncounted = walk.uncounted.filter((d) => !excused(d));
+  for (const d of unreached) problems.push(`Tab never reached ${d}`);
+  for (const d of uncounted) problems.push(`Tab stopped on ${d}, which isn't a control`);
+  const visibleStops = walk.stops.filter((s) => s.width > 0 && s.height > 0).length;
+  const expected = walk.focusableCount - (walk.unreached.length - unreached.length) + (walk.uncounted.length - uncounted.length);
+  if (problems.length === 0 && visibleStops !== expected) {
+    problems.push(`Tab made ${visibleStops} visible stops, but there are ${expected} visible controls`);
+  }
+  return problems;
+}
+
 /** Describes and measures whatever has focus right now (null when nothing on the page does). */
-async function focusedStop(page: Page, index: number): Promise<(TabStop & { key: string }) | null> {
+async function focusedStop(page: Page, index: number): Promise<(TabStop & { key: string; countKey: string }) | null> {
   return page.evaluate((i) => {
     const el = document.activeElement as HTMLElement | null;
     if (!el || el === document.body || el === document.documentElement) return null;
     // A stable identity for "already visited": the element's path from the document root.
-    const path: number[] = [];
-    for (let n: Element | null = el; n && n.parentElement; n = n.parentElement) {
-      path.unshift(Array.prototype.indexOf.call(n.parentElement.children, n));
-    }
+    const pathOf = (e: Element) => {
+      const path: number[] = [];
+      for (let n: Element | null = e; n && n.parentElement; n = n.parentElement) {
+        path.unshift(Array.prototype.indexOf.call(n.parentElement.children, n));
+      }
+      return path.join(".");
+    };
+    const key = pathOf(el);
+    // TS-200: a radio group is one Tab stop, whichever of its radios has focus.
+    const countKey =
+      el instanceof HTMLInputElement && el.type === "radio" && el.name
+        ? `radio:${el.form ? pathOf(el.form) : ""}:${el.name}`
+        : key;
     const rect = el.getBoundingClientRect();
     let left = rect.left + window.scrollX;
     let top = rect.top + window.scrollY;
@@ -132,18 +212,57 @@ async function focusedStop(page: Page, index: number): Promise<(TabStop & { key:
       "";
     const role = el.getAttribute("role") ?? el.tagName.toLowerCase();
     const description = `${role}${el.id ? `#${el.id}` : ""} "${name.replace(/\s+/g, " ").trim().slice(0, 60)}"`;
-    return { index: i, description, left, top, width: rect.width, height: rect.height, pinned, key: path.join(".") };
+    return { index: i, description, left, top, width: rect.width, height: rect.height, pinned, key, countKey };
   }, index);
 }
 
 /**
- * Focuses the first visible control on the page (or inside `region`), then presses Tab through
- * every control in turn and returns where each one was. The page should already be loaded and
- * settled. Stops when focus leaves the page or the region, or comes back to a control already seen.
+ * TS-200: every visible control Tab should reach in `root` (the whole page when null), each with
+ * the same identity focusedStop gives it -- a radio group once. Disabled, hidden, zero-size,
+ * inert and tabindex="-1" controls aren't counted.
  */
-export async function walkTabOrder(page: Page, options: WalkOptions = {}): Promise<TabStop[]> {
+async function visibleControls(page: Page, root: ElementHandle<Element> | null): Promise<{ countKey: string; description: string }[]> {
+  return page.evaluate((r) => {
+    const scope: Element = r ?? document.body;
+    const pathOf = (e: Element) => {
+      const path: number[] = [];
+      for (let n: Element | null = e; n && n.parentElement; n = n.parentElement) {
+        path.unshift(Array.prototype.indexOf.call(n.parentElement.children, n));
+      }
+      return path.join(".");
+    };
+    const found = new Map<string, string>();
+    const candidates = scope.querySelectorAll<HTMLElement>(
+      'a[href], button, input, select, textarea, summary, [tabindex], [contenteditable="true"]',
+    );
+    for (const el of Array.from(candidates)) {
+      if (el.tabIndex < 0 || el.matches(":disabled") || el.closest("[inert]")) continue;
+      if (el instanceof HTMLInputElement && el.type === "hidden") continue;
+      const rect = el.getBoundingClientRect();
+      if (rect.width === 0 || rect.height === 0 || getComputedStyle(el).visibility === "hidden") continue;
+      const countKey =
+        el instanceof HTMLInputElement && el.type === "radio" && el.name
+          ? `radio:${el.form ? pathOf(el.form) : ""}:${el.name}`
+          : pathOf(el);
+      if (found.has(countKey)) continue;
+      const name = el.getAttribute("aria-label") ?? (el.id ? document.querySelector(`label[for="${CSS.escape(el.id)}"]`)?.textContent : null) ?? el.textContent ?? "";
+      const role = el.getAttribute("role") ?? el.tagName.toLowerCase();
+      found.set(countKey, `${role}${el.id ? `#${el.id}` : ""} "${name.replace(/\s+/g, " ").trim().slice(0, 60)}"`);
+    }
+    return Array.from(found, ([countKey, description]) => ({ countKey, description }));
+  }, root);
+}
+
+/**
+ * Focuses the first visible control on the page (or inside `region`), then presses Tab through
+ * every control in turn and records where each one was. The page should already be loaded and
+ * settled. Stops when focus leaves the page or the region, or comes back to a control already
+ * seen; TS-200: says which (`end`), and compares the stops with the visible controls there are.
+ */
+export async function walkTabOrderDetailed(page: Page, options: WalkOptions = {}): Promise<TabWalk> {
   const maxStops = options.maxStops ?? DEFAULT_MAX_STOPS;
   const region = options.region ? await options.region.elementHandle() : null;
+  const controls = await visibleControls(page, region);
   const focusedFirst = await page.evaluate((root) => {
     window.scrollTo(0, 0);
     const scope: Element = root ?? document.body;
@@ -151,7 +270,7 @@ export async function walkTabOrder(page: Page, options: WalkOptions = {}): Promi
       'a[href], button, input, select, textarea, summary, [tabindex], [contenteditable="true"]',
     );
     for (const el of Array.from(candidates)) {
-      if (el.tabIndex < 0 || (el as HTMLButtonElement).disabled || el.closest("[inert]")) continue;
+      if (el.tabIndex < 0 || el.matches(":disabled") || el.closest("[inert]")) continue;
       if (el instanceof HTMLInputElement && el.type === "hidden") continue;
       const rect = el.getBoundingClientRect();
       if (rect.width === 0 || rect.height === 0 || getComputedStyle(el).visibility === "hidden") continue;
@@ -160,25 +279,71 @@ export async function walkTabOrder(page: Page, options: WalkOptions = {}): Promi
     }
     return false;
   }, region);
-  if (!focusedFirst) return [];
 
   const stops: TabStop[] = [];
-  const seen = new Set<string>();
-  for (let i = 0; i < maxStops; i++) {
-    if (i > 0) await page.keyboard.press("Tab");
-    const stop = await focusedStop(page, i);
-    if (!stop || seen.has(stop.key)) break; // left the page, or came round again
-    if (region && !(await region.evaluate((r) => r.contains(document.activeElement)))) break; // left the region
-    seen.add(stop.key);
-    const { key: _key, ...rest } = stop;
-    stops.push(rest);
+  const reached = new Map<string, string>();
+  let end: TabWalkEnd = "max-stops";
+  if (!focusedFirst) {
+    end = "nothing-focusable";
+  } else {
+    const seen = new Set<string>();
+    let firstKey = "";
+    for (let i = 0; i < maxStops; i++) {
+      if (i > 0) await page.keyboard.press("Tab");
+      let stop = await focusedStop(page, i);
+      if (!stop) {
+        // Focus is on the page itself: either Tab took it off the page (the browser's own controls,
+        // or round to the page's start), or it was dropped part-way. Tab on past any invisible
+        // controls at the very start (a skip link) to see where it goes next.
+        for (let extra = 0; extra < 5; extra++) {
+          await page.keyboard.press("Tab");
+          stop = await focusedStop(page, i);
+          if (!stop || stop.width > 0 || stop.height > 0) break;
+        }
+        end = !stop || seen.has(stop.key) ? "left-page" : "lost-focus";
+        break;
+      }
+      if (seen.has(stop.key)) {
+        end = stop.key === firstKey ? "came-round" : "trapped";
+        break;
+      }
+      if (region && !(await region.evaluate((r) => r.contains(document.activeElement)))) {
+        end = "left-region";
+        break;
+      }
+      if (i === 0) firstKey = stop.key;
+      seen.add(stop.key);
+      const { key: _key, countKey, ...rest } = stop;
+      stops.push(rest);
+      if (rest.width > 0 && rest.height > 0) reached.set(countKey, rest.description);
+    }
   }
   await region?.dispose();
-  return stops;
+
+  const counted = new Set(controls.map((c) => c.countKey));
+  return {
+    stops,
+    end,
+    maxStops,
+    focusableCount: controls.length,
+    unreached: controls.filter((c) => !reached.has(c.countKey)).map((c) => c.description),
+    uncounted: Array.from(reached).filter(([k]) => !counted.has(k)).map(([, d]) => d),
+  };
 }
 
-/** Walks the page's tab order and returns every reading-order problem (empty when fine). */
-export async function checkTabOrder(page: Page, options: TabOrderOptions & WalkOptions = {}): Promise<{ stops: TabStop[]; problems: string[] }> {
-  const stops = await walkTabOrder(page, options);
-  return { stops, problems: tabOrderProblems(stops, options) };
+/** The stops of a walk (see walkTabOrderDetailed). */
+export async function walkTabOrder(page: Page, options: WalkOptions = {}): Promise<TabStop[]> {
+  return (await walkTabOrderDetailed(page, options)).stops;
+}
+
+/**
+ * Walks the page's tab order and returns every reading-order problem (empty when fine). TS-200:
+ * `walkProblems` says whether the walk itself can be trusted (see tabWalkProblems).
+ */
+export async function checkTabOrder(
+  page: Page,
+  options: TabOrderOptions & WalkOptions & { allowCount?: readonly TabCountException[] } = {},
+): Promise<{ stops: TabStop[]; problems: string[]; walk: TabWalk; walkProblems: string[] }> {
+  const walk = await walkTabOrderDetailed(page, options);
+  return { stops: walk.stops, problems: tabOrderProblems(walk.stops, options), walk, walkProblems: tabWalkProblems(walk, options.allowCount) };
 }

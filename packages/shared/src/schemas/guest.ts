@@ -2,7 +2,7 @@ import { z } from "zod";
 // TS-180: free text refuses hidden control characters (see ../safe-text).
 import { safeText } from "../safe-text";
 import { FIELD_LIMITS } from "../field-limits";
-import { expectedRevisionField } from "./common";
+import { expectedRevisionField, lengthFirst } from "./common";
 import { PERSON_NAME_PATTERN, PERSON_NAME_MESSAGE, looksLikeWebAddress, NO_WEB_ADDRESS_MESSAGE, hasMixedScriptWord, NO_MIXED_SCRIPT_MESSAGE } from "../validation";
 
 export const guestTierEnum = z.enum(["VIP", "FAMILY", "FRIEND", "PLUS_ONE", "OTHER"]);
@@ -43,26 +43,25 @@ export type GuestSide = z.infer<typeof guestSideEnum>;
 export const ageCategoryEnum = z.enum(["ADULT", "CHILD", "INFANT"]);
 export type AgeCategory = z.infer<typeof ageCategoryEnum>;
 
+function guestNameField(requiredMessage: string) {
+  return lengthFirst(
+    FIELD_LIMITS.personName,
+    z
+      .string()
+      .min(1, requiredMessage)
+      .regex(PERSON_NAME_PATTERN, PERSON_NAME_MESSAGE)
+      // TS-163: a guest's name goes into their RSVP email, so -- like a planner's name (TS-156) --
+      // it can't read as a web address that the email app would turn into a link.
+      .refine((v) => !looksLikeWebAddress(v), NO_WEB_ADDRESS_MESSAGE)
+      // TS-178: nor mix look-alike letters from different alphabets in one word.
+      .refine((v) => !hasMixedScriptWord(v), NO_MIXED_SCRIPT_MESSAGE)
+  );
+}
+
 export const createGuestSchema = z.object({
-  firstName: z
-    .string()
-    .trim()
-    .min(1, "First name is required")
-    .max(FIELD_LIMITS.personName)
-    .regex(PERSON_NAME_PATTERN, PERSON_NAME_MESSAGE)
-    // TS-163: a guest's name goes into their RSVP email, so -- like a planner's name (TS-156) -- it
-    // can't read as a web address that the email app would turn into a link.
-    .refine((v) => !looksLikeWebAddress(v), NO_WEB_ADDRESS_MESSAGE)
-    // TS-178: nor mix look-alike letters from different alphabets in one word.
-    .refine((v) => !hasMixedScriptWord(v), NO_MIXED_SCRIPT_MESSAGE),
-  lastName: z
-    .string()
-    .trim()
-    .min(1, "Last name is required")
-    .max(FIELD_LIMITS.personName)
-    .regex(PERSON_NAME_PATTERN, PERSON_NAME_MESSAGE)
-    .refine((v) => !looksLikeWebAddress(v), NO_WEB_ADDRESS_MESSAGE)
-    .refine((v) => !hasMixedScriptWord(v), NO_MIXED_SCRIPT_MESSAGE),
+  // TS-200: the length is checked first, and a name that's too long goes no further (lengthFirst).
+  firstName: guestNameField("First name is required"),
+  lastName: guestNameField("Last name is required"),
   partyName: safeText(FIELD_LIMITS.partyName).optional().nullable(),
   headcount: z.number().int().min(1).max(20).default(1),
   tier: guestTierEnum.default("OTHER"),

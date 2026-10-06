@@ -1,5 +1,6 @@
 import nodemailer from "nodemailer";
 import { Resend } from "resend";
+import { runningOnNetlify } from "@seatwise/shared";
 import { hitRateLimitCount, undoRateLimitHit } from "./queries/rate-limit";
 
 // TS-132: how Seatwise sends email, chosen from the environment:
@@ -252,6 +253,16 @@ export async function sendEmail(
   // TS-178: addresses are masked in every log line here.
   const shown = maskEmailAddress(to);
   const config = resolveEmailTransport(env);
+  // TS-200: printing an email instead of sending it is only for this machine and CI. On Netlify it
+  // means the site is set up wrong (EMAIL_TRANSPORT=log copied into its settings, or not a
+  // production build), and saying "logged" there would tell a planner "Emailed" when nobody was --
+  // so it's refused, loudly, and the caller hears "failed".
+  if (config.kind === "log" && runningOnNetlify(env)) {
+    console.error(
+      `[email] NOT sent to ${shown}: this server would only print the email (EMAIL_TRANSPORT=log, or not a production build), which never happens on Netlify. Remove EMAIL_TRANSPORT from the site's settings and set SMTP_USER and SMTP_PASSWORD.`
+    );
+    return "failed";
+  }
   if (config.kind === "none") {
     console.warn(`[email] not sent to ${shown}: no email service is configured (set SMTP_USER and SMTP_PASSWORD).`);
     return "not-configured";

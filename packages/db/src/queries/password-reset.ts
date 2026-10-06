@@ -6,6 +6,12 @@ import { pool, beginTransaction } from "../pool";
 
 export const PASSWORD_RESET_TTL_MINUTES = 60;
 
+// TS-200: a plain SHA-256 is right here, and CodeQL's "insufficient password hash" warning on this
+// line doesn't apply. What's hashed is never a password someone chose: it's a reset (or email
+// confirmation, see email-verification.ts) link's token, 32 bytes from randomBytes (64 hex
+// characters, 256 bits). A slow hash like bcrypt only helps when
+// the input is guessable; nobody can guess 256 random bits, and a fast hash lets the link be looked
+// up by its hash in one indexed query. Passwords themselves are hashed with bcrypt (TS-163).
 export function hashResetToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }

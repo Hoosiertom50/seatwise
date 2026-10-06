@@ -13,6 +13,7 @@
  */
 
 import { expect, defineQualityTest, test } from "../fixtures/index.js";
+import { waitUntilSafelyInsideUtcDay } from "../support/utcDay.js";
 import { uniquePersonName, uniqueToken } from "../data/ids.js";
 import { TEST_ACCOUNT_EMAIL_DOMAIN } from "../support/auth.js";
 import { accountEmailCount, setAccountEmailCount } from "../support/testDatabase.js";
@@ -42,6 +43,8 @@ defineQualityTest(
     tags: ["@mutating", "@feature:guests", "@feature:rsvp", "@risk:high", "@suite:regression"],
   },
   async ({ managedWedding, weddingData, context, account, weddingGuestsPage }, testInfo) => {
+    // TS-200: this test reads the account's daily email counts -- they must all be in one UTC day.
+    await waitUntilSafelyInsideUtcDay(testInfo);
     const w = managedWedding.id;
     const email = () => `pw-guest-closed-${uniqueToken(testInfo.workerIndex)}${TEST_ACCOUNT_EMAIL_DOMAIN}`;
     await weddingData.updateWedding(w, { rsvpCutoffDate: "2025-01-15" });
@@ -165,6 +168,9 @@ defineQualityTest(
     tags: ["@mutating", "@feature:collaboration", "@feature:guests", "@risk:high", "@suite:regression"],
   },
   async ({ managedWedding, context, account }, testInfo) => {
+    // TS-200: this test sets the account's daily allowance and reads the other counters -- they
+    // must all be in one UTC day.
+    await waitUntilSafelyInsideUtcDay(testInfo);
     const w = managedWedding.id;
     const invite = () =>
       context.request.post(`/api/v1/weddings/${w}/invites`, {

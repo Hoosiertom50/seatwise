@@ -7,13 +7,10 @@
 // PlanVersion in schema.prisma). Prisma can't express a partial index, so it always proposes
 // dropping it; that one line is allowed and anything else fails the check.
 //
-// REPORT-ONLY FOR NOW: CI runs this with continue-on-error. The first migration (0001_init) was
-// written by hand with inline REFERENCES, which Postgres creates as ON UPDATE NO ACTION (and
-// plan_versions."restoredFromId" as ON DELETE NO ACTION), while Prisma's defaults for those
-// relations are ON UPDATE CASCADE / ON DELETE SET NULL -- so some drift is expected on the first
-// run, and it couldn't be measured without a database when this was added. Once the first CI run's
-// summary has been reviewed and that drift settled (onUpdate/onDelete in schema.prisma to match
-// the database, or a migration), remove continue-on-error in ci.yml to make it blocking.
+// TS-200: this check BLOCKS. It ran report-only (continue-on-error) at first, in case the
+// hand-written first migration (0001_init) disagreed with Prisma's defaults; the first CI runs
+// reported no drift, so TS-192 removed continue-on-error -- a schema change without its migration
+// (or the other way round) now fails CI.
 //
 // Usage (CI, after the e2e job's Postgres service is up):
 //   SHADOW_DATABASE_URL=postgresql://.../seatwise_shadow pnpm --filter @seatwise/db check-schema-drift
