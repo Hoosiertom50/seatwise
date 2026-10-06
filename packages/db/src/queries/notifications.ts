@@ -1,8 +1,8 @@
 import { randomUUID } from "crypto";
-import { ACCOUNT_EMAILS_PER_DAY, accountDailyEmailKey, sendEmail, type EmailResult } from "../email";
+import { ACCOUNT_EMAILS_PER_DAY, accountDailyEmailKey, emailDelivered, sendEmail, type EmailResult } from "../email";
 import { pool } from "../pool";
-import { hitRateLimit } from "./rate-limit";
-import { emailSafeWeddingName, looksLikeWebAddress } from "@seatwise/shared";
+import { hitRateLimit, undoRateLimitHit } from "./rate-limit";
+import { emailSafeWeddingName, looksLikePhoneNumber, looksLikeWebAddress } from "@seatwise/shared";
 
 // TS-163: how many notification emails one person's actions can set off (each recipient counts).
 // Generous for real planning -- approving a plan emails a handful of collaborators -- but a loop of
@@ -20,31 +20,61 @@ export const NOTIFICATION_EMAILS_PER_WEDDING_WITHOUT_ACTOR = [
   { limit: 150, windowSeconds: 86_400 },
 ] as const;
 
-async function weddingMayEmailWithoutActor(weddingId: string): Promise<boolean> {
-  const results = await Promise.all(
-    NOTIFICATION_EMAILS_PER_WEDDING_WITHOUT_ACTOR.map(({ limit, windowSeconds }) =>
-      hitRateLimit(`email:notify-wedding:${windowSeconds}:${weddingId}`, limit, windowSeconds)
-    )
-  );
-  return results.every((r) => r.allowed);
-}
+const NEUTRAL_NOTIFICATION_TEXT = "There's an update on a wedding you're part of — open Seatwise to see it.";
 
 // TS-168: what an email may say. A message built from names typed by people (guest names, table
 // labels) only goes out if it can't read as a web address; otherwise the email just says there's
 // an update, and the details stay in the app.
+// TS-178: nor as a phone number, and it's always one line -- control characters and line breaks
+// become spaces, so typed text can't lay itself out as a separate message inside the email.
 export function emailSafeNotificationText(message: string): string {
-  return looksLikeWebAddress(message) ? "There's an update on a wedding you're part of — open Seatwise to see it." : message;
+  const oneLine = message
+    .replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]+/gu, " ")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+  return looksLikeWebAddress(oneLine) || looksLikePhoneNumber(oneLine) ? NEUTRAL_NOTIFICATION_TEXT : oneLine;
 }
 
-async function actorMayEmail(actorUserId: string): Promise<boolean> {
-  const results = await Promise.all([
-    ...NOTIFICATION_EMAILS_PER_ACTOR.map(({ limit, windowSeconds }) =>
-      hitRateLimit(`email:notify:${windowSeconds}:${actorUserId}`, limit, windowSeconds)
-    ),
-    // TS-171: these count toward the account's one daily allowance for every kind of email.
-    hitRateLimit(accountDailyEmailKey(actorUserId), ACCOUNT_EMAILS_PER_DAY.limit, ACCOUNT_EMAILS_PER_DAY.windowSeconds),
-  ]);
-  return results.every((r) => r.allowed);
+type Counter = { key: string; limit: number; windowSeconds: number };
+
+/**
+ * TS-178: counts one notification email against every limit it falls under. Refused once any is
+ * over -- and then every count is taken back, so a full window can't quietly drain the others.
+ * When allowed, `giveBack` takes all the counts back -- for an email that then didn't go out.
+ */
+async function reserveNotificationEmail(counters: Counter[]): Promise<{ allowed: boolean; giveBack: () => Promise<void> }> {
+  const results = await Promise.all(counters.map(({ key, limit, windowSeconds }) => hitRateLimit(key, limit, windowSeconds)));
+  const giveBack = async () => {
+    await Promise.all(counters.map((c) => undoRateLimitHit(c.key, c.windowSeconds)));
+  };
+  if (results.every((r) => r.allowed)) return { allowed: true, giveBack };
+  await giveBack();
+  return { allowed: false, giveBack: async () => {} };
+}
+
+function notificationEmailCounters(actorUserId: string | null, weddingId: string, ownerId: string): Counter[] {
+  if (actorUserId) {
+    return [
+      ...NOTIFICATION_EMAILS_PER_ACTOR.map(({ limit, windowSeconds }) => ({
+        key: `email:notify:${windowSeconds}:${actorUserId}`,
+        limit,
+        windowSeconds,
+      })),
+      // TS-171: these count toward the account's one daily allowance for every kind of email.
+      { key: accountDailyEmailKey(actorUserId), ...ACCOUNT_EMAILS_PER_DAY },
+    ];
+  }
+  return [
+    ...NOTIFICATION_EMAILS_PER_WEDDING_WITHOUT_ACTOR.map(({ limit, windowSeconds }) => ({
+      key: `email:notify-wedding:${windowSeconds}:${weddingId}`,
+      limit,
+      windowSeconds,
+    })),
+    // TS-178: with nobody signed in behind it (a guest's RSVP), the email counts toward the
+    // wedding owner's daily allowance instead -- otherwise many weddings, each with its own cap,
+    // could send far more in a day than one account is allowed to.
+    { key: accountDailyEmailKey(ownerId), ...ACCOUNT_EMAILS_PER_DAY },
+  ];
 }
 
 export interface NotificationRow {
@@ -131,18 +161,23 @@ export async function notifyWeddingCollaborators(
     // TS-168: only to an address its owner has confirmed (TS-164) -- otherwise anyone could sign
     // up with a stranger's address and have Seatwise email them every time a guest responded.
     if (!recipient.emailVerifiedAt) continue;
-    if (mayEmail && actorUserId && !(await actorMayEmail(actorUserId))) mayEmail = false;
-    if (mayEmail && !actorUserId && !(await weddingMayEmailWithoutActor(weddingId))) mayEmail = false;
-    if (mayEmail) {
-      const weddingName = emailSafeWeddingName(wedding.name);
-      await sendEmailNotification(
-        recipient.email,
-        weddingName ? `Seatwise: ${weddingName}` : "Seatwise: a wedding update",
-        emailSafeNotificationText(emailMessage ?? message),
-        // TS-171: a confirmed member of this wedding, so not held to the per-address daily cap.
-        { toWeddingMember: true }
-      );
+    if (!mayEmail) continue;
+    const reservation = await reserveNotificationEmail(notificationEmailCounters(actorUserId, weddingId, wedding.ownerId));
+    if (!reservation.allowed) {
+      mayEmail = false;
+      continue;
     }
+    const weddingName = emailSafeWeddingName(wedding.name);
+    const result = await sendEmailNotification(
+      recipient.email,
+      weddingName ? `Seatwise: ${weddingName}` : "Seatwise: a wedding update",
+      emailSafeNotificationText(emailMessage ?? message),
+      // TS-171: a confirmed member of this wedding, so not held to the per-address daily cap.
+      { toWeddingMember: true }
+    );
+    // TS-178: nothing went out (failed, held back by the day's limit, or no email service), so it
+    // doesn't use up the sender's, the wedding's or the owner's allowance.
+    if (!emailDelivered(result)) await reservation.giveBack();
   }
 }
 
@@ -179,7 +214,20 @@ export async function markNotificationRead(id: string, userId: string): Promise<
   return (rowCount ?? 0) > 0;
 }
 
-export async function markAllNotificationsRead(userId: string): Promise<void> {
+/**
+ * TS-182: with `upTo`, only notifications created no later than it are marked -- "Mark all read"
+ * sends the newest one the bell has shown, so one that arrived since isn't marked unseen. (The
+ * column holds milliseconds, the same precision the bell was given.)
+ */
+export async function markAllNotificationsRead(userId: string, upTo?: Date): Promise<void> {
+  if (upTo) {
+    await pool.query(
+      `UPDATE "notifications" SET "isRead" = true
+        WHERE "recipientUserId" = $1 AND "isRead" = false AND "createdAt" <= $2`,
+      [userId, upTo]
+    );
+    return;
+  }
   await pool.query(
     `UPDATE "notifications" SET "isRead" = true WHERE "recipientUserId" = $1 AND "isRead" = false`,
     [userId]

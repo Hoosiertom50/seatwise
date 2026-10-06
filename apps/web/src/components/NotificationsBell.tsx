@@ -74,16 +74,26 @@ export function NotificationsBell({
   }, []);
 
   async function onMarkAllRead() {
+    // TS-182: only up to the newest notification shown here -- one that arrived since stays unread
+    // (it used to be marked read without ever being seen). The count is then fetched again.
+    const upTo = notifications.reduce<string | null>(
+      (newest, n) => (newest === null || Date.parse(n.createdAt) > Date.parse(newest) ? n.createdAt : newest),
+      null
+    );
     setNotifications((prev) => prev.map((n) => ({ ...n, isRead: true })));
     setUnreadCount(0);
     try {
-      await api.post("/api/v1/notifications");
+      await api.post("/api/v1/notifications", upTo ? { upTo } : undefined);
     } catch {
-      load();
+      // Falls through to the reload, which shows what really happened.
     }
+    load();
   }
 
   async function onMarkOneRead(id: string) {
+    // TS-182: clicking one that was already read no longer takes one off the unread count.
+    const wasUnread = notifications.some((n) => n.id === id && !n.isRead);
+    if (!wasUnread) return;
     setNotifications((prev) => prev.map((n) => (n.id === id ? { ...n, isRead: true } : n)));
     setUnreadCount((c) => Math.max(0, c - 1));
     try {
@@ -129,7 +139,7 @@ export function NotificationsBell({
                 <button
                   key={n.id}
                   onClick={() => onMarkOneRead(n.id)}
-                  className={`flex w-full flex-col items-start gap-0.5 border-b border-neutral-50 px-4 py-3 text-left last:border-0 hover:bg-neutral-50 dark:hover:bg-neutral-800 ${
+                  className={`flex w-full flex-col items-start gap-0.5 border-b border-neutral-50 dark:border-neutral-800 px-4 py-3 text-left last:border-0 hover:bg-neutral-50 dark:hover:bg-neutral-800 ${
                     // TS-175: a dark-mode shade too -- the light one made unread rows unreadable.
                     n.isRead ? "" : "bg-blue-50/50 dark:bg-blue-950/60"
                   }`}

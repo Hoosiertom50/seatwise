@@ -69,6 +69,15 @@ export async function checkGuestHardRuleViolation(
   return conflictRows.length > 0;
 }
 
+// TS-181: when a plan-history entry happened, for "Modified since approval". A change's own
+// transaction may have started before the plan was approved and only got its turn (the plan's
+// lock) after the approval committed -- the default, now(), is when the transaction started, so
+// that change was dated before the approval and never showed. clock_timestamp() is the moment the
+// entry is written; and never earlier than just after the plan's approval (the column keeps only
+// milliseconds, so a change in the same millisecond would otherwise tie with it). Use it as the
+// "createdAt" value of an INSERT whose $2 is the plan version's id.
+export const HISTORY_CREATED_AT = `GREATEST(clock_timestamp(), (SELECT "approvedAt" + interval '1 millisecond' FROM "plan_versions" WHERE id = $2))`;
+
 export type TableSeatingFlagReason = "accessible" | "capacity" | "restricted" | "rule";
 
 // A guest a re-check has just flagged Needs Reassignment, and why. TS-177: with the table they're
@@ -81,11 +90,19 @@ export interface NewlyFlaggedSeat {
   tableId: string;
 }
 
+// TS-181: the order seats at a table are counted in, so who gets flagged when there isn't room is
+// always the same and makes sense: locked guests first, then in the order they were seated there,
+// and guests seated at the same moment (a whole plan is saved at once) by name. Before, the
+// tie-break was the seat's random id, so the same plan could flag a different guest each time.
+// Shared by the table re-check and the restore preview (which must keep and drop the same guests).
+// Uses the aliases sa (seat_assignments) and g (guests).
+export const SEAT_ORDER = `g."isLocked" DESC, sa."createdAt", g."lastName", g."firstName", g.id`;
+
 // FR-4.6 / TS-120 / TS-150: re-checks everyone seated at one table in the given plan version and
 // sets Needs Reassignment exactly where a hard rule is broken or the table has no room left for
 // them -- flagging and clearing alike, so the answer is always the whole truth for that table.
 // Nobody is ever unseated. Who "no longer fits": locked guests keep their place first, then guests
-// in the order they were seated; whoever pushes the headcount past capacity is flagged. Runs on
+// in the order they were seated (SEAT_ORDER); whoever pushes the headcount past capacity is flagged. Runs on
 // the caller's client; the caller owns the transaction and recomputes isComplete.
 export async function resyncSeatsAtTable(
   client: Queryable,
@@ -110,7 +127,7 @@ export async function resyncSeatsAtTable(
             g."requiresAccessibleTable", sa."needsReassignment"
      FROM "seat_assignments" sa JOIN "guests" g ON g.id = sa."guestId"
      WHERE sa."planVersionId" = $1 AND sa."seatingTableId" = $2
-     ORDER BY g."isLocked" DESC, sa."createdAt", sa.id
+     ORDER BY ${SEAT_ORDER}
      FOR UPDATE OF sa`,
     [planVersionId, tableId]
   );
@@ -158,6 +175,40 @@ export async function resyncSeatsAtTable(
     }
   }
   return { newlyFlagged, changed };
+}
+
+// TS-181: the Restricted tables any of these guests is on the required-guest list of, where the
+// list as it now stands needs more seats than the table has -- for a change that grows a listed
+// guest's party (the planner's edit, an import), checked after writing it on the same
+// transaction so the caller can refuse it. Locks those tables' rows (guests before tables, as
+// everywhere), so a list saved at the same moment is counted too.
+export async function restrictedListsOverCapacity(
+  q: Queryable,
+  guestIds: string[]
+): Promise<{ tableLabel: string; capacity: number; seats: number; guestNames: string[] }[]> {
+  if (guestIds.length === 0) return [];
+  const { rows: tables } = await q.query(
+    `SELECT t.id, t.label, t.capacity FROM "seating_tables" t
+     WHERE t."isRestricted" AND t.id IN (SELECT "tableId" FROM "restricted_table_guests" WHERE "guestId" = ANY($1::text[]))
+     ORDER BY t.id FOR UPDATE`,
+    [guestIds]
+  );
+  const over: { tableLabel: string; capacity: number; seats: number; guestNames: string[] }[] = [];
+  for (const t of tables as { id: string; label: string; capacity: number }[]) {
+    const { rows } = await q.query(
+      `SELECT COALESCE(SUM(g.headcount), 0)::int AS seats,
+              array_agg(g."firstName" || ' ' || g."lastName" ORDER BY g."lastName", g."firstName")
+                FILTER (WHERE g.id = ANY($2::text[])) AS "guestNames"
+       FROM "restricted_table_guests" rtg JOIN "guests" g ON g.id = rtg."guestId"
+       WHERE rtg."tableId" = $1`,
+      [t.id, guestIds]
+    );
+    const seats = rows[0].seats as number;
+    if (seats > t.capacity) {
+      over.push({ tableLabel: t.label, capacity: t.capacity, seats, guestNames: (rows[0].guestNames as string[] | null) ?? [] });
+    }
+  }
+  return over;
 }
 
 // TS-165: every table a change to these guests' seats can affect -- the tables they're at now,
@@ -217,8 +268,8 @@ export async function recordRecheckIfApproved(
   const { rows } = await client.query(`SELECT status FROM "plan_versions" WHERE id = $1`, [planVersionId]);
   if (rows[0]?.status !== "APPROVED") return;
   await client.query(
-    `INSERT INTO "change_history_entries" (id, "planVersionId", action, description, "actorUserId")
-     VALUES ($1, $2, 'SEATING_RECHECK', $3, $4)`,
+    `INSERT INTO "change_history_entries" (id, "planVersionId", action, description, "actorUserId", "createdAt")
+     VALUES ($1, $2, 'SEATING_RECHECK', $3, $4, ${HISTORY_CREATED_AT})`,
     [randomUUID(), planVersionId, description, actorUserId]
   );
 }
@@ -259,6 +310,14 @@ export async function lockCurrentPlan(q: Queryable, weddingId: string): Promise<
     [weddingId]
   );
   return (rows[0]?.id as string | undefined) ?? null;
+}
+
+// TS-181: taken (right after lockCurrentPlan) by everything that checks a new seating rule against
+// the Restricted tables' required-guest lists or the other way round -- saving a list, editing a
+// Restricted table, adding a rule -- so one can't pass its checks against the other's old state.
+// The plan's lock does this too, but a wedding may not have a plan yet.
+export async function lockRestrictedLists(q: Queryable, weddingId: string): Promise<void> {
+  await q.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [`restricted-lists:${weddingId}`]);
 }
 
 // FR-8.1 / TS-174: the write half of an attendance change, on the caller's transaction -- which
@@ -307,8 +366,8 @@ export async function applyAttendanceChange(
       ? `${guest.name} marked not attending${seatFreed ? " — seat freed" : ""}`
       : `${guest.name} marked attending again — now unassigned`;
   await client.query(
-    `INSERT INTO "change_history_entries" (id, "planVersionId", action, description, "actorUserId")
-     VALUES ($1, $2, 'ATTENDANCE_CHANGE', $3, $4)`,
+    `INSERT INTO "change_history_entries" (id, "planVersionId", action, description, "actorUserId", "createdAt")
+     VALUES ($1, $2, 'ATTENDANCE_CHANGE', $3, $4, ${HISTORY_CREATED_AT})`,
     [randomUUID(), planVersionId, description, actorUserId]
   );
   return { seatFreed };

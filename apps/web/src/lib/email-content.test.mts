@@ -15,6 +15,17 @@ test("a notification whose text could read as a web address isn't emailed as wri
   );
 });
 
+// TS-178: nor as a phone number, and never more than one line.
+test("a notification that could read as a phone number isn't emailed as written, and text is kept to one line", () => {
+  const neutral = "There's an update on a wedding you're part of — open Seatwise to see it.";
+  for (const v of ["Call 800, 555, 1234 is coming.", "Ana (800) 555-1234 declined.", "Ana is coming. Seated at evil. com"]) {
+    assert.equal(emailSafeNotificationText(v), neutral, v);
+  }
+  assert.equal(emailSafeNotificationText("Ana Ruiz\n\nURGENT: reply now\r\nis coming."), "Ana Ruiz URGENT: reply now is coming.");
+  assert.equal(emailSafeNotificationText(`Ana${String.fromCodePoint(0x202e)} Ruiz\tis coming.${String.fromCodePoint(0x2028)}`), "Ana Ruiz is coming.");
+  assert.equal(emailSafeNotificationText("Ana Ruiz is coming. Seated at Table 12."), "Ana Ruiz is coming. Seated at Table 12.");
+});
+
 test("a copy's default name keeps to the wedding-name rules, length included", () => {
   assert.equal(copiedWeddingName("Ana & Bo's Wedding"), "Ana & Bo's Wedding - copy");
   assert.equal(emailSafeWeddingName(copiedWeddingName("Ana & Bo's Wedding")), "Ana & Bo's Wedding - copy");

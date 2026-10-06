@@ -4,15 +4,13 @@
  *
  * The workbook's precondition describes a *transitive* contradiction (A-B and B-C both
  * must-sit-together, then attempting A-C must-not-sit-together) and expects it "blocked" "at
- * creation" with a message identifying all three guests and the existing transitive rules. Read
- * directly against `createRelationship` (packages/db/src/queries/relationships.ts): rule creation
- * only ever checks for a *direct* opposite-hard-type rule between the exact same two guests
- * (`OPPOSITE_HARD_TYPE` lookup) -- it has no concept of a transitive chain through a third guest
- * at all. The transitive case is instead caught later, at *generation* time, by the engine's own
- * union-find contradiction check -- already fully covered by TS-38's
- * seat-assignment.impossible-hard-rule-set-is-reported.spec.ts (same A-B/B-C/A-C scenario,
- * asserting the 409-style "These rule conflicts need to be fixed first" UI message and that no new
- * plan version is created). Not re-authored here.
+ * creation" with a message identifying all three guests and the existing transitive rules.
+ * TS-181: `createRelationship` (packages/db/src/queries/relationships.ts) now refuses that
+ * transitive case at creation too, naming the guests and the chain -- covered by TS-38's
+ * seat-assignment.impossible-hard-rule-set-is-reported.spec.ts (same A-B/B-C/A-C scenario, through
+ * the Seating rules tab) and TS-181's
+ * seat-assignment.restricted-lists-rules-and-removals-keep-the-plan-consistent.spec.ts (both
+ * directions). Not re-authored here.
  *
  * What *is* implemented, and untested until now, is the direct case this AC also describes in
  * miniature: two guests with one hard rule already between them, and an attempt to add the
@@ -21,11 +19,10 @@
  * error UI beyond the existing Seating rules tab's own inline error text (which just renders
  * whatever the API returns as-is).
  *
- * Also unimplemented, and not tested around here: the AC's closing clause ("the same validation
- * applies to contradictions involving Restricted Table, accessible-table, and capacity
- * requirements") -- `createRelationship` never looks at tables, accessibility, or capacity at all
- * when saving a rule. Both this and the transitive-at-creation-time gap above are real gaps
- * against this AC's literal wording, not something this test works around.
+ * The AC's closing clause ("the same validation applies to contradictions involving Restricted
+ * Table, accessible-table, and capacity requirements") is now partly covered: TS-173/TS-181 refuse
+ * a rule that clashes with a Restricted table's required-guest list (tested in the two specs named
+ * above); accessibility and capacity still aren't looked at when a rule is saved.
  */
 
 import { expect, defineQualityTest, test } from "../fixtures/index.js";

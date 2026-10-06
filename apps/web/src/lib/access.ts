@@ -1,4 +1,10 @@
-import { getWeddingAccessLevel, getWeddingById, type AccessLevel, type WeddingRow } from "@seatwise/db";
+import {
+  getWeddingAccessLevel,
+  getWeddingAccessDetail,
+  getWeddingById,
+  type AccessLevel,
+  type WeddingRow,
+} from "@seatwise/db";
 import { errorResponse } from "./api-response";
 
 // TS-13: replaces the old pure-ownership check (getWeddingForOwner) across routes that a
@@ -24,4 +30,17 @@ export async function requireAccess(
   }
 
   return { wedding, accessLevel };
+}
+
+// TS-179: who may approve a plan, or undo an approval -- the wedding's owner, or a Couple member
+// with Comment or Edit access. Shared by the status route and by Generate/Restore (which save a
+// comparison draft instead of replacing an approved plan when this is false).
+export async function canManageApproval(
+  weddingId: string,
+  userId: string,
+  accessLevel: AccessLevel
+): Promise<boolean> {
+  if (accessLevel === "OWNER") return true;
+  const detail = await getWeddingAccessDetail(weddingId, userId);
+  return detail.role === "COUPLE" && detail.accessLevel !== null && detail.accessLevel !== "VIEW";
 }

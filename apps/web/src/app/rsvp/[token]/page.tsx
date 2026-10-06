@@ -24,7 +24,8 @@ export default function GuestRsvpPage() {
   const [loadError, setLoadError] = useState<string | null>(null);
 
   const [attending, setAttending] = useState<"CONFIRMED" | "DECLINED">("CONFIRMED");
-  const [headcount, setHeadcount] = useState(1);
+  // TS-182: kept as typed, so clearing the box to type a new number doesn't show 0.
+  const [headcount, setHeadcount] = useState("1");
   const [plusOneNames, setPlusOneNames] = useState("");
   const [notes, setNotes] = useState("");
   const [requiresAccessibleTable, setRequiresAccessibleTable] = useState(false);
@@ -35,7 +36,7 @@ export default function GuestRsvpPage() {
       setPreview(res.rsvp);
       if (res.rsvp.status !== "NOT_FOUND") {
         setAttending(res.rsvp.rsvpStatus === "DECLINED" ? "DECLINED" : "CONFIRMED");
-        setHeadcount(res.rsvp.headcount ?? 1);
+        setHeadcount(String(res.rsvp.headcount ?? 1));
         setPlusOneNames(res.rsvp.plusOneNames ?? "");
         setNotes(res.rsvp.notes ?? "");
         setRequiresAccessibleTable(res.rsvp.requiresAccessibleTable ?? false);
@@ -76,7 +77,7 @@ export default function GuestRsvpPage() {
     try {
       // TS-170: a cleared party-size box reads as 0 -- and once "declining" hides it, the browser
       // no longer checks it -- so it's never sent below 1.
-      const partySize = Math.max(1, headcount || 1);
+      const partySize = Math.max(1, Number(headcount) || 1);
       // TS-174: only the answers the form is showing are sent. Declining hides the party size,
       // plus-ones and accessible seat (they stay as they were on file); a party of one hides the
       // plus-ones, so a name typed before the size dropped to 1 isn't sent (it's cleared).
@@ -160,7 +161,7 @@ export default function GuestRsvpPage() {
           </p>
         )}
         {!closed && justSubmitted && (
-          <p className="mb-6 rounded-md bg-green-50 dark:bg-green-950 px-3 py-2 text-sm text-green-700 dark:text-green-400">
+          <p role="status" className="mb-6 rounded-md bg-green-50 dark:bg-green-950 px-3 py-2 text-sm text-green-700 dark:text-green-400">
             {/* TS-177: answers can be changed only while RSVPs are open. */}
             Thanks — your RSVP has been recorded. You can come back to this link to change it
             {preview.rsvpCutoffDate ? ` until ${formatDate(preview.rsvpCutoffDate)}` : " while RSVPs are open"}.
@@ -206,18 +207,20 @@ export default function GuestRsvpPage() {
                     min={1}
                     max={preview?.maxHeadcount ?? 20}
                     value={headcount}
-                    onChange={(e) => setHeadcount(Number(e.target.value))}
+                    onChange={(e) => setHeadcount(e.target.value)}
                     className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
                   />
                 </label>
 
-                {headcount > 1 && (
+                {Number(headcount) > 1 && (
                   <label className="text-sm">
                     <span className="mb-1 block text-neutral-700 dark:text-neutral-300">Who&apos;s coming with you?</span>
                     <input
                       type="text"
                       value={plusOneNames}
                       onChange={(e) => setPlusOneNames(e.target.value)}
+                      // TS-180: the most the server accepts, so typing stops there instead of failing on send.
+                      maxLength={500}
                       placeholder="e.g. Jamie Lee"
                       className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
                     />
@@ -242,6 +245,8 @@ export default function GuestRsvpPage() {
               <textarea
                 value={notes}
                 onChange={(e) => setNotes(e.target.value)}
+                // TS-180: the most the server accepts.
+                maxLength={2000}
                 rows={3}
                 className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
               />

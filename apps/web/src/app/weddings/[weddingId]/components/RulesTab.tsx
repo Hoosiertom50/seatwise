@@ -32,7 +32,8 @@ export function RulesTab({
   // TS-150: who a new rule flags because of where they're seated right now.
   const [warnings, setWarnings] = useState<string[]>([]);
   // TS-159: tell the page this tab has input that leaving it would lose.
-  useUnsavedChanges("rules", !!(guestAId || guestBId));
+  // TS-182: only while the form is there (it's hidden without Edit access).
+  useUnsavedChanges("rules", canEdit && !!(guestAId || guestBId));
 
   useEffect(() => {
     api
@@ -78,15 +79,21 @@ export function RulesTab({
   // rather than as a generic failure that puts the row back in the list only to fail again on
   // retry.
   async function onRemove(id: string) {
-    const prev = relationships;
-    setRelationships(relationships.filter((r) => r.id !== id));
+    // TS-182: on failure only this rule comes back, in its old place -- a copy of the whole list
+    // taken here used to also undo a rule added meanwhile.
+    const index = relationships.findIndex((r) => r.id === id);
+    const removed = relationships[index];
+    setRelationships((cur) => cur.filter((r) => r.id !== id));
     try {
       await api.delete(`/api/v1/weddings/${weddingId}/relationships/${id}`);
     } catch (err) {
       if (err instanceof ApiError && err.status === 404) {
         setError("That rule was already removed — possibly by another collaborator.");
       } else {
-        setRelationships(prev);
+        if (removed)
+          setRelationships((cur) =>
+            cur.some((r) => r.id === id) ? cur : [...cur.slice(0, index), removed, ...cur.slice(index)]
+          );
         setError(err instanceof ApiError ? err.message : "Couldn't remove that rule.");
       }
     }
@@ -202,10 +209,11 @@ export function RulesTab({
             return (
               <li
                 key={r.id}
-                className="flex items-center justify-between rounded-lg border border-neutral-200 dark:border-neutral-700 px-4 py-3"
+                className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-neutral-200 dark:border-neutral-700 px-4 py-3"
               >
-                <div>
-                  <p className="font-medium">
+                {/* TS-182: long names wrap instead of pushing Remove off a phone screen. */}
+                <div className="min-w-0">
+                  <p className="break-words font-medium">
                     {r.guestAName} &amp; {r.guestBName}
                   </p>
                   <p className="text-sm text-neutral-500 dark:text-neutral-400">

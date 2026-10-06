@@ -3,7 +3,7 @@
 import { useEffect, useState, useRef } from "react";
 import { ConfirmDeleteButton } from "@/components/ConfirmDeleteButton";
 import { api, ApiError, apiErrorMessage } from "@/lib/api-client";
-import { formatClockTime } from "@/lib/display-format";
+import { formatClockTime, OPEN_EDIT_MESSAGE } from "@/lib/display-format";
 import { matchVendorSuggestions } from "@/lib/vendor-suggestions";
 import type {
   VendorDTO,
@@ -61,10 +61,18 @@ function amountProblem(value: string, what: string): string | null {
 
 function formatCents(cents: number): string {
   const sign = cents < 0 ? "-" : "";
-  return `${sign}$${(Math.abs(cents) / 100).toLocaleString(undefined, {
+  // TS-182: always US formatting -- amounts are dollars, and a browser set to another language used
+  // to show e.g. "$1.234,50".
+  return `${sign}$${(Math.abs(cents) / 100).toLocaleString("en-US", {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   })}`;
+}
+
+// TS-180: one order for the vendor list -- on load and after every change. The list used to come
+// in in the database's order and be re-sorted differently after an edit, so vendors jumped about.
+function sortVendors(list: VendorDTO[]): VendorDTO[] {
+  return [...list].sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
 }
 
 export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: boolean }) {
@@ -112,9 +120,10 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
     !!editingVendor &&
     (editCostText !== centsToDollarsString(editingVendor.costCents) ||
       (Object.keys(editVendor) as (keyof VendorDTO)[]).some((k) => (editVendor[k] ?? null) !== (editingVendor[k] ?? null)));
+  // TS-182: only while the forms are there (they're hidden without Edit access).
   useUnsavedChanges(
     "budget",
-    !!(name.trim() || contactName.trim() || contactEmail.trim() || contactPhone.trim() || cost || contractNotes.trim() || arrivalTime || editChanged || budgetEdited)
+    canEdit && !!(name.trim() || contactName.trim() || contactEmail.trim() || contactPhone.trim() || cost || contractNotes.trim() || arrivalTime || editChanged || budgetEdited)
   );
   const [saving, setSaving] = useState(false);
 
@@ -125,7 +134,8 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
           api.get<{ vendors: VendorDTO[] }>(`/api/v1/weddings/${weddingId}/vendors`),
           api.get<{ summary: BudgetSummaryDTO }>(`/api/v1/weddings/${weddingId}/budget`),
         ]);
-        setVendors(vendorsRes.vendors);
+        // TS-180: in the same order the list keeps after every change (see sortVendors).
+        setVendors(sortVendors(vendorsRes.vendors));
         setSummary(summaryRes.summary);
         setBudgetInput(centsToDollarsString(summaryRes.summary.budgetCents));
       } catch {
@@ -134,7 +144,9 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
         setLoading(false);
       }
     })();
-  }, [weddingId]);
+    // TS-180: loaded again when access changes -- someone promoted from View to Edit had vendors
+    // loaded without their contract notes, and saving an edit then wiped the notes.
+  }, [weddingId, canEdit]);
 
   useEffect(() => {
     if (!canEdit) return;
@@ -233,7 +245,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
         contractNotes: contractNotes || null,
         arrivalTime: arrivalTime || null,
       });
-      setVendors((cur) => [...cur, vendor].sort((a, b) => a.name.localeCompare(b.name)));
+      setVendors((cur) => sortVendors([...cur, vendor]));
       setName("");
       setCategory("CATERING");
       setCategoryOther("");
@@ -253,6 +265,11 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
   }
 
   function startEdit(vendor: VendorDTO) {
+    // TS-182: opening another vendor used to throw away a changed open edit without a word.
+    if (editChanged && editingId !== vendor.id) {
+      setError(OPEN_EDIT_MESSAGE);
+      return;
+    }
     setEditingId(vendor.id);
     setEditVendor({ ...vendor });
     setEditCostText(centsToDollarsString(vendor.costCents));
@@ -272,24 +289,35 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
     const problem = amountProblem(editCostText, "Cost");
     if (problem) return setError(problem);
     setSaving(true);
-    const expectedRevision = vendors.find((v) => v.id === vendorId)?.revision;
+    const loaded = vendors.find((v) => v.id === vendorId);
+    const expectedRevision = loaded?.revision;
+    // TS-180: only what was changed in the edit box is sent, so a field this person never touched
+    // (or never saw -- contract notes are hidden from View access) can't be overwritten by a save.
+    const edited: Record<string, unknown> = {
+      name: editVendor.name,
+      category: editVendor.category,
+      categoryOther: editVendor.category === "OTHER" ? editVendor.categoryOther || "" : null,
+      contactName: editVendor.contactName ?? null,
+      contactEmail: editVendor.contactEmail ?? null,
+      contactPhone: editVendor.contactPhone ?? null,
+      costCents: dollarsStringToCents(editCostText),
+      contractNotes: editVendor.contractNotes ?? null,
+      arrivalTime: editVendor.arrivalTime ?? null,
+    };
+    const changes = Object.fromEntries(
+      Object.entries(edited).filter(([key, value]) => !loaded || (loaded[key as keyof VendorDTO] ?? null) !== (value ?? null))
+    );
+    // A category change always carries its label (or its clearing), which the server checks together.
+    if ("category" in changes || "categoryOther" in changes) {
+      changes.category = edited.category;
+      changes.categoryOther = edited.categoryOther;
+    }
     try {
       const { vendor } = await api.patch<{ vendor: VendorDTO }>(
         `/api/v1/weddings/${weddingId}/vendors/${vendorId}`,
-        {
-          name: editVendor.name,
-          category: editVendor.category,
-          categoryOther: editVendor.category === "OTHER" ? editVendor.categoryOther || "" : null,
-          contactName: editVendor.contactName ?? null,
-          contactEmail: editVendor.contactEmail ?? null,
-          contactPhone: editVendor.contactPhone ?? null,
-          costCents: dollarsStringToCents(editCostText),
-          contractNotes: editVendor.contractNotes ?? null,
-          arrivalTime: editVendor.arrivalTime ?? null,
-          expectedRevision,
-        }
+        { ...changes, expectedRevision }
       );
-      setVendors((cur) => cur.map((v) => (v.id === vendorId ? vendor : v)).sort((a, b) => a.name.localeCompare(b.name)));
+      setVendors((cur) => sortVendors(cur.map((v) => (v.id === vendorId ? vendor : v))));
       setEditingId(null);
       await refreshSummary();
     } catch (err) {
@@ -355,7 +383,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
       await api.delete(`/api/v1/weddings/${weddingId}/vendors/${id}`);
     } catch {
       // Put just this vendor back (not an older copy of the whole list).
-      if (removed) setVendors((cur) => [...cur, removed].sort((a, b) => a.name.localeCompare(b.name)));
+      if (removed) setVendors((cur) => sortVendors([...cur, removed]));
       setError("Couldn't remove that vendor.");
       return;
     }
@@ -712,7 +740,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
                     {v.arrivalTime && (
                       <p className="text-sm text-neutral-500 dark:text-neutral-400">Arrives {formatClockTime(v.arrivalTime)}</p>
                     )}
-                    {v.contractNotes && <p className="mt-1 text-sm text-neutral-500 dark:text-neutral-400">{v.contractNotes}</p>}
+                    {v.contractNotes && <p className="mt-1 whitespace-pre-line text-sm text-neutral-500 dark:text-neutral-400">{v.contractNotes}</p>}
                     {shareResult[v.id] && (
                       <p className="mt-1 break-all text-xs text-neutral-500 dark:text-neutral-400">{shareResult[v.id]}</p>
                     )}

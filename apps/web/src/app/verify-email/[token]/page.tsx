@@ -50,6 +50,18 @@ export default function VerifyEmailPage() {
             >
               {state === "working" ? "Confirming…" : "Confirm my email"}
             </button>
+            {/* TS-179 (Tom's decision): someone else may have signed up with this address. */}
+            <p className="mt-4 text-sm text-neutral-600 dark:text-neutral-300" data-testid="verify-email-not-yours">
+              If you didn&apos;t create this Seatwise account, don&apos;t confirm — use{" "}
+              <Link href="/forgot-password" className="font-medium underline">
+                Forgot password
+              </Link>{" "}
+              on the{" "}
+              <Link href="/login" className="font-medium underline">
+                sign-in page
+              </Link>{" "}
+              to take it over instead.
+            </p>
             {error && (
               <p className="mt-4 text-sm text-red-600 dark:text-red-400" role="alert">
                 {error}

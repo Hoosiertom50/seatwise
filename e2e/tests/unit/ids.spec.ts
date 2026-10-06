@@ -25,8 +25,8 @@ const PERSON_NAME_PATTERN = /^[\p{L}\p{M}][\p{L}\p{M} '.-]*$/u;
 
 // Mirrors packages/shared/src/validation.ts's WEDDING_NAME_PATTERN, for the same reason as above.
 const WEDDING_NAME_PATTERN = /^[\p{L}\p{N}\p{M}][\p{L}\p{N}\p{M} '&,.!-]*$/u;
-// TS-171: mirrors validation.ts's PHONE_NUMBER_LIKE (a wedding name can't contain one).
-const PHONE_NUMBER_LIKE = /\p{Nd}(?:[ .-]*\p{Nd}){6,}/u;
+// TS-171 / TS-178: mirrors validation.ts's PHONE_NUMBER_LIKE (a wedding name can't contain one).
+const PHONE_NUMBER_LIKE = /\p{Nd}(?:[\s.,'’/()[\]_\u2010-\u2015-]*\p{Nd}){6,}/u;
 
 test.describe("numberToLetters", () => {
   test("encodes the spreadsheet-column boundary cases", () => {

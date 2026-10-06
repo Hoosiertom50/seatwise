@@ -124,8 +124,8 @@ tracking table as it goes — nothing special to do. The "resolve as already app
 matters if you ever point Prisma's CLI at *this sandbox's* database specifically, since its first
 migration was applied by hand before any tracking table existed there. If you'd rather adopt Prisma
 Client for the query layer instead of the current `pg`-based one, that's a reasonable next step
-once `prisma generate` can run — the schema and `@prisma/adapter-pg` (already installed) are set
-up for it.
+once `prisma generate` can run — the schema is set up for it (add `@prisma/adapter-pg` back then;
+TS-183 removed it while nothing used it).
 
 ## Production deployment
 
@@ -135,21 +135,26 @@ The web app is live at **https://seatwise-app.netlify.app** (since 2026-09-30, T
 |---|---|---|
 | Web app | Netlify, project `seatwise-app`, Free plan | Next.js via Netlify's OpenNext adapter; config in `apps/web/netlify.toml` |
 | Database | Neon, project `Seatwise`, branch `production`, AWS US East 2 (Ohio), Free plan | Same region as Netlify's functions |
-| Email | Resend (account created, **not yet wired**) | Needs a verified domain before it can email guests — until then the app's console stand-in is used and invite/RSVP links are copied by hand |
+| Email | Gmail SMTP — the dedicated **seatwise.notifications@gmail.com** account (app password) | See [Email delivery](#email-delivery-ts-132). Resend is kept for later, once Seatwise has its own domain |
 
-**How a change reaches production.** Merge to `main` → Netlify builds and publishes automatically
-(about a minute). Nothing else deploys:
+**How a change reaches production.** Netlify publishes only the `release` branch — merging to
+`main` does **not** deploy. The owner moves `release` up to `main` (a `main` → `release` PR, about
+once a day, to save credits), and Netlify then builds and publishes it (about a minute). Nothing
+else deploys:
 - **Deploy Previews are off** ("Don't deploy pull requests") and branch deploys are production-only —
   a preview would run unmerged code against the production database.
 - The `ignore` rule in `netlify.toml` skips the build when a merge doesn't touch the web app
-  (`apps/web`, `packages`, the lockfile). The Free plan has **300 credits a month and each
+  (`apps/web`, `packages`, the lockfile). A retry or "Clear cache and deploy" of the same commit
+  (e.g. after changing an environment variable) always builds (TS-183). The Free plan has **300 credits a month and each
   production deploy costs 15** — batch small merges where it's easy, and keep an eye on
   *Usage & billing* in Netlify. When credits run out, every site on the account goes offline until
   the next cycle.
 
 **Environment variables** (Netlify → Project configuration → Environment variables; never in the
 repo): `DATABASE_URL` (Neon's **pooled** `-pooler` string), `JWT_SECRET`, `ENCRYPTION_KEY`,
-`APP_URL` (`https://seatwise-app.netlify.app`). The three secrets are marked *Contains secret
+`APP_URL` (`https://seatwise-app.netlify.app`), and the email settings `SMTP_USER`/`SMTP_PASSWORD`
+(see Email delivery). A production build refuses a `JWT_SECRET` shorter than 32 characters or
+left at a placeholder such as the one in `.env.example` (TS-179). The three secrets are marked *Contains secret
 values* and are **not** available in local development. The two keys were generated with
 `openssl rand -hex 32` and are kept in the owner's password manager.
 
@@ -165,8 +170,35 @@ typed without echo, so it never lands in shell history or anywhere else:
 read -rs NEON_URL && DATABASE_URL="$NEON_URL" pnpm --filter @seatwise/db exec prisma migrate deploy; unset NEON_URL
 ```
 
-(Paste the string after pressing Return — nothing is shown — then Return again.) Do this **before**
-or together with the deploy that needs it.
+(Paste the string after pressing Return — nothing is shown — then Return again.)
+
+**Publish steps when a release includes a migration** (TS-183). The new code and the new schema
+should be live together, so the gap between them is as short as possible:
+
+1. Merge the PRs to `main` and make sure CI is green.
+2. **Migrate**: run the `prisma migrate deploy` command above against production.
+3. **Publish immediately**: merge `main` into `release` (the PR), and wait for Netlify's deploy to
+   finish.
+4. **Then re-run the safe data steps** against production. Each is a dry run first — read what it
+   says, then repeat with `--confirm`. Both are safe to run more than once and only run against
+   production with `--target-production`, asking for the secrets without showing them:
+
+   ```bash
+   read -rs PRODUCTION_DATABASE_URL && export PRODUCTION_DATABASE_URL   # Neon's direct string
+   # Re-checks every current seating plan with the app's own checks (after the
+   # declined-guests migration, 20261005170000_declined_guests_not_attending).
+   pnpm --filter @seatwise/db recheck-current-plans -- --target-production
+   pnpm --filter @seatwise/db recheck-current-plans -- --target-production --confirm
+   # Encrypts RSVP/vendor links still stored in plain text (needs the live ENCRYPTION_KEY).
+   read -rs PRODUCTION_ENCRYPTION_KEY && export PRODUCTION_ENCRYPTION_KEY
+   pnpm --filter @seatwise/db encrypt-old-link-tokens -- --target-production
+   pnpm --filter @seatwise/db encrypt-old-link-tokens -- --target-production --confirm
+   unset PRODUCTION_DATABASE_URL PRODUCTION_ENCRYPTION_KEY
+   ```
+
+   Every other script in `packages/db/prisma` (seed, cleanup, fill) refuses to run against anything
+   but a local database, whatever it's passed.
+5. Check the live site by hand (sign in, open a wedding, its seating plan).
 
 **Backups.** Two layers:
 - **Neon** keeps 6 hours of history — for a mistake noticed right away, restore to a point in time

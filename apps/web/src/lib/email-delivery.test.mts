@@ -14,14 +14,26 @@ const {
   dailyEmailLimits,
   setRecipientEmailCounterForTests,
   EMAILS_PER_RECIPIENT_PER_DAY,
+  setConfirmationEmailCounterForTests,
+  recipientCountAddress,
+  maskEmailAddress,
 } = await import("@seatwise/db");
 
 // TS-163: the daily email ceiling's counter lives in the database; here it's an in-memory one.
 let sentToday = 0;
 // TS-171: and so does the per-recipient one.
 let toAddress = new Map<string, number>();
+// TS-178: and so does the confirmations' share of the day.
+let confirmationsToday = 0;
 beforeEach(() => {
   sentToday = 0;
+  confirmationsToday = 0;
+  setConfirmationEmailCounterForTests({
+    hit: async () => ++confirmationsToday,
+    undo: async () => {
+      confirmationsToday--;
+    },
+  });
   toAddress = new Map();
   setRecipientEmailCounterForTests({
     hit: async (to) => {
@@ -42,6 +54,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   setEmailSenderForTests();
+  setConfirmationEmailCounterForTests();
   setDailyEmailCounterForTests();
   setRecipientEmailCounterForTests();
 });
@@ -158,9 +171,11 @@ test("links' secret parts are hidden in logged emails from a production build, k
 const GMAIL = { NODE_ENV: "production", SMTP_USER: "seatwise.notifications@gmail.com", SMTP_PASSWORD: "app-pass" };
 
 test("the daily ceiling defaults to 400 everyday emails, with 80 more kept for password resets", () => {
-  assert.deepEqual(dailyEmailLimits({}), { everyday: 400, essential: 480 });
-  assert.deepEqual(dailyEmailLimits({ EMAIL_DAILY_LIMIT: "100" }), { everyday: 100, essential: 180 });
-  assert.deepEqual(dailyEmailLimits({ EMAIL_DAILY_LIMIT: "nonsense" }), { everyday: 400, essential: 480 });
+  // TS-178: and a quarter of the everyday allowance at most for email-address confirmations.
+  assert.deepEqual(dailyEmailLimits({}), { everyday: 400, essential: 480, confirmations: 100 });
+  assert.deepEqual(dailyEmailLimits({ EMAIL_DAILY_LIMIT: "100" }), { everyday: 100, essential: 180, confirmations: 25 });
+  assert.deepEqual(dailyEmailLimits({ EMAIL_DAILY_LIMIT: "nonsense" }), { everyday: 400, essential: 480, confirmations: 100 });
+  assert.equal(dailyEmailLimits({ EMAIL_DAILY_LIMIT: "2" }).confirmations, 1);
 });
 
 test("over the daily ceiling, everyday emails aren't sent (and don't use up the reset headroom); resets still go", async () => {
@@ -272,4 +287,154 @@ test("an email refused by the daily ceiling doesn't count toward its recipient's
     assert.equal(await sendEmail("y@example.invalid", "s", "t", env), "limited");
   });
   assert.equal(toAddress.get("y@example.invalid"), 0);
+});
+
+// TS-178: sign-up confirmations get their own share of the everyday allowance.
+test("email confirmations stop at their share of the day, leaving the rest for invites and RSVP emails", async () => {
+  const sent: string[] = [];
+  setEmailSenderForTests(async (_config, message) => {
+    sent.push(message.subject);
+  });
+  const env = { ...GMAIL, EMAIL_DAILY_LIMIT: "8" }; // a share of 2 confirmations
+  await quietly(async () => {
+    assert.equal(await sendEmail("a@example.invalid", "Confirm", "t", env, { confirmation: true }), "sent");
+    assert.equal(await sendEmail("b@example.invalid", "Confirm", "t", env, { confirmation: true }), "sent");
+    assert.equal(await sendEmail("c@example.invalid", "Confirm", "t", env, { confirmation: true }), "limited");
+    assert.equal(await sendEmail("d@example.invalid", "Confirm", "t", env, { confirmation: true }), "limited");
+    // The everyday allowance still has room for other emails.
+    for (let i = 0; i < 6; i++) assert.equal(await sendEmail(`guest${i}@example.invalid`, "RSVP", "t", env), "sent", `RSVP ${i}`);
+    assert.equal(await sendEmail("late@example.invalid", "RSVP", "t", env), "limited");
+  });
+  assert.equal(confirmationsToday, 2, "refused confirmations are taken back off their count");
+  assert.equal(sentToday, 8, "and never counted against the day");
+  assert.equal(toAddress.get("c@example.invalid"), 0, "nor against their address");
+  assert.equal(sent.filter((s) => s === "Confirm").length, 2);
+});
+
+test("a confirmation refused by the everyday ceiling gives back its share too", async () => {
+  setEmailSenderForTests(async () => {});
+  const env = { ...GMAIL, EMAIL_DAILY_LIMIT: "4" };
+  await quietly(async () => {
+    for (let i = 0; i < 4; i++) await sendEmail(`g${i}@example.invalid`, "RSVP", "t", env);
+    assert.equal(await sendEmail("a@example.invalid", "Confirm", "t", env, { confirmation: true }), "limited");
+  });
+  assert.equal(confirmationsToday, 0);
+  assert.equal(sentToday, 4);
+});
+
+test("the confirmations' share only counts real sends, like the daily ceiling", async () => {
+  await quietly(async () => {
+    assert.equal(await sendEmail("a@example.invalid", "Confirm", "t", { EMAIL_TRANSPORT: "log", NODE_ENV: "production" }, { confirmation: true }), "logged");
+  });
+  assert.equal(confirmationsToday, 0);
+});
+
+// TS-178: one inbox, however its address is written.
+test("the per-address count treats case, +tags and Gmail's dots as the same inbox", () => {
+  assert.equal(recipientCountAddress(" Victim+one@Example.invalid "), "victim@example.invalid");
+  assert.equal(recipientCountAddress("v.i.c.t.i.m+x@gmail.com"), "victim@gmail.com");
+  assert.equal(recipientCountAddress("V.Ictim@GoogleMail.com"), "victim@gmail.com");
+  // Dots only mean nothing at Gmail; elsewhere they're part of the address.
+  assert.equal(recipientCountAddress("first.last@example.invalid"), "first.last@example.invalid");
+  assert.equal(recipientCountAddress("+leading@example.invalid"), "+leading@example.invalid");
+});
+
+test("the per-address cap can't be got round with +tags or Gmail dots, and the email still goes to the address as given", async () => {
+  const sent: string[] = [];
+  setEmailSenderForTests(async (_config, message) => {
+    sent.push(message.to);
+  });
+  const variants = ["victim@gmail.com", "v.ictim@gmail.com", "victim+1@gmail.com", "VICTIM@googlemail.com", "vic.tim+x@gmail.com"];
+  await quietly(async () => {
+    for (const to of variants) assert.equal(await sendEmail(to, "s", "t", GMAIL), "sent", to);
+    assert.equal(await sendEmail("victim+6@gmail.com", "s", "t", GMAIL), "recipient-limited");
+    assert.equal(await sendEmail("vi.ctim@googlemail.com", "s", "t", GMAIL), "recipient-limited");
+  });
+  assert.deepEqual(sent, variants);
+  assert.equal(toAddress.get("victim@gmail.com"), EMAILS_PER_RECIPIENT_PER_DAY);
+});
+
+// TS-178: sending never throws, even when the counters can't be reached.
+test("if the email counters can't be reached, nothing is sent, nothing is left counted, and it reports failed", async () => {
+  let called = false;
+  setEmailSenderForTests(async () => {
+    called = true;
+  });
+  setDailyEmailCounterForTests({
+    hit: async () => {
+      throw new Error("connection refused");
+    },
+    undo: async () => {},
+  });
+  const errors: string[] = [];
+  const original = console.error;
+  console.error = (...args: unknown[]) => errors.push(args.join(" "));
+  try {
+    assert.equal(await sendEmail("a@example.invalid", "s", "t", GMAIL), "failed");
+  } finally {
+    console.error = original;
+  }
+  assert.equal(called, false);
+  assert.equal(toAddress.get("a@example.invalid"), 0, "the address's count is given back");
+  assert.ok(errors.some((e) => e.includes("connection refused")));
+
+  setRecipientEmailCounterForTests({
+    hit: async () => {
+      throw new Error("timeout");
+    },
+    undo: async () => {},
+  });
+  await quietly(async () => {
+    const { error } = console;
+    console.error = () => {};
+    try {
+      assert.equal(await sendEmail("b@example.invalid", "s", "t", { EMAIL_TRANSPORT: "log" }), "failed");
+    } finally {
+      console.error = error;
+    }
+  });
+});
+
+test("a send that fails gives back the day's count and the address's count", async () => {
+  setEmailSenderForTests(async () => {
+    throw new Error("421 try again later");
+  });
+  const { error } = console;
+  console.error = () => {};
+  try {
+    assert.equal(await sendEmail("a@example.invalid", "s", "t", GMAIL), "failed");
+    assert.equal(await sendEmail("b@example.invalid", "Confirm", "t", GMAIL, { confirmation: true }), "failed");
+  } finally {
+    console.error = error;
+  }
+  assert.equal(sentToday, 0);
+  assert.equal(confirmationsToday, 0);
+  assert.equal(toAddress.get("a@example.invalid"), 0);
+});
+
+// TS-178: logs show who an email was for without collecting people's addresses.
+test("addresses are masked in the logs", async () => {
+  assert.equal(maskEmailAddress("victim@gmail.com"), "v***@gmail.com");
+  assert.equal(maskEmailAddress("x@example.invalid"), "x***@example.invalid");
+  assert.equal(maskEmailAddress("not-an-address"), "***");
+
+  const lines: string[] = [];
+  const { warn, error, log } = console;
+  console.warn = (...args: unknown[]) => lines.push(args.join(" "));
+  console.error = (...args: unknown[]) => lines.push(args.join(" "));
+  console.log = (...args: unknown[]) => lines.push(args.join(" "));
+  try {
+    await sendEmail("victim@gmail.com", "s", "t", { NODE_ENV: "production" }); // not configured
+    await sendEmail("victim@gmail.com", "s", "t", { NODE_ENV: "production", EMAIL_TRANSPORT: "log" });
+    setEmailSenderForTests(async () => {
+      throw new Error("550 5.1.1 <victim@gmail.com>: Recipient address rejected");
+    });
+    await sendEmail("victim@gmail.com", "s", "t", GMAIL);
+    for (let i = 0; i < EMAILS_PER_RECIPIENT_PER_DAY; i++) await sendEmail("victim@gmail.com", "s", "t", { NODE_ENV: "production", EMAIL_TRANSPORT: "log" });
+  } finally {
+    Object.assign(console, { warn, error, log });
+  }
+  assert.ok(lines.length >= 4);
+  assert.ok(lines.every((l) => !l.includes("victim@gmail.com")), lines.join("\n"));
+  assert.ok(lines.some((l) => l.includes("v***@gmail.com")));
 });

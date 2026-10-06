@@ -16,6 +16,9 @@ export const RSVP_LINK_TOO_MANY_SUBMITS =
 
 export type EmailKind = "invites" | "rsvpEmails";
 
+// TS-178: the daily cap on new weddings per account (WEDDING_CREATE_LIMITS in ./rate-limit).
+export const TOO_MANY_WEDDINGS_TODAY = "You've created a lot of weddings today — you can create more tomorrow.";
+
 export const TOO_MANY_INVITES =
   "You've sent a lot of invites in a short time. Please wait a while before sending more.";
 export const ACCOUNT_DAILY_EMAIL_LIMIT_REACHED =

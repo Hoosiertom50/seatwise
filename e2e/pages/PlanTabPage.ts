@@ -12,7 +12,7 @@ import { BasePage } from "./BasePage.js";
 
 export class PlanTabPage extends BasePage {
   private seatingPlanTabButton() {
-    return this.page.getByRole("button", { name: "Seating plan", exact: true });
+    return this.page.getByRole("tab", { name: "Seating plan", exact: true });
   }
 
   private generateButton() {
@@ -412,5 +412,15 @@ export class PlanTabPage extends BasePage {
   /** TS-170: the "Move back to draft" button, which appears once the plan is In review. */
   moveBackToDraftLocator() {
     return this.moveBackToDraftButton();
+  }
+
+  /** TS-179: shown after Generate or Restore by someone who can't replace an approved plan. */
+  savedAsDraftNotice() {
+    return this.page.getByRole("status").filter({ hasText: "saved as a comparison draft" });
+  }
+
+  /** TS-179: the approved plan's PDF export links (shown only on the current, approved version). */
+  exportLinks() {
+    return this.page.getByRole("link", { name: /\(PDF\)$/ });
   }
 }

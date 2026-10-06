@@ -31,6 +31,15 @@ export const SIGNUP_LIMITS = {
   perAddressDay: { limit: 100, windowSeconds: 86_400 },
 };
 
+// TS-178: new weddings per account per day (creating or copying one). Every wedding comes with
+// its own allowance for emails nobody signed in sets off (guests' RSVPs, see
+// NOTIFICATION_EMAILS_PER_WEDDING_WITHOUT_ACTOR), so without a cap one account could multiply that
+// allowance. A planner setting up several weddings in one sitting stays well under 10.
+export const WEDDING_CREATE_LIMITS = {
+  perAccountDay: { limit: 10, windowSeconds: 86_400 },
+};
+export const weddingCreateKey = (userId: string) => `weddings:create:day:${userId}`;
+
 // TS-164: confirming an email address -- link uses per address (guessing isn't feasible; this only
 // stops abuse), and "Resend link" per account, so it can't be used to flood an inbox.
 export const EMAIL_VERIFICATION_LIMITS = {
@@ -82,13 +91,24 @@ export const LOGIN_LIMITS = {
   failuresPerAddress: { limit: 30, windowSeconds: 900 },
 };
 
+const accountSignInFailuresKey = (account: string) => `login:account:${account}`;
+
+/**
+ * TS-178: whether the sign-in limits currently lock this account out from everywhere (too many
+ * wrong passwords for it, from any number of addresses). Only looks; counts nothing.
+ */
+export async function accountSignInLocked(email: string): Promise<boolean> {
+  const { limit, windowSeconds } = LOGIN_LIMITS.failuresPerAccount;
+  return !(await peekRateLimit(accountSignInFailuresKey(email.trim().toLowerCase()), limit, windowSeconds)).allowed;
+}
+
 // TS-171: the failure counters one password attempt counts against. Keyed by the email as typed
 // (lowercased) whether or not an account exists, so the limits can't reveal which are registered.
 export function signInFailureLimits(email: string, address: string, { perAddress = true }: { perAddress?: boolean } = {}) {
   const account = email.trim().toLowerCase();
   return [
     { key: `login:account-addr:${account}:${address}`, ...LOGIN_LIMITS.failuresPerAccountAndAddress },
-    { key: `login:account:${account}`, ...LOGIN_LIMITS.failuresPerAccount },
+    { key: accountSignInFailuresKey(account), ...LOGIN_LIMITS.failuresPerAccount },
     ...(perAddress ? [{ key: `login:addr:${address}`, ...LOGIN_LIMITS.failuresPerAddress }] : []),
   ];
 }
@@ -139,6 +159,7 @@ export {
   emailSendRefusedMessage,
   RSVP_LINK_TOO_MANY_SUBMITS,
   TOO_MANY_INVITES,
+  TOO_MANY_WEDDINGS_TODAY,
   tooManyAttemptsMessage,
   type EmailLimitReason,
 } from "./limit-messages";

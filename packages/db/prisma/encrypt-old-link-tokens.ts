@@ -24,17 +24,33 @@
 //
 //   3. DRY RUN BY DEFAULT. Nothing is written without --confirm. Link values are never printed.
 //
+//   4. TS-183: LOCAL ONLY, unless run with --target-production. Then it asks for the live site's
+//      DATABASE_URL (PRODUCTION_DATABASE_URL) and its link-encryption key (PRODUCTION_ENCRYPTION_KEY
+//      -- the live web app's ENCRYPTION_KEY), or reads them from the environment; neither is echoed
+//      or printed (see production-target.ts). The development key and keys shorter than 32
+//      characters are refused, and so is a key that can't read the links already encrypted there
+//      (a wrong key would make every link the planner's buttons show unreadable).
+//
 // Usage (from the repo root):
 //   pnpm --filter @seatwise/db encrypt-old-link-tokens            # dry run, prints counts
 //   pnpm --filter @seatwise/db encrypt-old-link-tokens --confirm  # actually encrypts
+// Against the live site (after the migrations are applied):
+//   read -rs PRODUCTION_DATABASE_URL && read -rs PRODUCTION_ENCRYPTION_KEY && \
+//     export PRODUCTION_DATABASE_URL PRODUCTION_ENCRYPTION_KEY
+//   pnpm --filter @seatwise/db encrypt-old-link-tokens -- --target-production            # dry run
+//   pnpm --filter @seatwise/db encrypt-old-link-tokens -- --target-production --confirm  # writes
 
-// TS-172: local databases only (see local-only.ts).
+// TS-172: local databases only (see local-only.ts) -- TS-183: unless --target-production.
 import "./local-only";
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { pool, hashLinkToken } from "../src/index";
+import type { Pool } from "pg";
 import { decryptTextWithSecret, devEncryptionSecret, encryptTextWithSecret } from "../src/crypto";
-import { isPlainStoredLinkToken } from "../src/link-tokens";
+import { hashLinkToken, isPlainStoredLinkToken } from "../src/link-tokens";
+import { readSecret, targetsProduction, useProductionDatabase } from "./production-target";
+
+// TS-183: loaded only once the target database is known (see main) -- importing it connects.
+let pool: Pool;
 
 function webAppEncryptionSecret(): string {
   if (process.env.LINK_ENCRYPTION_KEY) return process.env.LINK_ENCRYPTION_KEY;
@@ -96,11 +112,49 @@ async function encryptTable(t: LinkTable, secret: string, confirmed: boolean): P
   console.log(`  Encrypted ${updated} (${toEncrypt.length - updated} changed meanwhile and were left as they are).`);
 }
 
+// TS-183: every link already encrypted on the target must read back with this key and match its
+// hash -- otherwise this key isn't the one the web app there uses. Returns how many were checked
+// and how many didn't read.
+async function checkKeyAgainstExistingLinks(secret: string): Promise<{ checked: number; unreadable: number }> {
+  let checked = 0;
+  let unreadable = 0;
+  for (const t of LINK_TABLES) {
+    const { rows } = await pool.query<{ stored: string; hash: string | null }>(
+      `SELECT "${t.tokenColumn}" AS stored, "${t.hashColumn}" AS hash FROM "${t.table}" WHERE "${t.tokenColumn}" LIKE 'enc:v1:%'`,
+    );
+    for (const r of rows) {
+      checked += 1;
+      const plain = decryptTextWithSecret(r.stored, secret);
+      if (!plain || plain === "[unable to decrypt]" || (r.hash !== null && hashLinkToken(plain) !== r.hash)) unreadable += 1;
+    }
+  }
+  return { checked, unreadable };
+}
+
 async function main() {
   const confirmed = process.argv.includes("--confirm");
-  const secret = webAppEncryptionSecret();
-  if (secret === devEncryptionSecret()) {
-    console.log("Using the development encryption key (no LINK_ENCRYPTION_KEY or ENCRYPTION_KEY found).");
+  const production = targetsProduction();
+  let secret: string;
+  if (production) {
+    await useProductionDatabase();
+    secret = await readSecret("PRODUCTION_ENCRYPTION_KEY", "Production ENCRYPTION_KEY (not shown): ");
+    if (secret.length < 32) throw new Error("The production encryption key is shorter than 32 characters -- refusing.");
+    if (secret === devEncryptionSecret()) throw new Error("That's the development key, not the live site's -- refusing.");
+  } else {
+    secret = webAppEncryptionSecret();
+    if (secret === devEncryptionSecret()) {
+      console.log("Using the development encryption key (no LINK_ENCRYPTION_KEY or ENCRYPTION_KEY found).");
+    }
+  }
+  ({ pool } = await import("../src/index"));
+
+  const keyCheck = await checkKeyAgainstExistingLinks(secret);
+  if (keyCheck.unreadable > 0) {
+    const message = `${keyCheck.unreadable} of ${keyCheck.checked} already-encrypted link(s) can't be read with this key.`;
+    if (production) throw new Error(`${message} It isn't the live web app's ENCRYPTION_KEY -- nothing was changed.`);
+    console.log(`Warning: ${message} Check LINK_ENCRYPTION_KEY / apps/web/.env before using --confirm.`);
+  } else if (keyCheck.checked > 0) {
+    console.log(`Key check: all ${keyCheck.checked} already-encrypted link(s) read back correctly.`);
   }
 
   for (const t of LINK_TABLES) await encryptTable(t, secret, confirmed);
@@ -112,7 +166,8 @@ async function main() {
 }
 
 main().catch((err) => {
-  console.error(err);
+  // TS-183: only the message -- an error object can carry connection details.
+  console.error(`\nStopped: ${err instanceof Error ? err.message : String(err)}`);
   process.exitCode = 1;
-  void pool.end();
+  void pool?.end();
 });

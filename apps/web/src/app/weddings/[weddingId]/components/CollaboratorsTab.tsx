@@ -13,6 +13,11 @@ import type {
 } from "@seatwise/shared";
 import { useUnsavedChanges } from "@/lib/unsaved-changes";
 
+// TS-179: guest RSVP and vendor links someone copied while they had access aren't tied to them,
+// so taking access away doesn't stop those links -- the owner's reset below does.
+const LINKS_KEEP_WORKING =
+  "Any guest or vendor links they copied keep working until you use Reset all guest and vendor links below.";
+
 const LEVELS: { value: CollaboratorPermission; label: string; hint: string }[] = [
   { value: "VIEW", label: "View", hint: "Can see everything, can't change anything" },
   { value: "COMMENT", label: "Comment", hint: "View, plus can leave and resolve their own comments" },
@@ -58,7 +63,8 @@ export function CollaboratorsTab({
   /** TS-148: so a collaborator can leave the wedding from their own row. */
   currentUserId: string | null;
   wedding: WeddingDTO | null;
-  setWedding: (w: WeddingDTO) => void;
+  // TS-182: takes an update function too, so each save changes only its own field.
+  setWedding: React.Dispatch<React.SetStateAction<WeddingDTO | null>>;
 }) {
   const [collaborators, setCollaborators] = useState<CollaboratorDTO[]>([]);
   const router = useRouter();
@@ -83,12 +89,6 @@ export function CollaboratorsTab({
   const [venueName, setVenueName] = useState(wedding?.venueName ?? "");
   const [savingDetails, setSavingDetails] = useState(false);
   const [detailsSaved, setDetailsSaved] = useState(false);
-  // TS-159: tell the page this tab has input that leaving it would lose.
-  useUnsavedChanges(
-    "collaborators",
-    !!email.trim() ||
-      (!!wedding && (eventDate !== (wedding.eventDate ?? "") || venueName !== (wedding.venueName ?? "")))
-  );
   // FR-1.3a: this wedding's own names for its two sides -- edited here, then PATCHed as a pure
   // label rename. Local input state so typing doesn't PATCH on every keystroke; saved on blur.
   const [sideLabel1, setSideLabel1] = useState(wedding?.sideLabel1 ?? "Bride");
@@ -101,6 +101,23 @@ export function CollaboratorsTab({
   // pattern as the note/side labels above. Empty string means no cutoff at all.
   const [rsvpCutoffDate, setRsvpCutoffDate] = useState(wedding?.rsvpCutoffDate ?? "");
   const [savingRsvpCutoff, setSavingRsvpCutoff] = useState(false);
+  // TS-159: tell the page this tab has input that leaving it would lose.
+  // TS-182: the settings that save when you leave the box count too while they differ from what's
+  // saved (a reload or Back with a half-typed name or note used to lose it without a word). Only
+  // the owner sees these boxes.
+  useUnsavedChanges(
+    "collaborators",
+    isOwner &&
+      (!!email.trim() ||
+        (!!wedding &&
+          (eventDate !== (wedding.eventDate ?? "") ||
+            venueName !== (wedding.venueName ?? "") ||
+            weddingName.trim() !== wedding.name ||
+            (sideLabel1.trim() || "Bride") !== wedding.sideLabel1 ||
+            (sideLabel2.trim() || "Groom") !== wedding.sideLabel2 ||
+            note.trim() !== (wedding.note ?? "") ||
+            rsvpCutoffDate.trim() !== (wedding.rsvpCutoffDate ?? ""))))
+  );
 
   useEffect(() => {
     api
@@ -162,7 +179,8 @@ export function CollaboratorsTab({
         `/api/v1/weddings/${weddingId}`,
         { name: trimmed }
       );
-      setWedding(updated);
+      // TS-182: only the field this save owns, so a slower answer can't undo another setting.
+      setWedding((w) => (w ? { ...w, name: updated.name, updatedAt: updated.updatedAt } : w));
       setWeddingName(updated.name);
     } catch (err) {
       setError(apiErrorMessage(err, ["name"], "Couldn't save the wedding name."));
@@ -185,7 +203,9 @@ export function CollaboratorsTab({
         eventDate: eventDate || null,
         venueName: venueName.trim() || null,
       });
-      setWedding(updated);
+      setWedding((w) =>
+        w ? { ...w, eventDate: updated.eventDate, venueName: updated.venueName, updatedAt: updated.updatedAt } : w
+      );
       setEventDate(updated.eventDate ?? "");
       setVenueName(updated.venueName ?? "");
       setDetailsSaved(true);
@@ -215,7 +235,7 @@ export function CollaboratorsTab({
         `/api/v1/weddings/${weddingId}`,
         { [field]: label }
       );
-      setWedding(updated);
+      setWedding((w) => (w ? { ...w, [field]: updated[field], updatedAt: updated.updatedAt } : w));
       // A blank box shows what it saved as (Bride/Groom), unless the planner has typed since.
       setTyped((current) => (current.trim() === "" ? updated[field] : current));
     } catch (err) {
@@ -236,7 +256,7 @@ export function CollaboratorsTab({
         `/api/v1/weddings/${weddingId}`,
         { note: trimmed || null }
       );
-      setWedding(updated);
+      setWedding((w) => (w ? { ...w, note: updated.note, updatedAt: updated.updatedAt } : w));
       setNote(updated.note ?? "");
     } catch (err) {
       setError(apiErrorMessage(err, [], "Couldn't save the note."));
@@ -261,6 +281,11 @@ export function CollaboratorsTab({
   // TS-161: the owner deletes the wedding for everyone, then goes back to the dashboard.
   const [deleteConfirmName, setDeleteConfirmName] = useState("");
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  // TS-179: the owner's "Reset all guest and vendor links" -- what happened, or why it failed.
+  const [resetLinksDone, setResetLinksDone] = useState<string | null>(null);
+  const [resetLinksError, setResetLinksError] = useState<string | null>(null);
+  // TS-179: shown after the owner lowers someone's access (there is no confirmation for that).
+  const [loweredAccessNote, setLoweredAccessNote] = useState<string | null>(null);
   async function onDeleteWedding() {
     setDeleteError(null);
     try {
@@ -310,35 +335,66 @@ export function CollaboratorsTab({
     }
   }
 
+  // TS-179: owner only -- every guest and vendor link gets a new address; the old ones stop working.
+  async function onResetLinks() {
+    setResetLinksDone(null);
+    setResetLinksError(null);
+    try {
+      const res = await api.post<{ guestLinks: number; vendorLinks: number }>(
+        `/api/v1/weddings/${weddingId}/reset-links`
+      );
+      const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
+      setResetLinksDone(
+        `Done — replaced ${plural(res.guestLinks, "guest link")} and ${plural(res.vendorLinks, "vendor link")}. The old links no longer work.`
+      );
+    } catch (err) {
+      setResetLinksError(err instanceof ApiError ? err.message : "Couldn't reset the links. Nothing was changed.");
+    }
+  }
+
   async function onChangeLevel(id: string, permissionLevel: CollaboratorPermission) {
-    const prev = collaborators;
-    setCollaborators(collaborators.map((c) => (c.id === id ? { ...c, permissionLevel } : c)));
+    // TS-182: on failure only this person's level goes back, on the list as it is now.
+    const before = collaborators.find((c) => c.id === id);
+    setLoweredAccessNote(null);
+    setCollaborators((cur) => cur.map((c) => (c.id === id ? { ...c, permissionLevel } : c)));
     try {
       await api.patch(`/api/v1/weddings/${weddingId}/collaborators/${id}`, { permissionLevel });
+      const rank = (l: CollaboratorPermission) => LEVELS.findIndex((x) => x.value === l);
+      if (before && rank(permissionLevel) < rank(before.permissionLevel)) {
+        setLoweredAccessNote(
+          `${before.userName}'s access is now ${LEVELS[rank(permissionLevel)].label}. ${LINKS_KEEP_WORKING}`
+        );
+      }
     } catch {
-      setCollaborators(prev);
+      if (before) setCollaborators((cur) => cur.map((c) => (c.id === id ? { ...c, permissionLevel: before.permissionLevel } : c)));
       setError("Couldn't change that collaborator's access level.");
     }
   }
 
   async function onChangeRole(id: string, newRole: CollaboratorRole) {
-    const prev = collaborators;
-    setCollaborators(collaborators.map((c) => (c.id === id ? { ...c, role: newRole } : c)));
+    // TS-182: as above -- only this person's role goes back.
+    const before = collaborators.find((c) => c.id === id)?.role;
+    setCollaborators((cur) => cur.map((c) => (c.id === id ? { ...c, role: newRole } : c)));
     try {
       await api.patch(`/api/v1/weddings/${weddingId}/collaborators/${id}`, { role: newRole });
     } catch {
-      setCollaborators(prev);
+      if (before) setCollaborators((cur) => cur.map((c) => (c.id === id ? { ...c, role: before } : c)));
       setError("Couldn't change that collaborator's role.");
     }
   }
 
   async function onRemove(id: string) {
-    const prev = collaborators;
-    setCollaborators(collaborators.filter((c) => c.id !== id));
+    // TS-182: on failure only this person comes back, in their old place.
+    const index = collaborators.findIndex((c) => c.id === id);
+    const removed = collaborators[index];
+    setCollaborators((cur) => cur.filter((c) => c.id !== id));
     try {
       await api.delete(`/api/v1/weddings/${weddingId}/collaborators/${id}`);
     } catch {
-      setCollaborators(prev);
+      if (removed)
+        setCollaborators((cur) =>
+          cur.some((c) => c.id === id) ? cur : [...cur.slice(0, index), removed, ...cur.slice(index)]
+        );
       setError("Couldn't remove that collaborator.");
     }
   }
@@ -362,7 +418,7 @@ export function CollaboratorsTab({
         `/api/v1/weddings/${weddingId}`,
         { rsvpCutoffDate: trimmed || null }
       );
-      setWedding(updated);
+      setWedding((w) => (w ? { ...w, rsvpCutoffDate: updated.rsvpCutoffDate, updatedAt: updated.updatedAt } : w));
       setRsvpCutoffDate(updated.rsvpCutoffDate ?? "");
     } catch (err) {
       setError(apiErrorMessage(err, [], "Couldn't save the RSVP cutoff."));
@@ -375,14 +431,16 @@ export function CollaboratorsTab({
   async function onToggleEmailNotifications() {
     if (!wedding) return;
     const next = !wedding.emailNotificationsEnabled;
-    setWedding({ ...wedding, emailNotificationsEnabled: next });
+    // TS-182: changes (and on failure, puts back) only this one setting, on the wedding as it is
+    // now -- a copy taken here used to undo a name or note saved meanwhile.
+    setWedding((w) => (w ? { ...w, emailNotificationsEnabled: next } : w));
     setSavingSettings(true);
     try {
       await api.patch(`/api/v1/weddings/${weddingId}/notification-settings`, {
         emailNotificationsEnabled: next,
       });
     } catch {
-      setWedding({ ...wedding, emailNotificationsEnabled: !next });
+      setWedding((w) => (w ? { ...w, emailNotificationsEnabled: !next } : w));
       setError("Couldn't update the email notification setting.");
     } finally {
       setSavingSettings(false);
@@ -462,6 +520,7 @@ export function CollaboratorsTab({
           </form>
           {inviteSent && (
             <p
+              role="status"
               className={`mb-8 break-all text-sm ${
                 inviteSent.startsWith("Invite sent") ? "text-green-700 dark:text-green-400" : "text-amber-800 dark:text-amber-300"
               }`}
@@ -479,10 +538,11 @@ export function CollaboratorsTab({
                   .map((i) => (
                     <li
                       key={i.id}
-                      className="flex items-center justify-between gap-3 rounded-lg border border-neutral-200 dark:border-neutral-700 px-4 py-3"
+                      className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-neutral-200 dark:border-neutral-700 px-4 py-3"
                     >
-                      <div>
-                        <p className="font-medium">{i.email}</p>
+                      {/* TS-182: a long address wraps instead of pushing Revoke off a phone screen. */}
+                      <div className="min-w-0">
+                        <p className="break-all font-medium">{i.email}</p>
                         <p className="text-sm text-neutral-500 dark:text-neutral-400">
                           {roleLabel(i.role)} · {LEVELS.find((l) => l.value === i.permissionLevel)?.label} ·{" "}
                           <span className={i.status === "EXPIRED" ? "text-amber-700 dark:text-amber-400" : "text-neutral-500 dark:text-neutral-400"}>
@@ -725,7 +785,7 @@ export function CollaboratorsTab({
                   </select>
                   <ConfirmDeleteButton
                     ariaLabel={`Remove ${c.userName}`}
-                    question={`Remove ${c.userName}'s access to this wedding? They'll lose access right away. You can invite them again later.`}
+                    question={`Remove ${c.userName}'s access to this wedding? They'll lose access right away. You can invite them again later. ${LINKS_KEEP_WORKING}`}
                     confirmLabel="Yes, remove access"
                     onConfirm={() => onRemove(c.id)}
                   />
@@ -735,7 +795,7 @@ export function CollaboratorsTab({
                   <span className="rounded-full bg-neutral-100 dark:bg-neutral-800 px-3 py-1 text-sm text-neutral-600 dark:text-neutral-300">
                     {LEVELS.find((l) => l.value === c.permissionLevel)?.label}
                   </span>
-                  <span className="text-xs text-neutral-400 dark:text-neutral-500">{roleLabel(c.role)}</span>
+                  <span className="text-xs text-neutral-500 dark:text-neutral-400">{roleLabel(c.role)}</span>
                   {/* TS-148: anyone can take themselves off a wedding. */}
                   {c.userId === currentUserId && (
                     <ConfirmDeleteButton
@@ -758,6 +818,43 @@ export function CollaboratorsTab({
             </li>
           ))}
         </ul>
+      )}
+
+      {loweredAccessNote && (
+        <p role="status" className="mt-3 text-sm text-amber-800 dark:text-amber-300">
+          {loweredAccessNote}
+        </p>
+      )}
+
+      {/* TS-179 (Tom's decision): the owner replaces every guest RSVP link and vendor share link at
+          once, so links copied by someone who no longer has access stop working. No emails go out. */}
+      {isOwner && (
+        <div className="mt-8 rounded-lg border border-neutral-200 dark:border-neutral-700 p-4">
+          <h3 className="mb-1 text-sm font-medium">Reset all guest and vendor links</h3>
+          <p className="mb-3 text-sm text-neutral-500 dark:text-neutral-400">
+            Gives every guest RSVP link and vendor link a new address, so the old ones stop working —
+            for example after removing someone who may have copied them. Nobody is emailed: guests and
+            vendors will need their new links, which you can send from the guest list and the budget tab.
+          </p>
+          <ConfirmDeleteButton
+            label="Reset all guest and vendor links"
+            question="Reset every guest RSVP link and vendor link? The old links stop working straight away, and guests and vendors will need their new links — nothing is emailed automatically."
+            confirmLabel="Yes, reset all links"
+            busyLabel="Resetting…"
+            className="rounded-md border border-red-300 dark:border-red-700 px-3 py-1.5 text-sm font-medium text-red-700 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950 disabled:opacity-50"
+            onConfirm={onResetLinks}
+          />
+          {resetLinksDone && (
+            <p role="status" className="mt-2 text-sm text-green-700 dark:text-green-400">
+              {resetLinksDone}
+            </p>
+          )}
+          {resetLinksError && (
+            <p role="alert" className="mt-2 text-sm text-red-600 dark:text-red-400">
+              {resetLinksError}
+            </p>
+          )}
+        </div>
       )}
 
       {/* TS-105: the owner hands the wedding to someone who already has access. Needed before the

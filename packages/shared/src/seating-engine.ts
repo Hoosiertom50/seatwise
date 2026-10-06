@@ -168,7 +168,10 @@ interface Unit {
   totalHeadcount: number;
   requiresAccessible: boolean;
   pinnedTableId: string | null;
-  pinReason: "lock" | "required" | null;
+  // TS-181: "lock" is a guest's own lock, "table" is sitting at a locked table (TS-177).
+  pinReason: "lock" | "table" | "required" | null;
+  // TS-181: someone in this unit is locked themselves -- they go first among table-lock pins.
+  hasLockedGuest: boolean;
   // TS-173: why this unit can't be seated at all, when its members' Restricted-table lists
   // disagree (one is required at a table another isn't listed for, or two are required at
   // different tables) -- every table would break a hard rule for someone in it.
@@ -393,6 +396,7 @@ export function generateSeatingPlan(
         requiresAccessible: false,
         pinnedTableId: null,
         pinReason: null,
+        hasLockedGuest: false,
         blockedReason: null,
         side: "BOTH",
       };
@@ -410,6 +414,7 @@ export function generateSeatingPlan(
     // FR-3.7a: a required-table pin takes priority over a lock (it's a hard rule, a lock is a
     // soft "keep them where they were"); either way the whole unit is pinned, since forced-
     // together members are always seated as one.
+    if (g.isLocked) unit.hasLockedGuest = true;
     if (g.requiredTableId && unit.pinReason !== "required") {
       unit.pinnedTableId = g.requiredTableId;
       unit.pinReason = "required";
@@ -419,13 +424,14 @@ export function generateSeatingPlan(
       // there: locked tables are left out of the general pool below.)
       (g.isLocked || (!!g.currentTableId && !!tablesById.get(g.currentTableId)?.isLocked)) &&
       g.currentTableId &&
-      !unit.pinnedTableId &&
+      // TS-181: a guest's own lock wins over a table-lock pin another member of the unit set first.
+      (!unit.pinnedTableId || (unit.pinReason === "table" && g.isLocked)) &&
       // TS-150: a lock never keeps someone at a Restricted table -- if they belong there, their
       // required-table pin above already does; if they've been taken off its list, they move.
       !tablesById.get(g.currentTableId)?.isRestricted
     ) {
       unit.pinnedTableId = g.currentTableId;
-      unit.pinReason = "lock";
+      unit.pinReason = g.isLocked ? "lock" : "table";
     }
   }
   const units = [...unitsByRoot.values()];
@@ -643,15 +649,26 @@ export function generateSeatingPlan(
     );
   }
 
-  // Pinned (locked) units are placed first, so their reserved capacity isn't grabbed by other
-  // units first; unpinned units then follow the existing largest-first heuristic.
-  const pinnedUnits = units.filter((u) => u.pinnedTableId);
+  // Pinned units are placed first, so their reserved capacity isn't grabbed by other units;
+  // unpinned units then follow the existing largest-first heuristic.
+  // TS-181: pins go in passes -- required-table pins (a hard rule), then guests' own locks, then
+  // people kept at a locked table (TS-177), with individually locked guests first within that
+  // pass. Before, pins went in guest-list order and a lock that couldn't be kept was re-seated
+  // straight away, so it could take a seat another pin (even a required one) still needed. Now
+  // every pin is tried before any lock that couldn't be kept is seated somewhere else.
+  const pinPass = (reason: Unit["pinReason"]) =>
+    units
+      .filter((u) => u.pinnedTableId && u.pinReason === reason)
+      .sort((x, y) => Number(y.hasLockedGuest) - Number(x.hasLockedGuest));
+  const pinnedUnits = [...pinPass("required"), ...pinPass("lock"), ...pinPass("table")];
   const unpinnedUnits = [...units.filter((u) => !u.pinnedTableId)].sort(
     (a, b) => b.totalHeadcount - a.totalHeadcount
   );
 
   const assignments: SeatingPlanAssignment[] = [];
   const unassignedGuestIds: string[] = [];
+  // TS-181: locks that couldn't be kept, seated automatically once every pin has had its turn.
+  const failedLocks: { unit: Unit; target: EngineTable | undefined }[] = [];
 
   for (const unit of pinnedUnits) {
     if (unit.blockedReason) {
@@ -680,8 +697,12 @@ export function generateSeatingPlan(
       );
       continue;
     }
-    // A lock is only "keep them where they were", so fall back to normal automatic placement
-    // rather than leaving the guest(s) stranded.
+    failedLocks.push({ unit, target });
+  }
+
+  // A lock is only "keep them where they were", so fall back to normal automatic placement
+  // rather than leaving the guest(s) stranded -- after every pin, before the unpinned guests.
+  for (const { unit, target } of failedLocks) {
     warnings.push(
       `${unit.guestIds.length === 1 ? "Guest" : "Guests"} ${unit.guestIds
         .map(guestName)

@@ -41,7 +41,7 @@ export interface AddVendorInput {
 
 export class BudgetTabPage extends BasePage {
   private budgetTabButton() {
-    return this.page.getByRole("button", { name: "Budget", exact: true });
+    return this.page.getByRole("tab", { name: "Budget", exact: true });
   }
 
   async goto(weddingId: string): Promise<void> {
@@ -369,6 +369,15 @@ export class BudgetTabPage extends BasePage {
       ),
       this.saveEditButton().click(),
     ]);
+  }
+
+  /** TS-180: like saveEdit, and returns what the Save actually sent (only changed fields go). */
+  async saveEditReturningSentFields(): Promise<Record<string, unknown>> {
+    const [request] = await Promise.all([
+      this.page.waitForRequest((req) => req.method() === "PATCH" && /\/vendors\/[^/]+$/.test(new URL(req.url()).pathname)),
+      this.saveEdit(),
+    ]);
+    return (request.postDataJSON() ?? {}) as Record<string, unknown>;
   }
 
   /** TS-175: how many vendor edit forms are open (0 once a conflict has closed the editor). */

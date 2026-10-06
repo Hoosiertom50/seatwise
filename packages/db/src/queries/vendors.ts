@@ -81,8 +81,9 @@ export async function createVendor(weddingId: string, input: CreateVendorData): 
 }
 
 export async function listVendorsForWedding(weddingId: string): Promise<VendorRow[]> {
+  // TS-180: case doesn't decide the order (the Budget tab sorts the same way, ignoring case).
   const { rows } = await pool.query(
-    `SELECT ${COLUMNS} FROM "vendors" WHERE "weddingId" = $1 ORDER BY name`,
+    `SELECT ${COLUMNS} FROM "vendors" WHERE "weddingId" = $1 ORDER BY lower(name), id`,
     [weddingId]
   );
   return rows;

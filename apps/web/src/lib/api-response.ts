@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import type { ZodError } from "zod";
 import { PlanSourceChangedError } from "@seatwise/db";
+import { isNonJsonBody } from "./json-body";
 
 export function errorResponse(
   message: string,
@@ -8,6 +9,21 @@ export function errorResponse(
   fieldErrors?: Record<string, string[] | undefined>
 ) {
   return NextResponse.json({ error: message, fieldErrors }, { status });
+}
+
+export const SEND_AS_JSON = "Send this request as JSON.";
+
+// TS-179: defence in depth for routes that read a JSON body. proxy.ts already refuses a write whose
+// body isn't JSON, but a route shouldn't depend on that alone (a matcher change, or a route outside
+// it, would quietly drop the check). Refuses a non-JSON body with 415; otherwise returns the parsed
+// body, or null when it's empty or not valid JSON (the route's own schema then says what's wrong,
+// as before).
+export async function readJson(
+  req: Request
+): Promise<{ ok: true; body: unknown } | { ok: false; response: NextResponse }> {
+  if (isNonJsonBody(req.headers)) return { ok: false, response: errorResponse(SEND_AS_JSON, 415) };
+  const body: unknown = await req.json().catch(() => null);
+  return { ok: true, body };
 }
 
 export function zodErrorResponse(error: ZodError) {

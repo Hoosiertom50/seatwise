@@ -78,7 +78,8 @@ export function DayOfTab({
     setDetail(d);
   }
   // TS-166: a half-typed walk-in counts as unsaved input (TS-159).
-  useUnsavedChanges("day-of-walk-in", walkInFirst.trim() !== "" || walkInLast.trim() !== "");
+  // TS-182: only while the form is there (it's hidden without Edit access).
+  useUnsavedChanges("day-of-walk-in", canEdit && (walkInFirst.trim() !== "" || walkInLast.trim() !== ""));
 
   async function load() {
     const [{ tables: tableList }, { planVersions }] = await Promise.all([
@@ -122,6 +123,9 @@ export function DayOfTab({
       `${g.firstName} ${g.lastName} ${g.partyName ?? ""}`.toLowerCase().includes(q)
     );
   }, [guests, search]);
+
+  const errorGuest = errorGuestId ? guests.find((g) => g.id === errorGuestId) : undefined;
+  const errorGuestName = errorGuest ? `${errorGuest.firstName} ${errorGuest.lastName}` : null;
 
   const occupancy = useMemo(() => {
     const counts = new Map<string, number>();
@@ -315,8 +319,15 @@ export function DayOfTab({
           {error}
         </p>
       )}
+      {/* TS-182: a message about a guest the search is hiding (or who has gone) is shown up here,
+          with their name, instead of nowhere. */}
+      {error && errorGuestId && !filteredGuests.some((g) => g.id === errorGuestId) && (
+        <p role="alert" className="text-sm text-red-600 dark:text-red-400">
+          {errorGuestName ? `${errorGuestName}: ${error}` : error}
+        </p>
+      )}
       {notice && (
-        <p className="rounded-lg border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-950 p-3 text-sm text-blue-800 dark:text-blue-300">
+        <p role="status" className="rounded-lg border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-950 p-3 text-sm text-blue-800 dark:text-blue-300">
           {notice}
         </p>
       )}

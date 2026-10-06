@@ -16,6 +16,7 @@ import type {
 import { compareTableLabels, GUEST_TIER_LABELS, type GuestTier } from "@seatwise/shared";
 import { useUnsavedChanges } from "@/lib/unsaved-changes";
 import { useSerialTasks } from "@/lib/serial-tasks";
+import { OPEN_EDIT_MESSAGE } from "@/lib/display-format";
 
 const SHAPES: TableShape[] = ["ROUND", "RECTANGULAR", "SQUARE", "OVAL", "OTHER"];
 
@@ -146,7 +147,8 @@ export function TablesTab({
   const [view, setView] = useState<"list" | "floorplan">("list");
 
   const [label, setLabel] = useState("");
-  const [capacity, setCapacity] = useState(8);
+  // TS-182: number boxes keep what was typed, so clearing one to type a new number doesn't show 0.
+  const [capacity, setCapacity] = useState("8");
   const [purpose, setPurpose] = useState("");
   const [isRestricted, setIsRestricted] = useState(false);
   const [isAccessible, setIsAccessible] = useState(false);
@@ -167,8 +169,8 @@ export function TablesTab({
   const [editDirty, setEditDirty] = useState(false);
 
   // FR-4.2: quick-create a standard set of tables in one action.
-  const [qcCount, setQcCount] = useState(12);
-  const [qcCapacity, setQcCapacity] = useState(8);
+  const [qcCount, setQcCount] = useState("12");
+  const [qcCapacity, setQcCapacity] = useState("8");
   const [qcShape, setQcShape] = useState<TableShape>("ROUND");
   const [qcPrefix, setQcPrefix] = useState("Table");
   const [qcCreating, setQcCreating] = useState(false);
@@ -179,11 +181,14 @@ export function TablesTab({
   const [savingTemplate, setSavingTemplate] = useState(false);
   const [savedTemplate, setSavedTemplate] = useState<SeatingTemplateDTO | null>(null);
   // TS-159: tell the page this tab has input that leaving it would lose.
-  useUnsavedChanges("tables", !!(label.trim() || purpose.trim() || templateName.trim() || (editingId && editDirty)));
+  // TS-182: only while the forms are there (they're hidden without Edit access).
+  useUnsavedChanges("tables", canEdit && !!(label.trim() || purpose.trim() || templateName.trim() || (editingId && editDirty)));
 
   // TS-91: add a saved template's tables to this existing wedding (additive -- nothing already
   // here changes). The template list loads the first time the section is opened.
   const [myTemplates, setMyTemplates] = useState<SeatingTemplateDTO[] | null>(null);
+  // TS-182: the list couldn't be loaded -- it used to say "Loading your templates…" for good.
+  const [templatesFailed, setTemplatesFailed] = useState(false);
   const [applyTemplateId, setApplyTemplateId] = useState("");
   const [applyingTemplate, setApplyingTemplate] = useState(false);
   const [appliedMessage, setAppliedMessage] = useState<string | null>(null);
@@ -236,7 +241,7 @@ export function TablesTab({
         `/api/v1/weddings/${weddingId}/tables`,
         {
           label,
-          capacity,
+          capacity: Number(capacity),
           purpose: purpose || null,
           isRestricted,
           isAccessible,
@@ -249,7 +254,7 @@ export function TablesTab({
       // TS-166: built from the list as it is now, so another change made meanwhile isn't lost.
       setTables((cur) => [...cur, table].sort((a, b) => compareTableLabels(a.label, b.label)));
       setLabel("");
-      setCapacity(8);
+      setCapacity("8");
       setPurpose("");
       setIsRestricted(false);
       setIsAccessible(false);
@@ -271,7 +276,7 @@ export function TablesTab({
     try {
       const { tables: created } = await api.post<{ tables: SeatingTableDTO[] }>(
         `/api/v1/weddings/${weddingId}/tables/quick-create`,
-        { count: qcCount, capacity: qcCapacity, shape: qcShape, labelPrefix: qcPrefix }
+        { count: Number(qcCount), capacity: Number(qcCapacity), shape: qcShape, labelPrefix: qcPrefix }
       );
       setTables((cur) => [...cur, ...created].sort((a, b) => compareTableLabels(a.label, b.label)));
     } catch (err) {
@@ -296,6 +301,8 @@ export function TablesTab({
       );
       setSavedTemplate(template);
       setTemplateName("");
+      // TS-182: "Add tables from a template" shows the new one straight away.
+      if (myTemplates !== null || templatesFailed) void loadMyTemplates(true);
     } catch (err) {
       setError(apiErrorMessage(err, [], "Couldn't save that template."));
     } finally {
@@ -303,14 +310,16 @@ export function TablesTab({
     }
   }
 
-  async function loadMyTemplates() {
-    if (myTemplates) return;
+  async function loadMyTemplates(force = false) {
+    if (myTemplates && !force) return;
+    setTemplatesFailed(false);
     try {
       const { templates } = await api.get<{ templates: SeatingTemplateDTO[] }>(`/api/v1/templates`);
       setMyTemplates(templates);
-      if (templates[0]) setApplyTemplateId(templates[0].id);
-    } catch (err) {
-      setError(apiErrorMessage(err, [], "Couldn't load your templates."));
+      // Keeps the one already picked, if it's still there.
+      setApplyTemplateId((cur) => (templates.some((t) => t.id === cur) ? cur : (templates[0]?.id ?? "")));
+    } catch {
+      setTemplatesFailed(true);
     }
   }
 
@@ -502,7 +511,7 @@ export function TablesTab({
             max={50}
             className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
             value={capacity}
-            onChange={(e) => setCapacity(Number(e.target.value))}
+            onChange={(e) => setCapacity(e.target.value)}
           />
         </div>
         <div>
@@ -636,7 +645,7 @@ export function TablesTab({
               max={100}
               className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1.5 text-sm"
               value={qcCount}
-              onChange={(e) => setQcCount(Number(e.target.value))}
+              onChange={(e) => setQcCount(e.target.value)}
             />
           </div>
           <div>
@@ -650,7 +659,7 @@ export function TablesTab({
               max={50}
               className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1.5 text-sm"
               value={qcCapacity}
-              onChange={(e) => setQcCapacity(Number(e.target.value))}
+              onChange={(e) => setQcCapacity(e.target.value)}
             />
           </div>
           <div>
@@ -726,7 +735,7 @@ export function TablesTab({
           </button>
         </form>
         {savedTemplate && (
-          <p className="mt-2 text-sm text-green-700 dark:text-green-400">
+          <p role="status" className="mt-2 text-sm text-green-700 dark:text-green-400">
             Saved &ldquo;{savedTemplate.name}&rdquo; ({savedTemplate.tableCount} table
             {savedTemplate.tableCount === 1 ? "" : "s"}) — pick it when creating a new wedding from
             your dashboard.
@@ -748,7 +757,14 @@ export function TablesTab({
           wedding. Tables already here stay exactly as they are; a name that&apos;s already taken
           gets a number added.
         </p>
-        {myTemplates === null ? (
+        {templatesFailed ? (
+          <p role="alert" className="text-sm text-red-600 dark:text-red-400">
+            Couldn&apos;t load your templates.{" "}
+            <button type="button" onClick={() => void loadMyTemplates(true)} className="underline hover:no-underline">
+              Try again
+            </button>
+          </p>
+        ) : myTemplates === null ? (
           <p className="text-sm text-neutral-500 dark:text-neutral-400">Loading your templates…</p>
         ) : myTemplates.length === 0 ? (
           <p className="text-sm text-neutral-500 dark:text-neutral-400">
@@ -783,7 +799,7 @@ export function TablesTab({
             </button>
           </form>
         )}
-        {appliedMessage && <p className="mt-2 text-sm text-green-700 dark:text-green-400">{appliedMessage}</p>}
+        {appliedMessage && <p role="status" className="mt-2 text-sm text-green-700 dark:text-green-400">{appliedMessage}</p>}
       </details>
         </>
       )}
@@ -896,13 +912,13 @@ export function TablesTab({
                       </span>
                     )}
                     {t.singleSideOnly && (
-                      <span className="ml-2 rounded bg-purple-50 px-1.5 py-0.5 text-xs text-purple-700">
+                      <span className="ml-2 rounded bg-purple-50 dark:bg-purple-950 px-1.5 py-0.5 text-xs text-purple-700 dark:text-purple-300">
                         single-side only
                       </span>
                     )}
                     {t.purposeCriterionType && (
                       <span
-                        className="ml-2 rounded bg-emerald-50 px-1.5 py-0.5 text-xs text-emerald-700"
+                        className="ml-2 rounded bg-emerald-50 dark:bg-emerald-950 px-1.5 py-0.5 text-xs text-emerald-700 dark:text-emerald-300"
                         title="A soft preference for generation — never blocks anyone else from being seated here."
                       >
                         favors {criterionValueLabel(t.purposeCriterionType, t.purposeCriterionValue, SIDE_VALUES)}
@@ -942,6 +958,11 @@ export function TablesTab({
                       </button>
                       <button
                         onClick={() => {
+                          // TS-182: opening another table used to throw away a changed open edit.
+                          if (editingId && editingId !== t.id && editDirty) {
+                            setError(OPEN_EDIT_MESSAGE);
+                            return;
+                          }
                           setError(null);
                           setEditingId(editingId === t.id ? null : t.id);
                           setEditDirty(false);
@@ -1248,7 +1269,7 @@ function TableEditForm({
   onCancel: () => void;
 }) {
   const [label, setLabel] = useState(table.label);
-  const [capacity, setCapacity] = useState(table.capacity);
+  const [capacity, setCapacity] = useState(String(table.capacity));
   const [shape, setShape] = useState<TableShape>(table.shape);
   const [purpose, setPurpose] = useState(table.purpose ?? "");
   const [criterionType, setCriterionType] = useState<TablePurposeCriterionType | "">(table.purposeCriterionType ?? "");
@@ -1263,7 +1284,7 @@ function TableEditForm({
     requiredGuestIds.some((id) => !table.requiredGuestIds.includes(id));
   const dirty =
     label !== table.label ||
-    capacity !== table.capacity ||
+    capacity !== String(table.capacity) ||
     shape !== table.shape ||
     purpose !== (table.purpose ?? "") ||
     criterionType !== (table.purposeCriterionType ?? "") ||
@@ -1290,7 +1311,7 @@ function TableEditForm({
       const { table: saved, warnings } = await save(
         {
           label: label.trim(),
-          capacity,
+          capacity: Number(capacity),
           shape,
           purpose: purpose.trim() || null,
           purposeCriterionType: criterionType || null,
@@ -1332,7 +1353,7 @@ function TableEditForm({
           max={50}
           className={field}
           value={capacity}
-          onChange={(e) => setCapacity(Number(e.target.value))}
+          onChange={(e) => setCapacity(e.target.value)}
           required
         />
       </div>

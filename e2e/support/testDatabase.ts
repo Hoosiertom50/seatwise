@@ -294,7 +294,7 @@ export async function holdWeddingLock(weddingId: string): Promise<HeldWeddingLoc
   await client.query("BEGIN");
   const { rows } = await client.query(
     `SELECT w.id FROM "weddings" w JOIN "users" u ON u.id = w."ownerId"
-     WHERE w.id = $1 AND u.email LIKE $2 FOR UPDATE OF w`,
+     WHERE w.id = $1 AND u.email LIKE $2 FOR NO KEY UPDATE OF w`,
     [weddingId, TEST_EMAIL_PATTERN],
   );
   if (!rows[0]) {
@@ -318,6 +318,66 @@ export async function holdWeddingLock(weddingId: string): Promise<HeldWeddingLoc
   };
 }
 
+/** TS-179: a test plan version's row lock, held from outside the app -- see holdPlanVersion. */
+export interface HeldPlanVersion {
+  /** Resolves once `count` of the app's own database sessions are waiting on this plan version. */
+  waitForWaiters(count: number): Promise<void>;
+  /** Marks the plan Approved (as an approval landing just first would) and lets the waiting requests carry on. */
+  approveAndRelease(): Promise<void>;
+  /** Lets the waiting requests carry on without changing anything (cleanup). */
+  release(): Promise<void>;
+}
+
+/**
+ * TS-179: holds a test plan version's row lock (the one a status change takes), so a status change
+ * waits exactly where an approval landing at the same moment used to slip past the route's own
+ * check; the test then approves the plan and lets the request go. Test weddings only.
+ */
+export async function holdPlanVersion(planVersionId: string): Promise<HeldPlanVersion> {
+  const { Client } = await import("pg");
+  testPool(); // the same production refusal as every other helper here
+  const client = new Client({ connectionString: resolveDatabaseUrl() });
+  await client.connect();
+  await client.query("BEGIN");
+  const { rows } = await client.query(
+    `SELECT pv.id FROM "plan_versions" pv JOIN "weddings" w ON w.id = pv."weddingId" JOIN "users" u ON u.id = w."ownerId"
+     WHERE pv.id = $1 AND u.email LIKE $2 FOR UPDATE OF pv`,
+    [planVersionId, TEST_EMAIL_PATTERN],
+  );
+  if (!rows[0]) {
+    await client.query("ROLLBACK");
+    await client.end();
+    throw new Error(`testDatabase: no plan version ${planVersionId} on a test wedding.`);
+  }
+  const { rows: me } = await client.query<{ pid: number }>(`SELECT pg_backend_pid() AS pid`);
+  const pid = me[0].pid;
+  let open = true;
+  const finish = async (sql: "COMMIT" | "ROLLBACK") => {
+    if (!open) return;
+    open = false;
+    try {
+      await client.query(sql);
+    } finally {
+      await client.end();
+    }
+  };
+  return {
+    async waitForWaiters(count: number) {
+      await waitForSessionsBlockedBy(pid, count, "the plan version");
+    },
+    async approveAndRelease() {
+      await client.query(
+        `UPDATE "plan_versions" SET status = 'APPROVED', "approvedAt" = now(), revision = revision + 1 WHERE id = $1`,
+        [planVersionId],
+      );
+      await finish("COMMIT");
+    },
+    async release() {
+      await finish("ROLLBACK");
+    },
+  };
+}
+
 /**
  * TS-174: makes a test wedding's timeline entries tie on position the way entries saved before
  * TS-153 could (every one at sortOrder 0), with their creation times in the given order -- the
@@ -333,6 +393,22 @@ export async function plantTimelineTie(weddingId: string, entryIdsInCreatedOrder
     [weddingId, entryIdsInCreatedOrder, TEST_EMAIL_PATTERN],
   );
   if (rowCount !== entryIdsInCreatedOrder.length) throw new Error(`testDatabase: not every entry is on test wedding ${weddingId}.`);
+}
+
+/**
+ * TS-181: clears every Needs Reassignment flag on a test wedding's plan version and marks it
+ * complete -- what a plan looks like when a change was saved but its own re-check never ran. Lets
+ * a test check that approving re-checks the seating itself rather than trusting the stored flags.
+ */
+export async function plantStaleSeatFlags(weddingId: string, planVersionId: string): Promise<void> {
+  const { rowCount } = await testPool().query(
+    `UPDATE "plan_versions" pv SET "isComplete" = true
+     FROM "weddings" w JOIN "users" u ON u.id = w."ownerId"
+     WHERE pv.id = $2 AND pv."weddingId" = $1 AND w.id = pv."weddingId" AND u.email LIKE $3`,
+    [weddingId, planVersionId, TEST_EMAIL_PATTERN],
+  );
+  if (rowCount !== 1) throw new Error(`testDatabase: no plan version ${planVersionId} on test wedding ${weddingId}.`);
+  await testPool().query(`UPDATE "seat_assignments" SET "needsReassignment" = false WHERE "planVersionId" = $1`, [planVersionId]);
 }
 
 /** TS-174: a test timeline entry's row lock, held from outside the app -- see holdTimelineEntry. */
@@ -452,4 +528,83 @@ export async function setAccountEmailCount(email: string, counter: AccountEmailC
      ON CONFLICT (key, "windowStart") DO UPDATE SET count = $3`,
     [`${prefix}${await testAccountId(email)}`, currentWindowStart(windowSeconds), count],
   );
+}
+
+/** TS-178: sets one counter's value in its current window. Every caller below checks first that the
+ * key belongs to a test address or test account. */
+async function setCounter(key: string, windowSeconds: number, count: number, window: "current" | "previous" = "current"): Promise<void> {
+  const start = currentWindowStart(windowSeconds);
+  // TS-184: "previous" is the window just before the current one, which shorter limits still count.
+  if (window === "previous") start.setTime(start.getTime() - windowSeconds * 1000);
+  await testPool().query(
+    `INSERT INTO "rate_limit_counters" (key, "windowStart", count) VALUES ($1, $2, $3)
+     ON CONFLICT (key, "windowStart") DO UPDATE SET count = $3`,
+    [key, start, count],
+  );
+}
+
+async function readCounter(key: string, windowSeconds: number): Promise<number> {
+  const { rows } = await testPool().query<{ count: number }>(
+    `SELECT count FROM "rate_limit_counters" WHERE key = $1 AND "windowStart" = $2`,
+    [key, currentWindowStart(windowSeconds)],
+  );
+  return rows[0]?.count ?? 0;
+}
+
+function requireTestEmail(email: string): string {
+  const lowered = email.trim().toLowerCase();
+  if (!lowered.endsWith(TEST_ACCOUNT_EMAIL_DOMAIN)) throw new Error(`testDatabase: ${email} isn't a test address.`);
+  return lowered;
+}
+
+/**
+ * TS-178: sets how many emails a test address has had from Seatwise today (the per-address daily
+ * cap, EMAILS_PER_RECIPIENT_PER_DAY in packages/db/src/email.ts), so a test can reach the cap
+ * without sending them. Test addresses (@example.invalid, no "+tag") only.
+ */
+export async function setEmailsToAddressToday(email: string, count: number): Promise<void> {
+  const address = requireTestEmail(email);
+  if (address.includes("+")) throw new Error("testDatabase: use a test address without a +tag.");
+  await setCounter(`email:to:day:${address}`, 86_400, count);
+}
+
+/** TS-178: how many emails a test address has had from Seatwise today (see setEmailsToAddressToday). */
+export async function emailsToAddressToday(email: string): Promise<number> {
+  return readCounter(`email:to:day:${requireTestEmail(email)}`, 86_400);
+}
+
+/**
+ * TS-178: sets a test account's count of wrong passwords from everywhere in the current window
+ * (LOGIN_LIMITS.failuresPerAccount in apps/web/src/lib/rate-limit.ts) -- `count` at that limit
+ * locks the account, as many wrong guesses would.
+ */
+export async function setSignInFailuresForAccount(
+  email: string,
+  count: number,
+  window: "current" | "previous" = "current",
+): Promise<void> {
+  await testAccountId(email); // throws unless it's a test account
+  await setCounter(`login:account:${requireTestEmail(email)}`, 900, count, window);
+}
+
+/** TS-178: the "Forgot password?" counters for one test email (PASSWORD_RESET_LIMITS), by window. */
+export type PasswordResetCounter = "per-email-15-minutes" | "per-email-day";
+const PASSWORD_RESET_COUNTERS: Record<PasswordResetCounter, { prefix: string; windowSeconds: number }> = {
+  "per-email-15-minutes": { prefix: "pw-reset:email:", windowSeconds: 900 },
+  "per-email-day": { prefix: "pw-reset:email:day:", windowSeconds: 86_400 },
+};
+
+export async function passwordResetCount(email: string, counter: PasswordResetCounter): Promise<number> {
+  const { prefix, windowSeconds } = PASSWORD_RESET_COUNTERS[counter];
+  return readCounter(`${prefix}${requireTestEmail(email)}`, windowSeconds);
+}
+
+export async function setPasswordResetCount(email: string, counter: PasswordResetCounter, count: number): Promise<void> {
+  const { prefix, windowSeconds } = PASSWORD_RESET_COUNTERS[counter];
+  await setCounter(`${prefix}${requireTestEmail(email)}`, windowSeconds, count);
+}
+
+/** TS-178: how many weddings a test account has created today (WEDDING_CREATE_LIMITS). */
+export async function weddingsCreatedToday(email: string): Promise<number> {
+  return readCounter(`weddings:create:day:${await testAccountId(email)}`, 86_400);
 }

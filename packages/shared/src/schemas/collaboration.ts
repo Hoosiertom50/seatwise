@@ -1,4 +1,6 @@
 import { z } from "zod";
+// TS-180: free text refuses hidden control characters (see ../safe-text).
+import { safeText } from "../safe-text";
 
 // TS-13 (Collaboration & Notifications, FR-10.x): View/Comment/Edit collaborator access, plus
 // comments attached to a guest or table and in-app notifications.
@@ -98,7 +100,7 @@ export const createCommentSchema = z
     guestId: z.string().optional().nullable(),
     tableId: z.string().optional().nullable(),
     timelineEntryId: z.string().optional().nullable(),
-    body: z.string().min(1, "Comment can't be empty").max(4000),
+    body: safeText(4000, { multiline: true, required: "Comment can't be empty" }),
     parentCommentId: z.string().optional().nullable(),
   })
   .refine(

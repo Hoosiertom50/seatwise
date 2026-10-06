@@ -7,6 +7,7 @@ import {
   revokeVendorShareToken,
 } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
+import { appBaseUrl } from "@/lib/app-url";
 import { errorResponse, zodErrorResponse } from "@/lib/api-response";
 import { requireAccess } from "@/lib/access";
 
@@ -28,12 +29,13 @@ export async function POST(req: NextRequest, { params }: Params) {
   if (!parsed.success) return zodErrorResponse(parsed.error);
 
   if (!(await getVendorForWedding(vendorId, weddingId))) return errorResponse("Vendor not found", 404);
+  // TS-178: the app's own address (see lib/app-url), worked out before the link is changed.
+  const appUrl = appBaseUrl();
   const token = parsed.data.regenerate
     ? await regenerateVendorShareToken(vendorId, weddingId)
     : await ensureVendorShareToken(vendorId, weddingId);
   if (!token) return errorResponse("Vendor not found", 404);
 
-  const appUrl = process.env.APP_URL || "http://localhost:3000";
   const result: VendorShareLinkDTO = { url: `${appUrl}/vendor/${token}` };
   return NextResponse.json({ link: result });
 }

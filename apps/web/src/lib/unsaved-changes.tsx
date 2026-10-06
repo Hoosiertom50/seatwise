@@ -24,6 +24,35 @@ export function useUnsavedChanges(key: string, dirty: boolean): void {
 }
 
 /**
+ * TS-182: for fields that save when you leave them (a guest row's name, email or notes; the
+ * wedding settings). They had no unsaved state of their own, so a reload or Back while one was
+ * half-typed lost it without a word. The returned `markDirty(key, dirty)` reports one field at a
+ * time (dirty while its text differs from what's saved); `clearAll` forgets every field this
+ * component reported, and leaving the component does the same.
+ */
+export function useUnsavedFields(): {
+  markDirty: (key: string, dirty: boolean) => void;
+  clearAll: () => void;
+} {
+  const registry = useContext(UnsavedChangesContext);
+  const keys = useRef(new Set<string>());
+  const markDirty = useCallback(
+    (key: string, dirty: boolean) => {
+      if (dirty) keys.current.add(key);
+      else keys.current.delete(key);
+      registry?.setDirty(key, dirty);
+    },
+    [registry]
+  );
+  const clearAll = useCallback(() => {
+    for (const key of keys.current) registry?.setDirty(key, false);
+    keys.current.clear();
+  }, [registry]);
+  useEffect(() => clearAll, [clearAll]);
+  return useMemo(() => ({ markDirty, clearAll }), [markDirty, clearAll]);
+}
+
+/**
  * Wraps the tabs. `hasUnsaved` tells the page whether any tab has unsaved input right now; the
  * provider also asks the browser to confirm before the page is closed or reloaded while it does.
  */

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { PERSON_NAME_PATTERN, PERSON_NAME_MESSAGE, looksLikeWebAddress, NO_WEB_ADDRESS_MESSAGE } from "../validation";
+import { PERSON_NAME_PATTERN, PERSON_NAME_MESSAGE, looksLikeWebAddress, NO_WEB_ADDRESS_MESSAGE, hasMixedScriptWord, NO_MIXED_SCRIPT_MESSAGE } from "../validation";
 
 // TS-163: bcrypt only uses a password's first 72 bytes, so anything longer would be silently cut
 // short -- capped (in bytes, since one letter can take several) rather than quietly ignored.
@@ -19,7 +19,9 @@ export const signupSchema = z.object({
     .min(1, "Name is required")
     .max(100)
     .regex(PERSON_NAME_PATTERN, PERSON_NAME_MESSAGE)
-    .refine((v) => !looksLikeWebAddress(v), NO_WEB_ADDRESS_MESSAGE),
+    .refine((v) => !looksLikeWebAddress(v), NO_WEB_ADDRESS_MESSAGE)
+    // TS-178: nor mix look-alike letters from different alphabets in one word.
+    .refine((v) => !hasMixedScriptWord(v), NO_MIXED_SCRIPT_MESSAGE),
   email: z.string().email("Enter a valid email address"),
   password: newPassword,
 });

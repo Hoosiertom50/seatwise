@@ -156,3 +156,13 @@ test("resolveRetriedPatchConflict answers in each route's own shape, and only fo
     null
   );
 });
+
+// TS-182: generating a plan and committing an import may honestly take longer than other requests.
+test("generate and import commit get the long timeout; everything else the usual one", async () => {
+  const { requestTimeoutFor, REQUEST_TIMEOUT_MS, LONG_REQUEST_TIMEOUT_MS } = await import("./api-client");
+  assert.equal(requestTimeoutFor("POST", "/api/v1/weddings/w1/plan-versions/generate"), LONG_REQUEST_TIMEOUT_MS);
+  assert.equal(requestTimeoutFor("POST", "/api/v1/weddings/w1/guests/import/commit"), LONG_REQUEST_TIMEOUT_MS);
+  assert.equal(requestTimeoutFor("POST", "/api/v1/weddings/w1/guests/import/preview"), REQUEST_TIMEOUT_MS);
+  assert.equal(requestTimeoutFor("GET", "/api/v1/weddings/w1/plan-versions"), REQUEST_TIMEOUT_MS);
+  assert.ok(LONG_REQUEST_TIMEOUT_MS >= 120_000);
+});

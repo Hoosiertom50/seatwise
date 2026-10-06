@@ -28,7 +28,9 @@ export async function POST(req: NextRequest, { params }: Params) {
       parsed.data.csv,
       parsed.data.mapping,
       parsed.data.expectedRevisions,
-      user.id
+      user.id,
+      // TS-180: write guests changed since the export only when the planner ticked to overwrite.
+      parsed.data.overwriteChanged ?? false
     );
     const guests = await listGuestsByWedding(weddingId);
     return NextResponse.json({ result, guests });

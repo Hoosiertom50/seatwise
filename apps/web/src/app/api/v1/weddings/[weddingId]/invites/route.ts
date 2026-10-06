@@ -4,6 +4,7 @@ import { inviteEmailText } from "@/lib/outgoing-email-text";
 import { confirmEmailFirstMessage } from "@/lib/email-verification";
 import { createInvite, listInvitesForWedding, sendEmailNotification, emailDelivered, InviteError, INVITE_TTL_DAYS } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
+import { appBaseUrl } from "@/lib/app-url";
 import { errorResponse, zodErrorResponse } from "@/lib/api-response";
 import { requireAccess } from "@/lib/access";
 import { emailSendRefusedMessage, releaseEmailSend, reserveEmailSend } from "@/lib/rate-limit";
@@ -40,6 +41,9 @@ export async function POST(req: NextRequest, { params }: Params) {
   // TS-164: only an account that has confirmed its own address can have Seatwise email people.
   if (user.emailVerifiedAt === null) return errorResponse(confirmEmailFirstMessage(), 403);
 
+  // TS-178: the link is built from the app's own address -- worked out before anything is counted.
+  const appUrl = appBaseUrl();
+
   // TS-156: every invite sends an email, so invites are capped per sender.
   // TS-177: the message says which limit it was -- the account's daily allowance means tomorrow.
   const reservation = await reserveEmailSend("invites", user.id);
@@ -57,7 +61,6 @@ export async function POST(req: NextRequest, { params }: Params) {
     // FR-1.4a: the email itself carries no guest data -- just who invited them, to what wedding
     // (by name only), at what role/level, and the accept link. A failed/unconfigured send never
     // blocks the invite from being created (same guarantee as every other notification email).
-    const appUrl = process.env.APP_URL || "http://localhost:3000";
     const acceptUrl = `${appUrl}/invites/${invite.token}`;
     const roleLabel = invite.role === "COUPLE" ? "a Couple member" : "a collaborator";
     // TS-156 / TS-163 / TS-171: names only go in if they pass today's rules, and never in the subject.
@@ -70,9 +73,10 @@ export async function POST(req: NextRequest, { params }: Params) {
       expiresInDays: INVITE_TTL_DAYS,
     });
     const sent = await sendEmailNotification(invite.email, subject, text);
-    // TS-171: the invite was made but nothing went out (this address has had its share of email
-    // today) -- it doesn't use up the sender's allowance; the owner gets the link to send instead.
-    if (sent === "recipient-limited") await releaseEmailSend("invites", user.id);
+    // TS-171 / TS-178: the invite was made but nothing went out (this address has had its share of
+    // email today, the day's limit was reached, or the send failed) -- it doesn't use up the
+    // sender's allowance; the owner gets the link to send instead.
+    if (!emailDelivered(sent)) await releaseEmailSend("invites", user.id);
 
     // eslint-disable-next-line @typescript-eslint/no-unused-vars -- TS-176: the token is left out of the response on purpose.
     const { token: _token, ...invitePublic } = invite;

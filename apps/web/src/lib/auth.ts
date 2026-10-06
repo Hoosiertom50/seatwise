@@ -1,21 +1,44 @@
 import { SignJWT, jwtVerify } from "jose";
 import type { NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
+import { appBaseUrl } from "./app-url";
 
 const JWT_SECRET = process.env.JWT_SECRET;
 
-let warnedShortSecret = false;
+// TS-179: values copied from the README or .env.example (or obvious stand-ins) that must never
+// sign real sessions -- anyone who has read this public repo would know them.
+const PLACEHOLDER_SECRETS = new Set([
+  "replace-with-a-long-random-secret",
+  "a long random string",
+  "changeme",
+  "secret",
+]);
+const MIN_SECRET_LENGTH = 32;
+
+/**
+ * TS-179: why this JWT_SECRET can't be used, or null if it's fine. In production (which includes
+ * `next build && next start`, as CI runs it -- CI generates a 64-character secret per run) a missing,
+ * short or placeholder secret is refused. Outside production only a missing one is, so local
+ * development keeps working with the README's example value.
+ */
+export function jwtSecretProblem(secret: string | undefined, nodeEnv: string | undefined): string | null {
+  if (!secret) return "JWT_SECRET environment variable is not set";
+  if (nodeEnv !== "production") return null;
+  if (PLACEHOLDER_SECRETS.has(secret.trim().toLowerCase())) {
+    return "JWT_SECRET is still a placeholder value -- set it to a long random value (e.g. openssl rand -hex 32).";
+  }
+  if (secret.length < MIN_SECRET_LENGTH) {
+    return `JWT_SECRET is shorter than ${MIN_SECRET_LENGTH} characters -- set it to a long random value (e.g. openssl rand -hex 32).`;
+  }
+  return null;
+}
 
 function getSecretKey() {
-  if (!JWT_SECRET) {
-    throw new Error("JWT_SECRET environment variable is not set");
-  }
-  // TS-172: a short secret could be guessed offline from any session token. It's reported rather
-  // than refused, so a deployment with a shorter secret keeps working while it's replaced.
-  if (process.env.NODE_ENV === "production" && JWT_SECRET.length < 32 && !warnedShortSecret) {
-    warnedShortSecret = true;
-    console.error("[auth] JWT_SECRET is shorter than 32 characters -- replace it with a long random value.");
-  }
+  // TS-172 only logged a short secret; TS-179 refuses it (and a placeholder) in production, the same
+  // way ENCRYPTION_KEY is refused (packages/db/src/crypto.ts). Checked on use, not at import, so
+  // `next build` doesn't need the secret.
+  const problem = jwtSecretProblem(JWT_SECRET, process.env.NODE_ENV);
+  if (problem) throw new Error(problem);
   return new TextEncoder().encode(JWT_SECRET);
 }
 
@@ -38,23 +61,23 @@ export const AUTH_COOKIE_NAME = "seatwise_token";
 // issue (a settle-wait candidate fix was tried and disproved first -- see the TS-62 spike branch's
 // own commit history for that ruled-out iteration).
 //
-// Derived from APP_URL instead -- the same env var and fallback the rsvp-link and invites routes
-// already use for this app's own canonical URL (apps/web/src/app/api/v1/weddings/[weddingId]/
-// guests/[guestId]/rsvp-link/route.ts, .../invites/route.ts) -- so this reflects the scheme the app
-// is actually being served over rather than guessing from the build mode. Unset in CI (defaults to
-// the same "http://localhost:3000" those two routes fall back to), so this resolves to `false`
-// there; a real deployment already sets APP_URL to its own https:// origin for those two routes, so
-// this resolves to `true` there with no new config needed.
+// Derived from the app's own address instead (TS-178: appBaseUrl in ./app-url, the same one every
+// emailed link uses), so this reflects the scheme the app is actually being served over rather than
+// guessing from the build mode. In CI that's http://localhost:3000, so this resolves to `false`
+// there; a real deployment sets APP_URL to its own https:// origin, so this resolves to `true`.
 let warnedNoAppUrl = false;
 export function isSecureCookieContext(): boolean {
-  // TS-149: on a real deployment APP_URL must be set, or the cookie quietly loses Secure and
-  // emailed links point at localhost -- say so loudly in the logs.
-  if (!process.env.APP_URL && process.env.NETLIFY && !warnedNoAppUrl) {
-    warnedNoAppUrl = true;
-    console.error("APP_URL is not set: session cookies won't be marked Secure and emailed links will be wrong.");
+  try {
+    return appBaseUrl().startsWith("https://");
+  } catch (err) {
+    // TS-149 / TS-178: a production build without a proper APP_URL -- say so loudly in the logs,
+    // and keep the cookie Secure (the safe choice for a real site) rather than failing every sign-in.
+    if (!warnedNoAppUrl) {
+      warnedNoAppUrl = true;
+      console.error(`${err instanceof Error ? err.message : String(err)} Session cookies stay Secure; emailed links won't work.`);
+    }
+    return true;
   }
-  const appUrl = process.env.APP_URL || "http://localhost:3000";
-  return appUrl.startsWith("https://");
 }
 
 export interface TokenPayload {

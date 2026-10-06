@@ -72,3 +72,35 @@ export async function delayRequests(
     clear: () => page.unroute(urlPattern, handler),
   };
 }
+
+/** TS-182: lets every `method` request to a URL matching `urlPattern` reach the real server at
+ * once, then holds its answer for `ms` before the page gets it -- so a test can make a save that
+ * was done first come back last (its answer then carries what the server held at that moment). */
+export async function delayResponses(
+  page: Page,
+  urlPattern: string | RegExp,
+  method: string,
+  ms: number,
+): Promise<FaultHandle & { readonly answered: number }> {
+  let hits = 0;
+  let answered = 0;
+  const handler = async (route: Route) => {
+    if (route.request().method() !== method) return route.fallback();
+    hits++;
+    const response = await route.fetch();
+    // The server has answered (and so has made the change); the page hasn't heard yet.
+    answered++;
+    await new Promise((resolve) => setTimeout(resolve, ms));
+    return route.fulfill({ response });
+  };
+  await page.route(urlPattern, handler);
+  return {
+    get hits() {
+      return hits;
+    },
+    get answered() {
+      return answered;
+    },
+    clear: () => page.unroute(urlPattern, handler),
+  };
+}
