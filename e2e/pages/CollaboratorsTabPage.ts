@@ -166,4 +166,37 @@ export class CollaboratorsTabPage extends BasePage {
     await new ConfirmDelete(this.page).confirm();
     await this.page.waitForURL(/\/dashboard$/);
   }
+
+  // TS-179: the owner-only "Reset all guest and vendor links".
+  resetLinksButton() {
+    return this.page.getByRole("button", { name: "Reset all guest and vendor links", exact: true });
+  }
+
+  /** Opens the reset's "Are you sure?" and returns it (its text says what will happen). */
+  async openResetLinks() {
+    await this.resetLinksButton().click();
+    return new ConfirmDelete(this.page).question();
+  }
+
+  /** Confirms the open reset question and waits for the result line. */
+  async confirmResetLinks(): Promise<void> {
+    await new ConfirmDelete(this.page).confirm();
+    await this.resetLinksResult().waitFor();
+  }
+
+  /** "Done — replaced N guest links and M vendor links. …" */
+  resetLinksResult() {
+    return this.page.getByRole("status").filter({ hasText: /^Done — replaced / });
+  }
+
+  /** TS-179: opens a person's Remove question without answering it, and returns it. */
+  async openRemoveQuestion(email: string) {
+    await this.person(email).getByRole("button", { name: /^Remove / }).click();
+    return new ConfirmDelete(this.person(email)).question();
+  }
+
+  /** TS-179: the note shown after the owner lowers someone's access. */
+  loweredAccessNote() {
+    return this.page.getByRole("status").filter({ hasText: /access is now/ });
+  }
 }

@@ -26,4 +26,21 @@ export class VerifyEmailPage extends BasePage {
   reminderBanner() {
     return this.page.getByRole("region", { name: "Confirm your email" });
   }
+
+  /** TS-179: the "didn't create this account?" warning beside the Confirm button. */
+  notYourAccountWarning() {
+    return this.page.getByText(/^If you didn.t create this Seatwise account, don.t confirm/);
+  }
+
+  /** TS-179: the warning's Forgot password link. */
+  forgotPasswordLink() {
+    return this.page.getByRole("link", { name: "Forgot password", exact: true });
+  }
+
+  /** Follows the warning's Forgot password link and waits for the request form. */
+  async followForgotPassword(): Promise<void> {
+    await this.forgotPasswordLink().click();
+    await this.page.waitForURL(/\/forgot-password$/);
+    await this.page.getByRole("button", { name: "Send reset link", exact: true }).waitFor();
+  }
 }

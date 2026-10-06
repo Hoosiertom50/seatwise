@@ -2,15 +2,15 @@ import { NextRequest, NextResponse } from "next/server";
 import { planVersionStatusSchema } from "@seatwise/shared";
 import {
   setPlanVersionStatus,
-  getWeddingAccessDetail,
   PlanVersionStatusError,
+  PlanApprovalPermissionError,
   PlanVersionConflictError,
   PlanVersionNotFoundError,
   getPlanVersionStatusForWedding,
 } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
 import { errorResponse, zodErrorResponse } from "@/lib/api-response";
-import { requireAccess } from "@/lib/access";
+import { requireAccess, canManageApproval } from "@/lib/access";
 
 type Params = { params: Promise<{ weddingId: string; planVersionId: string }> };
 
@@ -36,12 +36,14 @@ export async function POST(req: NextRequest, { params }: Params) {
 
   // TS-172 (Tom's decision, 2026-10-05): undoing an approval (Approved -> Draft or In review) is for
   // the same people who can approve -- before, any Edit collaborator could withdraw it.
+  // TS-179: these are also passed to setPlanVersionStatus, which checks them again under the lock
+  // against the plan's real status -- the read below is only for a quick, friendly refusal.
+  const mayManageApproval = await canManageApproval(weddingId, user.id, access.accessLevel);
+  const mayMoveDraftAndReview = access.accessLevel === "OWNER" || access.accessLevel === "EDIT";
   const currentStatus = await getPlanVersionStatusForWedding(planVersionId, weddingId);
   const touchesApproval = parsed.data.status === "APPROVED" || currentStatus === "APPROVED";
-  if (touchesApproval && access.accessLevel !== "OWNER") {
-    const detail = await getWeddingAccessDetail(weddingId, user.id);
-    const canApprove = detail.role === "COUPLE" && detail.accessLevel !== "VIEW";
-    if (!canApprove) {
+  if (touchesApproval) {
+    if (!mayManageApproval) {
       return errorResponse(
         parsed.data.status === "APPROVED"
           ? "Only the wedding's owner, or a Couple member with Comment or Edit access, can approve a plan."
@@ -49,7 +51,7 @@ export async function POST(req: NextRequest, { params }: Params) {
         403
       );
     }
-  } else if (!touchesApproval && access.accessLevel !== "OWNER" && access.accessLevel !== "EDIT") {
+  } else if (!mayMoveDraftAndReview) {
     // Draft <-> In Review still requires Edit -- only Approve gets the Couple/Comment carve-out.
     return errorResponse("You don't have permission to do that", 403);
   }
@@ -60,12 +62,14 @@ export async function POST(req: NextRequest, { params }: Params) {
       weddingId,
       parsed.data.status,
       user.id,
-      parsed.data.expectedRevision
+      parsed.data.expectedRevision,
+      { mayApprove: mayManageApproval, mayLeaveApproved: mayManageApproval, mayMoveDraftAndReview }
     );
     if (!planVersion) return errorResponse("Plan version not found", 404);
     return NextResponse.json({ planVersion });
   } catch (err) {
     if (err instanceof PlanVersionNotFoundError) return errorResponse(err.message, 404);
+    if (err instanceof PlanApprovalPermissionError) return errorResponse(err.message, 403);
     if (err instanceof PlanVersionConflictError) {
       return NextResponse.json(
         { error: err.message, planVersion: err.planVersion },

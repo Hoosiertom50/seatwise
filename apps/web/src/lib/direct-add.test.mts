@@ -13,3 +13,8 @@ test("local development and CI (with the flag) allow them for test setup", () =>
   assert.equal(directCollaboratorAddAllowed({ NODE_ENV: "development" }), true);
   assert.equal(directCollaboratorAddAllowed({ NODE_ENV: "production", ALLOW_DIRECT_COLLABORATOR_ADD: "1" }), true);
 });
+
+test("TS-183: never on Netlify, whatever else is set", () => {
+  assert.equal(directCollaboratorAddAllowed({ NODE_ENV: "production", ALLOW_DIRECT_COLLABORATOR_ADD: "1", NETLIFY: "true" }), false);
+  assert.equal(directCollaboratorAddAllowed({ NODE_ENV: "development", NETLIFY: "true" }), false);
+});

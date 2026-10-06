@@ -25,7 +25,13 @@ on:
     - cron: "0 9 * * 1"
   workflow_dispatch: {}
 
+# TS-183: this job only reads the code and uploads artifacts.
+permissions:
+  contents: read
+
 env:
+  # TS-183: CI never sends real email -- it's printed instead (same as ci.yml and the nightly run).
+  EMAIL_TRANSPORT: log
   DATABASE_URL: postgresql://postgres:postgres@localhost:5432/seatwise_ci?schema=public
   # TS-148: the tests set up collaborators directly; the live site never allows that.
   ALLOW_DIRECT_COLLABORATOR_ADD: "1"
@@ -71,12 +77,14 @@ jobs:
       - name: Re-run the regression selection 3x to proactively surface new flakiness
         env:
           CI: "true"
+        # TS-183: playwright.config.ts caps a CI run at 10 minutes (globalTimeout) -- sized for one
+        # pass. Three passes need about three times that, so this run gets 90 minutes instead.
         run: |
           SELECTION_OUTPUT="$(pnpm exec tsx playwright-framework/cli/print-ci-selection.ts regression)"
           PATTERN="$(echo "$SELECTION_OUTPUT" | sed -n '1p')"
           FILES="$(echo "$SELECTION_OUTPUT" | sed -n '2p')"
           pnpm exec playwright test --project=chromium --grep "$PATTERN" $FILES \
-            --repeat-each=3 --retries=0 \
+            --repeat-each=3 --retries=0 --global-timeout=5400000 \
             --reporter=list,./playwright-framework/reporting/normalizedReporter.ts
       - name: Surface any flaky/failed results found by the repeat-each re-check
         if: always()

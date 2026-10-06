@@ -413,4 +413,14 @@ export class PlanTabPage extends BasePage {
   moveBackToDraftLocator() {
     return this.moveBackToDraftButton();
   }
+
+  /** TS-179: shown after Generate or Restore by someone who can't replace an approved plan. */
+  savedAsDraftNotice() {
+    return this.page.getByRole("status").filter({ hasText: "saved as a comparison draft" });
+  }
+
+  /** TS-179: the approved plan's PDF export links (shown only on the current, approved version). */
+  exportLinks() {
+    return this.page.getByRole("link", { name: /\(PDF\)$/ });
+  }
 }

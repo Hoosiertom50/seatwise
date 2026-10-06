@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { signupSchema } from "@seatwise/shared";
 import { createUser, emailDelivered, findUserByEmail, hitRateLimit, undoRateLimitHit } from "@seatwise/db";
 import { hashPassword, signToken, setAuthCookie, wantsBearerToken } from "@/lib/auth";
-import { errorResponse, zodErrorResponse } from "@/lib/api-response";
+import { errorResponse, readJson, zodErrorResponse } from "@/lib/api-response";
 import { accountEmailAddressKey, ACCOUNT_EMAIL_LIMITS, clientAddress, rateLimitOr429, SIGNUP_LIMITS } from "@/lib/rate-limit";
 import { sendVerificationEmail } from "@/lib/email-verification";
 
@@ -14,8 +14,10 @@ export async function POST(req: NextRequest) {
     (await rateLimitOr429(`signup:addr:day:${address}`, SIGNUP_LIMITS.perAddressDay));
   if (limited) return limited;
 
-  const body = await req.json().catch(() => null);
-  const parsed = signupSchema.safeParse(body);
+  // TS-179: refuses a body that isn't JSON (415) here too, not only in proxy.ts.
+  const json = await readJson(req);
+  if (!json.ok) return json.response;
+  const parsed = signupSchema.safeParse(json.body);
   if (!parsed.success) return zodErrorResponse(parsed.error);
 
   const existing = await findUserByEmail(parsed.data.email);

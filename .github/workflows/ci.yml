@@ -263,6 +263,19 @@ jobs:
       - name: Apply database migrations
         run: pnpm --filter @seatwise/db migrate:deploy
 
+      # TS-183: schema.prisma vs the migrations folder, replayed into a throwaway shadow database on
+      # this job's Postgres service (the validate job has no database). Shard 1 only -- one check is
+      # enough. The partial index plan_versions_one_current_per_wedding is the one allowed
+      # difference (see packages/db/prisma/check-schema-drift.ts). Report-only for now
+      # (continue-on-error): the hand-written first migration's foreign keys are expected to differ
+      # from Prisma's defaults; review the run summary, settle that, then remove continue-on-error.
+      - name: Schema drift check (schema.prisma vs migrations, report-only)
+        if: matrix.shard == 1
+        continue-on-error: true
+        env:
+          SHADOW_DATABASE_URL: postgresql://postgres:postgres@postgres:5432/seatwise_shadow
+        run: pnpm --filter @seatwise/db check-schema-drift
+
       - name: Build the application
         run: pnpm build
 

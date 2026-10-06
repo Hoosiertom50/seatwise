@@ -481,6 +481,9 @@ model GuestRelationship {
 
   @@unique([weddingId, guestAId, guestBId, type])
   @@index([weddingId])
+  // TS-183: finding a guest's seating rules (deletes, re-checks).
+  @@index([guestAId])
+  @@index([guestBId])
   @@map("guest_relationships")
 }
 
@@ -655,6 +658,12 @@ model PlanVersion {
 
   @@unique([weddingId, versionNumber])
   @@index([weddingId])
+  // TS-183: the database also has a hand-written partial unique index, written in SQL in migration
+  // 20260909180537_plan_version_is_current because Prisma can't express it here:
+  //   CREATE UNIQUE INDEX "plan_versions_one_current_per_wedding" ON "plan_versions" ("weddingId") WHERE "isCurrent";
+  // It guarantees at most one Current version per wedding. `prisma migrate dev` will offer to DROP
+  // it (it isn't in this file) -- never accept that; delete the DROP INDEX from any generated
+  // migration. CI's schema drift check allows exactly this one difference.
   @@map("plan_versions")
 }
 
@@ -672,6 +681,9 @@ model SeatAssignment {
 
   @@unique([planVersionId, guestId])
   @@index([planVersionId])
+  // TS-183: finding a guest's seats, or a table's (deletes, re-checks).
+  @@index([guestId])
+  @@index([seatingTableId])
   @@map("seat_assignments")
 }
 

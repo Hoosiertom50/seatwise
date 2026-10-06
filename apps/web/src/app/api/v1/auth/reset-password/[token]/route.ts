@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { resetPasswordSchema } from "@seatwise/shared";
 import { isPasswordResetTokenUsable, resetPasswordWithToken } from "@seatwise/db";
-import { errorResponse, zodErrorResponse } from "@/lib/api-response";
+import { errorResponse, readJson, zodErrorResponse } from "@/lib/api-response";
 import { hashPassword, signToken, setAuthCookie } from "@/lib/auth";
 import { clientAddress, rateLimitOr429, PASSWORD_RESET_LIMITS } from "@/lib/rate-limit";
 
@@ -23,7 +23,10 @@ export async function POST(req: NextRequest, { params }: Params) {
   const limited = await rateLimitOr429(`pw-reset:use:${clientAddress(req)}`, PASSWORD_RESET_LIMITS.resetsPerAddress);
   if (limited) return limited;
   const { token } = await params;
-  const body = (await req.json().catch(() => null)) as { password?: unknown } | null;
+  // TS-179: refuses a body that isn't JSON (415) here too, not only in proxy.ts.
+  const json = await readJson(req);
+  if (!json.ok) return json.response;
+  const body = json.body as { password?: unknown } | null;
   const parsed = resetPasswordSchema.safeParse({ token, password: body?.password });
   if (!parsed.success) return zodErrorResponse(parsed.error);
 

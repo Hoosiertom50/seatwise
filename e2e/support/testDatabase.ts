@@ -318,6 +318,66 @@ export async function holdWeddingLock(weddingId: string): Promise<HeldWeddingLoc
   };
 }
 
+/** TS-179: a test plan version's row lock, held from outside the app -- see holdPlanVersion. */
+export interface HeldPlanVersion {
+  /** Resolves once `count` of the app's own database sessions are waiting on this plan version. */
+  waitForWaiters(count: number): Promise<void>;
+  /** Marks the plan Approved (as an approval landing just first would) and lets the waiting requests carry on. */
+  approveAndRelease(): Promise<void>;
+  /** Lets the waiting requests carry on without changing anything (cleanup). */
+  release(): Promise<void>;
+}
+
+/**
+ * TS-179: holds a test plan version's row lock (the one a status change takes), so a status change
+ * waits exactly where an approval landing at the same moment used to slip past the route's own
+ * check; the test then approves the plan and lets the request go. Test weddings only.
+ */
+export async function holdPlanVersion(planVersionId: string): Promise<HeldPlanVersion> {
+  const { Client } = await import("pg");
+  testPool(); // the same production refusal as every other helper here
+  const client = new Client({ connectionString: resolveDatabaseUrl() });
+  await client.connect();
+  await client.query("BEGIN");
+  const { rows } = await client.query(
+    `SELECT pv.id FROM "plan_versions" pv JOIN "weddings" w ON w.id = pv."weddingId" JOIN "users" u ON u.id = w."ownerId"
+     WHERE pv.id = $1 AND u.email LIKE $2 FOR UPDATE OF pv`,
+    [planVersionId, TEST_EMAIL_PATTERN],
+  );
+  if (!rows[0]) {
+    await client.query("ROLLBACK");
+    await client.end();
+    throw new Error(`testDatabase: no plan version ${planVersionId} on a test wedding.`);
+  }
+  const { rows: me } = await client.query<{ pid: number }>(`SELECT pg_backend_pid() AS pid`);
+  const pid = me[0].pid;
+  let open = true;
+  const finish = async (sql: "COMMIT" | "ROLLBACK") => {
+    if (!open) return;
+    open = false;
+    try {
+      await client.query(sql);
+    } finally {
+      await client.end();
+    }
+  };
+  return {
+    async waitForWaiters(count: number) {
+      await waitForSessionsBlockedBy(pid, count, "the plan version");
+    },
+    async approveAndRelease() {
+      await client.query(
+        `UPDATE "plan_versions" SET status = 'APPROVED', "approvedAt" = now(), revision = revision + 1 WHERE id = $1`,
+        [planVersionId],
+      );
+      await finish("COMMIT");
+    },
+    async release() {
+      await finish("ROLLBACK");
+    },
+  };
+}
+
 /**
  * TS-174: makes a test wedding's timeline entries tie on position the way entries saved before
  * TS-153 could (every one at sortOrder 0), with their creation times in the given order -- the
