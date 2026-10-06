@@ -12,7 +12,7 @@ import { BasePage } from "./BasePage.js";
 
 export class PlanTabPage extends BasePage {
   private seatingPlanTabButton() {
-    return this.page.getByRole("button", { name: "Seating plan", exact: true });
+    return this.page.getByRole("tab", { name: "Seating plan", exact: true });
   }
 
   private generateButton() {

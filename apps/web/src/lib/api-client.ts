@@ -54,6 +54,15 @@ const RETRY_DELAYS_MS = [400, 1200];
 // limit, a request stuck on a dead connection never finished -- and changes queued behind it (see
 // serial-tasks.ts) waited for good. Long enough for the slowest real request (a large import).
 export const REQUEST_TIMEOUT_MS = 30_000;
+// TS-182: generating a plan for a big wedding and committing a large import can honestly take
+// longer than that -- they get two minutes, so a slow success isn't reported as "couldn't reach".
+export const LONG_REQUEST_TIMEOUT_MS = 120_000;
+const LONG_REQUESTS = [/\/plan-versions\/generate$/, /\/guests\/import\/commit$/];
+
+/** TS-182: how long a request may take before it counts as having got no response. */
+export function requestTimeoutFor(method: string, path: string): number {
+  return method === "POST" && LONG_REQUESTS.some((re) => re.test(path)) ? LONG_REQUEST_TIMEOUT_MS : REQUEST_TIMEOUT_MS;
+}
 
 // TS-175: responses that came from a retry (an earlier try got no answer, so it may have landed).
 const retriedResponses = new WeakSet<Response>();
@@ -150,7 +159,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
         "Content-Type": "application/json",
         ...(options.headers || {}),
       },
-    });
+    }, requestTimeoutFor(options.method ?? "GET", path));
   } catch (err) {
     if (tracksSave) writeFailed(NETWORK_ERROR_MESSAGE);
     throw err;

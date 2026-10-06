@@ -6,7 +6,8 @@
  *
  * TS-53 (REQ-NON-FUNCTIONAL): `openTab` added as a generic, label-driven tab switch -- every one
  * of the 10 tab buttons (`WeddingDetailPage.tsx`'s own `TABS` array) shares the exact same
- * `getByRole("button", {name: <label>, exact: true})` shape, already relied on identically by
+ * `getByRole("tab", {name: <label>, exact: true})` shape (TS-182: real tabs now, they were plain
+ * buttons), already relied on identically by
  * every per-tab page object's own tab-button locator (`TablesTabPage.tablesTabButton`,
  * `RulesTabPage.rulesTabButton`, etc). Two tabs -- Activity and Collaborators -- have no dedicated
  * page object at all (see `getActivity`'s own doc comment in `e2e/data/api.ts`), so a generic
@@ -53,7 +54,7 @@ export class WeddingDetailPage extends BasePage {
   /** TS-115: the tab row's vertical position (its first tab's top edge), for checking nothing
    * above it -- e.g. the Getting started strip -- pops in afterwards and pushes it down. */
   async tabRowTop(): Promise<number> {
-    const guestsTab = this.page.getByRole("button", { name: "Guests", exact: true });
+    const guestsTab = this.page.getByRole("tab", { name: "Guests", exact: true });
     await guestsTab.waitFor();
     return (await guestsTab.boundingBox())!.y;
   }
@@ -124,13 +125,13 @@ export class WeddingDetailPage extends BasePage {
   /** Clicks the named tab button (its exact visible label, e.g. "Seating rules", "Day-of mode")
    * and waits for its own data fetch(es) to settle. */
   async openTab(label: string): Promise<void> {
-    await this.page.getByRole("button", { name: label, exact: true }).click();
+    await this.page.getByRole("tab", { name: label, exact: true }).click();
     await this.page.waitForLoadState("networkidle");
   }
 
   /** TS-159: clicks a tab without waiting for it to open (it may be held by the unsaved-changes prompt). */
   async clickTab(label: string): Promise<void> {
-    await this.page.getByRole("button", { name: label, exact: true }).click();
+    await this.page.getByRole("tab", { name: label, exact: true }).click();
   }
   /**
    * TS-176: the browser's Back button, once the page has put its Back guard in place -- it does so
@@ -156,6 +157,40 @@ export class WeddingDetailPage extends BasePage {
   }
   async leaveTabWithoutSaving(): Promise<void> {
     await this.unsavedChangesPrompt().getByRole("button", { name: "Leave without saving", exact: true }).click();
+  }
+
+  /** TS-182: the row of tabs, one tab in it, and the panel showing the open tab. */
+  tabList() {
+    return this.page.getByRole("tablist", { name: "Wedding sections" });
+  }
+  tab(label: string) {
+    return this.page.getByRole("tab", { name: label, exact: true });
+  }
+  tabPanel() {
+    return this.page.getByRole("tabpanel");
+  }
+  /** TS-182: moves focus to a tab and presses a key there (e.g. ArrowRight to move along). */
+  async pressOnTab(label: string, key: string): Promise<void> {
+    await this.tab(label).focus();
+    await this.tab(label).press(key);
+  }
+
+  /**
+   * TS-182: closes the page the way closing the browser tab would, and returns the type of the
+   * question the browser asked first ("beforeunload" when the page asks "Leave site?"), or null if
+   * it closed without asking. The question is answered "stay", so the page is still open after.
+   */
+  async closeAndCatchLeaveQuestion(): Promise<string | null> {
+    const asked = this.page
+      .waitForEvent("dialog", { timeout: 5_000 })
+      .then(async (dialog) => {
+        const type = dialog.type();
+        await dialog.dismiss();
+        return type;
+      })
+      .catch(() => null);
+    await this.page.close({ runBeforeUnload: true });
+    return asked;
   }
 
   /** TS-166: the page's own "Back to dashboard" link. */

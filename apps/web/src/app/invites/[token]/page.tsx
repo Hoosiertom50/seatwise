@@ -151,7 +151,7 @@ export default function InviteAcceptPage() {
               {preview.permissionLevel?.toLowerCase()} access.
             </p>
             {preview.invitedEmail ? (
-              <p className="mb-6 text-xs text-neutral-400 dark:text-neutral-500">Invited: {preview.invitedEmail}</p>
+              <p className="mb-6 break-all text-xs text-neutral-500 dark:text-neutral-400">Invited: {preview.invitedEmail}</p>
             ) : (
               <div className="mb-6" />
             )}

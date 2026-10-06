@@ -15,7 +15,7 @@ import type {
   WeddingDTO,
 } from "@seatwise/shared";
 import { formatGuestCounts, parseCsv, toCsv, GUEST_TIER_LABELS, RSVP_STATUS_LABELS } from "@seatwise/shared";
-import { useUnsavedChanges } from "@/lib/unsaved-changes";
+import { useUnsavedChanges, useUnsavedFields } from "@/lib/unsaved-changes";
 
 const TIERS: GuestTier[] = ["VIP", "FAMILY", "FRIEND", "PLUS_ONE", "OTHER"];
 const RSVP_STATUSES: RsvpStatus[] = ["PENDING", "CONFIRMED", "DECLINED"];
@@ -139,7 +139,8 @@ export function GuestsTab({
   const [partyName, setPartyName] = useState("");
   // TS-112: the add-guest form's optional fields start collapsed.
   const [showMoreDetails, setShowMoreDetails] = useState(false);
-  const [headcount, setHeadcount] = useState(1);
+  // TS-182: kept as typed, so clearing the box to type a new number doesn't show 0.
+  const [headcount, setHeadcount] = useState("1");
   const [tier, setTier] = useState<GuestTier>("OTHER");
   const [rsvpStatus, setRsvpStatus] = useState<RsvpStatus>("PENDING");
   const [requiresAccessibleTable, setRequiresAccessibleTable] = useState(false);
@@ -149,24 +150,35 @@ export function GuestsTab({
   const [email, setEmail] = useState("");
   const [notes, setNotes] = useState("");
   const [adding, setAdding] = useState(false);
-  const [error, setErrorText] = useState<string | null>(null);
   // TS-175: the guest a message is about, when it's about one -- it's then shown in that guest's
   // row (and announced), not at the top of a long list where it went unseen.
-  const [errorGuestId, setErrorGuestId] = useState<string | null>(null);
+  // TS-182: the message and its guest are kept together, so a save on one guest can clear just
+  // that guest's message (it used to clear another guest's error too).
+  const [errorState, setErrorState] = useState<{ message: string; guestId: string | null } | null>(null);
+  const error = errorState?.message ?? null;
+  const errorGuestId = errorState?.guestId ?? null;
   const setError = useCallback((message: string | null) => {
-    setErrorText(message);
-    setErrorGuestId(null);
+    setErrorState(message === null ? null : { message, guestId: null });
   }, []);
   const setRowError = useCallback((guestId: string, message: string) => {
-    setErrorText(message);
-    setErrorGuestId(guestId);
+    setErrorState({ message, guestId });
   }, []);
+  const clearRowError = useCallback((guestId: string) => {
+    setErrorState((cur) => (cur?.guestId === guestId ? null : cur));
+  }, []);
+  // TS-182: the row fields save when you leave them; while one is half-typed, the page asks before
+  // a reload, close or Back, like it does for the forms.
+  const rowFields = useUnsavedFields();
+  useEffect(() => {
+    if (!canEdit) rowFields.clearAll();
+  }, [canEdit, rowFields]);
   // TS-151: what a save changed elsewhere (e.g. a guest flagged Needs Reassignment).
   const [warning, setWarning] = useState<string | null>(null);
   // TS-17 (FR-12.4): which guest's RSVP-link action is in flight, and the last result shown for
   // that guest (a copy-to-clipboard confirmation or "emailed to ...") -- keyed by guestId so
   // multiple rows can each show their own status independently.
-  const [rsvpLinkBusy, setRsvpLinkBusy] = useState<string | null>(null);
+  // TS-182: a set, so getting one guest's link doesn't re-enable another guest's buttons mid-request.
+  const [rsvpLinkBusy, setRsvpLinkBusy] = useState<ReadonlySet<string>>(new Set());
   const [rsvpLinkResult, setRsvpLinkResult] = useState<Record<string, string>>({});
 
   // FR-2.4/2.4a: bulk import. CSV headers are parsed client-side the moment a file is chosen (so
@@ -328,7 +340,8 @@ export function GuestsTab({
         firstName,
         lastName,
         partyName: partyName || null,
-        headcount,
+        // TS-182: a box left empty means the usual one.
+        headcount: headcount.trim() === "" ? 1 : Number(headcount),
         tier,
         rsvpStatus,
         requiresAccessibleTable,
@@ -346,7 +359,7 @@ export function GuestsTab({
       setFirstName("");
       setLastName("");
       setPartyName("");
-      setHeadcount(1);
+      setHeadcount("1");
       setTier("OTHER");
       setRsvpStatus("PENDING");
       setRequiresAccessibleTable(false);
@@ -363,6 +376,8 @@ export function GuestsTab({
 
   async function onDeleteGuest(guestId: string) {
     const removed = guests.find((g) => g.id === guestId);
+    // TS-182: a removed guest's half-typed fields are gone with their row.
+    for (const field of ["firstName", "lastName", "notes", "email"]) rowFields.markDirty(`guest-row-${guestId}-${field}`, false);
     setGuests((cur) => cur.filter((g) => g.id !== guestId));
     try {
       await api.delete(`/api/v1/weddings/${weddingId}/guests/${guestId}`);
@@ -418,7 +433,8 @@ export function GuestsTab({
       });
       putGuest(result.guest);
       // TS-166: a save that works clears an earlier save's error, which used to stay up for good.
-      setError(null);
+      // TS-182: only this guest's own error -- not a message about someone else.
+      clearRowError(guestId);
       // TS-151: say when the change knocked the guest out of their seat.
       setWarning(result.warnings?.length ? result.warnings.join(" ") : null);
       return result;
@@ -578,7 +594,7 @@ export function GuestsTab({
   // one; "regenerate" always issues a fresh one. Either way, if the guest has an email on file the
   // server also (re)sends it -- the result line reflects whichever actually happened.
   async function onRsvpLink(guestId: string, guestEmail: string | null, regenerate: boolean) {
-    setRsvpLinkBusy(guestId);
+    setRsvpLinkBusy((cur) => new Set(cur).add(guestId));
     setRsvpLinkResult((prev) => ({ ...prev, [guestId]: "" }));
     try {
       const { rsvp } = await api.post<{
@@ -616,7 +632,11 @@ export function GuestsTab({
     } catch (err) {
       setRowError(guestId, err instanceof ApiError ? err.message : "Couldn't get that guest's RSVP link.");
     } finally {
-      setRsvpLinkBusy(null);
+      setRsvpLinkBusy((cur) => {
+        const next = new Set(cur);
+        next.delete(guestId);
+        return next;
+      });
     }
   }
 
@@ -744,7 +764,7 @@ export function GuestsTab({
               max={20}
               className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
               value={headcount}
-              onChange={(e) => setHeadcount(Number(e.target.value))}
+              onChange={(e) => setHeadcount(e.target.value)}
             />
           </div>
           <div>
@@ -838,7 +858,8 @@ export function GuestsTab({
         </button>
       </form>
 
-      {error && !errorGuestId && (
+      {/* TS-182: a message about a guest who is no longer in the list is shown up here instead. */}
+      {error && (!errorGuestId || !guests.some((g) => g.id === errorGuestId)) && (
         <p role="alert" className="mb-4 text-sm text-red-600 dark:text-red-400">
           {error}
         </p>
@@ -910,7 +931,7 @@ export function GuestsTab({
               <button
                 type="button"
                 onClick={onDownloadImportExample}
-                className="mt-2 rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-xs font-medium hover:bg-white"
+                className="mt-2 rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-xs font-medium hover:bg-white dark:hover:bg-neutral-800"
               >
                 Download example CSV
               </button>
@@ -1012,13 +1033,13 @@ export function GuestsTab({
                     r.kind === "error" ? "bg-red-50 dark:bg-red-950" : r.kind === "update" ? "bg-blue-50 dark:bg-blue-950" : ""
                   }`}
                 >
-                  <span className="w-12 shrink-0 text-neutral-400 dark:text-neutral-500">Row {r.rowNumber}</span>
+                  <span className="w-12 shrink-0 text-neutral-500 dark:text-neutral-400">Row {r.rowNumber}</span>
                   <span
                     className={`shrink-0 rounded px-1.5 py-0.5 text-xs font-medium ${
                       r.kind === "error"
                         ? "bg-red-100 dark:bg-red-900 text-red-700 dark:text-red-400"
                         : r.kind === "update"
-                          ? "bg-blue-100 text-blue-700 dark:text-blue-400"
+                          ? "bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-200"
                           : "bg-neutral-100 dark:bg-neutral-800 text-neutral-700 dark:text-neutral-300"
                     }`}
                   >
@@ -1093,7 +1114,11 @@ export function GuestsTab({
                         className="w-24 rounded-md border border-transparent px-1 py-0.5 font-medium hover:border-neutral-200 dark:hover:border-neutral-700 focus:border-neutral-300 dark:focus:border-neutral-600 focus:outline-none"
                         key={`${g.id}-first-${g.firstName}`}
                         defaultValue={g.firstName}
-                        onBlur={(e) => onUpdateName(g.id, "firstName", e.currentTarget)}
+                        onInput={(e) => rowFields.markDirty(`guest-row-${g.id}-firstName`, e.currentTarget.value.trim() !== g.firstName)}
+                        onBlur={(e) => {
+                          rowFields.markDirty(`guest-row-${g.id}-firstName`, false);
+                          onUpdateName(g.id, "firstName", e.currentTarget);
+                        }}
                         maxLength={100}
                       />
                       <input
@@ -1101,7 +1126,11 @@ export function GuestsTab({
                         className="w-28 rounded-md border border-transparent px-1 py-0.5 font-medium hover:border-neutral-200 dark:hover:border-neutral-700 focus:border-neutral-300 dark:focus:border-neutral-600 focus:outline-none"
                         key={`${g.id}-last-${g.lastName}`}
                         defaultValue={g.lastName}
-                        onBlur={(e) => onUpdateName(g.id, "lastName", e.currentTarget)}
+                        onInput={(e) => rowFields.markDirty(`guest-row-${g.id}-lastName`, e.currentTarget.value.trim() !== g.lastName)}
+                        onBlur={(e) => {
+                          rowFields.markDirty(`guest-row-${g.id}-lastName`, false);
+                          onUpdateName(g.id, "lastName", e.currentTarget);
+                        }}
                         maxLength={100}
                       />
                     </span>
@@ -1163,7 +1192,7 @@ export function GuestsTab({
                 {/* TS-107: the guest's own note from their RSVP link -- read-only here, and kept
                     apart from the planner's private notes, which the guest never sees. */}
                 {g.rsvpNotes && (
-                  <p className="text-sm text-neutral-600 dark:text-neutral-400">
+                  <p className="whitespace-pre-line text-sm text-neutral-600 dark:text-neutral-400">
                     <span className="font-medium">Guest&apos;s RSVP note:</span> {g.rsvpNotes}
                   </p>
                 )}
@@ -1179,11 +1208,15 @@ export function GuestsTab({
                     placeholder="Private notes (dietary, accessibility…)"
                     key={`${g.id}-notes-${g.notes ?? ""}`}
                     defaultValue={g.notes ?? ""}
-                    onBlur={(e) => onUpdateNotes(g.id, e.currentTarget)}
+                    onInput={(e) => rowFields.markDirty(`guest-row-${g.id}-notes`, (e.currentTarget.value.trim() || null) !== (g.notes ?? null))}
+                    onBlur={(e) => {
+                      rowFields.markDirty(`guest-row-${g.id}-notes`, false);
+                      onUpdateNotes(g.id, e.currentTarget);
+                    }}
                   />
                 ) : (
                   g.notes && (
-                    <p className="text-sm text-neutral-600 dark:text-neutral-400">
+                    <p className="whitespace-pre-line text-sm text-neutral-600 dark:text-neutral-400">
                       <span className="font-medium">Notes:</span> {g.notes}
                     </p>
                   )
@@ -1196,15 +1229,17 @@ export function GuestsTab({
                     placeholder="Email (for their RSVP link)"
                     key={`${g.id}-email-${g.email ?? ""}`}
                     defaultValue={g.email ?? ""}
+                    onInput={(e) => rowFields.markDirty(`guest-row-${g.id}-email`, e.currentTarget.value !== (g.email ?? ""))}
                     onBlur={(e) => {
+                      rowFields.markDirty(`guest-row-${g.id}-email`, false);
                       if (e.target.value !== (g.email ?? "")) onUpdateEmail(g.id, e.currentTarget);
                     }}
                   />
                 ) : (
-                  g.email && <p className="mt-1 text-xs text-neutral-400 dark:text-neutral-500">{g.email}</p>
+                  g.email && <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">{g.email}</p>
                 )}
                 {rsvpLinkResult[g.id] && (
-                  <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">{rsvpLinkResult[g.id]}</p>
+                  <p role="status" className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">{rsvpLinkResult[g.id]}</p>
                 )}
               </div>
               <div className="flex flex-wrap items-center gap-2">
@@ -1246,15 +1281,15 @@ export function GuestsTab({
                         always issues a fresh token, invalidating whatever link was out there. */}
                     <button
                       onClick={() => onRsvpLink(g.id, g.email, false)}
-                      disabled={rsvpLinkBusy === g.id}
+                      disabled={rsvpLinkBusy.has(g.id)}
                       title="Copies this guest's RSVP link, and emails it to them if they have an address on file."
                       className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50"
                     >
-                      {rsvpLinkBusy === g.id ? "..." : "RSVP link"}
+                      {rsvpLinkBusy.has(g.id) ? "..." : "RSVP link"}
                     </button>
                     <button
                       onClick={() => onRsvpLink(g.id, g.email, true)}
-                      disabled={rsvpLinkBusy === g.id}
+                      disabled={rsvpLinkBusy.has(g.id)}
                       title="Makes a new RSVP link (the old one stops working) and emails it to the guest if they have an email address and RSVPs are still open."
                       className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50"
                     >

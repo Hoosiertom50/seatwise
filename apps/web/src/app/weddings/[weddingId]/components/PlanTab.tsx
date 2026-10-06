@@ -1,10 +1,14 @@
 "use client";
 
-import { formatDateTime, formatMomentDate } from "@/lib/display-format";
+import { formatDateTime, formatMomentDate, REFRESH_FAILED_MESSAGE } from "@/lib/display-format";
 import { useEffect, useRef, useState } from "react";
 import { api, ApiError } from "@/lib/api-client";
 import { useSerialTasks } from "@/lib/serial-tasks";
 import { useUnsavedChanges } from "@/lib/unsaved-changes";
+import { PLAN_CHANGED_EVENT } from "./GettingStarted";
+
+// TS-182: a change queued for one version, but another version is open by the time it runs.
+const VERSION_CLOSED_MESSAGE = "That version isn't open any more — nothing was saved.";
 import { RULE_WEIGHT_CONFIG, compareTableLabels } from "@seatwise/shared";
 import type {
   GuestDTO,
@@ -147,6 +151,12 @@ export function PlanTab({
   const [undoStack, setUndoStack] = useState<UndoEntry[]>([]);
   const [redoStack, setRedoStack] = useState<UndoEntry[]>([]);
   const [undoRedoBusy, setUndoRedoBusy] = useState(false);
+  // TS-182: while a move (or undo/redo) is queued or on its way, the version can't be switched
+  // and a new plan can't be generated -- the move would land on a version no longer on screen.
+  const planChangesPending = movingIds.size > 0 || undoRedoBusy;
+  // TS-182: only the newest version picked is shown -- a slower answer for an earlier pick used to
+  // replace it.
+  const selectRequest = useRef(0);
 
   const guestName = (id: string) => {
     const g = guests.find((g) => g.id === id);
@@ -258,7 +268,13 @@ export function PlanTab({
         `/api/v1/weddings/${weddingId}/plan-versions/generate`,
         { makeCurrent: !saveAsDraft }
       );
-      await loadVersions(res.planVersion.id);
+      window.dispatchEvent(new Event(PLAN_CHANGED_EVENT));
+      // TS-182: the plan was made even if reloading the list then fails -- say that, not "Couldn't".
+      try {
+        await loadVersions(res.planVersion.id);
+      } catch {
+        setError(REFRESH_FAILED_MESSAGE);
+      }
       setScoreReport(res.scoreReport ?? null);
     } catch (err) {
       if (err instanceof ApiError && err.status === 409 && err.fieldErrors?.conflicts) {
@@ -281,14 +297,17 @@ export function PlanTab({
     // against the wrong version later.
     setUndoStack([]);
     setRedoStack([]);
+    const request = ++selectRequest.current;
     // TS-151: a version that can't be loaded says so instead of failing silently.
     try {
       const d = await api.get<{ planVersion: PlanVersionDetailDTO }>(
         `/api/v1/weddings/${weddingId}/plan-versions/${id}`
       );
+      if (request !== selectRequest.current) return;
       setError(null);
       setDetail(d.planVersion);
     } catch (err) {
+      if (request !== selectRequest.current) return;
       setError(err instanceof ApiError ? err.message : "Couldn't open that version.");
     }
   }
@@ -299,12 +318,18 @@ export function PlanTab({
   function onMoveGuest(guestId: string, tableId: string): Promise<MoveGuestResult> {
     if (!detail || !tableId) return Promise.resolve({});
     markMoving(guestId, true);
-    return queueMove(() => moveGuest(guestId, tableId));
+    // TS-182: the version on screen at the click -- a queued move doesn't land on another one.
+    const versionId = detail.id;
+    return queueMove(() => moveGuest(guestId, tableId, versionId));
   }
 
-  async function moveGuest(guestId: string, tableId: string): Promise<MoveGuestResult> {
+  async function moveGuest(guestId: string, tableId: string, versionId: string): Promise<MoveGuestResult> {
     const current = detailRef.current;
-    if (!current) return {};
+    if (!current || current.id !== versionId) {
+      markMoving(guestId, false);
+      setError(VERSION_CLOSED_MESSAGE);
+      return { error: VERSION_CLOSED_MESSAGE };
+    }
     setError(null);
     setMoveWarnings([]);
     const priorTableId = current.assignments.find((a) => a.guestId === guestId)?.tableId ?? null;
@@ -432,6 +457,8 @@ export function PlanTab({
     } catch (err) {
       const fresh = conflictPlanVersion(err);
       if (fresh) {
+        // TS-182: the queue's copy too, so the next change is sent with this revision.
+        detailRef.current = fresh;
         setDetail(fresh);
         setVersions((vs) => vs.map((v) => (v.id === fresh.id ? fresh : v)));
       }
@@ -468,7 +495,13 @@ export function PlanTab({
       setRestorePreview(null);
       setUndoStack([]);
       setRedoStack([]);
-      await loadVersions(res.planVersion.id);
+      window.dispatchEvent(new Event(PLAN_CHANGED_EVENT));
+      // TS-182: restored even if reloading the list then fails -- say that, not "Couldn't".
+      try {
+        await loadVersions(res.planVersion.id);
+      } catch {
+        setError(REFRESH_FAILED_MESSAGE);
+      }
       setMoveWarnings(res.warnings);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't restore that version.");
@@ -487,7 +520,7 @@ export function PlanTab({
       const versionId = labelVersionId;
       const res = await queueMove(() => {
         const current = detailRef.current!;
-        if (current.id !== versionId) throw new Error("That version isn't open any more — nothing was saved.");
+        if (current.id !== versionId) throw new Error(VERSION_CLOSED_MESSAGE);
         return api.patch<{ planVersion: PlanVersionDetailDTO }>(
           `/api/v1/weddings/${weddingId}/plan-versions/${current.id}`,
           { label, expectedRevision: current.revision }
@@ -500,10 +533,20 @@ export function PlanTab({
     } catch (err) {
       const fresh = conflictPlanVersion(err);
       if (fresh) {
+        // TS-182: the queue's copy too (see onSetStatus).
+        detailRef.current = fresh;
         setDetail(fresh);
         setVersions((vs) => vs.map((v) => (v.id === fresh.id ? fresh : v)));
       }
-      setError(err instanceof ApiError ? err.message : "Couldn't save that label.");
+      // TS-182: the "isn't open any more" message is shown as it is (it was replaced by the
+      // general one, since it isn't an ApiError).
+      setError(
+        err instanceof ApiError
+          ? err.message
+          : err instanceof Error && err.message === VERSION_CLOSED_MESSAGE
+            ? VERSION_CLOSED_MESSAGE
+            : "Couldn't save that label."
+      );
     } finally {
       setSavingLabel(false);
     }
@@ -569,7 +612,7 @@ export function PlanTab({
           <div className="flex min-w-0 max-w-full flex-col items-end gap-2">
             <button
               onClick={onGenerate}
-              disabled={generating}
+              disabled={generating || planChangesPending}
               className="min-h-11 rounded-md bg-neutral-900 dark:bg-neutral-100 px-4 py-2 text-sm font-medium text-white dark:text-neutral-900 hover:bg-neutral-700 dark:hover:bg-neutral-300 disabled:opacity-50"
             >
               {generating ? "Generating..." : "Generate new plan"}
@@ -676,6 +719,7 @@ export function PlanTab({
             className="min-h-11 rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
             value={detail?.id ?? ""}
             onChange={(e) => onSelectVersion(e.target.value)}
+            disabled={planChangesPending}
           >
             {versions.map((v) => (
               <option key={v.id} value={v.id}>
@@ -1036,7 +1080,7 @@ export function PlanTab({
           )}
 
           {moveWarnings.length > 0 && (
-            <div className="mb-6 rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-950 p-4">
+            <div role="status" className="mb-6 rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950 p-4">
               <p className="mb-2 text-sm font-medium text-amber-800 dark:text-amber-300">
                 That move was made, but note:
               </p>
@@ -1130,7 +1174,7 @@ export function PlanTab({
                   <li key={g.guestId} className="flex items-center justify-between gap-2 text-sm">
                     <span>
                       {g.guestName}{" "}
-                      <span className="text-xs text-neutral-400 dark:text-neutral-500">(currently at {g.tableLabel})</span>
+                      <span className="text-xs text-neutral-500 dark:text-neutral-400">(currently at {g.tableLabel})</span>
                     </span>
                     {canEditThisVersion && (
                       <select
@@ -1563,7 +1607,7 @@ function PlanFloorPlan({
                 {t.label}
               </p>
               <div className="flex max-h-36 flex-col gap-1 overflow-y-auto">
-                {tableGuests.length === 0 && <span className="text-neutral-400 dark:text-neutral-500">Empty</span>}
+                {tableGuests.length === 0 && <span className="text-neutral-500 dark:text-neutral-400">Empty</span>}
                 {tableGuests.map((g) =>
                   <GuestChip
                 key={g.guestId}

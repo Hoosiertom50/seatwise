@@ -31,6 +31,10 @@ export function loadGettingStartedCounts(weddingId: string): Promise<GettingStar
     .catch(() => null);
 }
 
+// TS-182: fired on `window` when a plan is generated (or restored), so the strip -- which goes
+// away once the wedding has a plan -- doesn't stay up until the planner switches tabs.
+export const PLAN_CHANGED_EVENT = "seatwise:plan-changed";
+
 export function GettingStarted({
   weddingId,
   guestCount,
@@ -64,6 +68,20 @@ export function GettingStarted({
       cancelled = true;
     };
   }, [weddingId, refreshKey]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const onPlanChanged = () => {
+      loadGettingStartedCounts(weddingId).then((c) => {
+        if (!cancelled && c) setCounts(c);
+      });
+    };
+    window.addEventListener(PLAN_CHANGED_EVENT, onPlanChanged);
+    return () => {
+      cancelled = true;
+      window.removeEventListener(PLAN_CHANGED_EVENT, onPlanChanged);
+    };
+  }, [weddingId]);
 
   if (!counts || counts.plans > 0) return null;
 

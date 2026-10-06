@@ -19,7 +19,7 @@ export interface AddGuestInput {
 
 export class WeddingGuestsPage extends BasePage {
   private guestsTabButton() {
-    return this.page.getByRole("button", { name: "Guests", exact: true });
+    return this.page.getByRole("tab", { name: "Guests", exact: true });
   }
 
   private firstNameInput() {

@@ -62,3 +62,9 @@ export function localTodayIso(now: Date = new Date()): string {
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
 }
+
+// TS-182: shown when a change was saved but the list couldn't be loaded again afterwards -- it used
+// to say "Couldn't …" as if the change itself had failed.
+export const REFRESH_FAILED_MESSAGE = "Done — but the list couldn't be refreshed; reload the page.";
+// TS-182: shown when Edit is pressed on another row while the open edit has changes.
+export const OPEN_EDIT_MESSAGE = "Save or cancel the open edit first.";

@@ -41,7 +41,7 @@ export interface AddVendorInput {
 
 export class BudgetTabPage extends BasePage {
   private budgetTabButton() {
-    return this.page.getByRole("button", { name: "Budget", exact: true });
+    return this.page.getByRole("tab", { name: "Budget", exact: true });
   }
 
   async goto(weddingId: string): Promise<void> {

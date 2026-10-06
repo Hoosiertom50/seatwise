@@ -218,13 +218,19 @@ export default function DashboardPage() {
   }
 
   async function onDeleteTemplate(id: string) {
-    const prev = templates;
-    setTemplates(templates.filter((t) => t.id !== id));
+    // TS-182: on failure only this template comes back, in its old place -- a copy of the whole
+    // list taken here used to also undo another template deleted meanwhile.
+    const index = templates.findIndex((t) => t.id === id);
+    const removed = templates[index];
+    setTemplates((cur) => cur.filter((t) => t.id !== id));
     if (selectedTemplateId === id) setSelectedTemplateId("");
     try {
       await api.delete(`/api/v1/templates/${id}`);
     } catch (err) {
-      setTemplates(prev);
+      if (removed)
+        setTemplates((cur) =>
+          cur.some((t) => t.id === id) ? cur : [...cur.slice(0, index), removed, ...cur.slice(index)]
+        );
       setTemplatesError(err instanceof ApiError ? err.message : "Couldn't delete that template.");
     }
   }

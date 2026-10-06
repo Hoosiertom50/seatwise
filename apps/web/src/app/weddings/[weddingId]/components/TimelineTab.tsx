@@ -5,6 +5,7 @@ import { ConfirmDeleteButton } from "@/components/ConfirmDeleteButton";
 import { api, ApiError, apiErrorMessage } from "@/lib/api-client";
 import type { TimelineEntryDTO } from "@seatwise/shared";
 import { useUnsavedChanges } from "@/lib/unsaved-changes";
+import { OPEN_EDIT_MESSAGE, REFRESH_FAILED_MESSAGE } from "@/lib/display-format";
 
 // TS-18 (Day-Of Timeline / Run-of-Show, FR-13.1/FR-13.2): a per-wedding, chronological schedule of
 // day-of events -- its own record, entirely independent of guests/tables/rules/seating plans.
@@ -27,7 +28,8 @@ export function TimelineTab({ weddingId, canEdit }: { weddingId: string; canEdit
   // TS-175: an open edit box counts only once something in it has changed.
   const editingEntry = entries.find((e) => e.id === editingId);
   const editChanged = !!editingEntry && (editTime !== editingEntry.time || editDescription !== editingEntry.description);
-  useUnsavedChanges("timeline", !!(time || description.trim() || editChanged));
+  // TS-182: only while the forms are there (they're hidden without Edit access).
+  useUnsavedChanges("timeline", canEdit && !!(time || description.trim() || editChanged));
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -61,6 +63,12 @@ export function TimelineTab({ weddingId, canEdit }: { weddingId: string; canEdit
   }
 
   function startEdit(entry: TimelineEntryDTO) {
+    // TS-182: opening another entry used to throw away a changed open edit without a word.
+    if (editChanged && editingId !== entry.id) {
+      setError(OPEN_EDIT_MESSAGE);
+      return;
+    }
+    setError(null);
     setEditingId(entry.id);
     setEditTime(entry.time);
     setEditDescription(entry.description);
@@ -79,8 +87,9 @@ export function TimelineTab({ weddingId, canEdit }: { weddingId: string; canEdit
           expectedRevision: entries.find((e) => e.id === entryId)?.revision,
         }
       );
-      setEntries(
-        entries
+      // TS-182: applied to the list as it is now, so an entry added or removed meanwhile stays.
+      setEntries((cur) =>
+        cur
           .map((e) => (e.id === entryId ? entry : e))
           .sort((a, b) => a.time.localeCompare(b.time) || a.sortOrder - b.sortOrder)
       );
@@ -91,8 +100,8 @@ export function TimelineTab({ weddingId, canEdit }: { weddingId: string; canEdit
       // what's on record.
       const fresh = err instanceof ApiError && err.status === 409 ? (err.data?.entry as TimelineEntryDTO | undefined) : undefined;
       if (fresh) {
-        setEntries(
-          entries
+        setEntries((cur) =>
+          cur
             .map((e) => (e.id === entryId ? fresh : e))
             .sort((a, b) => a.time.localeCompare(b.time) || a.sortOrder - b.sortOrder)
         );
@@ -123,19 +132,25 @@ export function TimelineTab({ weddingId, canEdit }: { weddingId: string; canEdit
   async function onReorder(entryId: string, direction: "UP" | "DOWN") {
     setError(null);
     try {
-      const { entry } = await api.post<{ entry: TimelineEntryDTO }>(
+      await api.post<{ entry: TimelineEntryDTO }>(
         `/api/v1/weddings/${weddingId}/timeline-entries/${entryId}/reorder`,
         { direction }
       );
-      // The move can affect two rows (this one and its swapped neighbor) -- simplest correct
-      // approach is to refetch the full list rather than guess at the neighbor's new sortOrder.
+    } catch (err) {
+      setError(apiErrorMessage(err, [], "Couldn't reorder that entry."));
+      return;
+    }
+    // The move can affect two rows (this one and its swapped neighbor) -- simplest correct
+    // approach is to refetch the full list rather than guess at the neighbor's new sortOrder.
+    // TS-182: in its own try -- the move was saved even if this reload fails, and it used to say
+    // "Couldn't reorder" when it had.
+    try {
       const res = await api.get<{ entries: TimelineEntryDTO[] }>(
         `/api/v1/weddings/${weddingId}/timeline-entries`
       );
       setEntries(res.entries);
-      void entry;
-    } catch (err) {
-      setError(apiErrorMessage(err, [], "Couldn't reorder that entry."));
+    } catch {
+      setError(REFRESH_FAILED_MESSAGE);
     }
   }
 
