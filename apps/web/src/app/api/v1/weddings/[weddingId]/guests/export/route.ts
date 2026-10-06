@@ -28,6 +28,8 @@ const HEADERS = [
   // quietly undoing those changes. Both last, for the same reason as above.
   "Plus-ones",
   "Version",
+  // TS-190: the guest's age category (an update import maps it back). Last, for the same reason.
+  "Age category",
 ];
 
 // Exists so a bulk *update* import (FR-2.4a) has a Guest ID to map back in the first place --
@@ -60,6 +62,7 @@ export async function GET(req: NextRequest, { params }: Params) {
     // TS-180: plus-ones stay visible to View and Comment collaborators, as in the app.
     g.plusOneNames ?? "",
     String(g.revision),
+    g.ageCategory,
   ]);
   // TS-180: starts with a byte-order mark (see toCsv), so Excel shows accented names correctly.
   const csv = toCsv(HEADERS, rows);
