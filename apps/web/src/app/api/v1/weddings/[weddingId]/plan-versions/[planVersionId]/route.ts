@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getPlanVersionDetail, setPlanVersionLabel, PlanVersionConflictError, PlanVersionNotFoundError } from "@seatwise/db";
 import { setPlanVersionLabelSchema } from "@seatwise/shared";
 import { getAuthUser } from "@/lib/session";
-import { errorResponse, zodErrorResponse } from "@/lib/api-response";
+import { errorResponse, zodErrorResponse, concurrentChangeResponse } from "@/lib/api-response";
 import { requireAccess } from "@/lib/access";
 
 type Params = { params: Promise<{ weddingId: string; planVersionId: string }> };
@@ -53,6 +53,9 @@ export async function PATCH(req: NextRequest, { params }: Params) {
         { status: 409 }
       );
     }
+    // TS-187: lost a race with another change (nothing saved) -- 409, not a server error.
+    const conflict = concurrentChangeResponse(err);
+    if (conflict) return conflict;
     throw err;
   }
 }

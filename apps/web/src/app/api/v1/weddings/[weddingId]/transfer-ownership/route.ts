@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { transferWeddingOwnership, OwnershipTransferError } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
-import { errorResponse, zodErrorResponse } from "@/lib/api-response";
+import { errorResponse, zodErrorResponse, concurrentChangeResponse } from "@/lib/api-response";
 import { requireAccess } from "@/lib/access";
 
 type Params = { params: Promise<{ weddingId: string }> };
@@ -27,6 +27,9 @@ export async function POST(req: NextRequest, { params }: Params) {
     return NextResponse.json({ ok: true, newOwnerName: result.newOwnerName });
   } catch (err) {
     if (err instanceof OwnershipTransferError) return errorResponse(err.message, 409);
+    // TS-187: lost a race with another change (nothing saved) -- 409, not a server error.
+    const conflict = concurrentChangeResponse(err);
+    if (conflict) return conflict;
     throw err;
   }
 }

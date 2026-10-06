@@ -9,7 +9,7 @@ import {
   type NewlyFlaggedSeat,
 } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
-import { errorResponse, zodErrorResponse } from "@/lib/api-response";
+import { errorResponse, zodErrorResponse, concurrentChangeResponse } from "@/lib/api-response";
 import { requireAccess } from "@/lib/access";
 
 type Params = { params: Promise<{ weddingId: string; tableId: string }> };
@@ -45,6 +45,9 @@ export async function PATCH(req: NextRequest, { params }: Params) {
     if (err instanceof TableConflictError) {
       return NextResponse.json({ error: err.message, table: err.table }, { status: 409 });
     }
+    // TS-187: lost a race with another change (nothing saved) -- 409, not a server error.
+    const conflict = concurrentChangeResponse(err);
+    if (conflict) return conflict;
     throw err;
   }
 
@@ -82,7 +85,15 @@ export async function DELETE(req: NextRequest, { params }: Params) {
   // TS-124: a table with guests seated at it in the current plan is only removed once the caller
   // confirms (?confirm=true) -- the 409 says how many, so the UI can ask.
   const confirmed = req.nextUrl.searchParams.get("confirm") === "true";
-  const result = await removeSeatingTable(tableId, weddingId, user.id, confirmed);
+  let result: Awaited<ReturnType<typeof removeSeatingTable>>;
+  try {
+    result = await removeSeatingTable(tableId, weddingId, user.id, confirmed);
+  } catch (err) {
+    // TS-187: lost a race with another change (nothing saved) -- 409, not a server error.
+    const conflict = concurrentChangeResponse(err);
+    if (conflict) return conflict;
+    throw err;
+  }
   if (result.status === "NOT_FOUND") return errorResponse("Table not found", 404);
   if (result.status === "NEEDS_CONFIRMATION") {
     const guests = result.seatedCount === 1 ? "1 guest is" : `${result.seatedCount} guests are`;

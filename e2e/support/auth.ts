@@ -50,8 +50,9 @@ export interface SignedUpAccount {
  * therefore structurally incapable of matching a genuine account, rather than relying on care.
  *
  * This matters more here than for weddings or templates: `User` is the root of the cascade --
- * `Wedding.ownerId` and `SeatingTemplate.ownerId` are both `onDelete: Cascade` -- so deleting the
- * wrong user destroys their weddings, guests, plans and templates along with them.
+ * `SeatingTemplate.ownerId` is `onDelete: Cascade` (TS-187: `Wedding.ownerId` is now `Restrict`, so
+ * the run-level purge deletes a test account's weddings itself, just before the account) -- so
+ * deleting the wrong user destroys their weddings, guests, plans and templates along with them.
  */
 export const TEST_ACCOUNT_EMAIL_DOMAIN = "@example.invalid";
 

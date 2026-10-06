@@ -1,5 +1,5 @@
 import { randomUUID } from "crypto";
-import { pool } from "../pool";
+import { pool, beginTransaction } from "../pool";
 
 // TS-105 (Tom's decision, 2026-10-01): a planner can delete their account only once every wedding
 // they own has been handed off -- so no wedding is ever left with nobody in charge. Handing off
@@ -29,9 +29,11 @@ export async function transferWeddingOwnership(
 ): Promise<{ newOwnerUserId: string; newOwnerName: string }> {
   const client = await pool.connect();
   try {
-    await client.query("BEGIN");
+    await beginTransaction(client);
+    // TS-187: NO KEY UPDATE, like every other wedding lock (TS-185) -- a full FOR UPDATE here also
+    // held up every change elsewhere in the wedding that Postgres checks the wedding exists for.
     const { rows: weddingRows } = await client.query(
-      `SELECT "ownerId" FROM "weddings" WHERE id = $1 FOR UPDATE`,
+      `SELECT "ownerId" FROM "weddings" WHERE id = $1 FOR NO KEY UPDATE`,
       [weddingId]
     );
     if (!weddingRows[0] || weddingRows[0].ownerId !== currentOwnerId) {
@@ -58,7 +60,12 @@ export async function transferWeddingOwnership(
     await client.query("COMMIT");
     return { newOwnerUserId: target.userId, newOwnerName: target.name };
   } catch (err) {
-    await client.query("ROLLBACK");
+    await client.query("ROLLBACK").catch(() => {});
+    // TS-187: the person it was being handed to deleted their account at that same moment -- the
+    // database refused to make a deleted account the owner. Nothing changed.
+    if ((err as { code?: string }).code === "23503") {
+      throw new OwnershipTransferError("That person's account was just deleted — pick someone else to hand this wedding to.");
+    }
     throw err;
   } finally {
     client.release();
@@ -75,12 +82,42 @@ export async function deleteUserAccount(
 ): Promise<{ deleted: true } | { deleted: false; ownedWeddings: OwnedWeddingRow[] }> {
   const owned = await listWeddingsOwnedBy(userId);
   if (owned.length > 0) return { deleted: false, ownedWeddings: owned };
-  // TS-153: the "owns nothing" check is repeated inside the delete itself, so a wedding handed to
-  // this person in the moment between the two can never be deleted along with the account.
-  const { rowCount } = await pool.query(
-    `DELETE FROM "users" WHERE id = $1 AND NOT EXISTS (SELECT 1 FROM "weddings" WHERE "ownerId" = $1)`,
-    [userId]
-  );
-  if (!rowCount) return { deleted: false, ownedWeddings: await listWeddingsOwnedBy(userId) };
-  return { deleted: true };
+  // TS-187: a wedding being handed to this person at this very moment used to be deleted along
+  // with the account (reproduced): the delete's "owns nothing" check couldn't see the hand-off,
+  // which wasn't saved yet, and went ahead once it was. Now, in one transaction:
+  //   1. the account's row is locked -- this waits for a hand-off to it that's under way to finish
+  //      (and a hand-off that starts later waits for this, then finds the account gone);
+  //   2. what it owns is read again, in a new statement, which sees that finished hand-off;
+  //   3. only then is it deleted.
+  // And the database itself refuses to delete an account that owns a wedding (ON DELETE RESTRICT,
+  // migration 20261006180000_wedding_owner_restrict) -- answered the same way if it ever does.
+  const client = await pool.connect();
+  try {
+    await beginTransaction(client);
+    const { rows: me } = await client.query(`SELECT id FROM "users" WHERE id = $1 FOR UPDATE`, [userId]);
+    if (!me[0]) {
+      // Already gone (deleted from another tab a moment ago) -- nothing left to delete.
+      await client.query("ROLLBACK").catch(() => {});
+      return { deleted: true };
+    }
+    const { rows: stillOwned } = await client.query<OwnedWeddingRow>(
+      `SELECT id, name FROM "weddings" WHERE "ownerId" = $1 ORDER BY name`,
+      [userId]
+    );
+    if (stillOwned.length > 0) {
+      await client.query("ROLLBACK").catch(() => {});
+      return { deleted: false, ownedWeddings: stillOwned };
+    }
+    await client.query(`DELETE FROM "users" WHERE id = $1`, [userId]);
+    await client.query("COMMIT");
+    return { deleted: true };
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => {});
+    if ((err as { code?: string }).code === "23503") {
+      return { deleted: false, ownedWeddings: await listWeddingsOwnedBy(userId) };
+    }
+    throw err;
+  } finally {
+    client.release();
+  }
 }

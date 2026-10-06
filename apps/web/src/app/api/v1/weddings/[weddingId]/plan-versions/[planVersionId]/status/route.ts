@@ -9,7 +9,7 @@ import {
   getPlanVersionStatusForWedding,
 } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
-import { errorResponse, zodErrorResponse } from "@/lib/api-response";
+import { errorResponse, zodErrorResponse, concurrentChangeResponse } from "@/lib/api-response";
 import { requireAccess, canManageApproval } from "@/lib/access";
 
 type Params = { params: Promise<{ weddingId: string; planVersionId: string }> };
@@ -40,20 +40,27 @@ export async function POST(req: NextRequest, { params }: Params) {
   // against the plan's real status -- the read below is only for a quick, friendly refusal.
   const mayManageApproval = await canManageApproval(weddingId, user.id, access.accessLevel);
   const mayMoveDraftAndReview = access.accessLevel === "OWNER" || access.accessLevel === "EDIT";
-  const currentStatus = await getPlanVersionStatusForWedding(planVersionId, weddingId);
-  const touchesApproval = parsed.data.status === "APPROVED" || currentStatus === "APPROVED";
-  if (touchesApproval) {
-    if (!mayManageApproval) {
-      return errorResponse(
-        parsed.data.status === "APPROVED"
-          ? "Only the wedding's owner, or a Couple member with Comment or Edit access, can approve a plan."
-          : "Only the wedding's owner, or a Couple member with Comment or Edit access, can undo an approval.",
-        403
-      );
+  // TS-189: a request that names the copy it was made from (expectedRevision) is judged entirely
+  // under the plan's lock, stale copy first -- so someone acting on a plan that changed since they
+  // loaded it is shown the plan as it is now, not refused over a status they haven't seen yet. And
+  // someone who can undo an approval but not otherwise move a plan between Draft and In review is
+  // also left to that check (it tells them the approval was already undone).
+  if (parsed.data.expectedRevision === undefined) {
+    const currentStatus = await getPlanVersionStatusForWedding(planVersionId, weddingId);
+    const touchesApproval = parsed.data.status === "APPROVED" || currentStatus === "APPROVED";
+    if (touchesApproval) {
+      if (!mayManageApproval) {
+        return errorResponse(
+          parsed.data.status === "APPROVED"
+            ? "Only the wedding's owner, or a Couple member with Comment or Edit access, can approve a plan."
+            : "Only the wedding's owner, or a Couple member with Comment or Edit access, can undo an approval.",
+          403
+        );
+      }
+    } else if (!mayMoveDraftAndReview && !mayManageApproval) {
+      // Draft <-> In Review still requires Edit -- only Approve gets the Couple/Comment carve-out.
+      return errorResponse("You don't have permission to do that", 403);
     }
-  } else if (!mayMoveDraftAndReview) {
-    // Draft <-> In Review still requires Edit -- only Approve gets the Couple/Comment carve-out.
-    return errorResponse("You don't have permission to do that", 403);
   }
 
   try {
@@ -79,6 +86,9 @@ export async function POST(req: NextRequest, { params }: Params) {
     if (err instanceof PlanVersionStatusError) {
       return errorResponse(err.message, 409);
     }
+    // TS-187: lost a race with another change (nothing saved) -- 409, not a server error.
+    const conflict = concurrentChangeResponse(err);
+    if (conflict) return conflict;
     throw err;
   }
 }

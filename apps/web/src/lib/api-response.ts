@@ -39,7 +39,9 @@ export function zodErrorResponse(error: ZodError) {
 // (409), not a server error. Nothing was saved in either case. Returns null for anything else.
 export function concurrentChangeResponse(err: unknown) {
   const code = (err as { code?: string } | null)?.code;
-  if (code === "40P01") {
+  // TS-187: 40001 too -- the current plan kept being replaced while a change waited for it (see
+  // lockCurrentPlan in packages/db).
+  if (code === "40P01" || code === "40001") {
     return errorResponse("Someone else changed this plan at the same moment — nothing was saved. Please try again.", 409);
   }
   if (code === "23503" || err instanceof PlanSourceChangedError) {

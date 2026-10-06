@@ -8,7 +8,7 @@ import {
   RelationshipConflictError,
 } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
-import { errorResponse, zodErrorResponse } from "@/lib/api-response";
+import { errorResponse, zodErrorResponse, concurrentChangeResponse } from "@/lib/api-response";
 import { requireAccess } from "@/lib/access";
 import { SAVED_BUT_NOT_RECHECKED } from "@/lib/post-save";
 
@@ -64,6 +64,9 @@ export async function POST(req: NextRequest, { params }: Params) {
     if (err instanceof RelationshipConflictError) {
       return errorResponse(err.message, 409);
     }
+    // TS-187: lost a race with another change (nothing saved) -- 409, not a server error.
+    const conflict = concurrentChangeResponse(err);
+    if (conflict) return conflict;
     throw err;
   }
 }

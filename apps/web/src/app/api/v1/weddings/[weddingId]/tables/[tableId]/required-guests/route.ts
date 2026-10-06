@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { setRequiredGuestsSchema } from "@seatwise/shared";
 import { setRequiredGuestsForTable, RestrictedTableError } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
-import { errorResponse, zodErrorResponse } from "@/lib/api-response";
+import { errorResponse, zodErrorResponse, concurrentChangeResponse } from "@/lib/api-response";
 import { requireAccess } from "@/lib/access";
 
 type Params = { params: Promise<{ weddingId: string; tableId: string }> };
@@ -39,6 +39,9 @@ export async function PUT(req: NextRequest, { params }: Params) {
       // TS-148: an unknown table is "not found", not a conflict.
       return errorResponse(err.message, err.message === "Table not found." ? 404 : 409);
     }
+    // TS-187: lost a race with another change (nothing saved) -- 409, not a server error.
+    const conflict = concurrentChangeResponse(err);
+    if (conflict) return conflict;
     throw err;
   }
 }

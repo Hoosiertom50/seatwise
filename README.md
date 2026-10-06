@@ -186,7 +186,11 @@ should be live together, so the gap between them is as short as possible:
    ```bash
    read -rs PRODUCTION_DATABASE_URL && export PRODUCTION_DATABASE_URL   # Neon's direct string
    # Re-checks every current seating plan with the app's own checks (after the
-   # declined-guests migration, 20261005170000_declined_guests_not_attending).
+   # declined-guests migration, 20261005170000_declined_guests_not_attending). TS-187: it also
+   # marks Not Attending (freeing their seat) any guest who declined in the gap between steps 2
+   # and 3, while the old code was still answering RSVPs -- the dry run lists them by wedding.
+   # A wedding someone is changing at that moment is tried again, then skipped and listed if it
+   # still can't be done; just run it again.
    pnpm --filter @seatwise/db recheck-current-plans -- --target-production
    pnpm --filter @seatwise/db recheck-current-plans -- --target-production --confirm
    # Encrypts RSVP/vendor links still stored in plain text (needs the live ENCRYPTION_KEY).
@@ -199,6 +203,10 @@ should be live together, so the gap between them is as short as possible:
    Every other script in `packages/db/prisma` (seed, cleanup, fill) refuses to run against anything
    but a local database, whatever it's passed.
 5. Check the live site by hand (sign in, open a wedding, its seating plan).
+
+   TS-187: someone who signed up in the gap between steps 2 and 3 got their "confirm your email"
+   link from the old code. If it doesn't work for them, they can use **Resend link** on the
+   confirm-your-email banner (shown once they sign in) to get a fresh one from the new code.
 
 **Backups.** Two layers:
 - **Neon** keeps 6 hours of history — for a mistake noticed right away, restore to a point in time

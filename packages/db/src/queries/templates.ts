@@ -1,5 +1,5 @@
 import { randomUUID } from "crypto";
-import { pool } from "../pool";
+import { pool, beginTransaction } from "../pool";
 import { compareTableLabels } from "@seatwise/shared";
 
 // TS-19 (FR-14.1/FR-14.2): a template is a reusable snapshot of a wedding's table layout plus its
@@ -77,7 +77,7 @@ export async function createTemplateFromWedding(
   const templateId = randomUUID();
   const client = await pool.connect();
   try {
-    await client.query("BEGIN");
+    await beginTransaction(client);
 
     const { rows: weddingRows } = await client.query(
       `SELECT "sideMixing" FROM "weddings" WHERE id = $1`,
@@ -134,7 +134,7 @@ export async function createTemplateFromWedding(
 
     await client.query("COMMIT");
   } catch (err) {
-    await client.query("ROLLBACK");
+    await client.query("ROLLBACK").catch(() => {});
     throw err;
   } finally {
     client.release();
@@ -247,7 +247,7 @@ export async function addTemplateTablesToWedding(
 ): Promise<number> {
   const client = await pool.connect();
   try {
-    await client.query("BEGIN");
+    await beginTransaction(client);
     const { rows: owned } = await client.query(
       `SELECT 1 FROM "seating_templates" WHERE id = $1 AND "ownerId" = $2`,
       [templateId, userId]
@@ -261,7 +261,7 @@ export async function addTemplateTablesToWedding(
     await client.query("COMMIT");
     return added;
   } catch (err) {
-    await client.query("ROLLBACK");
+    await client.query("ROLLBACK").catch(() => {});
     throw err;
   } finally {
     client.release();
@@ -279,13 +279,13 @@ export async function duplicateWeddingLayout(
 ): Promise<string | null> {
   const client = await pool.connect();
   try {
-    await client.query("BEGIN");
+    await beginTransaction(client);
     const { rows: src } = await client.query(
       `SELECT "venueName", "sideMixing", "sideLabel1", "sideLabel2" FROM "weddings" WHERE id = $1 AND "ownerId" = $2`,
       [sourceWeddingId, ownerId]
     );
     if (!src[0]) {
-      await client.query("ROLLBACK");
+      await client.query("ROLLBACK").catch(() => {});
       return null;
     }
     const id = randomUUID();
@@ -302,7 +302,7 @@ export async function duplicateWeddingLayout(
     await client.query("COMMIT");
     return id;
   } catch (err) {
-    await client.query("ROLLBACK");
+    await client.query("ROLLBACK").catch(() => {});
     throw err;
   } finally {
     client.release();

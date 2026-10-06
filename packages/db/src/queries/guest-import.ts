@@ -1,8 +1,9 @@
 import { randomUUID } from "crypto";
-import { pool, STATEMENT_TIMEOUT_MS, IDLE_IN_TRANSACTION_TIMEOUT_MS } from "../pool";
+import { pool, beginTransaction } from "../pool";
 import { encryptText } from "../crypto";
 import {
   lockCurrentPlan,
+  lockRestrictedLists,
   recordRecheckIfApproved,
   resyncSeatsAtTable,
   restrictedListsOverCapacity,
@@ -392,18 +393,18 @@ export async function commitGuestImport(
 
   const client = await pool.connect();
   try {
-    await client.query("BEGIN");
-    // TS-180: this transaction locks the whole wedding, so it's held to the same limits as the
-    // pool's (set here too, as the pooled connection may not keep session settings).
-    await client.query(
-      `SET LOCAL statement_timeout = ${STATEMENT_TIMEOUT_MS}; SET LOCAL idle_in_transaction_session_timeout = ${IDLE_IN_TRANSACTION_TIMEOUT_MS}`
-    );
+    // TS-180/TS-187: this transaction locks the whole wedding, so it's held to the app's time
+    // limits (beginTransaction sets them for this transaction).
+    await beginTransaction(client);
     // TS-173: the same wedding lock Generate, Restore and attendance changes take, then the
     // current plan's row (see lockCurrentPlan) -- and the current plan read under them. Before,
     // it was read before the transaction, so an import racing a Generate could leave guests it
     // marked Not Attending seated in the new version.
     await client.query(`SELECT id FROM "weddings" WHERE id = $1 FOR NO KEY UPDATE`, [weddingId]);
     const planVersionId: string | undefined = (await lockCurrentPlan(client, weddingId)) ?? undefined;
+    // TS-187: then the Restricted tables' lists (a party that grows is checked against them below),
+    // before any guest's row -- the same order a list save takes them in.
+    await lockRestrictedLists(client, weddingId);
 
     // TS-92: refuse the whole import (it's all-or-nothing already) if any guest it would update
     // was changed by someone else after the planner previewed it -- otherwise the import would
@@ -427,7 +428,7 @@ export async function commitGuestImport(
         dayOfAttendance: string;
       }>(
         `SELECT id, revision, ("firstName" || ' ' || "lastName") AS name, headcount, "rsvpStatus", "dayOfAttendance"
-         FROM "guests" WHERE "weddingId" = $1 AND id = ANY($2::text[]) ORDER BY id FOR UPDATE`,
+         FROM "guests" WHERE "weddingId" = $1 AND id = ANY($2::text[]) ORDER BY id FOR NO KEY UPDATE`,
         [weddingId, updateIds]
       );
       for (const g of locked) currentById.set(g.id, g);
@@ -708,7 +709,7 @@ export async function commitGuestImport(
     await client.query("COMMIT");
     return { createdCount, updatedCount, skippedCount, warnings: reassignmentWarnings };
   } catch (err) {
-    await client.query("ROLLBACK");
+    await client.query("ROLLBACK").catch(() => {});
     throw err;
   } finally {
     client.release();

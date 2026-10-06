@@ -1,6 +1,6 @@
 import { randomBytes, randomUUID } from "crypto";
-import { pool } from "../pool";
-import { hashResetToken } from "./password-reset";
+import { pool, beginTransaction } from "../pool";
+import { hashResetToken, OLD_ACCOUNT_LINK_DAYS } from "./password-reset";
 
 // TS-164: "confirm your email" links (Tom's decision, 2026-10-05: everyone confirms at sign-up).
 // Same design as password-reset links (TS-142): 32 random bytes, only the SHA-256 hash stored,
@@ -17,6 +17,13 @@ export async function createEmailVerificationToken(userId: string): Promise<stri
      VALUES ($1, $2, $3, now() + make_interval(hours => $4))`,
     [randomUUID(), userId, hashResetToken(token), EMAIL_VERIFICATION_TTL_HOURS]
   );
+  // TS-187: opportunistic cleanup, ~1 new link in 100 (see pruneOldPasswordResetTokens): links
+  // that expired over a month ago are deleted. In the background; a failure is harmless.
+  if (Math.random() < 0.01) {
+    pool
+      .query(`DELETE FROM "email_verification_tokens" WHERE "expiresAt" < now() - make_interval(days => $1)`, [OLD_ACCOUNT_LINK_DAYS])
+      .catch(() => {});
+  }
   return token;
 }
 
@@ -27,7 +34,7 @@ export async function createEmailVerificationToken(userId: string): Promise<stri
 export async function verifyEmailWithToken(token: string): Promise<{ userId: string } | null> {
   const client = await pool.connect();
   try {
-    await client.query("BEGIN");
+    await beginTransaction(client);
     const { rows } = await client.query<{ userId: string }>(
       `SELECT "userId" FROM "email_verification_tokens"
        WHERE "tokenHash" = $1 AND "usedAt" IS NULL AND "expiresAt" > now()
@@ -36,7 +43,7 @@ export async function verifyEmailWithToken(token: string): Promise<{ userId: str
     );
     const row = rows[0];
     if (!row) {
-      await client.query("ROLLBACK");
+      await client.query("ROLLBACK").catch(() => {});
       return null;
     }
     await client.query(
@@ -50,7 +57,7 @@ export async function verifyEmailWithToken(token: string): Promise<{ userId: str
     await client.query("COMMIT");
     return { userId: row.userId };
   } catch (err) {
-    await client.query("ROLLBACK");
+    await client.query("ROLLBACK").catch(() => {});
     throw err;
   } finally {
     client.release();

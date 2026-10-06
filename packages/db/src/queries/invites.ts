@@ -1,5 +1,5 @@
 import { randomBytes, randomUUID } from "crypto";
-import { pool } from "../pool";
+import { pool, beginTransaction } from "../pool";
 import { hashLinkToken } from "../link-tokens";
 import { type CollaboratorRole } from "./collaborators";
 
@@ -35,6 +35,19 @@ export interface WeddingInviteRow {
   acceptedAt: Date | null;
   createdAt: Date;
 }
+
+// TS-187: "now" in UTC, as a time without a zone -- what "expiresAt" (a column without a time zone)
+// holds. Comparing or adding to it this way gives the same answer whatever the time zone of the
+// server or the database session.
+const UTC_NOW = `(now() AT TIME ZONE 'UTC')`;
+
+// TS-187: an invite's columns, with "expiresAt" read back as the UTC moment it is (a time with a
+// zone), so the app's own reading of it doesn't depend on the server's time zone either.
+function inviteColumns(alias = ""): string {
+  const a = alias ? `${alias}.` : "";
+  return `${a}id, ${a}"weddingId", ${a}email, ${a}role, ${a}"permissionLevel", ${a}status, ${a}"invitedByUserId", ${a}"expiresAt" AT TIME ZONE 'UTC' AS "expiresAt", ${a}"acceptedAt", ${a}"createdAt"`;
+}
+const INVITE_COLUMNS = inviteColumns();
 
 // "Expired" is derived from expiresAt rather than its own stored transition -- nobody performs an
 // action to make an invite expire, time just passes -- but a row whose status is still the stored
@@ -90,15 +103,18 @@ export async function createInvite(
 
   const id = randomUUID();
   const token = randomBytes(32).toString("hex");
-  const expiresAt = new Date(Date.now() + INVITE_TTL_DAYS * 24 * 60 * 60 * 1000);
 
   const { rows } = await pool.query(
+    // TS-187: the expiry is worked out by the database, in UTC (the column has no time zone and is
+    // read as UTC). Before, it was a JavaScript date, which is sent in the server's own time zone
+    // -- so on a server not set to UTC an invite lasted hours longer or shorter than 7 days.
     `INSERT INTO "wedding_invites"
        (id, "weddingId", email, role, "permissionLevel", token, status, "invitedByUserId", "expiresAt")
-     VALUES ($1, $2, $3, $4::"CollaboratorRole", $5::"CollaboratorPermission", $6, 'PENDING', $7, $8)
-     RETURNING id, "weddingId", email, role, "permissionLevel", status, "invitedByUserId", "expiresAt", "acceptedAt", "createdAt"`,
+     VALUES ($1, $2, $3, $4::"CollaboratorRole", $5::"CollaboratorPermission", $6, 'PENDING', $7,
+             ${UTC_NOW} + make_interval(days => $8::int))
+     RETURNING ${INVITE_COLUMNS}`,
     // TS-160: only the token's hash is stored; the token itself goes out in the email and nowhere else.
-    [id, weddingId, normalizedEmail, role, permissionLevel, hashLinkToken(token), invitedByUserId, expiresAt]
+    [id, weddingId, normalizedEmail, role, permissionLevel, hashLinkToken(token), invitedByUserId, INVITE_TTL_DAYS]
   );
 
   return { ...withDerivedStatus(rows[0]), token };
@@ -106,7 +122,7 @@ export async function createInvite(
 
 export async function listInvitesForWedding(weddingId: string): Promise<WeddingInviteRow[]> {
   const { rows } = await pool.query(
-    `SELECT id, "weddingId", email, role, "permissionLevel", status, "invitedByUserId", "expiresAt", "acceptedAt", "createdAt"
+    `SELECT ${INVITE_COLUMNS}
      FROM "wedding_invites" WHERE "weddingId" = $1 ORDER BY "createdAt" DESC`,
     [weddingId]
   );
@@ -130,8 +146,7 @@ export interface InviteLookupRow extends WeddingInviteRow {
 
 export async function getInviteByToken(token: string): Promise<InviteLookupRow | null> {
   const { rows } = await pool.query(
-    `SELECT wi.id, wi."weddingId", wi.email, wi.role, wi."permissionLevel", wi.status,
-            wi."invitedByUserId", wi."expiresAt", wi."acceptedAt", wi."createdAt", w.name AS "weddingName"
+    `SELECT ${inviteColumns("wi")}, w.name AS "weddingName"
      FROM "wedding_invites" wi
      JOIN "weddings" w ON w.id = wi."weddingId"
      WHERE wi.token = $1`,
@@ -155,16 +170,16 @@ export async function acceptInvite(
 ): Promise<{ weddingId: string } | { error: InviteStatus | "NOT_FOUND" | "ALREADY_COLLABORATOR" }> {
   const client = await pool.connect();
   try {
-    await client.query("BEGIN");
+    await beginTransaction(client);
     const { rows } = await client.query(
       `UPDATE "wedding_invites" SET status = 'ACCEPTED', "acceptedAt" = now()
-       WHERE token = $1 AND status = 'PENDING' AND "expiresAt" > now()
+       WHERE token = $1 AND status = 'PENDING' AND "expiresAt" > ${UTC_NOW}
        RETURNING "weddingId", role, "permissionLevel", "invitedByUserId"`,
       [hashLinkToken(token)]
     );
     const claimed = rows[0];
     if (!claimed) {
-      await client.query("ROLLBACK");
+      await client.query("ROLLBACK").catch(() => {});
       const invite = await getInviteByToken(token);
       return { error: invite ? invite.status : "NOT_FOUND" };
     }
@@ -175,13 +190,13 @@ export async function acceptInvite(
       [randomUUID(), claimed.weddingId, acceptingUserId, claimed.role, claimed.permissionLevel, claimed.invitedByUserId]
     );
     if (!rowCount) {
-      await client.query("ROLLBACK");
+      await client.query("ROLLBACK").catch(() => {});
       return { error: "ALREADY_COLLABORATOR" };
     }
     await client.query("COMMIT");
     return { weddingId: claimed.weddingId };
   } catch (err) {
-    await client.query("ROLLBACK");
+    await client.query("ROLLBACK").catch(() => {});
     throw err;
   } finally {
     client.release();
