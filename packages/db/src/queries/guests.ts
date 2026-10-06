@@ -423,7 +423,7 @@ export async function submitGuestRsvp(token: string, input: SubmitGuestRsvpData)
     if (!found[0]) throw new RsvpSubmissionError("This RSVP link isn't valid.", "NOT_FOUND");
     const weddingId = found[0].weddingId;
     const { rows: weddingRows } = await client.query<{ rsvpCutoffDate: string | null }>(
-      `SELECT "rsvpCutoffDate"::text AS "rsvpCutoffDate" FROM "weddings" WHERE id = $1 FOR UPDATE`,
+      `SELECT "rsvpCutoffDate"::text AS "rsvpCutoffDate" FROM "weddings" WHERE id = $1 FOR NO KEY UPDATE`,
       [weddingId]
     );
     if (!weddingRows[0]) throw new RsvpSubmissionError("This RSVP link isn't valid.", "NOT_FOUND");

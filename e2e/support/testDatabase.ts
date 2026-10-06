@@ -294,7 +294,7 @@ export async function holdWeddingLock(weddingId: string): Promise<HeldWeddingLoc
   await client.query("BEGIN");
   const { rows } = await client.query(
     `SELECT w.id FROM "weddings" w JOIN "users" u ON u.id = w."ownerId"
-     WHERE w.id = $1 AND u.email LIKE $2 FOR UPDATE OF w`,
+     WHERE w.id = $1 AND u.email LIKE $2 FOR NO KEY UPDATE OF w`,
     [weddingId, TEST_EMAIL_PATTERN],
   );
   if (!rows[0]) {

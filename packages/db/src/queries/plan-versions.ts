@@ -239,7 +239,11 @@ export async function createPlanVersionWithAssignments(
     await client.query("BEGIN");
     // TS-150: one new version at a time per wedding -- two Generate (or Restore) clicks at once
     // would otherwise both take the same next version number and the second would fail.
-    await client.query(`SELECT id FROM "weddings" WHERE id = $1 FOR UPDATE`, [weddingId]);
+    // TS-185: NO KEY UPDATE (here and in every other wedding lock) still lets only one of these run at
+    // a time, but doesn't block Postgres's own check that a changed row's wedding exists. With a full
+    // FOR UPDATE, an approval that had already changed its plan row waited here behind a Generate
+    // that was itself waiting for that plan row -- each waiting for the other.
+    await client.query(`SELECT id FROM "weddings" WHERE id = $1 FOR NO KEY UPDATE`, [weddingId]);
 
     if (makeCurrent && input.mayReplaceApproved === false && (await currentPlanIsApproved(client, weddingId))) {
       makeCurrent = false;
@@ -1148,7 +1152,7 @@ export async function setGuestAttendance(
     // TS-169: the same wedding lock Generate and Restore take, then the guest's row -- and the
     // current version and their attendance read again under them. Before, a guest declining by
     // link while a plan was being generated (or the planner moved them) could keep their seat.
-    await client.query(`SELECT id FROM "weddings" WHERE id = $1 FOR UPDATE`, [weddingId]);
+    await client.query(`SELECT id FROM "weddings" WHERE id = $1 FOR NO KEY UPDATE`, [weddingId]);
     // TS-173: the current plan's row before the guest's (see lockCurrentPlan) -- a move locks the
     // plan first too, so the two can no longer deadlock.
     currentPlanVersionId = (await lockCurrentPlan(client, weddingId)) ?? undefined;
@@ -1730,7 +1734,7 @@ export async function restorePlanVersion(
     await client.query("BEGIN");
     // TS-150: one new version at a time per wedding -- two Generate (or Restore) clicks at once
     // would otherwise both take the same next version number and the second would fail.
-    await client.query(`SELECT id FROM "weddings" WHERE id = $1 FOR UPDATE`, [weddingId]);
+    await client.query(`SELECT id FROM "weddings" WHERE id = $1 FOR NO KEY UPDATE`, [weddingId]);
     // TS-173: worked out under the wedding lock (attendance changes take it too), so a guest who
     // declined a moment ago is never seated by the restore.
     result = await computeRestorePlacement(sourceVersionId, weddingId, client);

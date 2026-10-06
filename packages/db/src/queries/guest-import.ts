@@ -402,7 +402,7 @@ export async function commitGuestImport(
     // current plan's row (see lockCurrentPlan) -- and the current plan read under them. Before,
     // it was read before the transaction, so an import racing a Generate could leave guests it
     // marked Not Attending seated in the new version.
-    await client.query(`SELECT id FROM "weddings" WHERE id = $1 FOR UPDATE`, [weddingId]);
+    await client.query(`SELECT id FROM "weddings" WHERE id = $1 FOR NO KEY UPDATE`, [weddingId]);
     const planVersionId: string | undefined = (await lockCurrentPlan(client, weddingId)) ?? undefined;
 
     // TS-92: refuse the whole import (it's all-or-nothing already) if any guest it would update
