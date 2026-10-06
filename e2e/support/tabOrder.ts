@@ -300,6 +300,7 @@ export async function walkTabOrderDetailed(page: Page, options: WalkOptions = {}
     const seen = new Set<string>();
     let firstKey = "";
     let previousKey = "";
+    let sameInARow = 0;
     for (let i = 0; i < maxStops; i++) {
       if (i > 0) await page.keyboard.press("Tab");
       let stop = await focusedStop(page, i);
@@ -315,9 +316,16 @@ export async function walkTabOrderDetailed(page: Page, options: WalkOptions = {}
         end = !stop || seen.has(stop.key) ? "left-page" : "lost-focus";
         break;
       }
-      // A date or time box keeps focus while Tab moves through its parts (month, day, year), so the
-      // same control again straight after itself is still that one stop, not a loop.
-      if (stop.key === previousKey) continue;
+      // A date or time box keeps focus while Tab moves through its parts (month, day, year, AM/PM),
+      // so the same control again straight after itself is still that one stop, not a loop. More
+      // than that in a row means Tab has left the page: Firefox keeps reporting the last control as
+      // focused once focus has gone to the browser's own toolbar.
+      if (stop.key === previousKey) {
+        if (++sameInARow <= 4) continue;
+        end = "left-page";
+        break;
+      }
+      sameInARow = 0;
       if (seen.has(stop.key)) {
         end = stop.key === firstKey ? "came-round" : "trapped";
         break;

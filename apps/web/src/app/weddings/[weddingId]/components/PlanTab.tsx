@@ -1579,9 +1579,14 @@ function PlanFloorPlan({
     }
     // TS-175: keep a keyboard user's place -- focus the guest where they now are. The table they
     // were put at re-draws, and focus used to fall back to the top of the page.
-    requestAnimationFrame(() =>
-      document.querySelector<HTMLElement>(`[data-guest-id="${CSS.escape(guestId)}"]`)?.focus()
-    );
+    // TS-199: only if focus was lost in the redraw -- Safari can run this a moment late, and it used
+    // to pull focus back from wherever the planner had already gone next (so their next Enter
+    // un-picked this guest instead of acting where they were).
+    requestAnimationFrame(() => {
+      const active = document.activeElement;
+      const lost = !active || active === document.body || !active.isConnected;
+      if (lost) document.querySelector<HTMLElement>(`[data-guest-id="${CSS.escape(guestId)}"]`)?.focus();
+    });
   }
 
   function onGuestDragStart(e: React.DragEvent<HTMLSpanElement>, guestId: string) {

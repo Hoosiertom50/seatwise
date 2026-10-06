@@ -179,8 +179,12 @@ export function TablesTab({
     setEditDirty(false);
     if (id) {
       setTimeout(() => {
+        // TS-199: only if focus went with the closed form -- after a save that took a moment, the
+        // planner may already be somewhere else, and is left there.
+        const active = document.activeElement;
+        const lost = !active || active === document.body || !active.isConnected;
         const button = document.getElementById(`edit-table-button-${id}`);
-        if (button && button.isConnected) button.focus();
+        if (lost && button && button.isConnected) button.focus();
       }, 0);
     }
   }
