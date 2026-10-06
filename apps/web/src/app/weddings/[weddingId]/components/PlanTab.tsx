@@ -564,8 +564,9 @@ export function PlanTab({
             than silently dropped.
           </p>
         </div>
+        {/* TS-177: the Generate column may shrink (it was shrink-0) -- the long draft label pushed a phone screen sideways. */}
         {canEdit && (
-          <div className="flex shrink-0 flex-col items-end gap-2">
+          <div className="flex min-w-0 max-w-full flex-col items-end gap-2">
             <button
               onClick={onGenerate}
               disabled={generating}
@@ -575,7 +576,7 @@ export function PlanTab({
             </button>
             {/* FR-5.6: chosen upfront, before the run -- an unsuccessful run (a hard-rule
                 conflict) only ever produces a conflict report either way, nothing is saved. */}
-            <label className="flex items-center gap-2 text-xs text-neutral-600 dark:text-neutral-300">
+            <label className="flex items-center gap-2 text-right text-xs text-neutral-600 dark:text-neutral-300">
               <input
                 type="checkbox"
                 checked={saveAsDraft}
