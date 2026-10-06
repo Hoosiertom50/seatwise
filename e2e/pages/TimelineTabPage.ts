@@ -12,7 +12,7 @@ import { ConfirmDelete } from "../components/ConfirmDelete.js";
 
 export class TimelineTabPage extends BasePage {
   private timelineTabButton() {
-    return this.page.getByRole("button", { name: "Timeline", exact: true });
+    return this.page.getByRole("tab", { name: "Timeline", exact: true });
   }
 
   private addTimeInput() {

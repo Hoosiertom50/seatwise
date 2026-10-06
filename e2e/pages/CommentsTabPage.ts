@@ -11,7 +11,7 @@ export type CommentTargetType = "GUEST" | "TABLE" | "TIMELINE_ENTRY";
 
 export class CommentsTabPage extends BasePage {
   private commentsTabButton() {
-    return this.page.getByRole("button", { name: "Comments", exact: true });
+    return this.page.getByRole("tab", { name: "Comments", exact: true });
   }
 
   private targetTypeSelect() {

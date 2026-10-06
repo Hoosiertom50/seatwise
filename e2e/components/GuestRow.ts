@@ -128,6 +128,12 @@ export class GuestRow {
     await this.notesInput().press("Tab");
   }
 
+  /** TS-182: types into the notes without leaving the box, so nothing has been saved yet. */
+  async typeNotesWithoutLeaving(value: string): Promise<void> {
+    await this.notesInput().click();
+    await this.notesInput().pressSequentially(value);
+  }
+
   /** TS-129: whether this row offers the notes for editing (View/Comment users get plain text). */
   notesEditor(): Locator {
     return this.notesInput();

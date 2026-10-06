@@ -3,7 +3,7 @@
 import { useEffect, useState, useRef } from "react";
 import { ConfirmDeleteButton } from "@/components/ConfirmDeleteButton";
 import { api, ApiError, apiErrorMessage } from "@/lib/api-client";
-import { formatClockTime } from "@/lib/display-format";
+import { formatClockTime, OPEN_EDIT_MESSAGE } from "@/lib/display-format";
 import { matchVendorSuggestions } from "@/lib/vendor-suggestions";
 import type {
   VendorDTO,
@@ -61,7 +61,9 @@ function amountProblem(value: string, what: string): string | null {
 
 function formatCents(cents: number): string {
   const sign = cents < 0 ? "-" : "";
-  return `${sign}$${(Math.abs(cents) / 100).toLocaleString(undefined, {
+  // TS-182: always US formatting -- amounts are dollars, and a browser set to another language used
+  // to show e.g. "$1.234,50".
+  return `${sign}$${(Math.abs(cents) / 100).toLocaleString("en-US", {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   })}`;
@@ -112,9 +114,10 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
     !!editingVendor &&
     (editCostText !== centsToDollarsString(editingVendor.costCents) ||
       (Object.keys(editVendor) as (keyof VendorDTO)[]).some((k) => (editVendor[k] ?? null) !== (editingVendor[k] ?? null)));
+  // TS-182: only while the forms are there (they're hidden without Edit access).
   useUnsavedChanges(
     "budget",
-    !!(name.trim() || contactName.trim() || contactEmail.trim() || contactPhone.trim() || cost || contractNotes.trim() || arrivalTime || editChanged || budgetEdited)
+    canEdit && !!(name.trim() || contactName.trim() || contactEmail.trim() || contactPhone.trim() || cost || contractNotes.trim() || arrivalTime || editChanged || budgetEdited)
   );
   const [saving, setSaving] = useState(false);
 
@@ -253,6 +256,11 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
   }
 
   function startEdit(vendor: VendorDTO) {
+    // TS-182: opening another vendor used to throw away a changed open edit without a word.
+    if (editChanged && editingId !== vendor.id) {
+      setError(OPEN_EDIT_MESSAGE);
+      return;
+    }
     setEditingId(vendor.id);
     setEditVendor({ ...vendor });
     setEditCostText(centsToDollarsString(vendor.costCents));
@@ -712,7 +720,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
                     {v.arrivalTime && (
                       <p className="text-sm text-neutral-500 dark:text-neutral-400">Arrives {formatClockTime(v.arrivalTime)}</p>
                     )}
-                    {v.contractNotes && <p className="mt-1 text-sm text-neutral-500 dark:text-neutral-400">{v.contractNotes}</p>}
+                    {v.contractNotes && <p className="mt-1 whitespace-pre-line text-sm text-neutral-500 dark:text-neutral-400">{v.contractNotes}</p>}
                     {shareResult[v.id] && (
                       <p className="mt-1 break-all text-xs text-neutral-500 dark:text-neutral-400">{shareResult[v.id]}</p>
                     )}

@@ -114,6 +114,20 @@ export default function WeddingDetailPage() {
     setTab(pendingTab);
     setPendingTab(null);
   }
+  // TS-182: arrow keys move along the tab list (and open that tab, asking first if needed).
+  function onTabKeyDown(e: React.KeyboardEvent<HTMLDivElement>) {
+    const index = TABS.findIndex((t) => t.value === tab);
+    let next = -1;
+    if (e.key === "ArrowRight") next = (index + 1) % TABS.length;
+    else if (e.key === "ArrowLeft") next = (index - 1 + TABS.length) % TABS.length;
+    else if (e.key === "Home") next = 0;
+    else if (e.key === "End") next = TABS.length - 1;
+    if (next < 0) return;
+    e.preventDefault();
+    const target = TABS[next].value;
+    goToTab(target);
+    document.getElementById(`tab-${target}`)?.focus();
+  }
   function stayOnTab() {
     setPendingTab(null);
     setPendingHref(null);
@@ -171,11 +185,17 @@ export default function WeddingDetailPage() {
   useEffect(() => {
     if (error) return;
     let redirectTimer: ReturnType<typeof setTimeout> | undefined;
+    // TS-182: a poll that was already in flight when the page closed could still answer 404 and
+    // start the redirect timer after the cleanup below had run -- nothing then cancelled it.
+    let cancelled = false;
     const interval = setInterval(async () => {
       try {
-        const res = await api.get<{ wedding: WeddingDTO; accessLevel: AccessLevel }>(
+        const res = await api.get<{ wedding: WeddingDTO; accessLevel: AccessLevel; role: string | null }>(
           `/api/v1/weddings/${weddingId}`
         );
+        if (cancelled) return;
+        // TS-182: the role (Couple or Collaborator) can change too, and decides who may approve.
+        setRole(res.role ?? null);
         if (res.accessLevel !== accessLevelRef.current) {
           const previous = accessLevelRef.current;
           accessLevelRef.current = res.accessLevel;
@@ -194,6 +214,7 @@ export default function WeddingDetailPage() {
           }
         }
       } catch (err) {
+        if (cancelled) return;
         if (err instanceof ApiError && err.status === 404) {
           setAccessRevoked(true);
           setAccessNotice("Your access to this wedding has been removed.");
@@ -210,6 +231,7 @@ export default function WeddingDetailPage() {
       }
     }, 4000);
     return () => {
+      cancelled = true;
       clearInterval(interval);
       if (redirectTimer) clearTimeout(redirectTimer);
     };
@@ -310,10 +332,23 @@ export default function WeddingDetailPage() {
         />
       )}
 
-      <div className="mb-8 flex gap-1 overflow-x-auto border-b border-neutral-200 dark:border-neutral-700">
+      {/* TS-182: a real tab list for screen readers -- which tab is open, and which panel it shows.
+          Left/Right (and Home/End) move between tabs, like any other tab list. */}
+      <div
+        role="tablist"
+        aria-label="Wedding sections"
+        onKeyDown={onTabKeyDown}
+        className="mb-8 flex gap-1 overflow-x-auto border-b border-neutral-200 dark:border-neutral-700"
+      >
         {TABS.map((t) => (
           <button
             key={t.value}
+            id={`tab-${t.value}`}
+            role="tab"
+            type="button"
+            aria-selected={tab === t.value}
+            aria-controls="wedding-tabpanel"
+            tabIndex={tab === t.value ? 0 : -1}
             onClick={() => goToTab(t.value)}
             className={`whitespace-nowrap px-4 py-2 text-sm font-medium ${
               tab === t.value
@@ -355,6 +390,7 @@ export default function WeddingDetailPage() {
       )}
 
       <unsaved.Provider value={unsaved.registry}>
+      <div id="wedding-tabpanel" role="tabpanel" aria-labelledby={`tab-${tab}`}>
       {tab === "guests" && (
         <GuestsTab
           weddingId={weddingId}
@@ -402,6 +438,7 @@ export default function WeddingDetailPage() {
           setWedding={setWedding}
         />
       )}
+      </div>
       </unsaved.Provider>
     </main>
   );

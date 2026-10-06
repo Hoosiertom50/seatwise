@@ -179,7 +179,20 @@ export async function markNotificationRead(id: string, userId: string): Promise<
   return (rowCount ?? 0) > 0;
 }
 
-export async function markAllNotificationsRead(userId: string): Promise<void> {
+/**
+ * TS-182: with `upTo`, only notifications created no later than it are marked -- "Mark all read"
+ * sends the newest one the bell has shown, so one that arrived since isn't marked unseen. (The
+ * column holds milliseconds, the same precision the bell was given.)
+ */
+export async function markAllNotificationsRead(userId: string, upTo?: Date): Promise<void> {
+  if (upTo) {
+    await pool.query(
+      `UPDATE "notifications" SET "isRead" = true
+        WHERE "recipientUserId" = $1 AND "isRead" = false AND "createdAt" <= $2`,
+      [userId, upTo]
+    );
+    return;
+  }
   await pool.query(
     `UPDATE "notifications" SET "isRead" = true WHERE "recipientUserId" = $1 AND "isRead" = false`,
     [userId]

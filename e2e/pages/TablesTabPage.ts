@@ -12,7 +12,7 @@ import { ConfirmDelete } from "../components/ConfirmDelete.js";
 
 export class TablesTabPage extends BasePage {
   private tablesTabButton() {
-    return this.page.getByRole("button", { name: "Tables", exact: true });
+    return this.page.getByRole("tab", { name: "Tables", exact: true });
   }
 
   // TS-51 (REQ-REUSABLE-TEMPLATES): the "Save as a reusable template" `<details>` section.

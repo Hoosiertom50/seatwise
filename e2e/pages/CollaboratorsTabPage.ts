@@ -15,7 +15,7 @@ export type RoleLabel = "Collaborator" | "Couple";
 export class CollaboratorsTabPage extends BasePage {
   async goto(weddingId: string): Promise<void> {
     await this.page.goto(`/weddings/${weddingId}`);
-    await this.page.getByRole("button", { name: "Collaborators", exact: true }).click();
+    await this.page.getByRole("tab", { name: "Collaborators", exact: true }).click();
     await this.peopleHeading().waitFor();
   }
 

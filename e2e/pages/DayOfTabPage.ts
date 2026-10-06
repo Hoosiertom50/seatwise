@@ -11,7 +11,7 @@ import { BasePage } from "./BasePage.js";
 
 export class DayOfTabPage extends BasePage {
   private dayOfTabButton() {
-    return this.page.getByRole("button", { name: "Day-of mode", exact: true });
+    return this.page.getByRole("tab", { name: "Day-of mode", exact: true });
   }
 
   private searchInput() {

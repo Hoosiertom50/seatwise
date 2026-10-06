@@ -39,7 +39,8 @@ export function CommentsTab({
   // TS-151: which reply is being posted, so a double-click can't post it twice.
   const [postingReply, setPostingReply] = useState<string | null>(null);
   // TS-159: tell the page this tab has input that leaving it would lose.
-  useUnsavedChanges("comments", !!(body.trim() || Object.values(replyBodies).some((b) => b.trim())));
+  // TS-182: only while the comment boxes are there (they're hidden without Comment access).
+  useUnsavedChanges("comments", canComment && !!(body.trim() || Object.values(replyBodies).some((b) => b.trim())));
   // Checked synchronously: a second click can land before React re-renders with postingReply set.
   const postingReplyNow = useRef(false);
 
@@ -258,7 +259,7 @@ export function CommentsTab({
                         <span className="ml-2 text-xs font-normal text-neutral-500 dark:text-neutral-400">(removed)</span>
                       )}
                     </p>
-                    <p className="mt-1 text-sm text-neutral-700 dark:text-neutral-300">{root.body}</p>
+                    <p className="mt-1 whitespace-pre-line break-words text-sm text-neutral-700 dark:text-neutral-300">{root.body}</p>
                     <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
                       {root.authorName} · {formatDateTime(root.createdAt)}
                     </p>
@@ -283,7 +284,7 @@ export function CommentsTab({
                   <ul className="mt-3 flex flex-col gap-2 border-l-2 border-neutral-100 dark:border-neutral-800 pl-4">
                     {replies.map((r) => (
                       <li key={r.id}>
-                        <p className="text-sm text-neutral-700 dark:text-neutral-300">{r.body}</p>
+                        <p className="whitespace-pre-line break-words text-sm text-neutral-700 dark:text-neutral-300">{r.body}</p>
                         <p className="mt-0.5 text-xs text-neutral-500 dark:text-neutral-400">
                           {r.authorName} · {formatDateTime(r.createdAt)}
                         </p>
