@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { resetWeddingLinkTokens } from "@seatwise/db";
+import { resetWeddingLinkTokens, LinkResetNotOwnerError } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
-import { errorResponse } from "@/lib/api-response";
+import { errorResponse, concurrentChangeResponse } from "@/lib/api-response";
 import { requireAccess } from "@/lib/access";
 
 type Params = { params: Promise<{ weddingId: string }> };
@@ -19,6 +19,17 @@ export async function POST(req: NextRequest, { params }: Params) {
   const access = await requireAccess(weddingId, user.id, "OWNER");
   if ("error" in access) return access.error;
 
-  const result = await resetWeddingLinkTokens(weddingId);
-  return NextResponse.json(result);
+  try {
+    const result = await resetWeddingLinkTokens(weddingId, user.id);
+    return NextResponse.json(result);
+  } catch (err) {
+    // TS-195: handed off to someone else a moment ago -- the owner check is made again under the
+    // wedding's lock.
+    if (err instanceof LinkResetNotOwnerError) return errorResponse(err.message, 403);
+    // TS-195: lost a race with another change, or the wedding was deleted (nothing saved) -- a
+    // clear 409/404, not a server error.
+    const conflict = concurrentChangeResponse(err);
+    if (conflict) return conflict;
+    throw err;
+  }
 }

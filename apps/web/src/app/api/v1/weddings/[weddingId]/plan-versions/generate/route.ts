@@ -19,7 +19,7 @@ import {
 } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
 import { errorResponse, zodErrorResponse, concurrentChangeResponse } from "@/lib/api-response";
-import { requireAccess, canManageApproval } from "@/lib/access";
+import { requireAccess, canManageApproval, actorAccessFor } from "@/lib/access";
 import { SAVED_AS_DRAFT_BECAUSE_APPROVED, MADE_CURRENT_BECAUSE_NO_CURRENT_PLAN } from "@/lib/plan-approval-text";
 
 type Params = { params: Promise<{ weddingId: string }> };
@@ -138,6 +138,8 @@ export async function POST(req: NextRequest, { params }: Params) {
       ruleConfigVersion: RULE_WEIGHT_CONFIG_VERSION,
       makeCurrent,
       mayReplaceApproved,
+      // TS-195: read again under the wedding lock -- refused if it dropped while this was worked out.
+      actorAccess: await actorAccessFor(weddingId, user.id, access.accessLevel),
     }));
   } catch (err) {
     const conflict = concurrentChangeResponse(err);

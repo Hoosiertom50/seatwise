@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import type { ZodError } from "zod";
-import { PlanSourceChangedError } from "@seatwise/db";
+import { AccessChangedError, PlanSourceChangedError, isWeddingDeletedError } from "@seatwise/db";
 import { isNonJsonBody } from "./json-body";
 
 export function errorResponse(
@@ -38,6 +38,11 @@ export function zodErrorResponse(error: ZodError) {
 // guest or table deleted while a new plan was being made (23503) -- is "it changed, try again"
 // (409), not a server error. Nothing was saved in either case. Returns null for anything else.
 export function concurrentChangeResponse(err: unknown) {
+  // TS-195: the wedding itself was deleted meanwhile, or the person's access dropped while the
+  // change waited -- said as such, not as "the plan changed".
+  const gone = weddingDeletedResponse(err);
+  if (gone) return gone;
+  if (err instanceof AccessChangedError) return errorResponse(err.message, 403);
   const code = (err as { code?: string } | null)?.code;
   // TS-187: 40001 too -- the current plan kept being replaced while a change waited for it (see
   // lockCurrentPlan in packages/db).
@@ -51,4 +56,14 @@ export function concurrentChangeResponse(err: unknown) {
     );
   }
   return null;
+}
+
+export const WEDDING_DELETED_MESSAGE = "This wedding was deleted — nothing was saved.";
+
+// TS-195: something added to a wedding (a guest, a table, a timeline entry, a vendor, a plan...)
+// while the wedding was being deleted: the delete wins, and the database refuses the new row
+// (23503 on its wedding) -- answered 404 "This wedding was deleted", not a server error. Returns
+// null for anything else.
+export function weddingDeletedResponse(err: unknown) {
+  return isWeddingDeletedError(err) ? errorResponse(WEDDING_DELETED_MESSAGE, 404) : null;
 }

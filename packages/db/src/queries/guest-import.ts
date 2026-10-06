@@ -1,6 +1,7 @@
 import { randomUUID } from "crypto";
 import { pool, beginTransaction } from "../pool";
 import { encryptText, decryptText } from "../crypto";
+import { recheckActorAccess, WeddingDeletedError, type ActorAccess } from "./wedding-lock";
 import {
   lockCurrentPlan,
   lockRestrictedLists,
@@ -436,7 +437,9 @@ export async function commitGuestImport(
   /** TS-169: who ran the import, for the plan's history. */
   actorUserId?: string,
   /** TS-180: also write rows for guests changed since the file was exported (the planner ticked to overwrite). */
-  overwriteChanged = false
+  overwriteChanged = false,
+  /** TS-195: the access the person was let in with -- read again under the wedding lock. */
+  actorAccess?: ActorAccess
 ): Promise<GuestImportCommitResult> {
   const { preview, unknownGuestIds } = await classifyRows(weddingId, csv, mapping);
   // TS-190: a guest the preview showed (so their ID is in expectedRevisions) but who is gone now
@@ -473,7 +476,11 @@ export async function commitGuestImport(
     // current plan's row (see lockCurrentPlan) -- and the current plan read under them. Before,
     // it was read before the transaction, so an import racing a Generate could leave guests it
     // marked Not Attending seated in the new version.
-    await client.query(`SELECT id FROM "weddings" WHERE id = $1 FOR NO KEY UPDATE`, [weddingId]);
+    const { rows: weddingLocked } = await client.query(`SELECT id FROM "weddings" WHERE id = $1 FOR NO KEY UPDATE`, [weddingId]);
+    // TS-195: deleted meanwhile -- said as such; and the person's access read again under the lock
+    // (removed or lowered while the import waited: nothing saved).
+    if (!weddingLocked[0]) throw new WeddingDeletedError();
+    if (actorAccess) await recheckActorAccess(client, weddingId, actorAccess);
     const planVersionId: string | undefined = (await lockCurrentPlan(client, weddingId)) ?? undefined;
     // TS-187: then the Restricted tables' lists (a party that grows is checked against them below),
     // before any guest's row -- the same order a list save takes them in.

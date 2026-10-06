@@ -85,9 +85,13 @@ export async function DELETE(req: NextRequest, { params }: Params) {
   // TS-124: a table with guests seated at it in the current plan is only removed once the caller
   // confirms (?confirm=true) -- the 409 says how many, so the UI can ask.
   const confirmed = req.nextUrl.searchParams.get("confirm") === "true";
+  // TS-195: how many seated guests the person was told about when they confirmed -- if that's
+  // changed by now, they're asked again with the new number instead of the table being removed.
+  const seatedParam = req.nextUrl.searchParams.get("seatedCount");
+  const confirmedSeatedCount = seatedParam !== null && /^\d{1,6}$/.test(seatedParam) ? Number(seatedParam) : undefined;
   let result: Awaited<ReturnType<typeof removeSeatingTable>>;
   try {
-    result = await removeSeatingTable(tableId, weddingId, user.id, confirmed);
+    result = await removeSeatingTable(tableId, weddingId, user.id, confirmed, confirmedSeatedCount);
   } catch (err) {
     // TS-187: lost a race with another change (nothing saved) -- 409, not a server error.
     const conflict = concurrentChangeResponse(err);
@@ -97,9 +101,11 @@ export async function DELETE(req: NextRequest, { params }: Params) {
   if (result.status === "NOT_FOUND") return errorResponse("Table not found", 404);
   if (result.status === "NEEDS_CONFIRMATION") {
     const guests = result.seatedCount === 1 ? "1 guest is" : `${result.seatedCount} guests are`;
+    // TS-195: said so when the number changed since they confirmed.
+    const changed = confirmed && confirmedSeatedCount !== undefined ? "The seating changed since you confirmed — now " : "";
     return NextResponse.json(
       {
-        error: `${guests} seated at "${result.label}" in the current plan. Removing it will leave them unassigned, and removes its seats from saved past versions too.`,
+        error: `${changed}${guests} seated at "${result.label}" in the current plan. Removing it will leave them unassigned, and removes its seats from saved past versions too.`,
         needsConfirmation: true,
         seatedCount: result.seatedCount,
       },

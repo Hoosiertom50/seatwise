@@ -162,7 +162,8 @@ export function TablesTab({
   const [error, setError] = useState<string | null>(null);
   // TS-124: a table with guests seated at it in the current plan is only removed after the
   // planner confirms, from the server's own count.
-  const [confirmRemoval, setConfirmRemoval] = useState<{ id: string; message: string } | null>(null);
+  // TS-195: with the number of seated guests the message named, sent back on "Remove anyway".
+  const [confirmRemoval, setConfirmRemoval] = useState<{ id: string; message: string; seatedCount?: number } | null>(null);
   const [tableWarnings, setTableWarnings] = useState<string[]>([]);
   // TS-120: the one table (if any) whose row is open for editing.
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -370,11 +371,16 @@ export function TablesTab({
     }
   }
 
-  async function onRemove(id: string, confirmed = false) {
+  // TS-195: `confirmedSeatedCount` is how many seated guests the person agreed to leave unassigned
+  // -- if that's changed by the time it's removed, the server asks again with the new number.
+  async function onRemove(id: string, confirmed = false, confirmedSeatedCount?: number) {
     setError(null);
     if (confirmed) setRemovingAnyway(true);
     try {
-      await api.delete(`/api/v1/weddings/${weddingId}/tables/${id}${confirmed ? "?confirm=true" : ""}`);
+      const query = confirmed
+        ? `?confirm=true${confirmedSeatedCount !== undefined ? `&seatedCount=${confirmedSeatedCount}` : ""}`
+        : "";
+      await api.delete(`/api/v1/weddings/${weddingId}/tables/${id}${query}`);
       setConfirmRemoval(null);
       setTables((current) => current.filter((t) => t.id !== id));
       // TS-191: a removed table's open edit goes with it -- it used to keep counting as unsaved,
@@ -384,7 +390,8 @@ export function TablesTab({
     } catch (err) {
       // TS-124: guests are seated here -- ask rather than silently unseat them.
       if (err instanceof ApiError && err.status === 409 && err.data?.needsConfirmation) {
-        setConfirmRemoval({ id, message: err.message });
+        const seatedCount = typeof err.data?.seatedCount === "number" ? (err.data.seatedCount as number) : undefined;
+        setConfirmRemoval({ id, message: err.message, seatedCount });
         return;
       }
       setConfirmRemoval(null);
@@ -1057,7 +1064,7 @@ export function TablesTab({
                   >
                     <span className="flex-1">{confirmRemoval.message}</span>
                     <button
-                      onClick={() => onRemove(t.id, true)}
+                      onClick={() => onRemove(t.id, true, confirmRemoval.seatedCount)}
                       disabled={removingAnyway}
                       className="rounded-md bg-red-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-red-800 disabled:opacity-50"
                     >

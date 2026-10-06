@@ -69,6 +69,22 @@ function clockTime12(hhmm: string): string {
   return `${h12}:${String(m).padStart(2, "0")} ${period}`;
 }
 
+// TS-195: the CommentError for a comment the database refused because its guest, table, timeline
+// entry or thread was removed a moment before it was saved (23503 on that column), or null for
+// anything else -- a wedding deleted meanwhile is left to the route ("This wedding was deleted").
+function commentTargetGoneError(err: unknown): CommentError | null {
+  const e = err as { code?: string; constraint?: string } | null;
+  if (e?.code !== "23503") return null;
+  const what: Record<string, string> = {
+    comments_guestId_fkey: "That guest",
+    comments_tableId_fkey: "That table",
+    comments_timelineEntryId_fkey: "That timeline entry",
+    comments_parentCommentId_fkey: "The comment you replied to",
+  };
+  const subject = e.constraint ? what[e.constraint] : undefined;
+  return subject ? new CommentError(`${subject} was removed a moment ago, so your comment wasn't saved.`, "NOT_FOUND") : null;
+}
+
 export async function createComment(
   weddingId: string,
   authorUserId: string,
@@ -152,22 +168,28 @@ export async function createComment(
   }
 
   const id = randomUUID();
-  await pool.query(
-    `INSERT INTO "comments" (id, "weddingId", "targetType", "guestId", "tableId", "timelineEntryId", "targetLabel", body, "authorUserId", "parentCommentId")
-     VALUES ($1, $2, $3::"CommentTargetType", $4, $5, $6, $7, $8, $9, $10)`,
-    [
-      id,
-      weddingId,
-      input.targetType,
-      guestId,
-      tableId,
-      timelineEntryId,
-      targetLabel,
-      input.body,
-      authorUserId,
-      input.parentCommentId ?? null,
-    ]
-  );
+  try {
+    await pool.query(
+      `INSERT INTO "comments" (id, "weddingId", "targetType", "guestId", "tableId", "timelineEntryId", "targetLabel", body, "authorUserId", "parentCommentId")
+       VALUES ($1, $2, $3::"CommentTargetType", $4, $5, $6, $7, $8, $9, $10)`,
+      [
+        id,
+        weddingId,
+        input.targetType,
+        guestId,
+        tableId,
+        timelineEntryId,
+        targetLabel,
+        input.body,
+        authorUserId,
+        input.parentCommentId ?? null,
+      ]
+    );
+  } catch (err) {
+    // TS-195: what the comment is about was removed between the check above and saving it -- the
+    // database refused the comment (nothing saved). Said in words, not a server error.
+    throw commentTargetGoneError(err) ?? err;
+  }
 
   if (input.parentCommentId) {
     // FR-10.2: a reply notifies everyone (owner + collaborators) except whoever wrote it —

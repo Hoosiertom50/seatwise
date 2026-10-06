@@ -605,6 +605,68 @@ export async function holdTimelineEntry(entryId: string): Promise<HeldTimelineEn
   };
 }
 
+/** TS-195: a delete held half-way, from outside the app -- see holdDeletion. */
+export interface HeldDeletion {
+  /** Resolves once `count` of the app's own database sessions are waiting (directly or in turn) on this delete. */
+  waitForWaiters(count: number): Promise<void>;
+  /** Saves the delete (the row is gone) and lets the waiting requests carry on. */
+  commit(): Promise<void>;
+  /** Undoes the delete and lets the waiting requests carry on (cleanup). */
+  release(): Promise<void>;
+}
+
+/**
+ * TS-195: deletes a test wedding, guest or account -- but doesn't save it yet, so requests that
+ * reach the row (to lock it, or to save something that points at it) wait exactly as they would
+ * behind a real delete under way. The test then saves it (commit) and checks what those requests
+ * were told. Test weddings and accounts only (owner, or account, at the reserved test domain).
+ * An account must own no wedding (the database refuses that delete).
+ */
+export async function holdDeletion(kind: "wedding" | "guest" | "account", idOrEmail: string): Promise<HeldDeletion> {
+  const { Client } = await import("pg");
+  testPool(); // the same production refusal as every other helper here
+  const client = new Client({ connectionString: resolveDatabaseUrl() });
+  await client.connect();
+  await client.query("BEGIN");
+  const sql = {
+    wedding: `DELETE FROM "weddings" w USING "users" u WHERE u.id = w."ownerId" AND w.id = $1 AND u.email LIKE $2`,
+    guest: `DELETE FROM "guests" g USING "weddings" w, "users" u
+            WHERE w.id = g."weddingId" AND u.id = w."ownerId" AND g.id = $1 AND u.email LIKE $2`,
+    account: `DELETE FROM "users" WHERE email = $1 AND email LIKE $2`,
+  }[kind];
+  try {
+    const { rowCount } = await client.query(sql, [idOrEmail, TEST_EMAIL_PATTERN]);
+    if (!rowCount) throw new Error(`testDatabase: no test ${kind} ${idOrEmail}.`);
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => {});
+    await client.end();
+    throw err;
+  }
+  const { rows: me } = await client.query<{ pid: number }>(`SELECT pg_backend_pid() AS pid`);
+  const pid = me[0].pid;
+  let open = true;
+  const finish = async (sql: "COMMIT" | "ROLLBACK") => {
+    if (!open) return;
+    open = false;
+    try {
+      await client.query(sql);
+    } finally {
+      await client.end();
+    }
+  };
+  return {
+    async waitForWaiters(count: number) {
+      await waitForSessionsBlockedBy(pid, count, `the held ${kind} delete`);
+    },
+    async commit() {
+      await finish("COMMIT");
+    },
+    async release() {
+      await finish("ROLLBACK");
+    },
+  };
+}
+
 /**
  * TS-171: uses up all but `remaining` of a test network address's daily allowance of account
  * emails (sign-up confirmations, resent links and password resets), so a test can reach the limit

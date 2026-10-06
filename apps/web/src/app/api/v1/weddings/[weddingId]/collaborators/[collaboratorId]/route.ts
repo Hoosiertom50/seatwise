@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { updateCollaboratorSchema } from "@seatwise/shared";
 import { updateCollaboratorPermission, removeCollaborator, getCollaboratorForWedding, CollaboratorError } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
-import { errorResponse, zodErrorResponse } from "@/lib/api-response";
+import { errorResponse, zodErrorResponse, concurrentChangeResponse } from "@/lib/api-response";
 import { requireAccess } from "@/lib/access";
 
 type Params = { params: Promise<{ weddingId: string; collaboratorId: string }> };
@@ -20,10 +20,13 @@ export async function PATCH(req: NextRequest, { params }: Params) {
   if (!parsed.success) return zodErrorResponse(parsed.error);
 
   try {
-    await updateCollaboratorPermission(weddingId, collaboratorId, parsed.data.permissionLevel, parsed.data.role);
+    await updateCollaboratorPermission(weddingId, collaboratorId, parsed.data.permissionLevel, parsed.data.role, user.id);
     return NextResponse.json({ ok: true });
   } catch (err) {
-    if (err instanceof CollaboratorError) return errorResponse(err.message, 404);
+    // TS-195: no longer the owner (handed off a moment ago) -- 403; otherwise not found.
+    if (err instanceof CollaboratorError) return errorResponse(err.message, err.code === "NOT_OWNER" ? 403 : 404);
+    const conflict = concurrentChangeResponse(err);
+    if (conflict) return conflict;
     throw err;
   }
 }
@@ -35,16 +38,25 @@ export async function DELETE(req: NextRequest, { params }: Params) {
 
   const { weddingId, collaboratorId } = await params;
   const own = await getCollaboratorForWedding(weddingId, collaboratorId);
-  if (own?.userId !== user.id) {
+  const leaving = own?.userId === user.id;
+  if (!leaving) {
     const access = await requireAccess(weddingId, user.id, "OWNER");
     if ("error" in access) return access.error;
   }
 
   try {
-    await removeCollaborator(weddingId, collaboratorId);
+    // TS-195: who may remove whom is checked again under the wedding's lock.
+    await removeCollaborator(weddingId, collaboratorId, user.id, { leaving });
     return NextResponse.json({ ok: true });
   } catch (err) {
-    if (err instanceof CollaboratorError) return errorResponse(err.message, 404);
+    if (err instanceof CollaboratorError) {
+      // TS-195: leaving while the wedding was being handed to them -- they own it now (409, said
+      // so); no longer the owner -- 403.
+      const status = err.code === "IS_OWNER" ? 409 : err.code === "NOT_OWNER" ? 403 : 404;
+      return errorResponse(err.message, status);
+    }
+    const conflict = concurrentChangeResponse(err);
+    if (conflict) return conflict;
     throw err;
   }
 }

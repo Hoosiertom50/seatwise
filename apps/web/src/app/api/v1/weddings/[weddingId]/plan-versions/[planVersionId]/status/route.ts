@@ -10,7 +10,7 @@ import {
 } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
 import { errorResponse, zodErrorResponse, concurrentChangeResponse } from "@/lib/api-response";
-import { requireAccess, canManageApproval } from "@/lib/access";
+import { requireAccess, canManageApproval, actorAccessFor } from "@/lib/access";
 
 type Params = { params: Promise<{ weddingId: string; planVersionId: string }> };
 
@@ -70,7 +70,13 @@ export async function POST(req: NextRequest, { params }: Params) {
       parsed.data.status,
       user.id,
       parsed.data.expectedRevision,
-      { mayApprove: mayManageApproval, mayLeaveApproved: mayManageApproval, mayMoveDraftAndReview }
+      {
+        mayApprove: mayManageApproval,
+        mayLeaveApproved: mayManageApproval,
+        mayMoveDraftAndReview,
+        // TS-195: what these were worked out from, read again under the plan's lock.
+        judgedAccess: await actorAccessFor(weddingId, user.id, access.accessLevel),
+      }
     );
     if (!planVersion) return errorResponse("Plan version not found", 404);
     return NextResponse.json({ planVersion });

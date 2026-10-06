@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createTableSchema } from "@seatwise/shared";
 import { createSeatingTable, listSeatingTablesForWedding } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
-import { errorResponse, zodErrorResponse } from "@/lib/api-response";
+import { errorResponse, zodErrorResponse, weddingDeletedResponse } from "@/lib/api-response";
 import { requireAccess } from "@/lib/access";
 
 type Params = { params: Promise<{ weddingId: string }> };
@@ -31,6 +31,13 @@ export async function POST(req: NextRequest, { params }: Params) {
   const parsed = createTableSchema.safeParse(body);
   if (!parsed.success) return zodErrorResponse(parsed.error);
 
-  const table = await createSeatingTable(weddingId, parsed.data);
-  return NextResponse.json({ table }, { status: 201 });
+  try {
+    const table = await createSeatingTable(weddingId, parsed.data);
+    return NextResponse.json({ table }, { status: 201 });
+  } catch (err) {
+    // TS-195: the wedding was deleted while this was being saved -- 404, not a server error.
+    const gone = weddingDeletedResponse(err);
+    if (gone) return gone;
+    throw err;
+  }
 }

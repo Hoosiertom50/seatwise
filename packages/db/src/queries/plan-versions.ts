@@ -13,6 +13,7 @@ import {
   HISTORY_CREATED_AT,
   SEAT_ORDER,
 } from "./seat-checks";
+import { recheckActorAccess, isWeddingDeletedError, WeddingDeletedError, type ActorAccess } from "./wedding-lock";
 import { RULE_WEIGHT_CONFIG, RULE_WEIGHT_CONFIG_VERSION, compareTableLabels } from "@seatwise/shared";
 
 // TS-3 (FR-0.2 AC2): a soft-rule warning must name "the applied weighting-configuration version"
@@ -243,6 +244,8 @@ export async function createPlanVersionWithAssignments(
     // saved as a comparison draft and the approved plan stays current. Checked under the wedding
     // lock below, so an approval landing a moment earlier is still respected.
     mayReplaceApproved?: boolean;
+    /** TS-195: the access the person was let in with -- read again under the wedding lock. */
+    actorAccess?: ActorAccess;
   }
 ): Promise<{ planVersionId: string; savedAsDraftBecauseApproved: boolean; madeCurrentBecauseNoCurrentPlan: boolean }> {
   let makeCurrent = input.makeCurrent ?? true;
@@ -257,7 +260,11 @@ export async function createPlanVersionWithAssignments(
     // a time, but doesn't block Postgres's own check that a changed row's wedding exists. With a full
     // FOR UPDATE, an approval that had already changed its plan row waited here behind a Generate
     // that was itself waiting for that plan row -- each waiting for the other.
-    await client.query(`SELECT id FROM "weddings" WHERE id = $1 FOR NO KEY UPDATE`, [weddingId]);
+    const { rows: weddingLocked } = await client.query(`SELECT id FROM "weddings" WHERE id = $1 FOR NO KEY UPDATE`, [weddingId]);
+    // TS-195: deleted while the plan was being worked out -- said as such; and the person's access
+    // read again under the lock (removed or lowered meanwhile: nothing saved).
+    if (!weddingLocked[0]) throw new WeddingDeletedError();
+    if (input.actorAccess) await recheckActorAccess(client, weddingId, input.actorAccess);
     // TS-187: then the current plan's row, in the usual order -- for a comparison draft too, so a
     // draft never runs its table re-checks while a change to the current plan is half-way through.
     const currentPlanId = await lockCurrentPlan(client, weddingId);
@@ -364,6 +371,8 @@ export async function createPlanVersionWithAssignments(
     return { planVersionId, savedAsDraftBecauseApproved, madeCurrentBecauseNoCurrentPlan };
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});
+    // TS-195: the wedding itself was deleted meanwhile -- not "the guest list or tables changed".
+    if (isWeddingDeletedError(err)) throw new WeddingDeletedError();
     if ((err as { code?: string }).code === "23503") throw new PlanSourceChangedError();
     throw err;
   } finally {
@@ -544,7 +553,13 @@ export async function setPlanVersionStatus(
   // TS-179: worked out by the route from who is asking. Checked here, under the plan row lock,
   // against the status the plan has right now -- the route's own earlier read could be stale if
   // someone approved (or un-approved) the plan in between. Omitted means "allowed" (internal use).
-  permissions: { mayApprove?: boolean; mayLeaveApproved?: boolean; mayMoveDraftAndReview?: boolean } = {}
+  permissions: {
+    mayApprove?: boolean;
+    mayLeaveApproved?: boolean;
+    mayMoveDraftAndReview?: boolean;
+    /** TS-195: the access (and role) these were worked out from -- read again under the lock. */
+    judgedAccess?: ActorAccess;
+  } = {}
 ): Promise<PlanVersionDetail | null> {
   if (!(await isCurrentVersion(id, weddingId))) {
     throw new PlanVersionStatusError(
@@ -578,6 +593,9 @@ export async function setPlanVersionStatus(
         fresh!
       );
     }
+    // TS-195: the person's access read again under the plan's lock -- removed or lowered (or no
+    // longer a Couple member) since the route worked out what they may do: refused, nothing saved.
+    if (permissions.judgedAccess) await recheckActorAccess(client, weddingId, permissions.judgedAccess);
     // TS-165: re-checked under the lock (a Generate could have replaced this version a moment ago).
     if (!current.isCurrent) {
       throw new PlanVersionStatusError(
@@ -1866,7 +1884,7 @@ export async function restorePlanVersion(
   actorUserId: string,
   // TS-179: false when the person restoring can't undo an approval -- an approved current plan is
   // then left current and the restored version is saved as a comparison draft beside it.
-  options: { mayReplaceApproved?: boolean } = {}
+  options: { mayReplaceApproved?: boolean; /** TS-195: read again under the wedding lock. */ actorAccess?: ActorAccess } = {}
 ): Promise<ManualMoveResult & { savedAsDraftBecauseApproved: boolean }> {
   const client = await pool.connect();
   let newVersionId: string;
@@ -1876,7 +1894,10 @@ export async function restorePlanVersion(
     await beginTransaction(client);
     // TS-150: one new version at a time per wedding -- two Generate (or Restore) clicks at once
     // would otherwise both take the same next version number and the second would fail.
-    await client.query(`SELECT id FROM "weddings" WHERE id = $1 FOR NO KEY UPDATE`, [weddingId]);
+    const { rows: weddingLocked } = await client.query(`SELECT id FROM "weddings" WHERE id = $1 FOR NO KEY UPDATE`, [weddingId]);
+    // TS-195: deleted meanwhile -- said as such; and the person's access read again under the lock.
+    if (!weddingLocked[0]) throw new WeddingDeletedError();
+    if (options.actorAccess) await recheckActorAccess(client, weddingId, options.actorAccess);
     // TS-187: then the current plan's row, in the usual order (see lockCurrentPlan).
     const currentPlanId = await lockCurrentPlan(client, weddingId);
     // TS-173: worked out under the wedding lock (attendance changes take it too), so a guest who
@@ -1931,6 +1952,7 @@ export async function restorePlanVersion(
     await client.query("COMMIT");
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});
+    if (isWeddingDeletedError(err)) throw new WeddingDeletedError();
     if ((err as { code?: string }).code === "23503") throw new PlanSourceChangedError();
     throw err;
   } finally {

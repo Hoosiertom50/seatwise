@@ -43,8 +43,20 @@ export async function PATCH(req: NextRequest, { params }: Params) {
     return errorResponse(SIDE_LABELS_MESSAGE, 422, { [sideLabel1 !== undefined ? "sideLabel1" : "sideLabel2"]: [SIDE_LABELS_MESSAGE] });
   }
 
-  await updateWeddingForOwner(weddingId, user.id, parsed.data);
+  const saved = await updateWeddingForOwner(weddingId, user.id, parsed.data);
+  // TS-195: the other side was renamed to this same name a moment ago (another tab) -- checked
+  // again as it saves; nothing was saved.
+  if (saved === "SIDE_LABELS_CLASH") {
+    return errorResponse(SIDE_LABELS_MESSAGE, 422, { [sideLabel1 !== undefined ? "sideLabel1" : "sideLabel2"]: [SIDE_LABELS_MESSAGE] });
+  }
   const wedding = await getWeddingById(weddingId);
+  // TS-195: deleted, or handed to someone else, a moment ago -- nothing was saved (it used to answer
+  // as if it had been).
+  if (saved === "NOT_FOUND") {
+    return wedding
+      ? errorResponse("Only the wedding's owner can change these settings — you aren't its owner any more.", 403)
+      : errorResponse("Wedding not found", 404);
+  }
   return NextResponse.json({ wedding });
 }
 

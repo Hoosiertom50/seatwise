@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { addTemplateTablesSchema } from "@seatwise/shared";
 import { addTemplateTablesToWedding, listSeatingTablesForWedding, TemplateNotFoundError } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
-import { errorResponse, zodErrorResponse } from "@/lib/api-response";
+import { errorResponse, zodErrorResponse, weddingDeletedResponse } from "@/lib/api-response";
 import { requireAccess } from "@/lib/access";
 
 type Params = { params: Promise<{ weddingId: string }> };
@@ -28,6 +28,9 @@ export async function POST(req: NextRequest, { params }: Params) {
     return NextResponse.json({ addedCount, tables }, { status: 201 });
   } catch (err) {
     if (err instanceof TemplateNotFoundError) return errorResponse("Template not found", 404);
+    // TS-195: the wedding was deleted while this was being saved -- 404, not a server error.
+    const gone = weddingDeletedResponse(err);
+    if (gone) return gone;
     throw err;
   }
 }
