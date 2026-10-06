@@ -49,6 +49,10 @@ export async function POST(req: NextRequest, { params }: Params) {
   const reservation = await reserveEmailSend("invites", user.id);
   if (!reservation.allowed) return errorResponse(emailSendRefusedMessage("invites", reservation.reason), 429);
 
+  // TS-194: the counts are given back -- from exactly the windows they were made in (the
+  // reservation) -- whenever no email went out: not sent, no invite made, or anything else going
+  // wrong on the way.
+  let emailWentOut = false;
   try {
     const invite = await createInvite(
       weddingId,
@@ -75,25 +79,28 @@ export async function POST(req: NextRequest, { params }: Params) {
     const sent = await sendEmailNotification(invite.email, subject, text);
     // TS-171 / TS-178: the invite was made but nothing went out (this address has had its share of
     // email today, the day's limit was reached, or the send failed) -- it doesn't use up the
-    // sender's allowance; the owner gets the link to send instead.
-    if (!emailDelivered(sent)) await releaseEmailSend("invites", user.id);
+    // sender's allowance (given back below); the owner gets the link to send instead.
+    const emailed = emailDelivered(sent);
+    emailWentOut = emailed;
 
     // eslint-disable-next-line @typescript-eslint/no-unused-vars -- TS-176: the token is left out of the response on purpose.
     const { token: _token, ...invitePublic } = invite;
     // TS-132: if the email didn't go out, hand the owner the accept link to send themselves --
     // otherwise the invitee has no way in. (Accepting still requires signing in with this exact
     // address, so the link is no use to anyone else.)
-    const emailed = emailDelivered(sent);
     return NextResponse.json(
       { invite: invitePublic, emailed, ...(emailed ? {} : { acceptUrl }) },
       { status: 201 }
     );
   } catch (err) {
-    if (err instanceof InviteError) {
-      // TS-168: no invite was made, so no email went out -- this one doesn't count.
-      await releaseEmailSend("invites", user.id);
-      return errorResponse(err.message, err.code === "NOT_FOUND" ? 404 : 409);
-    }
+    // TS-168: no invite was made, so no email went out -- this one doesn't count (given back below).
+    if (err instanceof InviteError) return errorResponse(err.message, err.code === "NOT_FOUND" ? 404 : 409);
     throw err;
+  } finally {
+    if (!emailWentOut) {
+      await releaseEmailSend("invites", user.id, reservation).catch((err) =>
+        console.error("Couldn't give back an invite email's count:", err)
+      );
+    }
   }
 }

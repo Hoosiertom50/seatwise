@@ -7,9 +7,7 @@ import {
   accountEmailAddressKey,
   ACCOUNT_EMAIL_LIMITS,
   clientAddress,
-  CONFIRMATION_EMAIL_LIMITS,
   rateLimitOr429,
-  signupConfirmationAddressKey,
   SIGNUP_LIMITS,
 } from "@/lib/rate-limit";
 import { sendVerificationEmail } from "@/lib/email-verification";
@@ -52,12 +50,9 @@ export async function POST(req: NextRequest) {
   // TS-171: the confirmation email counts with resends and resets from this address. Past the
   // address's daily allowance the account is still made (a whole office may sign up from one
   // network) -- just without the email; the banner offers "Resend link" for later.
-  // TS-186: and with this address's sign-up confirmations for the day (20), so one source can't
-  // take the whole day's share for confirmations.
-  const emailCounters = [
-    { key: accountEmailAddressKey(address), ...ACCOUNT_EMAIL_LIMITS.perAddressDay },
-    { key: signupConfirmationAddressKey(address), ...CONFIRMATION_EMAIL_LIMITS.signupsPerAddressDay },
-  ];
+  // TS-194: one count per network address (10 a day) for every email an outsider can trigger --
+  // it replaces the separate count of sign-up confirmations (see ACCOUNT_EMAIL_LIMITS).
+  const emailCounters = [{ key: accountEmailAddressKey(address), ...ACCOUNT_EMAIL_LIMITS.perAddressDay }];
   const hits = await Promise.all(emailCounters.map(({ key, limit, windowSeconds }) => hitRateLimit(key, limit, windowSeconds)));
   const giveBack = () =>
     Promise.all(emailCounters.map(({ key, windowSeconds }, i) => undoRateLimitHit(key, windowSeconds, hits[i].windowStart)));

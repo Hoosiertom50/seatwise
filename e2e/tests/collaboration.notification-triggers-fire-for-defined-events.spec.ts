@@ -30,7 +30,8 @@
 
 import { request as playwrightRequest } from "@playwright/test";
 import { expect, defineQualityTest, test } from "../fixtures/index.js";
-import { signUpFreshAccount } from "../support/auth.js";
+import { signUpFreshAccount, signUpFreshAccountInNewContext } from "../support/auth.js";
+import { breakNotificationsFor } from "../support/testDatabase.js";
 import { getEnv } from "../support/env.js";
 import { uniquePersonName } from "../data/ids.js";
 
@@ -241,6 +242,57 @@ defineQualityTest(
       });
     } finally {
       await collabCtx.dispose();
+    }
+  },
+);
+
+defineQualityTest(
+  {
+    id: "collaboration.notification-triggers-fire-for-defined-events.a-failed-notification-never-fails-the-saved-change",
+    title: "when notifying one collaborator fails (their account deleted a moment ago), the change is still saved and reported as saved, and everyone else is still notified",
+    objective:
+      "Confirms (TS-194) that notifications are best effort: with writing a notification for one collaborator failing the way it does when their account was just deleted, sharing the plan for review and approving it both return 200, adding a guest after approval returns 201, and the other collaborator still gets PLAN_SHARED, STATUS_CHANGED and GUEST_ADDED -- while the failing collaborator gets nothing and no error reaches the planner.",
+    expectedOutcome:
+      "Share for review: 200; approve: 200; add guest: 201 with the guest saved. The working collaborator has PLAN_SHARED, STATUS_CHANGED and GUEST_ADDED notifications; the failing one has none.",
+    requirementIds: ["REQ-COLLABORATION-NOTIFICATIONS"],
+    tags: ["@mutating", "@feature:collaboration", "@risk:high", "@suite:regression"],
+  },
+  async ({ managedWedding, weddingData, context, browser }, testInfo) => {
+    const w = managedWedding.id;
+    await weddingData.createGuest(w, uniquePersonName(testInfo.workerIndex));
+    await weddingData.createTable(w, { label: "Table A", capacity: 4 });
+    const generated = await weddingData.generatePlanVersion(w);
+    expect(generated.isComplete).toBe(true);
+
+    const gone = await signUpFreshAccountInNewContext(browser, testInfo.workerIndex, "notify-gone");
+    const present = await signUpFreshAccountInNewContext(browser, testInfo.workerIndex, "notify-present");
+    let broken: Awaited<ReturnType<typeof breakNotificationsFor>> | undefined;
+    try {
+      await weddingData.addCollaborator(w, gone.email, "EDIT");
+      await weddingData.addCollaborator(w, present.email, "EDIT");
+      broken = await breakNotificationsFor(gone.email);
+
+      await test.step("Sharing and approving the plan are saved and reported as saved", async () => {
+        expect((await weddingData.setPlanVersionStatus(w, generated.id, "IN_REVIEW")).status).toBe(200);
+        expect((await weddingData.setPlanVersionStatus(w, generated.id, "APPROVED")).status).toBe(200);
+      });
+
+      await test.step("Adding a guest after approval is saved and reported as saved", async () => {
+        const res = await context.request.post(`/api/v1/weddings/${w}/guests`, { data: uniquePersonName(testInfo.workerIndex) });
+        expect(res.status()).toBe(201);
+        const { guest } = (await res.json()) as { guest: { id: string } };
+        expect(guest.id).toBeTruthy();
+      });
+
+      await test.step("The other collaborator was still told about each; the failing one has nothing", async () => {
+        const types = (await notifications(present.context.request)).map((n) => n.type);
+        expect(types).toEqual(expect.arrayContaining(["PLAN_SHARED", "STATUS_CHANGED", "GUEST_ADDED"]));
+        expect(await notifications(gone.context.request)).toHaveLength(0);
+      });
+    } finally {
+      await broken?.restore();
+      await gone.context.close();
+      await present.context.close();
     }
   },
 );

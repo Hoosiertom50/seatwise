@@ -21,6 +21,7 @@ import { expect, defineQualityTest, test } from "../fixtures/index.js";
 import { uniquePersonName, uniqueTestAddress, uniqueToken } from "../data/ids.js";
 import { signUpFreshAccountInNewContext, TEST_ACCOUNT_EMAIL_DOMAIN } from "../support/auth.js";
 import { AccountPage } from "../pages/AccountPage.js";
+import { waitUntilSafelyInsideUtcDay } from "../support/utcDay.js";
 import {
   accountEmailCount,
   changedRsvpEmailsToday,
@@ -37,7 +38,8 @@ import {
 type RsvpLink = { url: string; emailed: boolean; emailFailed: boolean; recentlyEmailed?: boolean };
 
 const CHANGED_RSVP_EMAILS_PER_GUEST_PER_DAY = 3;
-const ACCOUNT_EMAILS_PER_NETWORK_ADDRESS_PER_DAY = 100;
+// TS-194: 10 a day per network address (Tom's decision).
+const ACCOUNT_EMAILS_PER_NETWORK_ADDRESS_PER_DAY = 10;
 const SIGN_IN_FAILURES_PER_ACCOUNT = 100;
 const RESET_REQUESTS_PER_EMAIL_15_MINUTES = 3;
 const DELETE_FAILURES_PER_ACCOUNT_AND_ADDRESS = 10;
@@ -159,6 +161,8 @@ defineQualityTest(
     tags: ["@mutating", "@feature:authentication", "@risk:high", "@suite:regression"],
   },
   async ({ browser, playwright }, testInfo) => {
+    // TS-194: the daily counter this test sets must be read in the same UTC day.
+    await waitUntilSafelyInsideUtcDay(testInfo);
     const baseURL = testInfo.project.use.baseURL;
     const usedUp = uniqueTestAddress();
     const fromUsedUp = await playwright.request.newContext({ baseURL, extraHTTPHeaders: { "x-forwarded-for": usedUp } });

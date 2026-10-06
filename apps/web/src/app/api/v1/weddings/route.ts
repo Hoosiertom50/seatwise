@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createWeddingSchema } from "@seatwise/shared";
-import { createWedding, listWeddingsWithSummaryForUser, TemplateNotFoundError, undoRateLimitHit } from "@seatwise/db";
+import { createWedding, listWeddingsWithSummaryForUser, TemplateNotFoundError } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
 import { errorResponse, zodErrorResponse } from "@/lib/api-response";
-import { rateLimitOr429, TOO_MANY_WEDDINGS_TODAY, WEDDING_CREATE_LIMITS, weddingCreateKey } from "@/lib/rate-limit";
+import { countOr429, TOO_MANY_WEDDINGS_TODAY, WEDDING_CREATE_LIMITS, weddingCreateKey } from "@/lib/rate-limit";
 
 // FR-11.1/FR-11.2: the dashboard's list now carries each wedding's plan status and
 // unassigned/Needs Reassignment counts (WeddingSummaryDTO), not just the plain WeddingDTO fields.
@@ -24,7 +24,8 @@ export async function POST(req: NextRequest) {
   if (!parsed.success) return zodErrorResponse(parsed.error);
 
   // TS-178: a few new weddings per account a day (see WEDDING_CREATE_LIMITS).
-  const limited = await rateLimitOr429(weddingCreateKey(user.id), WEDDING_CREATE_LIMITS.perAccountDay, TOO_MANY_WEDDINGS_TODAY);
+  // TS-194: given back from exactly the window it was counted in, if no wedding is made.
+  const { limited, giveBack } = await countOr429(weddingCreateKey(user.id), WEDDING_CREATE_LIMITS.perAccountDay, TOO_MANY_WEDDINGS_TODAY);
   if (limited) return limited;
 
   // TS-19 (FR-14.4): templateId is validated against this same user's own templates inside
@@ -35,7 +36,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ wedding }, { status: 201 });
   } catch (err) {
     // TS-178: no wedding was made, so it doesn't count.
-    await undoRateLimitHit(weddingCreateKey(user.id), WEDDING_CREATE_LIMITS.perAccountDay.windowSeconds);
+    await giveBack();
     if (err instanceof TemplateNotFoundError) return errorResponse(err.message, 404);
     throw err;
   }

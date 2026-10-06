@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { copiedWeddingName, duplicateWeddingSchema } from "@seatwise/shared";
-import { duplicateWeddingLayout, getWeddingById, undoRateLimitHit } from "@seatwise/db";
+import { duplicateWeddingLayout, getWeddingById } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
 import { errorResponse, zodErrorResponse } from "@/lib/api-response";
 import { requireAccess } from "@/lib/access";
-import { rateLimitOr429, TOO_MANY_WEDDINGS_TODAY, WEDDING_CREATE_LIMITS, weddingCreateKey } from "@/lib/rate-limit";
+import { countOr429, TOO_MANY_WEDDINGS_TODAY, WEDDING_CREATE_LIMITS, weddingCreateKey } from "@/lib/rate-limit";
 
 type Params = { params: Promise<{ weddingId: string }> };
 
@@ -30,11 +30,19 @@ export async function POST(req: NextRequest, { params }: Params) {
   const name = parsed.data.name ?? copiedWeddingName(source.name);
 
   // TS-178: a copy is a new wedding too, so it counts toward the same daily cap.
-  const limited = await rateLimitOr429(weddingCreateKey(user.id), WEDDING_CREATE_LIMITS.perAccountDay, TOO_MANY_WEDDINGS_TODAY);
+  // TS-194: given back from exactly the window it was counted in, if no copy is made -- including
+  // when making it fails.
+  const { limited, giveBack } = await countOr429(weddingCreateKey(user.id), WEDDING_CREATE_LIMITS.perAccountDay, TOO_MANY_WEDDINGS_TODAY);
   if (limited) return limited;
-  const newId = await duplicateWeddingLayout(weddingId, user.id, name);
+  let newId: string | null;
+  try {
+    newId = await duplicateWeddingLayout(weddingId, user.id, name);
+  } catch (err) {
+    await giveBack();
+    throw err;
+  }
   if (!newId) {
-    await undoRateLimitHit(weddingCreateKey(user.id), WEDDING_CREATE_LIMITS.perAccountDay.windowSeconds);
+    await giveBack();
     return errorResponse("Wedding not found", 404);
   }
   const wedding = await getWeddingById(newId);

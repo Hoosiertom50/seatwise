@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { ACCOUNT_EMAILS_PER_DAY, accountDailyEmailKey, hitRateLimit, peekRateLimit, undoRateLimitHit } from "@seatwise/db";
+import { accountDailyEmailKey, accountDailyEmailLimit, hitRateLimit, peekRateLimit, undoRateLimitHit } from "@seatwise/db";
 import { emailLimitReason, tooManyAttemptsMessage, type EmailLimitReason } from "./limit-messages";
 
 // TS-98: limits for the public, unauthenticated guest RSVP link -- the one part of the API anyone
@@ -47,32 +47,27 @@ export const EMAIL_VERIFICATION_LIMITS = {
   resendsPerAccount: { limit: 3, windowSeconds: 900 },
   // TS-168: daily ceilings, so "Resend link" can't be used to flood one inbox or spend the day's
   // email allowance.
-  // TS-171: 4, so the sign-up email plus every resend stays within the per-address daily email cap
-  // (EMAILS_PER_RECIPIENT_PER_DAY in packages/db/src/email.ts) -- a resend is refused plainly
-  // rather than "sent" into a cap.
-  resendsPerAccountDay: { limit: 4, windowSeconds: 86_400 },
-  resendsPerAddressDay: { limit: 20, windowSeconds: 86_400 },
+  // TS-171: so the sign-up email plus every resend stays within the per-address daily cap -- a
+  // resend is refused plainly rather than "sent" into a cap. TS-194: that cap is now 3 for emails
+  // anyone can ask for (ANONYMOUS_EMAILS_PER_RECIPIENT_PER_DAY in packages/db/src/email.ts), so 2:
+  // the sign-up email and two resends. Per network address, resends now count in
+  // ACCOUNT_EMAIL_LIMITS below (10 a day, with sign-ups and resets) instead of a separate 20.
+  resendsPerAccountDay: { limit: 2, windowSeconds: 86_400 },
 };
 
 // TS-171: emails about an account -- sign-up confirmations, "Resend link" and password resets --
 // asked for from one network address in a day, all counted together. Each has its own limits too,
-// but separately they added up to hundreds a day from one source. Roomy enough for a team signing
-// up together from one office connection.
+// but separately they added up to hundreds a day from one source.
+// TS-194 (Tom's decision): one count for every email someone who isn't signed in (or an account
+// that hasn't confirmed its address) can make Seatwise send -- sign-up confirmations, "Resend
+// link", and password resets for confirmed and unconfirmed accounts alike -- 10 a day per network
+// address. Counted only when an email really goes out, and given back otherwise. Past it a sign-up
+// still makes the account (without its email); "Resend link" works again tomorrow. This replaces
+// the separate 20-a-day counts for sign-up confirmations and resends.
 export const ACCOUNT_EMAIL_LIMITS = {
-  // As many as the address may sign up in a day (SIGNUP_LIMITS), so a shared office network isn't
-  // cut short; resets keep their own reserved allowance either way.
-  perAddressDay: { limit: 100, windowSeconds: 86_400 },
+  perAddressDay: { limit: 10, windowSeconds: 86_400 },
 };
 export const accountEmailAddressKey = (address: string) => `account-email:addr:day:${address}`;
-
-// TS-186: of those, sign-ups that send a confirmation email from one network address in a day --
-// so one source can't take the whole day's share for confirmations (CONFIRMATION_SHARE_OF_EVERYDAY
-// in packages/db/src/email.ts). Past it the account is still made, without the email (the banner
-// offers "Resend link", which has its own limits).
-export const CONFIRMATION_EMAIL_LIMITS = {
-  signupsPerAddressDay: { limit: 20, windowSeconds: 86_400 },
-};
-export const signupConfirmationAddressKey = (address: string) => `confirm-email:signup:addr:day:${address}`;
 
 // TS-142: "forgot password" -- requests per address and per email (the per-email cap is what keeps
 // one inbox from being flooded), and attempts to use a link per address. Links are 64 random hex
@@ -185,6 +180,7 @@ export { clientAddress } from "./client-address";
 // TS-177: the refusal messages live in ./limit-messages (unit-testable without a database).
 export {
   ACCOUNT_DAILY_EMAIL_LIMIT_REACHED,
+  NEW_ACCOUNT_DAILY_EMAIL_LIMIT_REACHED,
   emailSendRefusedMessage,
   RSVP_LINK_TOO_MANY_SUBMITS,
   TOO_MANY_INVITES,
@@ -242,6 +238,7 @@ export async function countOr429(
 // TS-171: on top of these, every kind of email an account sends counts toward one daily allowance
 // (ACCOUNT_EMAILS_PER_DAY, 100). RSVP emails used to have their own 500 a day -- more than the
 // whole site's everyday ceiling -- so that allowance is now the only daily limit on them.
+// TS-194: 20 a day for an account in its first week (see accountDailyEmailLimit).
 export const EMAIL_SEND_LIMITS: Record<"invites" | "rsvpEmails", readonly { limit: number; windowSeconds: number }[]> = {
   invites: [
     { limit: 20, windowSeconds: 3600 },
@@ -256,15 +253,17 @@ export type EmailSendReservation =
   | { allowed: true; release: () => Promise<void> }
   | { allowed: false; reason: EmailLimitReason };
 
-function emailSendCounters(kind: keyof typeof EMAIL_SEND_LIMITS, userId: string) {
+async function emailSendCounters(kind: keyof typeof EMAIL_SEND_LIMITS, userId: string) {
+  const { limit, windowSeconds, newAccount } = await accountDailyEmailLimit(userId);
   return [
     ...EMAIL_SEND_LIMITS[kind].map(({ limit, windowSeconds }) => ({
       key: `email:${kind}:${windowSeconds}:${userId}`,
       limit,
       windowSeconds,
       accountDaily: false,
+      newAccount: false,
     })),
-    { key: accountDailyEmailKey(userId), ...ACCOUNT_EMAILS_PER_DAY, accountDaily: true },
+    { key: accountDailyEmailKey(userId), limit, windowSeconds, accountDaily: true, newAccount },
   ];
 }
 
@@ -278,7 +277,7 @@ function emailSendCounters(kind: keyof typeof EMAIL_SEND_LIMITS, userId: string)
  * window full for longer.
  */
 export async function reserveEmailSend(kind: keyof typeof EMAIL_SEND_LIMITS, userId: string): Promise<EmailSendReservation> {
-  const counters = emailSendCounters(kind, userId);
+  const counters = await emailSendCounters(kind, userId);
   const results = await Promise.all(counters.map(({ key, limit, windowSeconds }) => hitRateLimit(key, limit, windowSeconds)));
   let counted = true;
   const release = async () => {
@@ -302,7 +301,10 @@ export async function releaseEmailSend(
   reservation?: EmailSendReservation
 ): Promise<void> {
   if (reservation?.allowed) return reservation.release();
-  await Promise.all(emailSendCounters(kind, userId).map(({ key, windowSeconds }) => undoRateLimitHit(key, windowSeconds)));
+  // Only the windows' keys are needed here, so the allowance's size doesn't matter.
+  const counters = EMAIL_SEND_LIMITS[kind].map(({ windowSeconds }) => ({ key: `email:${kind}:${windowSeconds}:${userId}`, windowSeconds }));
+  counters.push({ key: accountDailyEmailKey(userId), windowSeconds: 86_400 });
+  await Promise.all(counters.map(({ key, windowSeconds }) => undoRateLimitHit(key, windowSeconds)));
 }
 
 // TS-171: once a guest has been emailed their RSVP link, asking for the link again (to copy it)

@@ -1,4 +1,5 @@
 import type { EmailResult } from "@seatwise/db";
+import { EMAIL_NOT_SET_UP_MESSAGE } from "./email-verification-text";
 
 // TS-142 / TS-145: what the "Forgot password?" form tells the person. Plain about a missing account
 // (Tom's decision, 2026-10-02), and honest when the email didn't actually go out -- never "we've
@@ -11,8 +12,11 @@ export const RESET_EMAIL_FAILED_MESSAGE = "We couldn't send the email just now �
 // rather than "we've sent a link", which reads as if another email is on the way.
 export const RESET_ALREADY_SENT_MESSAGE =
   "We've already sent you a link to reset your password, and it still works. Check your email, including the spam or junk folder. Links last 1 hour; you can ask for a new one after that.";
-// TS-177: the day's email allowance is used up -- trying again in a few minutes won't help.
-export const RESET_EMAIL_LIMITED_MESSAGE = "Seatwise can't send any more emails today — please try again tomorrow.";
+// TS-177: the email allowance is used up -- trying again in a few minutes won't help.
+// TS-194: it rolls over 24 hours now, so room comes back during the day -- "a few hours".
+export const RESET_EMAIL_LIMITED_MESSAGE = "Seatwise has sent as many emails as it can for now — please try again in a few hours.";
+// TS-194: the site has no email service set up -- trying again won't help either.
+export const RESET_EMAIL_NOT_SET_UP_MESSAGE = EMAIL_NOT_SET_UP_MESSAGE;
 // TS-186: it's this address's share for the day that's used up, not Seatwise's -- say that.
 export const RESET_RECIPIENT_LIMITED_MESSAGE =
   "This email address has had as many emails from Seatwise as it can today — please try again tomorrow.";
@@ -28,5 +32,6 @@ export function resetOutcome(hasAccount: boolean, email: EmailResult | "already-
   if (email === "sent" || email === "logged") return { sent: true, message: RESET_SENT_MESSAGE };
   if (email === "recipient-limited") return { sent: false, emailFailed: true, message: RESET_RECIPIENT_LIMITED_MESSAGE };
   if (email === "limited") return { sent: false, emailFailed: true, message: RESET_EMAIL_LIMITED_MESSAGE };
+  if (email === "not-configured") return { sent: false, emailFailed: true, message: RESET_EMAIL_NOT_SET_UP_MESSAGE };
   return { sent: false, emailFailed: true, message: RESET_EMAIL_FAILED_MESSAGE };
 }

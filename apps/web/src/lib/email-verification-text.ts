@@ -24,9 +24,17 @@ export function confirmEmailToAcceptMessage(): string {
   return `Confirm your email address to accept this invite — use the link we email you, or "Resend link" at the top of the page if it hasn't arrived (check spam too). Then come back to this page.`;
 }
 
+/** TS-194: the site has no email service set up, so no email can go out until that's fixed. */
+export const EMAIL_NOT_SET_UP_MESSAGE =
+  "Seatwise can't send email right now because email isn't set up on this site — trying again won't help until it is.";
+
 /** TS-177: why "Resend link" didn't send -- "a few minutes" only when that's when it could work. */
 export function emailNotSentMessage(result: EmailResult): string {
   if (result === "recipient-limited") return "This address has had as many emails from Seatwise as it can today — please try again tomorrow.";
-  if (result === "limited") return "Seatwise can't send any more emails today — please try again tomorrow.";
+  // TS-194: Seatwise's own email allowance now rolls over 24 hours, so room comes back during the
+  // day -- "in a few hours", not "tomorrow".
+  if (result === "limited") return "Seatwise has sent as many emails as it can for now — please try again in a few hours.";
+  // TS-194: trying again won't help when the site has no email service set up -- say so.
+  if (result === "not-configured") return EMAIL_NOT_SET_UP_MESSAGE;
   return "We couldn't send the email just now — please try again in a few minutes.";
 }

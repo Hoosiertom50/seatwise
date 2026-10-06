@@ -15,7 +15,7 @@
 import { expect, defineQualityTest, test } from "../fixtures/index.js";
 import { uniquePersonName, uniqueToken } from "../data/ids.js";
 import { TEST_ACCOUNT_EMAIL_DOMAIN } from "../support/auth.js";
-import { accountEmailCount, setAccountEmailCount } from "../support/testDatabase.js";
+import { accountEmailCount, ageTestAccount, setAccountEmailCount } from "../support/testDatabase.js";
 import { DashboardPage } from "../pages/DashboardPage.js";
 
 const RSVP_CLOSED_NOTE =
@@ -173,6 +173,8 @@ defineQualityTest(
     let guestId = "";
 
     await test.step("With the day's allowance used up, an invite and an RSVP email are both refused, saying it's until tomorrow", async () => {
+      // TS-194: an account past its first week (a new one has a smaller allowance, with its own words).
+      await ageTestAccount(account.email, 8);
       await setAccountEmailCount(account.email, "account-day", 100);
       const refused = await invite();
       expect(refused.status()).toBe(429);

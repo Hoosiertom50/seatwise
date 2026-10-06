@@ -25,7 +25,7 @@ defineQualityTest(
     objective:
       "Confirms that a freshly signed-up account reports emailVerified false and sees the reminder banner; that its invite is refused (403) and adding a guest with an email doesn't email them; that accepting an invite to its address is refused with EMAIL_NOT_VERIFIED; that Resend link works then is limited; that the emailed link's page confirms the address after a click, after which the banner is gone, invites send and the invite can be accepted; that a used link is refused; and that a password reset confirms an unconfirmed address.",
     expectedOutcome:
-      "emailVerified false and the banner visible. Invite 403 with 'Confirm your email address first'. Guest add returns rsvpEmail.confirmEmailFirst true and emailed false. Accept 403 with status EMAIL_NOT_VERIFIED. Resend 200 three times, then 429. After confirming: 'your email address is confirmed', emailVerified true, no banner, invite 201, accept 200. Re-using the link shows an error. After a password reset, the second account is confirmed.",
+      "emailVerified false and the banner visible. Invite 403 with 'Confirm your email address first'. Guest add returns rsvpEmail.confirmEmailFirst true and emailed false. Accept 403 with status EMAIL_NOT_VERIFIED. Resend 200 twice, then 429 (TS-194: the sign-up email and two resends a day). After confirming: 'your email address is confirmed', emailVerified true, no banner, invite 201, accept 200. Re-using the link shows an error. After a password reset, the second account is confirmed.",
     requirementIds: ["REQ-ACCOUNT-WEDDING-MANAGEMENT"],
     tags: ["@mutating", "@feature:authentication", "@feature:collaboration", "@risk:high", "@suite:regression"],
   },
@@ -76,7 +76,8 @@ defineQualityTest(
       });
 
       await test.step("Resend link works, a few times, then waits", async () => {
-        for (let i = 1; i <= 3; i++) expect((await req.post("/api/v1/auth/verification-email", { data: {} })).status(), `resend ${i}`).toBe(200);
+        // TS-194: the sign-up email plus 2 resends a day -- the 3 a day anyone can ask for to one address.
+        for (let i = 1; i <= 2; i++) expect((await req.post("/api/v1/auth/verification-email", { data: {} })).status(), `resend ${i}`).toBe(200);
         expect((await req.post("/api/v1/auth/verification-email", { data: {} })).status()).toBe(429);
       });
 

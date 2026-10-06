@@ -206,12 +206,18 @@ export async function DELETE(req: NextRequest, { params }: Params) {
   // FR-10.2: guest removal is only notification-worthy post-approval.
   const status = await getCurrentPlanVersionStatus(weddingId);
   if (status === "APPROVED") {
-    await notifyWeddingCollaborators(
-      weddingId,
-      user.id,
-      "GUEST_REMOVED",
-      `${guest.firstName} ${guest.lastName} was removed from the guest list.`
-    );
+    // TS-194: the change above is already saved -- telling people about it is best effort, so a
+    // failure is logged and never turns the saved change into an error.
+    try {
+      await notifyWeddingCollaborators(
+        weddingId,
+        user.id,
+        "GUEST_REMOVED",
+        `${guest.firstName} ${guest.lastName} was removed from the guest list.`
+      );
+    } catch (err) {
+      console.error("Saved, but notifying the wedding's members failed:", err);
+    }
   }
 
   return NextResponse.json({ ok: true });
