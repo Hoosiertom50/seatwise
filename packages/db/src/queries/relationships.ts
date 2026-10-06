@@ -1,5 +1,6 @@
 import { randomUUID } from "crypto";
 import { pool } from "../pool";
+import { lockCurrentPlan, lockRestrictedLists } from "./seat-checks";
 
 export type RelationshipType =
   | "MUST_SIT_TOGETHER"
@@ -34,6 +35,83 @@ const OPPOSITE_HARD_TYPE: Partial<Record<RelationshipType, RelationshipType>> = 
 
 export class RelationshipConflictError extends Error {}
 
+type Queryable = { query: (text: string, params?: unknown[]) => Promise<{ rows: Record<string, unknown>[] }> };
+
+async function guestNames(q: Queryable, ids: string[]): Promise<Map<string, string>> {
+  const { rows } = await q.query(
+    `SELECT id, ("firstName" || ' ' || "lastName") AS name FROM "guests" WHERE id = ANY($1::text[])`,
+    [ids]
+  );
+  return new Map(rows.map((r) => [r.id as string, r.name as string]));
+}
+
+// TS-181: with `added` in place, is there a "must not sit together" pair inside one group of guests
+// linked by "must sit together" rules (who always share a table)? Only the group the new rule
+// touches is looked at, so an old problem elsewhere doesn't block an unrelated rule. Returns a
+// plain-English reason naming the guests and the chain that links them, or null.
+async function findRuleChainConflict(
+  q: Queryable,
+  weddingId: string,
+  added: { guestAId: string; guestBId: string; type: "MUST_SIT_TOGETHER" | "MUST_NOT_SIT_TOGETHER" }
+): Promise<string | null> {
+  const { rows } = await q.query(
+    `SELECT "guestAId", "guestBId", type FROM "guest_relationships"
+     WHERE "weddingId" = $1 AND type IN ('MUST_SIT_TOGETHER', 'MUST_NOT_SIT_TOGETHER')`,
+    [weddingId]
+  );
+  const rules = [...(rows as { guestAId: string; guestBId: string; type: string }[]), added];
+  const together = new Map<string, Set<string>>();
+  const link = (a: string, b: string) => {
+    if (!together.has(a)) together.set(a, new Set());
+    together.get(a)!.add(b);
+  };
+  for (const r of rules) {
+    if (r.type !== "MUST_SIT_TOGETHER") continue;
+    link(r.guestAId, r.guestBId);
+    link(r.guestBId, r.guestAId);
+  }
+  // The chain of "must sit together" rules from one guest to another (shortest), or null if none.
+  const chain = (from: string, to: string): string[] | null => {
+    const previous = new Map<string, string | null>([[from, null]]);
+    const queue = [from];
+    while (queue.length > 0) {
+      const at = queue.shift()!;
+      if (at === to) {
+        const path: string[] = [];
+        for (let step: string | null = to; step !== null; step = previous.get(step) ?? null) path.unshift(step);
+        return path;
+      }
+      for (const next of together.get(at) ?? []) {
+        if (!previous.has(next)) {
+          previous.set(next, at);
+          queue.push(next);
+        }
+      }
+    }
+    return null;
+  };
+  // Everyone in the new rule's group (for a must-not rule, its two guests are the pair to check).
+  const pairs =
+    added.type === "MUST_NOT_SIT_TOGETHER"
+      ? [added]
+      : rules.filter((r) => r.type === "MUST_NOT_SIT_TOGETHER");
+  for (const pair of pairs) {
+    const path = chain(pair.guestAId, pair.guestBId);
+    if (!path) continue;
+    // A must-sit rule only matters if the chain runs through the new rule's guests.
+    if (added.type === "MUST_SIT_TOGETHER" && !(path.includes(added.guestAId) && path.includes(added.guestBId))) {
+      continue;
+    }
+    const names = await guestNames(q, path);
+    const named = path.map((id) => names.get(id) ?? "a guest");
+    return (
+      `${named[0]} and ${named[named.length - 1]} must not sit together, but "must sit together" rules ` +
+      `(${named.join(" → ")}) would always seat them at the same table. Remove one of those rules first.`
+    );
+  }
+  return null;
+}
+
 export async function createRelationship(
   weddingId: string,
   input: { guestAId: string; guestBId: string; type: RelationshipType }
@@ -50,6 +128,12 @@ export async function createRelationship(
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
+    // TS-181: the current plan's row (see lockCurrentPlan), then the lists -- the same locks a
+    // Restricted table's list save takes -- so a new rule and a new list can't each pass their
+    // checks against the other's old state. That also puts two new rules for the same wedding
+    // one after the other, so the rule-chain check below always sees every other rule.
+    await lockCurrentPlan(client, weddingId);
+    await lockRestrictedLists(client, weddingId);
     await client.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [`relationship:${weddingId}:${guestAId}:${guestBId}`]);
 
     // FR-0.1: a hard rule can never be left violated. Two guests can't simultaneously be
@@ -89,6 +173,34 @@ export async function createRelationship(
             : `${listed.name} is required at "${listed.tableLabel}" and ${other.name} isn't on its list — add them to that list first, or they can't be required to sit together.`
         );
       }
+    }
+
+    // TS-181: two guests who must not sit together can't both be required at the same Restricted
+    // table -- one of them would have nowhere they're allowed to sit.
+    if (input.type === "MUST_NOT_SIT_TOGETHER") {
+      const { rows: sameList } = await client.query(
+        `SELECT t.label FROM "restricted_table_guests" ra
+         JOIN "restricted_table_guests" rb ON rb."tableId" = ra."tableId"
+         JOIN "seating_tables" t ON t.id = ra."tableId"
+         WHERE ra."guestId" = $1 AND rb."guestId" = $2 AND t."isRestricted"
+         LIMIT 1`,
+        [guestAId, guestBId]
+      );
+      if (sameList[0]) {
+        const names = await guestNames(client, [guestAId, guestBId]);
+        throw new RelationshipConflictError(
+          `${names.get(guestAId)} and ${names.get(guestBId)} are both on "${sameList[0].label}"'s required-guest list, so they can't have a "must not sit together" rule. Take one of them off that list first.`
+        );
+      }
+    }
+
+    // TS-181: a rule that would contradict a chain of rules. Guests linked by "must sit together"
+    // rules (directly or through others) all share one table, so a "must not sit together" rule
+    // between any two of them can never be kept -- and every Generate would fail. Before, only the
+    // same two guests' opposite rule was caught.
+    if (input.type === "MUST_SIT_TOGETHER" || input.type === "MUST_NOT_SIT_TOGETHER") {
+      const chainConflict = await findRuleChainConflict(client, weddingId, { guestAId, guestBId, type: input.type });
+      if (chainConflict) throw new RelationshipConflictError(chainConflict);
     }
 
     const { rows: exact } = await client.query(

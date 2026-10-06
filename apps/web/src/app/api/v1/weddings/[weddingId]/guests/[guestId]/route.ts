@@ -12,6 +12,7 @@ import {
   resyncGuestSeat,
   guestHasRsvpLink,
   GuestConflictError,
+  GuestHeadcountError,
   type NewlyFlaggedSeat,
 } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
@@ -89,6 +90,8 @@ export async function PATCH(req: NextRequest, { params }: Params) {
     if (err instanceof GuestConflictError) {
       return NextResponse.json({ error: err.message, guest: err.guest }, { status: 409 });
     }
+    // TS-181: a bigger party than their Restricted table can hold for its list -- nothing saved.
+    if (err instanceof GuestHeadcountError) return errorResponse(err.message, 422);
     throw err;
   }
 
