@@ -15,10 +15,11 @@ export async function DELETE(req: NextRequest, { params }: Params) {
   if ("error" in access) return access.error;
 
   try {
-    await revokeInvite(weddingId, inviteId);
+    await revokeInvite(weddingId, inviteId, user.id);
     return NextResponse.json({ ok: true });
   } catch (err) {
-    if (err instanceof InviteError) return errorResponse(err.message, 404);
+    // TS-195: NOT_OWNER -- handed off a moment ago.
+    if (err instanceof InviteError) return errorResponse(err.message, err.code === "NOT_OWNER" ? 403 : 404);
     throw err;
   }
 }

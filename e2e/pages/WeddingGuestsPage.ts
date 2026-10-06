@@ -4,7 +4,7 @@
  * app's stable `id`s on the add-guest form (`guest-first-name`, etc.) are used directly.
  */
 
-import { expect } from "@playwright/test";
+import { expect, type Response } from "@playwright/test";
 import { BasePage } from "./BasePage.js";
 import { GuestRow } from "../components/GuestRow.js";
 
@@ -164,11 +164,13 @@ export class WeddingGuestsPage extends BasePage {
 
   /** TS-92: confirms a preview the server is expected to refuse (e.g. a guest in it changed since
    * the preview) -- waits for the commit response itself, since no success summary will appear. */
-  async confirmImportExpectingRefusal(): Promise<void> {
-    await Promise.all([
+  // TS-198: hands back that response, so a test can read the refusal.
+  async confirmImportExpectingRefusal(): Promise<Response> {
+    const [response] = await Promise.all([
       this.page.waitForResponse((res) => res.url().includes("/guests/import/commit") && res.request().method() === "POST"),
       this.confirmImportButton().click(),
     ]);
+    return response;
   }
 
   // TS-118: the import form's helpers and guards.
@@ -203,6 +205,10 @@ export class WeddingGuestsPage extends BasePage {
   /** TS-190: a preview row, by the guest's name in it. */
   importPreviewRow(fullName: string) {
     return this.page.locator("li").filter({ hasText: /^Row \d+/ }).filter({ hasText: fullName });
+  }
+  /** TS-198: a preview row by its row number -- for a row with an error, which may show no name. */
+  importPreviewRowNumber(rowNumber: number) {
+    return this.page.locator("li").filter({ hasText: new RegExp(`^Row ${rowNumber}(?!\\d)`) });
   }
   /** TS-140: a column-mapping select, by its field label (e.g. "First name *"). */
   importMappingSelect(label: string | RegExp) {

@@ -22,10 +22,14 @@ test("the confirm-first messages never claim a link was sent", () => {
   assert.match(confirmEmailToAcceptMessage(), /^Confirm your email address to accept this invite.*Then come back to this page\.$/);
 });
 
-test("Resend link says 'tomorrow' when the day's allowance is used up, 'a few minutes' only for a hiccup", async () => {
+test("Resend link says when it could work: a few hours for Seatwise's 24-hour allowance, tomorrow for the address, minutes for a hiccup", async () => {
   const { emailNotSentMessage } = await import("./email-verification-text");
-  assert.match(emailNotSentMessage("limited"), /try again tomorrow/);
+  // TS-194: Seatwise's own allowance rolls over 24 hours, so room comes back the same day.
+  assert.match(emailNotSentMessage("limited"), /try again in a few hours/);
+  assert.doesNotMatch(emailNotSentMessage("limited"), /tomorrow/);
   assert.match(emailNotSentMessage("recipient-limited"), /try again tomorrow/);
   assert.match(emailNotSentMessage("failed"), /in a few minutes/);
-  assert.match(emailNotSentMessage("not-configured"), /in a few minutes/);
+  // TS-194: no email service set up -- trying again won't help, so it doesn't say to.
+  assert.match(emailNotSentMessage("not-configured"), /email isn't set up on this site/);
+  assert.doesNotMatch(emailNotSentMessage("not-configured"), /few minutes/);
 });

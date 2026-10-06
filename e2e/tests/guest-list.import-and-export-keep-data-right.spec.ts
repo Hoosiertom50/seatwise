@@ -7,6 +7,7 @@
  *   guests' sides when an export comes back.
  * - A file saved by Excel in its older Windows encoding reads its accented names correctly, and a
  *   file whose letters were already lost is refused with a clear message.
+ *   TS-198: only the row whose imported cell lost its letters is refused now, not the whole file.
  * - Re-importing an untouched export changes nothing: no guest is updated and no revision moves.
  *   The export carries Age category, which comes back unchanged.
  */
@@ -44,7 +45,8 @@ const EXPORT_MAPPING = {
 };
 
 const SIDE_LABELS_MESSAGE = "Side names must be different from each other and from 'Both'.";
-const UNREADABLE_MESSAGE = "This file has characters that couldn't be read — save it as 'CSV UTF-8' and choose it again.";
+// TS-198: said about the one cell, in the preview row.
+const UNREADABLE_CELL_MESSAGE = /Last name "M�ller-[a-z]+" has characters that couldn't be read \(shown as �\) — retype them, or save the file as 'CSV UTF-8' and choose it again\./;
 
 /** The export as rows of cells -- the test's names and values hold no commas or quotes. */
 function exportRows(csv: string): { header: string[]; rows: string[][] } {
@@ -154,11 +156,12 @@ defineQualityTest(
       expect(await saved()).toEqual(["Alex", "Groom"]);
     });
 
-    await test.step("The settings say why and put the saved name back", async () => {
+    await test.step("The settings say why, keep what was typed to fix, and save nothing", async () => {
       await collaboratorsTabPage.goto(w);
       await collaboratorsTabPage.setAndLeave(collaboratorsTabPage.sideLabelInput(2), "BOTH");
       await expect(collaboratorsTabPage.message(SIDE_LABELS_MESSAGE)).toBeVisible();
-      await expect(collaboratorsTabPage.sideLabelInput(2)).toHaveValue("Groom");
+      // TS-199: a refused value stays in the box with the reason, for the owner to fix.
+      await expect(collaboratorsTabPage.sideLabelInput(2)).toHaveValue("BOTH");
       expect(await saved()).toEqual(["Alex", "Groom"]);
     });
   },
@@ -167,11 +170,11 @@ defineQualityTest(
 defineQualityTest(
   {
     id: "guest-list.import-and-export-keep-data-right.windows-encoded-file-reads-correctly",
-    title: "a guest file saved in Excel's older Windows encoding imports its accented names correctly, and a file that already lost its letters is refused",
+    title: "a guest file saved in Excel's older Windows encoding imports its accented names correctly, and a row that already lost its letters is refused",
     objective:
-      "Uploads, on the Guests tab, a CSV whose 'Müller' is written in windows-1252 (the single byte FC, as Excel's plain 'CSV' on Windows saves it) and confirms the preview and the saved guest read 'Müller'; then confirms a file holding the replacement character (letters already lost) is refused on the Guests tab and by the server, saying to save it as 'CSV UTF-8'.",
+      "Uploads, on the Guests tab, a CSV whose 'Müller' is written in windows-1252 (the single byte FC, as Excel's plain 'CSV' on Windows saves it) and confirms the preview and the saved guest read 'Müller'; then confirms a row whose imported name holds the replacement character (letters already lost) is shown as an error in the Guests tab's preview and by the preview API, saying to save the file as 'CSV UTF-8', and that the commit refuses it (TS-198: the row, not the whole file).",
     expectedOutcome:
-      "The preview shows a new row 'Anna Müller-<suffix>' and, once imported, the guest list has a guest with that exact last name. Choosing a file with U+FFFD in it shows the 'save it as CSV UTF-8' message and no preview; the preview API answers 422 with the same message.",
+      "The preview shows a new row 'Anna Müller-<suffix>' and, once imported, the guest list has a guest with that exact last name. With U+FFFD in the last name, the preview line says 1 with errors and the row says the last name has characters that couldn't be read (save it as 'CSV UTF-8'); the preview API answers 200 with that row as an error, and the commit answers 422.",
     requirementIds: ["REQ-GUEST-LIST-MANAGEMENT"],
     tags: ["@mutating", "@feature:guests", "@risk:normal", "@suite:regression"],
   },
@@ -194,17 +197,21 @@ defineQualityTest(
       expect(guests.filter((g) => g.lastName === lastName).map((g) => g.firstName)).toEqual(["Anna"]);
     });
 
-    await test.step("A file whose letters were already lost is refused, on the page and by the server", async () => {
+    await test.step("A row whose letters were already lost is refused, on the page and by the server", async () => {
       const lost = `firstName,lastName\r\nAnna,M�ller-${suffix}\r\n`;
-      await weddingGuestsPage.chooseImportFileBytes(Buffer.from(lost, "utf-8"));
-      await expect(weddingGuestsPage.message(UNREADABLE_MESSAGE)).toBeVisible();
-      await expect(weddingGuestsPage.previewImportButtonLocator()).toHaveCount(0);
+      await weddingGuestsPage.importGuestsFileBytesAndPreview(Buffer.from(lost, "utf-8"));
+      await expect(weddingGuestsPage.importPreviewErrorCountText()).toBeVisible();
+      await expect(weddingGuestsPage.importPreviewRowNumber(1)).toContainText(UNREADABLE_CELL_MESSAGE);
 
-      const res = await context.request.post(`/api/v1/weddings/${w}/guests/import/preview`, {
-        data: { csv: lost, mapping: { firstName: "firstName", lastName: "lastName" } },
-      });
-      expect(res.status()).toBe(422);
-      expect(((await res.json()) as { error: string }).error).toBe(UNREADABLE_MESSAGE);
+      const mapping = { firstName: "firstName", lastName: "lastName" };
+      const res = await context.request.post(`/api/v1/weddings/${w}/guests/import/preview`, { data: { csv: lost, mapping } });
+      expect(res.status()).toBe(200);
+      const { preview } = (await res.json()) as { preview: { rows: { kind: string; reason?: string }[] } };
+      expect(preview.rows).toHaveLength(1);
+      expect(preview.rows[0].kind).toBe("error");
+      expect(preview.rows[0].reason).toMatch(UNREADABLE_CELL_MESSAGE);
+      const commit = await context.request.post(`/api/v1/weddings/${w}/guests/import/commit`, { data: { csv: lost, mapping } });
+      expect(commit.status()).toBe(422);
     });
   },
 );

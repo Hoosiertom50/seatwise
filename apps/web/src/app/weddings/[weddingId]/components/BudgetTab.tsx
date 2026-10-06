@@ -813,6 +813,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
                               New link
                             </button>
                             <ConfirmDeleteButton
+                              id={`vendor-${v.id}-link-off`}
                               label="Turn off link"
                               ariaLabel={`Turn off the link for ${v.name}`}
                               question={`Turn off ${v.name}'s link? It stops working right away. You can make a new one later.`}
@@ -830,6 +831,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
                           Edit
                         </button>
                         <ConfirmDeleteButton
+                          id={`vendor-${v.id}-remove`}
                           ariaLabel={`Remove ${v.name}`}
                           question={`Remove ${v.name} and everything recorded for them, such as cost and contract notes? This can't be undone.`}
                           confirmLabel="Yes, remove vendor"

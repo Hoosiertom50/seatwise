@@ -1,12 +1,13 @@
 /**
  * TS-171 (REQ-NON-FUNCTIONAL) — Seatwise sends every email from one account with a daily limit, so
  * no one person, address or network can use it up, or use it to fill a stranger's inbox.
- * - One account can make Seatwise send at most 100 emails a day, of every kind together.
+ * - One account can make Seatwise send at most 100 emails a day, of every kind together -- 20 a day
+ *   in its first week (TS-194, Tom's decision).
  * - One email address gets at most 5 emails a day from Seatwise, however many guests or invites
  *   point at it (password resets and notifications to a wedding's own members aside).
  * - Asking for a guest's RSVP link again doesn't re-email them within the hour; a new link does.
  * - Sign-up confirmations, "Resend link" and password resets asked for from one network address
- *   count together: 100 a day. Sign-up itself is never refused for it -- past it, no confirmation
+ *   count together: 10 a day (TS-194). Sign-up itself is never refused for it -- past it, no confirmation
  *   email goes out (Resend link works later).
  * - A wedding's name can't hold a phone number (it's shown in emails to people outside it).
  * Which emails may use the password-reset headroom, and the fixed subject lines, are unit-tested
@@ -17,28 +18,32 @@ import { randomBytes } from "node:crypto";
 import { expect, defineQualityTest, test } from "../fixtures/index.js";
 import { tagTestName, uniquePersonName, uniqueTestAddress, uniqueToken } from "../data/ids.js";
 import { TEST_ACCOUNT_EMAIL_DOMAIN } from "../support/auth.js";
-import { useUpAccountEmailAllowance } from "../support/testDatabase.js";
+import { ageTestAccount, setAccountEmailCount, useUpAccountEmailAllowance } from "../support/testDatabase.js";
 import { waitUntilSafelyInsideUtcDay } from "../support/utcDay.js";
 
 type RsvpEmail = { emailed: boolean; emailFailed: boolean; emailLimited: boolean; recipientLimited: boolean };
 type RsvpLink = { url: string; emailed: boolean; emailFailed: boolean; recentlyEmailed?: boolean };
 
 const ACCOUNT_EMAILS_PER_DAY = 100;
+const NEW_ACCOUNT_EMAILS_PER_DAY = 20;
 const EMAILS_PER_ADDRESS_PER_DAY = 5;
-const ACCOUNT_EMAILS_PER_NETWORK_ADDRESS_PER_DAY = 100;
+const ACCOUNT_EMAILS_PER_NETWORK_ADDRESS_PER_DAY = 10;
+const NEW_ACCOUNT_LIMIT_MESSAGE =
+  "New accounts can send up to 20 emails a day in their first week, and you've reached today's — you can send more tomorrow.";
+const ACCOUNT_LIMIT_MESSAGE = "You've reached today's email limit for your account — you can send more tomorrow.";
 
 defineQualityTest(
   {
     id: "cross-cutting.no-one-can-use-up-seatwise-email.account-daily-allowance-and-wedding-names",
-    title: "one account sends at most 100 emails a day across invites and RSVP emails, and a wedding name can't hold a phone number",
+    title: "a new account sends at most 20 emails a day across invites and RSVP emails (100 once it's a week old), and a wedding name can't hold a phone number",
     objective:
-      "Confirms that a fresh account's 5 invites and 95 RSVP emails (guests added with an email) all go out, that the next guest's RSVP email is held back (link still made, marked emailLimited) and the next invite is refused with 429, both because the day's 100 are used across kinds; and that renaming a wedding to text with a 7+ digit phone number is refused with a message saying so.",
+      "Confirms (TS-194, Tom's decision) that a fresh account's 5 invites and 15 RSVP emails (guests added with an email) all go out, that the next guest's RSVP email is held back (link still made, marked emailLimited) and the next invite is refused with 429 saying new accounts get 20 a day in their first week; that once the account is past its first week its allowance is 100 (the 100th email of the day goes out, the 101st invite is refused with the usual words); and that renaming a wedding to text with a 7+ digit phone number is refused with a message saying so.",
     expectedOutcome:
-      "Invites 1–5 return 201 with emailed true; guests 1–95 report rsvpEmail.emailed true; guest 96 reports emailed false and emailLimited true; invite 6 returns 429. Renaming to 'Call 1 800 555 0199 now' returns 422 mentioning a phone number, while 'Ana & Bo 2026' is accepted.",
+      "Invites 1–5 return 201 with emailed true; guests 1–15 report rsvpEmail.emailed true; guest 16 reports emailed false and emailLimited true; invite 6 returns 429 with the new-account message. Aged 8 days with 99 used: a guest's RSVP email goes out; the next invite returns 429 with \"You've reached today's email limit for your account — you can send more tomorrow.\". Renaming to 'Call 1 800 555 0199 now' returns 422 mentioning a phone number, while 'Ana & Bo 2026' is accepted.",
     requirementIds: ["REQ-NON-FUNCTIONAL"],
     tags: ["@mutating", "@feature:collaboration", "@feature:guests", "@risk:high", "@suite:regression"],
   },
-  async ({ managedWedding, context }, testInfo) => {
+  async ({ account, managedWedding, context }, testInfo) => {
     test.setTimeout(180_000);
     // TS-192: the daily counters this test sets and reads must all be in one UTC day.
     await waitUntilSafelyInsideUtcDay(testInfo);
@@ -55,23 +60,34 @@ defineQualityTest(
       return ((await res.json()) as { rsvpEmail: RsvpEmail }).rsvpEmail;
     };
 
-    await test.step("Five invites and 95 RSVP emails all go out", async () => {
+    await test.step("A new account: five invites and 15 RSVP emails all go out", async () => {
       for (let i = 1; i <= 5; i++) {
         const res = await invite();
         expect(res.status(), `invite ${i}`).toBe(201);
         expect(((await res.json()) as { emailed: boolean }).emailed, `invite ${i}`).toBe(true);
       }
-      for (let added = 0; added < ACCOUNT_EMAILS_PER_DAY - 5; added += 10) {
-        const batch = await Promise.all(Array.from({ length: Math.min(10, ACCOUNT_EMAILS_PER_DAY - 5 - added) }, addGuestWithEmail));
+      for (let added = 0; added < NEW_ACCOUNT_EMAILS_PER_DAY - 5; added += 5) {
+        const batch = await Promise.all(Array.from({ length: Math.min(5, NEW_ACCOUNT_EMAILS_PER_DAY - 5 - added) }, addGuestWithEmail));
         for (const rsvpEmail of batch) expect(rsvpEmail.emailed).toBe(true);
       }
     });
 
-    await test.step("The 101st email of the day isn't sent, whatever kind it is", async () => {
+    await test.step("The new account's 21st email of the day isn't sent, whatever kind it is, and it says why", async () => {
       const rsvpEmail = await addGuestWithEmail();
       expect(rsvpEmail.emailed).toBe(false);
       expect(rsvpEmail.emailLimited).toBe(true);
-      expect((await invite()).status()).toBe(429);
+      const refused = await invite();
+      expect(refused.status()).toBe(429);
+      expect(((await refused.json()) as { error: string }).error).toBe(NEW_ACCOUNT_LIMIT_MESSAGE);
+    });
+
+    await test.step("Past its first week the account has 100 a day: the 100th goes out, the 101st doesn't", async () => {
+      await ageTestAccount(account.email, 8);
+      await setAccountEmailCount(account.email, "account-day", ACCOUNT_EMAILS_PER_DAY - 1);
+      expect((await addGuestWithEmail()).emailed).toBe(true);
+      const refused = await invite();
+      expect(refused.status()).toBe(429);
+      expect(((await refused.json()) as { error: string }).error).toBe(ACCOUNT_LIMIT_MESSAGE);
     });
 
     await test.step("A wedding's name can't hold a phone number", async () => {
@@ -150,7 +166,7 @@ defineQualityTest(
 defineQualityTest(
   {
     id: "cross-cutting.no-one-can-use-up-seatwise-email.account-emails-per-network-address",
-    title: "sign-up confirmations, resent confirmation links and password resets from one network address count together, 100 a day, and sign-up itself is never refused for it",
+    title: "sign-up confirmations, resent confirmation links and password resets from one network address count together, 10 a day, and sign-up itself is never refused for it",
     objective:
       "Confirms that with one network address's daily allowance of account emails nearly used up, a resend still goes out, after which a password reset from that address is refused with 429, a sign-up from it still succeeds but without its confirmation email, and the same password reset from another address is sent.",
     expectedOutcome:

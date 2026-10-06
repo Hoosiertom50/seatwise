@@ -13,6 +13,7 @@ import { randomBytes } from "node:crypto";
 import { expect, defineQualityTest, test } from "../fixtures/index.js";
 import { uniqueToken } from "../data/ids.js";
 import { SignupPage } from "../pages/SignupPage.js";
+import { ageTestAccount } from "../support/testDatabase.js";
 
 defineQualityTest(
   {
@@ -32,9 +33,12 @@ defineQualityTest(
       "@suite:regression",
     ],
   },
-  async ({ managedWedding, context, browser }, testInfo) => {
+  async ({ account, managedWedding, context, browser }, testInfo) => {
     test.setTimeout(120_000);
     const w = managedWedding.id;
+    // TS-194: past its first week, so the account's daily allowance (20 a day for a new account)
+    // isn't what stops the 21st invite -- this test is about the hourly invite cap.
+    await ageTestAccount(account.email, 8);
 
     await test.step("A name that reads as a web address, or has a line break, is refused at signup", async () => {
       // A separate context: a successful signup signs that context in.

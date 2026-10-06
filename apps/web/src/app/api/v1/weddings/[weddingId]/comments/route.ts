@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createCommentSchema } from "@seatwise/shared";
 import { listCommentsForWedding, createComment, CommentError } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
-import { errorResponse, zodErrorResponse } from "@/lib/api-response";
+import { errorResponse, zodErrorResponse, weddingDeletedResponse } from "@/lib/api-response";
 import { requireAccess } from "@/lib/access";
 
 type Params = { params: Promise<{ weddingId: string }> };
@@ -40,6 +40,9 @@ export async function POST(req: NextRequest, { params }: Params) {
     if (err instanceof CommentError) {
       return errorResponse(err.message, err.code === "NOT_FOUND" ? 404 : 422);
     }
+    // TS-195: the wedding was deleted while the comment was being saved.
+    const gone = weddingDeletedResponse(err);
+    if (gone) return gone;
     throw err;
   }
 }

@@ -101,7 +101,11 @@ export const createCommentSchema = z
     guestId: z.string().optional().nullable(),
     tableId: z.string().optional().nullable(),
     timelineEntryId: z.string().optional().nullable(),
-    body: safeText(FIELD_LIMITS.comment, { multiline: true, required: "Comment can't be empty" }),
+    // TS-198: a comment of only spaces and line breaks is empty too (it used to post a blank comment).
+    body: safeText(FIELD_LIMITS.comment, { multiline: true, required: "Comment can't be empty" }).refine(
+      (v) => v.trim() !== "",
+      "Comment can't be empty"
+    ),
     parentCommentId: z.string().optional().nullable(),
   })
   .refine(

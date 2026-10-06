@@ -8,7 +8,7 @@ import {
   refreshPlanAfterGuestAdded,
 } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
-import { errorResponse, zodErrorResponse } from "@/lib/api-response";
+import { errorResponse, zodErrorResponse, weddingDeletedResponse } from "@/lib/api-response";
 import { requireAccess } from "@/lib/access";
 import { guestForViewer } from "@/lib/guest-privacy";
 import { rsvpEmailOutcome, sendGuestRsvpLink } from "@/lib/rsvp-email";
@@ -44,10 +44,18 @@ export async function POST(req: NextRequest, { params }: Params) {
   // TS-169: a guest added as Declined isn't coming, so they're Not Attending and get no seat --
   // the same rule as when a guest declines (TS-167) -- unless attendance was given explicitly.
   const explicitAttendance = (body as { dayOfAttendance?: unknown } | null)?.dayOfAttendance !== undefined;
-  const guest = await createGuest(weddingId, {
-    ...parsed.data,
-    ...(parsed.data.rsvpStatus === "DECLINED" && !explicitAttendance ? { dayOfAttendance: "NOT_ATTENDING" as const } : {}),
-  });
+  let guest: Awaited<ReturnType<typeof createGuest>>;
+  try {
+    guest = await createGuest(weddingId, {
+      ...parsed.data,
+      ...(parsed.data.rsvpStatus === "DECLINED" && !explicitAttendance ? { dayOfAttendance: "NOT_ATTENDING" as const } : {}),
+    });
+  } catch (err) {
+    // TS-195: the wedding was deleted while this was being saved -- 404, not a server error.
+    const gone = weddingDeletedResponse(err);
+    if (gone) return gone;
+    throw err;
+  }
   // TS-165: a new attending guest makes the current plan incomplete until they're seated.
   // TS-177: the guest is saved by now -- if this re-check fails, say so rather than "not saved".
   const warnings: string[] = [];
@@ -63,12 +71,18 @@ export async function POST(req: NextRequest, { params }: Params) {
   // FR-10.2: guest addition is only notification-worthy post-approval.
   const status = await getCurrentPlanVersionStatus(weddingId);
   if (status === "APPROVED") {
-    await notifyWeddingCollaborators(
-      weddingId,
-      user.id,
-      "GUEST_ADDED",
-      `${guest.firstName} ${guest.lastName} was added to the guest list.`
-    );
+    // TS-194: the change above is already saved -- telling people about it is best effort, so a
+    // failure is logged and never turns the saved change into an error.
+    try {
+      await notifyWeddingCollaborators(
+        weddingId,
+        user.id,
+        "GUEST_ADDED",
+        `${guest.firstName} ${guest.lastName} was added to the guest list.`
+      );
+    } catch (err) {
+      console.error("Saved, but notifying the wedding's members failed:", err);
+    }
   }
 
   // TS-143 (Tom, 2026-10-02): a guest added with an email gets their RSVP link straight away. (A

@@ -6,7 +6,6 @@ import {
   deleteGuestForWedding,
   getCurrentPlanVersionStatus,
   notifyWeddingCollaborators,
-  setGuestAttendance,
   resyncGuestsSeats,
   recomputeCurrentPlanCompleteness,
   resyncGuestSeat,
@@ -58,10 +57,10 @@ export async function GET(req: NextRequest, { params }: Params) {
 // FR-2.9: editing a guest's Attendance Status, Side, Relationship Tier, household (partyName),
 // or Requires Accessible Table re-checks their current seat assignment against hard rules.
 // Attendance Status is special-cased: it already has its own richer FR-8.1 behavior (free the
-// seat entirely, don't just flag it) via setGuestAttendance -- routing it through the same
-// function here means editing dayOfAttendance from this general endpoint behaves identically to
-// editing it from the dedicated Day-of-mode endpoint, instead of silently bypassing the
-// seat-freeing/notification logic that endpoint has always had.
+// seat entirely, don't just flag it) -- editing dayOfAttendance from this general endpoint behaves
+// identically to editing it from the dedicated Day-of-mode endpoint (the same applyAttendanceChange
+// and the same notification). TS-195: it's saved in the edit's own transaction (see
+// updateGuestForWedding), together with the attendance change a changed RSVP answer brings.
 const REASSIGNMENT_TRIGGER_FIELDS = ["side", "tier", "partyName", "requiresAccessibleTable"] as const;
 
 export async function PATCH(req: NextRequest, { params }: Params) {
@@ -76,15 +75,17 @@ export async function PATCH(req: NextRequest, { params }: Params) {
   const parsed = updateGuestSchema.safeParse(body);
   if (!parsed.success) return zodErrorResponse(parsed.error);
 
-  const { dayOfAttendance, expectedRevision, ...rest } = parsed.data;
+  const { expectedRevision, ...rest } = parsed.data;
   // TS-143: remember whether the guest had an email before this edit -- giving them their first one
   // sends their RSVP link, just like adding a guest with an email does (and TS-154: so does
   // correcting it).
-  // TS-169: and what their RSVP answer was, so a change of it can change their attendance.
-  const before = rest.email || rest.rsvpStatus ? await getGuestForWedding(guestId, weddingId) : null;
+  // TS-195: an RSVP answer's effect on attendance is no longer decided from this early read -- it's
+  // decided inside the edit, under the guest's lock (their own RSVP could land in between).
+  const before = rest.email ? await getGuestForWedding(guestId, weddingId) : null;
 
+  let updated: Awaited<ReturnType<typeof updateGuestForWedding>>;
   try {
-    const updated = await updateGuestForWedding(guestId, weddingId, rest, expectedRevision);
+    updated = await updateGuestForWedding(guestId, weddingId, rest, expectedRevision, user.id);
     if (!updated) return errorResponse("Guest not found", 404);
   } catch (err) {
     // FR-7.7, extended to guests: someone else's edit landed on this guest first -- refuse the
@@ -96,23 +97,32 @@ export async function PATCH(req: NextRequest, { params }: Params) {
     if (err instanceof GuestHeadcountError) return errorResponse(err.message, 422);
     // TS-188: needing an accessible table while required at a Restricted table that isn't one.
     if (err instanceof GuestAccessibleTableError) return errorResponse(err.message, 422);
+    // TS-188/TS-195: bringing them back would overfill their Restricted table's list -- the whole
+    // edit is refused and nothing of it is saved.
+    if (err instanceof AttendanceError) return errorResponse(err.message, 422);
     // TS-187: lost a race with another change (nothing saved) -- 409, not a server error.
     const conflict = concurrentChangeResponse(err);
     if (conflict) return conflict;
     throw err;
   }
 
-  // An attendance change asked for in this edit *is* part of the save, so a failure there is still
-  // an error.
-  if (dayOfAttendance !== undefined) {
+  // FR-10.2: an attendance change is only notification-worthy once the plan has been approved (the
+  // same notification as from the Day-of screen). TS-195: sent once the edit is saved; if it fails,
+  // that's logged and the saved edit stands.
+  if (updated.attendanceChange) {
     try {
-      await setGuestAttendance(weddingId, guestId, dayOfAttendance, user.id);
+      if ((await getCurrentPlanVersionStatus(weddingId)) === "APPROVED") {
+        await notifyWeddingCollaborators(
+          weddingId,
+          user.id,
+          "ATTENDANCE_CHANGED",
+          updated.attendanceChange === "NOT_ATTENDING"
+            ? `${updated.guestName} was marked not attending.`
+            : `${updated.guestName} was marked attending again.`
+        );
+      }
     } catch (err) {
-      // TS-188: e.g. bringing someone back would overfill their Restricted table's list.
-      if (err instanceof AttendanceError) return errorResponse(err.message, 422);
-      const conflict = concurrentChangeResponse(err);
-      if (conflict) return conflict;
-      throw err;
+      console.error("Guest saved, but the attendance notification failed", err);
     }
   }
 
@@ -121,15 +131,6 @@ export async function PATCH(req: NextRequest, { params }: Params) {
   const warnings: string[] = [];
   const newlyFlagged: NewlyFlaggedSeat[] = [];
   try {
-    if (dayOfAttendance === undefined && rest.rsvpStatus === "DECLINED" && before?.rsvpStatus !== "DECLINED") {
-      // TS-167: marking a guest Declined frees their seat, the same as when they decline themselves.
-      // (setGuestAttendance does nothing if they're already Not Attending.)
-      await setGuestAttendance(weddingId, guestId, "NOT_ATTENDING", user.id);
-    } else if (dayOfAttendance === undefined && rest.rsvpStatus && rest.rsvpStatus !== "DECLINED" && before?.rsvpStatus === "DECLINED") {
-      // TS-169: and changing them back from Declined brings them back -- Attending, waiting for a seat.
-      await setGuestAttendance(weddingId, guestId, "ATTENDING", user.id);
-    }
-
     // TS-177: only a flag this edit newly set is reported. Before, a guest already flagged (or
     // flagged because their table is over capacity) got "no longer fits a hard rule" on every edit.
     if (REASSIGNMENT_TRIGGER_FIELDS.some((f) => parsed.data[f] !== undefined)) {
@@ -141,13 +142,8 @@ export async function PATCH(req: NextRequest, { params }: Params) {
       newlyFlagged.push(...(await resyncGuestSeat(weddingId, guestId)).newlyFlagged);
     }
   } catch (err) {
-    // TS-188: the answer is saved, but they couldn't be marked attending again -- say why.
-    if (err instanceof AttendanceError) {
-      warnings.push(`Saved, but they're still marked Not Attending: ${err.message}`);
-    } else {
-      console.error("Guest saved, but re-checking the seating plan failed", err);
-      warnings.push(SAVED_BUT_NOT_RECHECKED);
-    }
+    console.error("Guest saved, but re-checking the seating plan failed", err);
+    warnings.push(SAVED_BUT_NOT_RECHECKED);
   }
   const seen = new Set<string>();
   const flagged = newlyFlagged.filter((f) => !seen.has(f.guestId) && !!seen.add(f.guestId));
@@ -201,18 +197,32 @@ export async function DELETE(req: NextRequest, { params }: Params) {
   // recompute so isComplete doesn't go stale.
   // TS-189: an attending guest leaving changes the plan's list of guests waiting for a seat, so
   // the plan's revision moves on too (anyone with the old copy refreshes before acting on it).
-  await recomputeCurrentPlanCompleteness(weddingId, { unassignedMayHaveChanged: guest.dayOfAttendance === "ATTENDING" });
+  // TS-197: that now happens once, inside the delete itself -- this recount only catches up on
+  // completeness. The guest is already gone, so a failure here is a warning, not an error.
+  const warnings: string[] = [];
+  try {
+    await recomputeCurrentPlanCompleteness(weddingId);
+  } catch (recountErr) {
+    console.error("Guest removed, but re-checking the plan failed", recountErr);
+    warnings.push(SAVED_BUT_NOT_RECHECKED);
+  }
 
   // FR-10.2: guest removal is only notification-worthy post-approval.
   const status = await getCurrentPlanVersionStatus(weddingId);
   if (status === "APPROVED") {
-    await notifyWeddingCollaborators(
-      weddingId,
-      user.id,
-      "GUEST_REMOVED",
-      `${guest.firstName} ${guest.lastName} was removed from the guest list.`
-    );
+    // TS-194: the change above is already saved -- telling people about it is best effort, so a
+    // failure is logged and never turns the saved change into an error.
+    try {
+      await notifyWeddingCollaborators(
+        weddingId,
+        user.id,
+        "GUEST_REMOVED",
+        `${guest.firstName} ${guest.lastName} was removed from the guest list.`
+      );
+    } catch (err) {
+      console.error("Saved, but notifying the wedding's members failed:", err);
+    }
   }
 
-  return NextResponse.json({ ok: true });
+  return NextResponse.json({ ok: true, warnings });
 }

@@ -5,13 +5,17 @@ import { useEffect, useRef, useState } from "react";
 import { api, ApiError } from "@/lib/api-client";
 import { useSerialTasks } from "@/lib/serial-tasks";
 import { useUnsavedChanges } from "@/lib/unsaved-changes";
+import { inReadingOrder } from "@/lib/reading-order";
+import { PickThenActControl } from "@/components/PickThenActControl";
 import { PLAN_CHANGED_EVENT } from "./GettingStarted";
-import { SAVED_AS_DRAFT_BECAUSE_APPROVED } from "@/lib/plan-approval-text";
+import { SAVED_AS_DRAFT_BECAUSE_APPROVED, MADE_CURRENT_BECAUSE_NO_CURRENT_PLAN } from "@/lib/plan-approval-text";
 
 // TS-182: a change queued for one version, but another version is open by the time it runs.
 const VERSION_CLOSED_MESSAGE = "That version isn't open any more — nothing was saved.";
 // TS-189: a move tried while a new plan is being made or an old one restored.
 const VERSION_CHANGING_MESSAGE = "Wait for the new plan to finish — nothing was moved.";
+// TS-197: shown when the page switches to a plan someone (or another tab) made since this one opened.
+const NEWER_PLAN_MESSAGE = "A newer plan was made — you're now looking at it.";
 import { RULE_WEIGHT_CONFIG, compareTableLabels } from "@seatwise/shared";
 import type {
   GuestDTO,
@@ -73,6 +77,10 @@ interface UndoEntry {
   guestId: string;
   priorTableId: string | null;
   toTableId: string;
+  /** TS-197: where undo puts the group back -- the guest's own table before, or (when they had no
+   * seat) the table a must-sit-together partner this move pulled along was already at, so undo
+   * doesn't take that partner's seat away. */
+  undoTableId: string | null;
   description: string;
 }
 
@@ -136,6 +144,12 @@ export function PlanTab({
   // is approved and this person can't replace it. Cleared on the next generate/restore/switch.
   const [draftNotice, setDraftNotice] = useState<string | null>(null);
   const [moveWarnings, setMoveWarnings] = useState<string[]>([]);
+  // TS-197: what the last Generate said about its plan (who couldn't be seated and why), kept apart
+  // from move warnings and shown until the next Generate or another version is opened. Before, the
+  // list was reloaded straight after Generate and these were lost.
+  const [generateWarnings, setGenerateWarnings] = useState<{ heading: string; items: string[] } | null>(null);
+  // TS-197: what a restore said about the version it made, under its own heading.
+  const [restoreWarnings, setRestoreWarnings] = useState<string[]>([]);
   const [conflicts, setConflicts] = useState<string[]>([]);
   const [restorePreview, setRestorePreview] = useState<RestorePreviewDTO | null>(null);
   const [previewingRestore, setPreviewingRestore] = useState(false);
@@ -237,11 +251,37 @@ export function PlanTab({
     detailRef.current = opened.planVersion;
     setDetail(opened.planVersion);
     // What was shown for the old version (warnings, a restore preview, a score report) is about it.
+    clearVersionMessages();
+    setSupersededNotice(NEWER_PLAN_MESSAGE);
+  }
+
+  // TS-197: everything shown about the version that was open -- cleared when another one opens.
+  function clearVersionMessages() {
     setMoveWarnings([]);
+    setGenerateWarnings(null);
+    setRestoreWarnings([]);
     setRestorePreview(null);
     setScoreReport(null);
     setDraftNotice(null);
-    setSupersededNotice("A newer plan was made — you're now looking at it.");
+  }
+
+  // TS-197: a refused change came back with the plan as it is now. Usually that's the open version
+  // with a newer revision; when a newer plan replaced the open one, it's that newer plan -- the page
+  // switches to it (and says so), as the 4-second check would.
+  function takeFreshPlan(fresh: PlanVersionDetailDTO) {
+    const openId = detailRef.current?.id;
+    detailRef.current = fresh;
+    setDetail(fresh);
+    if (openId && fresh.id !== openId) {
+      clearVersionMessages();
+      setSupersededNotice(NEWER_PLAN_MESSAGE);
+      api
+        .get<{ planVersions: PlanVersionDTO[] }>(`/api/v1/weddings/${weddingId}/plan-versions`)
+        .then((list) => setVersions(list.planVersions))
+        .catch(() => {});
+    } else {
+      setVersions((vs) => vs.map((v) => (v.id === fresh.id ? fresh : v)));
+    }
   }
 
   useEffect(() => {
@@ -321,11 +361,9 @@ export function PlanTab({
     setDraftNotice(null);
     setSupersededNotice(null);
     setConflicts([]);
-    setMoveWarnings([]);
-    setRestorePreview(null);
+    clearVersionMessages();
     setUndoStack([]);
     setRedoStack([]);
-    setScoreReport(null);
     setShowScoreDetail(false);
     setGenerating(true);
     try {
@@ -333,6 +371,8 @@ export function PlanTab({
         planVersion: PlanVersionDetailDTO;
         scoreReport?: PlanVersionScoreReportDTO;
         savedAsDraftBecauseApproved?: boolean;
+        madeCurrentBecauseNoCurrentPlan?: boolean;
+        notice?: string;
       }>(`/api/v1/weddings/${weddingId}/plan-versions/generate`, {
         // TS-189: the very first plan is always the current one (the choice isn't offered then).
         makeCurrent: versions.length === 0 || !saveAsDraft,
@@ -346,7 +386,18 @@ export function PlanTab({
         setError(REFRESH_FAILED_MESSAGE);
       }
       setScoreReport(res.scoreReport ?? null);
+      // TS-197: what the engine said about this plan, from the Generate answer itself (the reload
+      // above reads the saved version, which doesn't keep them). With someone left unseated, the
+      // reasons are what matters most, and the heading says so.
+      if (res.planVersion.warnings.length > 0) {
+        setGenerateWarnings({
+          heading: res.planVersion.unassignedGuestIds.length > 0 ? "Couldn't seat everyone:" : "Notes on this plan:",
+          items: res.planVersion.warnings,
+        });
+      }
       if (res.savedAsDraftBecauseApproved) setDraftNotice(SAVED_AS_DRAFT_BECAUSE_APPROVED);
+      // TS-197: a comparison draft asked for when there was no current plan was made current -- say so.
+      else if (res.madeCurrentBecauseNoCurrentPlan) setDraftNotice(res.notice ?? MADE_CURRENT_BECAUSE_NO_CURRENT_PLAN);
     } catch (err) {
       if (err instanceof ApiError && err.status === 409 && err.fieldErrors?.conflicts) {
         setConflicts(err.fieldErrors.conflicts as unknown as string[]);
@@ -359,11 +410,8 @@ export function PlanTab({
   }
 
   async function onSelectVersion(id: string) {
-    setMoveWarnings([]);
-    setDraftNotice(null);
+    clearVersionMessages();
     setSupersededNotice(null);
-    setRestorePreview(null);
-    setScoreReport(null);
     setShowScoreDetail(false);
     // Undo/redo history is scoped to whichever version was current when each move was made --
     // switching what's being viewed ends that continuity rather than risk replaying a stale move
@@ -418,6 +466,14 @@ export function PlanTab({
       setVersions((vs) => vs.map((v) => (v.id === res.planVersion.id ? res.planVersion : v)));
       setMoveWarnings(res.warnings);
       if (priorTableId !== tableId) {
+        // TS-197: a must-sit-together partner who was already seated somewhere else and came along.
+        // With no seat of their own before, undo puts the group back at that partner's table rather
+        // than taking the partner's seat away too.
+        const partnerPriorTableIds = res.planVersion.assignments
+          .filter((a) => a.guestId !== guestId && a.tableId === tableId)
+          .map((a) => current.assignments.find((b) => b.guestId === a.guestId)?.tableId ?? null)
+          .filter((t): t is string => t !== null && t !== tableId);
+        const undoTableId = priorTableId ?? partnerPriorTableIds[0] ?? null;
         setUndoStack((s) => [
           ...s,
           {
@@ -425,6 +481,7 @@ export function PlanTab({
             guestId,
             priorTableId,
             toTableId: tableId,
+            undoTableId,
             description: `move ${guestName(guestId)} to "${tableLabel(tableId)}"`,
           },
         ]);
@@ -434,12 +491,9 @@ export function PlanTab({
     } catch (err) {
       // FR-7.7: this plan changed under us -- show the fresh state instead of leaving the view
       // stale, and don't record an undo entry for a move that never actually applied.
+      // TS-197: or a newer plan replaced this one -- the page switches to it.
       const fresh = conflictPlanVersion(err);
-      if (fresh) {
-        detailRef.current = fresh;
-        setDetail(fresh);
-        setVersions((vs) => vs.map((v) => (v.id === fresh.id ? fresh : v)));
-      }
+      if (fresh) takeFreshPlan(fresh);
       const message = err instanceof ApiError ? err.message : "Couldn't move that guest.";
       setError(message);
       return { error: message };
@@ -467,7 +521,8 @@ export function PlanTab({
   // plan's revision. They used to run alongside it and never updated the copy the queue works
   // from, so the move (or "Move to review") right after an undo was refused as a stale change.
   async function replay(entry: UndoEntry, kind: "undo" | "redo") {
-    const [expectedAt, target] = kind === "undo" ? [entry.toTableId, entry.priorTableId] : [entry.priorTableId, entry.toTableId];
+    // TS-197: undo goes back to undoTableId (see UndoEntry) -- and redo then starts from there.
+    const [expectedAt, target] = kind === "undo" ? [entry.toTableId, entry.undoTableId] : [entry.undoTableId, entry.toTableId];
     const dropEntry = () => (kind === "undo" ? setUndoStack((s) => s.slice(0, -1)) : setRedoStack((s) => s.slice(0, -1)));
     setError(null);
     setUndoRedoBusy(true);
@@ -509,11 +564,7 @@ export function PlanTab({
       });
     } catch (err) {
       const fresh = conflictPlanVersion(err);
-      if (fresh) {
-        detailRef.current = fresh;
-        setDetail(fresh);
-        setVersions((vs) => vs.map((v) => (v.id === fresh.id ? fresh : v)));
-      }
+      if (fresh) takeFreshPlan(fresh);
       setError(err instanceof ApiError ? err.message : `Couldn't ${kind} that move.`);
     } finally {
       setUndoRedoBusy(false);
@@ -534,17 +585,18 @@ export function PlanTab({
           { status: newStatus, expectedRevision: current.revision }
         );
       });
+      setVersions((vs) => vs.map((v) => (v.id === res.planVersion.id ? res.planVersion : v)));
+      // TS-197: another version was opened while this was on its way -- it stays open.
+      if (detailRef.current?.id !== res.planVersion.id) return;
       detailRef.current = res.planVersion;
       setDetail(res.planVersion);
-      setVersions((vs) => vs.map((v) => (v.id === res.planVersion.id ? res.planVersion : v)));
     } catch (err) {
       const fresh = conflictPlanVersion(err);
-      if (fresh) {
-        // TS-182: the queue's copy too, so the next change is sent with this revision.
-        detailRef.current = fresh;
-        setDetail(fresh);
-        setVersions((vs) => vs.map((v) => (v.id === fresh.id ? fresh : v)));
-      }
+      // TS-182: the queue's copy too, so the next change is sent with this revision.
+      // TS-197: unless another version was opened meanwhile (the answer is about the old one). The
+      // "can't be approved yet" refusal carries the re-checked plan too, so its new revision and
+      // flags show straight away.
+      if (fresh && fresh.id === detailRef.current?.id) takeFreshPlan(fresh);
       setError(err instanceof ApiError ? err.message : "Couldn't update the plan's status.");
     } finally {
       setStatusUpdating(false);
@@ -579,7 +631,8 @@ export function PlanTab({
         warnings: string[];
         savedAsDraftBecauseApproved?: boolean;
       }>(`/api/v1/weddings/${weddingId}/plan-versions/${detail.id}/restore`);
-      setRestorePreview(null);
+      // TS-197: what was shown about the version restored from (a Generate's or a move's notes) goes.
+      clearVersionMessages();
       setUndoStack([]);
       setRedoStack([]);
       window.dispatchEvent(new Event(PLAN_CHANGED_EVENT));
@@ -589,7 +642,8 @@ export function PlanTab({
       } catch {
         setError(REFRESH_FAILED_MESSAGE);
       }
-      setMoveWarnings(res.warnings);
+      // TS-197: under their own heading (they were shown as if a move had made them).
+      setRestoreWarnings(res.warnings);
       if (res.savedAsDraftBecauseApproved) setDraftNotice(SAVED_AS_DRAFT_BECAUSE_APPROVED);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't restore that version.");
@@ -614,18 +668,16 @@ export function PlanTab({
           { label, expectedRevision: current.revision }
         );
       });
+      setVersions((vs) => vs.map((v) => (v.id === res.planVersion.id ? res.planVersion : v)));
+      // TS-197: another version was opened while this was on its way -- it stays open.
+      if (detailRef.current?.id !== res.planVersion.id) return;
       detailRef.current = res.planVersion;
       setDetail(res.planVersion);
-      setVersions((vs) => vs.map((v) => (v.id === res.planVersion.id ? res.planVersion : v)));
       setLabelVersionId(null);
     } catch (err) {
       const fresh = conflictPlanVersion(err);
-      if (fresh) {
-        // TS-182: the queue's copy too (see onSetStatus).
-        detailRef.current = fresh;
-        setDetail(fresh);
-        setVersions((vs) => vs.map((v) => (v.id === fresh.id ? fresh : v)));
-      }
+      // TS-182: the queue's copy too (see onSetStatus). TS-197: only if that version is still open.
+      if (fresh && fresh.id === detailRef.current?.id) takeFreshPlan(fresh);
       // TS-182: the "isn't open any more" message is shown as it is (it was replaced by the
       // general one, since it isn't an ApiError).
       setError(
@@ -835,7 +887,9 @@ export function PlanTab({
             className="min-h-11 rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
             value={detail?.id ?? ""}
             onChange={(e) => onSelectVersion(e.target.value)}
-            disabled={planChangesPending}
+            // TS-197: also while a status change or nickname is being saved -- its answer is about
+            // the version open now.
+            disabled={planChangesPending || statusUpdating || savingLabel}
           >
             {versions.map((v) => (
               <option key={v.id} value={v.id}>
@@ -1185,11 +1239,30 @@ export function PlanTab({
             </div>
           )}
 
-          {detail.warnings.length > 0 && (
-            <div className="mb-6 rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-950 p-4">
-              <p className="mb-2 text-sm font-medium text-amber-800 dark:text-amber-300">Notes on this plan:</p>
+          {/* TS-197: what the last Generate said about this plan, under a heading that says what it
+              is (who couldn't be seated, and why) -- kept until the next Generate or another
+              version is opened. A move's warnings are shown once, below, not copied in here. */}
+          {generateWarnings && (
+            <div
+              role="status"
+              data-testid="plan-generate-warnings"
+              className="mb-6 rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950 p-4"
+            >
+              <p className="mb-2 text-sm font-medium text-amber-800 dark:text-amber-300">{generateWarnings.heading}</p>
               <ul className="list-inside list-disc text-sm text-amber-700 dark:text-amber-400">
-                {detail.warnings.map((w, i) => (
+                {generateWarnings.items.map((w, i) => (
+                  <li key={i}>{w}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {/* TS-197: a restore's own notes, under their own heading. */}
+          {restoreWarnings.length > 0 && (
+            <div role="status" className="mb-6 rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950 p-4">
+              <p className="mb-2 text-sm font-medium text-amber-800 dark:text-amber-300">Restored, but note:</p>
+              <ul className="list-inside list-disc text-sm text-amber-700 dark:text-amber-400">
+                {restoreWarnings.map((w, i) => (
                   <li key={i}>{w}</li>
                 ))}
               </ul>
@@ -1254,23 +1327,21 @@ export function PlanTab({
                 {detail.unassignedGuestIds.map((id) => (
                   <li key={id} className="flex items-center justify-between gap-2 text-sm">
                     <span>{guestName(id)}</span>
+                    {/* TS-199: pick a table, then press Seat -- the arrow keys no longer seat the
+                        guest at every table on the way (see PickThenActControl). */}
                     {canEditThisVersion && (
-                      <select
-                        aria-label={`Move ${guestName(id)} to a table`}
-                        className="min-h-11 rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm disabled:opacity-50"
-                        value=""
-                        disabled={movingIds.has(id) || versionChanging}
-                        onChange={(e) => onMoveGuest(id, e.target.value)}
-                      >
-                        <option value="" disabled>
-                          {movingIds.has(id) ? "Seating..." : "Seat at..."}
-                        </option>
-                        {tables.map((t) => (
-                          <option key={t.id} value={t.id}>
-                            {t.label}
-                          </option>
-                        ))}
-                      </select>
+                      <PickThenActControl
+                        id={`plan-move-${id}`}
+                        label={`Move ${guestName(id)} to a table`}
+                        placeholder="Seat at..."
+                        busy={movingIds.has(id)}
+                        busyLabel="Seating..."
+                        disabled={versionChanging}
+                        options={tables.map((t) => ({ value: t.id, label: t.label }))}
+                        actLabel="Seat"
+                        actAriaLabel={`Seat ${guestName(id)}`}
+                        onAct={(tableId) => onMoveGuest(id, tableId)}
+                      />
                     )}
                   </li>
                 ))}
@@ -1293,25 +1364,22 @@ export function PlanTab({
                       {g.guestName}{" "}
                       <span className="text-xs text-neutral-500 dark:text-neutral-400">(currently at {g.tableLabel})</span>
                     </span>
+                    {/* TS-199: pick, then Move (see PickThenActControl). */}
                     {canEditThisVersion && (
-                      <select
-                        aria-label={`Move ${g.guestName} to a different table`}
-                        className="min-h-11 rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm disabled:opacity-50"
-                        value=""
-                        disabled={movingIds.has(g.guestId) || versionChanging}
-                        onChange={(e) => onMoveGuest(g.guestId, e.target.value)}
-                      >
-                        <option value="" disabled>
-                          {movingIds.has(g.guestId) ? "Moving..." : "Move to..."}
-                        </option>
-                        {tables
+                      <PickThenActControl
+                        id={`plan-move-${g.guestId}`}
+                        label={`Move ${g.guestName} to a different table`}
+                        placeholder="Move to..."
+                        busy={movingIds.has(g.guestId)}
+                        busyLabel="Moving..."
+                        disabled={versionChanging}
+                        options={tables
                           .filter((t) => t.id !== g.tableId)
-                          .map((t) => (
-                            <option key={t.id} value={t.id}>
-                              {t.label}
-                            </option>
-                          ))}
-                      </select>
+                          .map((t) => ({ value: t.id, label: t.label }))}
+                        actLabel="Move"
+                        actAriaLabel={`Move ${g.guestName}`}
+                        onAct={(tableId) => onMoveGuest(g.guestId, tableId)}
+                      />
                     )}
                   </li>
                 ))}
@@ -1393,25 +1461,24 @@ export function PlanTab({
                     {t.guests.map((g) => (
                       <li key={g.guestId} className="flex items-center justify-between gap-2 text-sm">
                         <span>{g.guestName}</span>
+                        {/* TS-199: pick, then Move (see PickThenActControl). */}
                         {canEditThisVersion && (
-                          <select
-                            aria-label={`Move ${g.guestName} to a different table`}
-                            className="min-h-11 rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-xs disabled:opacity-50"
-                            value=""
-                            disabled={movingIds.has(g.guestId) || versionChanging}
-                            onChange={(e) => onMoveGuest(g.guestId, e.target.value)}
-                          >
-                            <option value="" disabled>
-                              {movingIds.has(g.guestId) ? "Moving..." : "Move to..."}
-                            </option>
-                            {tables
+                          <PickThenActControl
+                            id={`plan-move-${g.guestId}`}
+                            label={`Move ${g.guestName} to a different table`}
+                            placeholder="Move to..."
+                            busy={movingIds.has(g.guestId)}
+                            busyLabel="Moving..."
+                            disabled={versionChanging}
+                            options={tables
                               .filter((table) => table.id !== tableId)
-                              .map((table) => (
-                                <option key={table.id} value={table.id}>
-                                  {table.label}
-                                </option>
-                              ))}
-                          </select>
+                              .map((table) => ({ value: table.id, label: table.label }))}
+                            actLabel="Move"
+                            actAriaLabel={`Move ${g.guestName}`}
+                            selectClassName="min-h-11 max-w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-xs disabled:opacity-50"
+                            buttonClassName="min-h-11 rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1 text-xs font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50"
+                            onAct={(tableId) => onMoveGuest(g.guestId, tableId)}
+                          />
                         )}
                       </li>
                     ))}
@@ -1512,9 +1579,14 @@ function PlanFloorPlan({
     }
     // TS-175: keep a keyboard user's place -- focus the guest where they now are. The table they
     // were put at re-draws, and focus used to fall back to the top of the page.
-    requestAnimationFrame(() =>
-      document.querySelector<HTMLElement>(`[data-guest-id="${CSS.escape(guestId)}"]`)?.focus()
-    );
+    // TS-199: only if focus was lost in the redraw -- Safari can run this a moment late, and it used
+    // to pull focus back from wherever the planner had already gone next (so their next Enter
+    // un-picked this guest instead of acting where they were).
+    requestAnimationFrame(() => {
+      const active = document.activeElement;
+      const lost = !active || active === document.body || !active.isConnected;
+      if (lost) document.querySelector<HTMLElement>(`[data-guest-id="${CSS.escape(guestId)}"]`)?.focus();
+    });
   }
 
   function onGuestDragStart(e: React.DragEvent<HTMLSpanElement>, guestId: string) {
@@ -1675,10 +1747,16 @@ function PlanFloorPlan({
         </div>
       )}
       <div
+        // TS-199: named, so the seating floor plan can be found as one area (e.g. its Tab order).
+        role="group"
+        aria-label="Seating floor plan"
         style={{ width: "100%", height, maxWidth: width }}
         className="relative overflow-auto rounded-lg border border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-900"
       >
-        {tables.map((t) => {
+        {/* TS-199: listed in reading order of where the tables sit (rows top to bottom, each left
+            to right), so Tab moves through the guests and tables the way the room reads. Tables
+            don't move on this view, so the order holds while a guest is dragged. */}
+        {inReadingOrder(tables, (t) => ({ x: t.positionX ?? 40, y: t.positionY ?? 40 })).map((t) => {
           const entry = grouped.get(t.id);
           const tableGuests = entry?.guests ?? [];
           const isTarget = pickedGuestId !== null && canEditThisVersion;

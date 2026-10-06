@@ -12,7 +12,9 @@
 // http://localhost APP_URL in the site's settings would otherwise be accepted there, and every
 // link and the session cookie would be built for the wrong address. Netlify always sets at least
 // one of NETLIFY, CONTEXT, SITE_ID or DEPLOY_ID; `netlify dev` (NETLIFY_DEV) runs on this machine
-// and keeps the local rules.
+// and keeps the local rules. (TS-200: see runningOnNetlify in packages/shared/src/netlify.ts.)
+
+import { runningOnNetlify } from "@seatwise/shared";
 
 type Env = Record<string, string | undefined>;
 
@@ -25,11 +27,8 @@ export class AppUrlNotConfiguredError extends Error {
   }
 }
 
-/** TS-192: true when running on Netlify (a build or a deployed function), not `netlify dev`. */
-export function runningOnNetlify(env: Env): boolean {
-  if (env.NETLIFY_DEV) return false;
-  return Boolean(env.NETLIFY || env.CONTEXT || env.SITE_ID || env.DEPLOY_ID);
-}
+// TS-200: "on Netlify" is decided in one place for the whole app (runningOnNetlify, @seatwise/shared).
+export { runningOnNetlify };
 
 function isLocalHost(hostname: string): boolean {
   return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]" || hostname.endsWith(".localhost");

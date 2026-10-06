@@ -129,11 +129,11 @@ jobs:
       image: mcr.microsoft.com/playwright:v1.63.0-noble
       options: --user 1001 --ipc=host
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "22"
           cache: "pnpm"
@@ -169,11 +169,11 @@ jobs:
     name: Mobile app unit tests (apps/mobile)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "22"
           cache: "pnpm"
@@ -188,11 +188,11 @@ jobs:
     name: Web app unit tests (apps/web)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "22"
           cache: "pnpm"
@@ -238,11 +238,11 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "22"
           cache: "pnpm"
@@ -256,9 +256,15 @@ jobs:
         # than storing a long-lived repository secret nothing actually needs to persist) is the
         # narrower-scoped choice. Written to GITHUB_ENV, never echoed to the log; see
         # PLAYWRIGHT_TESTING.md's "CI secrets and scoping" section for the full rationale.
+        # TS-200: each value is masked before it's saved, so it never shows in the log even if a
+        # later step prints it.
         run: |
-          echo "JWT_SECRET=$(node -e "process.stdout.write(require('crypto').randomBytes(32).toString('hex'))")" >> "$GITHUB_ENV"
-          echo "ENCRYPTION_KEY=$(node -e "process.stdout.write(require('crypto').randomBytes(32).toString('hex'))")" >> "$GITHUB_ENV"
+          jwt_secret="$(node -e "process.stdout.write(require('crypto').randomBytes(32).toString('hex'))")"
+          echo "::add-mask::$jwt_secret"
+          echo "JWT_SECRET=$jwt_secret" >> "$GITHUB_ENV"
+          encryption_key="$(node -e "process.stdout.write(require('crypto').randomBytes(32).toString('hex'))")"
+          echo "::add-mask::$encryption_key"
+          echo "ENCRYPTION_KEY=$encryption_key" >> "$GITHUB_ENV"
 
       - name: Apply database migrations
         run: pnpm --filter @seatwise/db migrate:deploy
@@ -327,7 +333,7 @@ jobs:
 
       - name: Upload blob report (for merging into one combined HTML report)
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: blob-report-shard-${{ matrix.shard }}
           path: blob-report
@@ -336,7 +342,7 @@ jobs:
 
       - name: Upload normalized run report, traces, and screenshots for this shard
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: run-artifacts-shard-${{ matrix.shard }}
           path: |
@@ -380,11 +386,11 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "22"
           cache: "pnpm"
@@ -393,9 +399,15 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Generate ephemeral, non-secret app config for this CI run only
+        # TS-200: each value is masked before it's saved, so it never shows in the log even if a
+        # later step prints it.
         run: |
-          echo "JWT_SECRET=$(node -e "process.stdout.write(require('crypto').randomBytes(32).toString('hex'))")" >> "$GITHUB_ENV"
-          echo "ENCRYPTION_KEY=$(node -e "process.stdout.write(require('crypto').randomBytes(32).toString('hex'))")" >> "$GITHUB_ENV"
+          jwt_secret="$(node -e "process.stdout.write(require('crypto').randomBytes(32).toString('hex'))")"
+          echo "::add-mask::$jwt_secret"
+          echo "JWT_SECRET=$jwt_secret" >> "$GITHUB_ENV"
+          encryption_key="$(node -e "process.stdout.write(require('crypto').randomBytes(32).toString('hex'))")"
+          echo "::add-mask::$encryption_key"
+          echo "ENCRYPTION_KEY=$encryption_key" >> "$GITHUB_ENV"
 
       - name: Apply database migrations
         run: pnpm --filter @seatwise/db migrate:deploy
@@ -438,7 +450,7 @@ jobs:
 
       - name: Upload blob report (for merging into one combined HTML report)
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: blob-report-firefox-shard-${{ matrix.shard }}
           path: blob-report
@@ -447,7 +459,7 @@ jobs:
 
       - name: Upload normalized run report, traces, and screenshots for this shard
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: run-artifacts-firefox-shard-${{ matrix.shard }}
           path: |
@@ -491,11 +503,11 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "22"
           cache: "pnpm"
@@ -504,9 +516,15 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Generate ephemeral, non-secret app config for this CI run only
+        # TS-200: each value is masked before it's saved, so it never shows in the log even if a
+        # later step prints it.
         run: |
-          echo "JWT_SECRET=$(node -e "process.stdout.write(require('crypto').randomBytes(32).toString('hex'))")" >> "$GITHUB_ENV"
-          echo "ENCRYPTION_KEY=$(node -e "process.stdout.write(require('crypto').randomBytes(32).toString('hex'))")" >> "$GITHUB_ENV"
+          jwt_secret="$(node -e "process.stdout.write(require('crypto').randomBytes(32).toString('hex'))")"
+          echo "::add-mask::$jwt_secret"
+          echo "JWT_SECRET=$jwt_secret" >> "$GITHUB_ENV"
+          encryption_key="$(node -e "process.stdout.write(require('crypto').randomBytes(32).toString('hex'))")"
+          echo "::add-mask::$encryption_key"
+          echo "ENCRYPTION_KEY=$encryption_key" >> "$GITHUB_ENV"
 
       - name: Apply database migrations
         run: pnpm --filter @seatwise/db migrate:deploy
@@ -549,7 +567,7 @@ jobs:
 
       - name: Upload blob report (for merging into one combined HTML report)
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: blob-report-webkit-shard-${{ matrix.shard }}
           path: blob-report
@@ -558,7 +576,7 @@ jobs:
 
       - name: Upload normalized run report, traces, and screenshots for this shard
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: run-artifacts-webkit-shard-${{ matrix.shard }}
           path: |
@@ -590,11 +608,11 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "22"
           cache: "pnpm"
@@ -609,9 +627,15 @@ jobs:
         run: pnpm exec playwright install --with-deps msedge
 
       - name: Generate ephemeral, non-secret app config for this CI run only
+        # TS-200: each value is masked before it's saved, so it never shows in the log even if a
+        # later step prints it.
         run: |
-          echo "JWT_SECRET=$(node -e "process.stdout.write(require('crypto').randomBytes(32).toString('hex'))")" >> "$GITHUB_ENV"
-          echo "ENCRYPTION_KEY=$(node -e "process.stdout.write(require('crypto').randomBytes(32).toString('hex'))")" >> "$GITHUB_ENV"
+          jwt_secret="$(node -e "process.stdout.write(require('crypto').randomBytes(32).toString('hex'))")"
+          echo "::add-mask::$jwt_secret"
+          echo "JWT_SECRET=$jwt_secret" >> "$GITHUB_ENV"
+          encryption_key="$(node -e "process.stdout.write(require('crypto').randomBytes(32).toString('hex'))")"
+          echo "::add-mask::$encryption_key"
+          echo "ENCRYPTION_KEY=$encryption_key" >> "$GITHUB_ENV"
 
       - name: Apply database migrations
         run: pnpm --filter @seatwise/db migrate:deploy
@@ -654,7 +678,7 @@ jobs:
 
       - name: Upload blob report (for merging into one combined HTML report)
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: blob-report-edge-shard-${{ matrix.shard }}
           path: blob-report
@@ -663,7 +687,7 @@ jobs:
 
       - name: Upload normalized run report, traces, and screenshots for this shard
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: run-artifacts-edge-shard-${{ matrix.shard }}
           path: |
@@ -682,11 +706,11 @@ jobs:
     needs: [e2e, e2e-firefox, e2e-webkit, e2e-edge]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "22"
           cache: "pnpm"
@@ -695,28 +719,28 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Download every shard's blob report
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           pattern: blob-report-shard-*
           path: all-blob-reports
           merge-multiple: true
 
       - name: Download every shard's blob report (Firefox)
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           pattern: blob-report-firefox-shard-*
           path: all-blob-reports
           merge-multiple: true
 
       - name: Download every shard's blob report (WebKit)
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           pattern: blob-report-webkit-shard-*
           path: all-blob-reports
           merge-multiple: true
 
       - name: Download every shard's blob report (Edge)
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           pattern: blob-report-edge-shard-*
           path: all-blob-reports
@@ -730,7 +754,7 @@ jobs:
         run: pnpm exec playwright merge-reports --config=playwright.merge.config.ts --reporter=html ./all-blob-reports
 
       - name: Upload the merged report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: merged-html-report
           path: merged-html-report

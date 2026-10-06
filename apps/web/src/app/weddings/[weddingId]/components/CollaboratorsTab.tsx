@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ConfirmDeleteButton } from "@/components/ConfirmDeleteButton";
+import { CommitSelect } from "@/components/CommitSelect";
 import { api, ApiError, apiErrorMessage } from "@/lib/api-client";
 import type {
   CollaboratorDTO,
@@ -72,6 +73,8 @@ export function CollaboratorsTab({
   const router = useRouter();
   // TS-105: which collaborator the owner is handing the wedding to.
   const [handOffTo, setHandOffTo] = useState("");
+  // TS-199: why a hand-off failed, shown under the Hand off button.
+  const [handOffError, setHandOffError] = useState<string | null>(null);
   const [invites, setInvites] = useState<WeddingInviteDTO[]>([]);
   const [loading, setLoading] = useState(true);
   const [email, setEmail] = useState("");
@@ -167,6 +170,17 @@ export function CollaboratorsTab({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [wedding?.id]);
 
+  // TS-199: a setting that couldn't be saved (no connection, or refused as invalid) keeps what was
+  // typed in its box and keeps counting as unsaved, with the error shown -- it used to be swapped
+  // back for the saved value, losing the typing. Only a 409 (someone else changed the wedding)
+  // puts the saved value back.
+  function keepTypedUnlessConflict(err: unknown, fieldKey: string, putBack: () => void) {
+    if (err instanceof ApiError && err.status === 409) {
+      putBack();
+      settingFields.markDirty(fieldKey, false);
+    } else settingFields.markDirty(fieldKey, true);
+  }
+
   // The wedding's name is required (min length 1) server-side -- an emptied-out field just
   // reverts to the last saved name on blur rather than being sent.
   async function onSaveName() {
@@ -190,7 +204,7 @@ export function CollaboratorsTab({
       setWeddingName(updated.name);
     } catch (err) {
       setError(apiErrorMessage(err, ["name"], "Couldn't save the wedding name."));
-      setWeddingName(wedding.name);
+      keepTypedUnlessConflict(err, "setting-name", () => setWeddingName(wedding.name));
     } finally {
       setSavingName(false);
     }
@@ -246,7 +260,7 @@ export function CollaboratorsTab({
       setTyped((current) => (current.trim() === "" ? updated[field] : current));
     } catch (err) {
       setError(apiErrorMessage(err, [], "Couldn't save the side labels."));
-      setTyped(wedding[field]);
+      keepTypedUnlessConflict(err, `setting-side-${which}`, () => setTyped(wedding[field]));
     }
   }
 
@@ -266,7 +280,7 @@ export function CollaboratorsTab({
       setNote(updated.note ?? "");
     } catch (err) {
       setError(apiErrorMessage(err, [], "Couldn't save the note."));
-      setNote(wedding.note ?? "");
+      keepTypedUnlessConflict(err, "setting-note", () => setNote(wedding.note ?? ""));
     } finally {
       setSavingNote(false);
     }
@@ -275,12 +289,12 @@ export function CollaboratorsTab({
   // TS-105: hand the wedding off, then reload -- this page's own access level has just changed.
   async function onHandOff() {
     if (!handOffTo) return;
-    setError(null);
+    setHandOffError(null);
     try {
       await api.post(`/api/v1/weddings/${weddingId}/transfer-ownership`, { collaboratorId: handOffTo });
       window.location.reload();
     } catch (err) {
-      setError(apiErrorMessage(err, [], "Couldn't hand off this wedding."));
+      setHandOffError(apiErrorMessage(err, [], "Couldn't hand off this wedding."));
     }
   }
 
@@ -358,33 +372,74 @@ export function CollaboratorsTab({
     }
   }
 
+  // TS-195: one person's level and role changes are saved one at a time, in the order they were
+  // made, and each answer puts the saved level and role on screen. Two quick changes used to race:
+  // the older answer could land last, and a failure put back a value from before the newer change.
+  // What's last confirmed by the server is kept per person, so a failure goes back to that.
+  const collaboratorSaves = useRef(new Map<string, Promise<unknown>>());
+  const confirmedAccess = useRef(new Map<string, { permissionLevel: CollaboratorPermission; role: CollaboratorRole }>());
+  type SavedAccess = { permissionLevel: CollaboratorPermission; role: CollaboratorRole };
+  function saveCollaborator(id: string, change: Partial<SavedAccess>): Promise<SavedAccess> {
+    const run = async () => {
+      const res = await api.patch<{ collaborator?: SavedAccess }>(`/api/v1/weddings/${weddingId}/collaborators/${id}`, change);
+      const saved = res.collaborator;
+      if (saved) {
+        confirmedAccess.current.set(id, saved);
+        // Only once no newer change for this person is waiting -- that one shows its own value.
+        if (collaboratorSaves.current.get(id) === next) {
+          setCollaborators((cur) => cur.map((c) => (c.id === id ? { ...c, ...saved } : c)));
+        }
+      }
+      return saved ?? (change as SavedAccess);
+    };
+    const next: Promise<SavedAccess> = (collaboratorSaves.current.get(id) ?? Promise.resolve()).catch(() => {}).then(run);
+    collaboratorSaves.current.set(id, next);
+    return next;
+  }
+  function lastConfirmed(id: string): SavedAccess | undefined {
+    const known = confirmedAccess.current.get(id);
+    if (known) return known;
+    const c = collaborators.find((x) => x.id === id);
+    return c ? { permissionLevel: c.permissionLevel, role: c.role } : undefined;
+  }
+
   async function onChangeLevel(id: string, permissionLevel: CollaboratorPermission) {
     // TS-182: on failure only this person's level goes back, on the list as it is now.
     const before = collaborators.find((c) => c.id === id);
+    const confirmedBefore = lastConfirmed(id);
+    if (confirmedBefore && !confirmedAccess.current.has(id)) confirmedAccess.current.set(id, confirmedBefore);
     setLoweredAccessNote(null);
     setCollaborators((cur) => cur.map((c) => (c.id === id ? { ...c, permissionLevel } : c)));
+    const save = saveCollaborator(id, { permissionLevel });
     try {
-      await api.patch(`/api/v1/weddings/${weddingId}/collaborators/${id}`, { permissionLevel });
+      const saved = await save;
       const rank = (l: CollaboratorPermission) => LEVELS.findIndex((x) => x.value === l);
-      if (before && rank(permissionLevel) < rank(before.permissionLevel)) {
+      if (before && rank(saved.permissionLevel) < rank(before.permissionLevel)) {
         setLoweredAccessNote(
-          `${before.userName}'s access is now ${LEVELS[rank(permissionLevel)].label}. ${LINKS_KEEP_WORKING}`
+          `${before.userName}'s access is now ${LEVELS[rank(saved.permissionLevel)].label}. ${LINKS_KEEP_WORKING}`
         );
       }
     } catch {
-      if (before) setCollaborators((cur) => cur.map((c) => (c.id === id ? { ...c, permissionLevel: before.permissionLevel } : c)));
+      // Put back what's saved -- unless a newer change for this person is waiting, which shows its own.
+      const back = confirmedAccess.current.get(id);
+      if (back && collaboratorSaves.current.get(id) === save)
+        setCollaborators((cur) => cur.map((c) => (c.id === id ? { ...c, ...back } : c)));
       setError("Couldn't change that collaborator's access level.");
     }
   }
 
   async function onChangeRole(id: string, newRole: CollaboratorRole) {
     // TS-182: as above -- only this person's role goes back.
-    const before = collaborators.find((c) => c.id === id)?.role;
+    const confirmedBefore = lastConfirmed(id);
+    if (confirmedBefore && !confirmedAccess.current.has(id)) confirmedAccess.current.set(id, confirmedBefore);
     setCollaborators((cur) => cur.map((c) => (c.id === id ? { ...c, role: newRole } : c)));
+    const save = saveCollaborator(id, { role: newRole });
     try {
-      await api.patch(`/api/v1/weddings/${weddingId}/collaborators/${id}`, { role: newRole });
+      await save;
     } catch {
-      if (before) setCollaborators((cur) => cur.map((c) => (c.id === id ? { ...c, role: before } : c)));
+      const back = confirmedAccess.current.get(id);
+      if (back && collaboratorSaves.current.get(id) === save)
+        setCollaborators((cur) => cur.map((c) => (c.id === id ? { ...c, ...back } : c)));
       setError("Couldn't change that collaborator's role.");
     }
   }
@@ -428,7 +483,7 @@ export function CollaboratorsTab({
       setRsvpCutoffDate(updated.rsvpCutoffDate ?? "");
     } catch (err) {
       setError(apiErrorMessage(err, [], "Couldn't save the RSVP cutoff."));
-      setRsvpCutoffDate(wedding.rsvpCutoffDate ?? "");
+      keepTypedUnlessConflict(err, "setting-rsvp-cutoff", () => setRsvpCutoffDate(wedding.rsvpCutoffDate ?? ""));
     } finally {
       setSavingRsvpCutoff(false);
     }
@@ -558,6 +613,7 @@ export function CollaboratorsTab({
                         </p>
                       </div>
                       <ConfirmDeleteButton
+                        id={`invite-${i.id}-revoke`}
                         label="Revoke"
                         ariaLabel={`Revoke the invite for ${i.email}`}
                         question={`Revoke the invite for ${i.email}? Their link stops working. You can send a new invite later.`}
@@ -591,6 +647,8 @@ export function CollaboratorsTab({
               </p>
               <input
                 id="wedding-name"
+                // TS-199: saves when you leave it -- Back on the wedding page saves it instead of asking.
+                data-blur-save=""
                 aria-label="Wedding name"
                 className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm disabled:opacity-50"
                 value={weddingName}
@@ -684,6 +742,7 @@ export function CollaboratorsTab({
                   </label>
                   <input
                     id="side-label-1"
+                    data-blur-save=""
                     className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
                     value={sideLabel1}
                     onChange={(e) => {
@@ -703,6 +762,7 @@ export function CollaboratorsTab({
                   </label>
                   <input
                     id="side-label-2"
+                    data-blur-save=""
                     className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
                     value={sideLabel2}
                     onChange={(e) => {
@@ -729,6 +789,7 @@ export function CollaboratorsTab({
               </p>
               <textarea
                 id="wedding-note"
+                data-blur-save=""
                 aria-label="Wedding note"
                 className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm disabled:opacity-50"
                 rows={3}
@@ -757,6 +818,7 @@ export function CollaboratorsTab({
               </p>
               <input
                 id="rsvp-cutoff-date"
+                data-blur-save=""
                 aria-label="RSVP cutoff date"
                 type="date"
                 className="w-full max-w-xs rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm disabled:opacity-50"
@@ -797,31 +859,38 @@ export function CollaboratorsTab({
               </div>
               {isOwner ? (
                 <div className="flex flex-wrap items-center gap-2">
-                  <select
+                  {/* TS-195/TS-199: arrowing through these no longer saves (and notifies) each
+                      level on the way -- Enter or leaving the list saves; a mouse pick saves at once. */}
+                  <CommitSelect
+                    id={`collaborator-${c.id}-role`}
                     aria-label={`Role for ${c.userName}`}
                     className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1.5 text-sm"
                     value={c.role}
-                    onChange={(e) => onChangeRole(c.id, e.target.value as CollaboratorRole)}
+                    onCommit={(v) => onChangeRole(c.id, v as CollaboratorRole)}
+                    onPendingChange={(p) => settingFields.markDirty(`collaborator-${c.id}-role`, p)}
                   >
                     {ROLES.map((r) => (
                       <option key={r.value} value={r.value}>
                         {r.label}
                       </option>
                     ))}
-                  </select>
-                  <select
+                  </CommitSelect>
+                  <CommitSelect
+                    id={`collaborator-${c.id}-level`}
                     aria-label={`Access level for ${c.userName}`}
                     className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1.5 text-sm"
                     value={c.permissionLevel}
-                    onChange={(e) => onChangeLevel(c.id, e.target.value as CollaboratorPermission)}
+                    onCommit={(v) => onChangeLevel(c.id, v as CollaboratorPermission)}
+                    onPendingChange={(p) => settingFields.markDirty(`collaborator-${c.id}-level`, p)}
                   >
                     {LEVELS.map((l) => (
                       <option key={l.value} value={l.value}>
                         {l.label}
                       </option>
                     ))}
-                  </select>
+                  </CommitSelect>
                   <ConfirmDeleteButton
+                    id={`collaborator-${c.id}-remove`}
                     ariaLabel={`Remove ${c.userName}`}
                     question={`Remove ${c.userName}'s access to this wedding? They'll lose access right away. You can invite them again later. ${LINKS_KEEP_WORKING}`}
                     confirmLabel="Yes, remove access"
@@ -929,6 +998,12 @@ export function CollaboratorsTab({
               onConfirm={onHandOff}
             />
           </div>
+          {/* TS-199: shown next to the button that was used, not at the top of the tab. */}
+          {handOffError && (
+            <p role="alert" className="mt-2 text-sm text-red-600 dark:text-red-400">
+              {handOffError}
+            </p>
+          )}
         </div>
       )}
 

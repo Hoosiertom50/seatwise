@@ -42,6 +42,8 @@ export async function POST(req: NextRequest, { params }: Params) {
       );
     }
     if (err instanceof SwapError) {
+      // TS-197: see the assignments route -- a newer plan comes back with the refusal.
+      if (err.planVersion) return NextResponse.json({ error: err.message, planVersion: err.planVersion }, { status: 409 });
       return errorResponse(err.message, 409);
     }
     const conflict = concurrentChangeResponse(err);

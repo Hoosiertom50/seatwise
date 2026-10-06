@@ -6,7 +6,7 @@ import {
   listSeatingTablesForWedding,
   type PlanVersionDetail,
 } from "@seatwise/db";
-import { compareTableLabels } from "@seatwise/shared";
+import { compareTableLabels, plusOnesToPrint } from "@seatwise/shared";
 import type { ExportGuestRow } from "./pdf";
 import { compareGuestNames } from "./guest-name-order";
 
@@ -63,7 +63,8 @@ export async function loadExportData(
 
   // TS-180: who's coming with each guest, for the lookup list (plus-ones aren't private -- View
   // and Comment collaborators see them in the app too).
-  const plusOnesById = new Map(guests.map((g) => [g.id, g.plusOneNames]));
+  // TS-198: only for a party bigger than one (see plusOnesToPrint).
+  const plusOnesById = new Map(guests.map((g) => [g.id, plusOnesToPrint(g)]));
   const sortedRows: ExportGuestRow[] = sortedAssignments.map((a) => ({
     guestName: a.guestName,
     tableLabel: a.tableLabel,

@@ -3,7 +3,7 @@ import { guestImportRequestSchema } from "@seatwise/shared";
 import { commitGuestImport, GuestImportError, listGuestsByWedding, GuestImportConflictError } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
 import { errorResponse, zodErrorResponse, concurrentChangeResponse } from "@/lib/api-response";
-import { requireAccess } from "@/lib/access";
+import { requireAccess, actorAccessFor } from "@/lib/access";
 
 type Params = { params: Promise<{ weddingId: string }> };
 
@@ -30,7 +30,9 @@ export async function POST(req: NextRequest, { params }: Params) {
       parsed.data.expectedRevisions,
       user.id,
       // TS-180: write guests changed since the export only when the planner ticked to overwrite.
-      parsed.data.overwriteChanged ?? false
+      parsed.data.overwriteChanged ?? false,
+      // TS-195: read again under the import's lock -- refused if it dropped meanwhile.
+      await actorAccessFor(weddingId, user.id, access.accessLevel)
     );
     const guests = await listGuestsByWedding(weddingId);
     return NextResponse.json({ result, guests });

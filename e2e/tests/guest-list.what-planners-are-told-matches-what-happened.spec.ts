@@ -13,9 +13,10 @@
  */
 
 import { expect, defineQualityTest, test } from "../fixtures/index.js";
+import { waitUntilSafelyInsideUtcDay } from "../support/utcDay.js";
 import { uniquePersonName, uniqueToken } from "../data/ids.js";
 import { TEST_ACCOUNT_EMAIL_DOMAIN } from "../support/auth.js";
-import { accountEmailCount, setAccountEmailCount } from "../support/testDatabase.js";
+import { accountEmailCount, ageTestAccount, setAccountEmailCount } from "../support/testDatabase.js";
 import { DashboardPage } from "../pages/DashboardPage.js";
 
 const RSVP_CLOSED_NOTE =
@@ -42,6 +43,8 @@ defineQualityTest(
     tags: ["@mutating", "@feature:guests", "@feature:rsvp", "@risk:high", "@suite:regression"],
   },
   async ({ managedWedding, weddingData, context, account, weddingGuestsPage }, testInfo) => {
+    // TS-200: this test reads the account's daily email counts -- they must all be in one UTC day.
+    await waitUntilSafelyInsideUtcDay(testInfo);
     const w = managedWedding.id;
     const email = () => `pw-guest-closed-${uniqueToken(testInfo.workerIndex)}${TEST_ACCOUNT_EMAIL_DOMAIN}`;
     await weddingData.updateWedding(w, { rsvpCutoffDate: "2025-01-15" });
@@ -165,6 +168,9 @@ defineQualityTest(
     tags: ["@mutating", "@feature:collaboration", "@feature:guests", "@risk:high", "@suite:regression"],
   },
   async ({ managedWedding, context, account }, testInfo) => {
+    // TS-200: this test sets the account's daily allowance and reads the other counters -- they
+    // must all be in one UTC day.
+    await waitUntilSafelyInsideUtcDay(testInfo);
     const w = managedWedding.id;
     const invite = () =>
       context.request.post(`/api/v1/weddings/${w}/invites`, {
@@ -173,6 +179,8 @@ defineQualityTest(
     let guestId = "";
 
     await test.step("With the day's allowance used up, an invite and an RSVP email are both refused, saying it's until tomorrow", async () => {
+      // TS-194: an account past its first week (a new one has a smaller allowance, with its own words).
+      await ageTestAccount(account.email, 8);
       await setAccountEmailCount(account.email, "account-day", 100);
       const refused = await invite();
       expect(refused.status()).toBe(429);

@@ -1,4 +1,4 @@
-import { pool } from "../pool";
+import { beginTransaction, pool } from "../pool";
 
 // TS-98: window-based rate limiting backed by Postgres, so a limit holds across every server
 // instance (serverless hosts run many that share no memory) and survives restarts.
@@ -8,6 +8,7 @@ import { pool } from "../pool";
 // count started again from zero on the quarter hour, so tries made just before and just after it
 // got twice the limit (and 100 wrong passwords spread across 2:15 never locked the account).
 // Daily limits stay calendar days (UTC), because their messages say "today" and "tomorrow".
+// TS-194: except the site-wide email counts, which roll over the last 24 hours (hitRollingCount).
 function slides(windowSeconds: number): boolean {
   return windowSeconds < 86_400;
 }
@@ -16,18 +17,30 @@ function windowStartFor(nowMs: number, windowMs: number): Date {
   return new Date(Math.floor(nowMs / windowMs) * windowMs);
 }
 
+// TS-194: "windowStart" has no time zone, and the database driver used to turn a JavaScript date
+// into the server's local time on the way in (and read it back the same way). Two servers in
+// different time zones -- or a server and the test helpers -- then disagreed about which window a
+// count was in. Every time stored here is now written as UTC (a text value, whose "Z" the column
+// ignores) and read back with EXTRACT(EPOCH ...), which treats it as UTC too -- so the window
+// arithmetic is the same whatever time zone the server runs in. Only this table is affected; the
+// rest of the app's timestamps are untouched.
+function utc(date: Date): string {
+  return date.toISOString();
+}
+
 // The previous window's count still inside the last `windowMs` -- rounded up, so a split can
 // never come out below the real number of tries.
 function carriedOver(previous: number, windowStart: Date, windowMs: number, nowMs: number): number {
   if (previous === 0) return 0;
   const stillInside = 1 - (nowMs - windowStart.getTime()) / windowMs;
-  return Math.ceil(previous * stillInside);
+  // TS-194: the tiny allowance stops floating-point noise (2.0000000001) rounding up a whole try.
+  return Math.ceil(previous * stillInside - 1e-9);
 }
 
 async function previousWindowCount(key: string, windowStart: Date, windowMs: number): Promise<number> {
   const { rows } = await pool.query<{ count: number }>(
-    `SELECT count FROM "rate_limit_counters" WHERE key = $1 AND "windowStart" = $2`,
-    [key, new Date(windowStart.getTime() - windowMs)]
+    `SELECT count FROM "rate_limit_counters" WHERE key = $1 AND "windowStart" = $2::timestamp`,
+    [key, utc(new Date(windowStart.getTime() - windowMs))]
   );
   return rows[0]?.count ?? 0;
 }
@@ -102,16 +115,13 @@ export async function hitRateLimit(key: string, limit: number, windowSeconds: nu
   const windowStart = windowStartFor(nowMs, windowMs);
 
   const { rows } = await pool.query<{ count: number }>(
-    `INSERT INTO "rate_limit_counters" (key, "windowStart", count) VALUES ($1, $2, 1)
+    `INSERT INTO "rate_limit_counters" (key, "windowStart", count) VALUES ($1, $2::timestamp, 1)
      ON CONFLICT (key, "windowStart") DO UPDATE SET count = "rate_limit_counters".count + 1
      RETURNING count`,
-    [key, windowStart]
+    [key, utc(windowStart)]
   );
 
-  // Opportunistic cleanup, ~1 request in 100: windows older than a day are never read again.
-  if (Math.random() < 0.01) {
-    pool.query(`DELETE FROM "rate_limit_counters" WHERE "windowStart" < now() - interval '1 day'`).catch(() => {});
-  }
+  pruneOldCounters();
 
   const previous = slides(windowSeconds) ? await previousWindowCount(key, windowStart, windowMs) : 0;
   const counted = rows[0].count + carriedOver(previous, windowStart, windowMs, nowMs);
@@ -123,16 +133,25 @@ export async function hitRateLimit(key: string, limit: number, windowSeconds: nu
   };
 }
 
+// Opportunistic cleanup, ~1 request in 100. TS-194: windows older than two days are never read again
+// (the rolling 24-hour email counts read back 25 hourly windows, so one day was too soon).
+function pruneOldCounters(): void {
+  if (Math.random() >= 0.01) return;
+  pool
+    .query(`DELETE FROM "rate_limit_counters" WHERE "windowStart" < (now() AT TIME ZONE 'UTC') - interval '2 days'`)
+    .catch(() => {});
+}
+
 // TS-163: counts one hit against `key` in the current window and returns the new count -- for a
 // limit with more than one threshold (the daily email ceiling, with headroom for password resets).
 // TS-186: and the window it was counted in, for undoRateLimitHit.
 export async function hitRateLimitCount(key: string, windowSeconds: number): Promise<{ count: number; windowStart: Date }> {
   const windowStart = windowStartFor(Date.now(), windowSeconds * 1000);
   const { rows } = await pool.query<{ count: number }>(
-    `INSERT INTO "rate_limit_counters" (key, "windowStart", count) VALUES ($1, $2, 1)
+    `INSERT INTO "rate_limit_counters" (key, "windowStart", count) VALUES ($1, $2::timestamp, 1)
      ON CONFLICT (key, "windowStart") DO UPDATE SET count = "rate_limit_counters".count + 1
      RETURNING count`,
-    [key, windowStart]
+    [key, utc(windowStart)]
   );
   return { count: rows[0].count, windowStart };
 }
@@ -145,8 +164,8 @@ export async function peekRateLimit(key: string, limit: number, windowSeconds: n
   const windowMs = windowSeconds * 1000;
   const windowStart = windowStartFor(nowMs, windowMs);
   const { rows } = await pool.query<{ count: number }>(
-    `SELECT count FROM "rate_limit_counters" WHERE key = $1 AND "windowStart" = $2`,
-    [key, windowStart]
+    `SELECT count FROM "rate_limit_counters" WHERE key = $1 AND "windowStart" = $2::timestamp`,
+    [key, utc(windowStart)]
   );
   const current = rows[0]?.count ?? 0;
   const previous = slides(windowSeconds) ? await previousWindowCount(key, windowStart, windowMs) : 0;
@@ -166,8 +185,8 @@ export async function peekRateLimit(key: string, limit: number, windowSeconds: n
 export async function undoRateLimitHit(key: string, windowSeconds: number, windowStart?: Date): Promise<void> {
   const start = windowStart ?? windowStartFor(Date.now(), windowSeconds * 1000);
   await pool.query(
-    `UPDATE "rate_limit_counters" SET count = GREATEST(count - 1, 0) WHERE key = $1 AND "windowStart" = $2`,
-    [key, start]
+    `UPDATE "rate_limit_counters" SET count = GREATEST(count - 1, 0) WHERE key = $1 AND "windowStart" = $2::timestamp`,
+    [key, utc(start)]
   );
 }
 
@@ -190,26 +209,27 @@ const COOLDOWN_LOCK_SPACE = 186;
 export async function claimCooldown(key: string, seconds: number): Promise<CooldownClaim> {
   const client = await pool.connect();
   try {
-    await client.query("BEGIN");
+    // TS-194: with the app's time limits, like every other transaction (see beginTransaction).
+    await beginTransaction(client);
     // One claim at a time per key, so two requests at the same moment can't both be first.
     await client.query(`SELECT pg_advisory_xact_lock($1, hashtext($2))`, [COOLDOWN_LOCK_SPACE, key]);
     const nowMs = Date.now();
-    const { rows } = await client.query<{ windowStart: Date }>(
-      `SELECT "windowStart" FROM "rate_limit_counters"
-        WHERE key = $1 AND count > 0 AND "windowStart" > $2
+    const { rows } = await client.query<{ startMs: number }>(
+      `SELECT (EXTRACT(EPOCH FROM "windowStart") * 1000)::float8 AS "startMs" FROM "rate_limit_counters"
+        WHERE key = $1 AND count > 0 AND "windowStart" > $2::timestamp
         ORDER BY "windowStart" DESC LIMIT 1`,
-      [key, new Date(nowMs - seconds * 1000)]
+      [key, utc(new Date(nowMs - seconds * 1000))]
     );
     if (rows[0]) {
       await client.query("COMMIT");
-      const endsMs = new Date(rows[0].windowStart).getTime() + seconds * 1000;
+      const endsMs = Number(rows[0].startMs) + seconds * 1000;
       return { allowed: false, retryAfterSeconds: Math.max(1, Math.ceil((endsMs - nowMs) / 1000)), claimedAt: null };
     }
     const claimedAt = new Date(nowMs);
     await client.query(
-      `INSERT INTO "rate_limit_counters" (key, "windowStart", count) VALUES ($1, $2, 1)
+      `INSERT INTO "rate_limit_counters" (key, "windowStart", count) VALUES ($1, $2::timestamp, 1)
        ON CONFLICT (key, "windowStart") DO UPDATE SET count = 1`,
-      [key, claimedAt]
+      [key, utc(claimedAt)]
     );
     await client.query("COMMIT");
     return { allowed: true, retryAfterSeconds: 0, claimedAt };
@@ -223,5 +243,52 @@ export async function claimCooldown(key: string, seconds: number): Promise<Coold
 
 /** TS-186: takes back a claim made by claimCooldown -- for an email that didn't go out after all. */
 export async function releaseCooldown(key: string, claimedAt: Date): Promise<void> {
-  await pool.query(`DELETE FROM "rate_limit_counters" WHERE key = $1 AND "windowStart" = $2`, [key, claimedAt]);
+  await pool.query(`DELETE FROM "rate_limit_counters" WHERE key = $1 AND "windowStart" = $2::timestamp`, [key, utc(claimedAt)]);
+}
+
+// TS-194 (Tom's decision): Gmail's daily sending limit counts the last 24 hours, not a calendar day.
+// The site-wide email counts used to start again from zero at midnight UTC, so a burst just before
+// and just after midnight could send nearly twice the day's allowance inside 24 hours. They're now
+// kept in hourly windows, and a count is everything in the current hour plus the 24 hours before
+// it -- a little more than 24 hours, never less, so it can't come out below what Gmail sees.
+export const ROLLING_BUCKET_SECONDS = 3600;
+export const ROLLING_SPAN_SECONDS = 86_400;
+
+/**
+ * TS-194: the rolling total -- `currentCount` (the current hourly window, this hit included) plus
+ * every earlier window that started no more than `spanSeconds` before the current one. Pure, so
+ * it can be unit-tested without a database.
+ */
+export function rollingTotal(
+  currentCount: number,
+  earlier: { startMs: number; count: number }[],
+  currentStartMs: number,
+  spanSeconds: number = ROLLING_SPAN_SECONDS
+): number {
+  const oldestMs = currentStartMs - spanSeconds * 1000;
+  return earlier
+    .filter((w) => w.startMs >= oldestMs && w.startMs < currentStartMs)
+    .reduce((total, w) => total + Number(w.count), currentCount);
+}
+
+/**
+ * TS-194: counts one hit against `key` in the current hourly window and returns the rolling total
+ * (see rollingTotal), with the window it was counted in -- pass that to undoRateLimitHit (with
+ * ROLLING_BUCKET_SECONDS) to take exactly this hit back.
+ */
+export async function hitRollingCount(key: string): Promise<{ count: number; windowStart: Date }> {
+  const windowStart = windowStartFor(Date.now(), ROLLING_BUCKET_SECONDS * 1000);
+  const { rows } = await pool.query<{ count: number }>(
+    `INSERT INTO "rate_limit_counters" (key, "windowStart", count) VALUES ($1, $2::timestamp, 1)
+     ON CONFLICT (key, "windowStart") DO UPDATE SET count = "rate_limit_counters".count + 1
+     RETURNING count`,
+    [key, utc(windowStart)]
+  );
+  pruneOldCounters();
+  const { rows: earlier } = await pool.query<{ startMs: number; count: number }>(
+    `SELECT (EXTRACT(EPOCH FROM "windowStart") * 1000)::float8 AS "startMs", count FROM "rate_limit_counters"
+      WHERE key = $1 AND "windowStart" >= $2::timestamp AND "windowStart" < $3::timestamp`,
+    [key, utc(new Date(windowStart.getTime() - ROLLING_SPAN_SECONDS * 1000)), utc(windowStart)]
+  );
+  return { count: rollingTotal(rows[0].count, earlier, windowStart.getTime()), windowStart };
 }

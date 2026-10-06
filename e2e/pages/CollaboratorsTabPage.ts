@@ -72,6 +72,18 @@ export class CollaboratorsTabPage extends BasePage {
     return this.page.getByLabel(`Access level for ${personName}`, { exact: true });
   }
 
+  /** TS-195/TS-199: focuses a person's access-level list and presses the down arrow `times` times
+   * -- nothing should save until Enter or leaving the list. */
+  async arrowThroughAccessLevel(personName: string, times: number): Promise<void> {
+    await this.accessLevelSelect(personName).focus();
+    for (let i = 0; i < times; i++) await this.accessLevelSelect(personName).press("ArrowDown");
+  }
+
+  /** TS-195/TS-199: leaves the access-level list (which saves a keyboard change). */
+  async leaveAccessLevel(personName: string): Promise<void> {
+    await this.accessLevelSelect(personName).blur();
+  }
+
   async removePerson(email: string): Promise<void> {
     await this.person(email).getByRole("button", { name: /^Remove / }).click();
     await new ConfirmDelete(this.person(email)).confirm();

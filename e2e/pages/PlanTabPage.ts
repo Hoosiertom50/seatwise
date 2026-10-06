@@ -10,6 +10,11 @@
 import { expect } from "@playwright/test";
 import { BasePage } from "./BasePage.js";
 
+/** TS-199: a guest's name used inside a pattern, matched literally. */
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 export class PlanTabPage extends BasePage {
   private seatingPlanTabButton() {
     return this.page.getByRole("tab", { name: "Seating plan", exact: true });
@@ -106,6 +111,40 @@ export class PlanTabPage extends BasePage {
 
   async showFloorPlanView(): Promise<void> {
     await this.floorPlanViewButton().click();
+  }
+
+  /** TS-199: the seating floor plan's canvas (the table boxes and the guests in them). */
+  floorPlanRegion() {
+    return this.page.getByRole("group", { name: "Seating floor plan", exact: true });
+  }
+
+  /** TS-199: a guest's "Move to…"/"Seat at…" list in the List view (pick a table, then press the
+   * button next to it). */
+  private listMoveSelect(guestName: string) {
+    return this.page.getByLabel(new RegExp(`^Move ${escapeRegExp(guestName)} to (a|a different) table$`));
+  }
+  private listMoveButton(guestName: string) {
+    return this.page.getByRole("button", { name: new RegExp(`^(Move|Seat) ${escapeRegExp(guestName)}$`) });
+  }
+
+  /** TS-199: picks a table in a guest's List-view list and presses Move/Seat, waiting for the save. */
+  async moveGuestInList(guestName: string, tableLabel: string): Promise<void> {
+    await this.listMoveSelect(guestName).selectOption({ label: tableLabel });
+    await Promise.all([this.waitForMove(), this.listMoveButton(guestName).click()]);
+  }
+
+  /** TS-199: focuses a guest's List-view list and presses the down arrow `times` times. */
+  async arrowThroughListMoveChoices(guestName: string, times: number): Promise<void> {
+    await this.listMoveSelect(guestName).focus();
+    for (let i = 0; i < times; i++) await this.page.keyboard.press("ArrowDown");
+  }
+
+  /** TS-199: the guest's List-view list (for focus checks) and its Move/Seat button. */
+  listMoveList(guestName: string) {
+    return this.listMoveSelect(guestName);
+  }
+  listMoveButtonFor(guestName: string) {
+    return this.listMoveButton(guestName);
   }
 
   async moveToReview(): Promise<void> {
@@ -427,6 +466,23 @@ export class PlanTabPage extends BasePage {
   /** TS-189: shown when a newer plan was made elsewhere and the tab switched to it. */
   newerPlanNotice() {
     return this.page.getByRole("status").filter({ hasText: "A newer plan was made — you're now looking at it." });
+  }
+
+  /** TS-197: what the last Generate said about its plan -- headed "Couldn't seat everyone:" when
+   * someone was left unseated (with the reasons), otherwise "Notes on this plan:". */
+  generateWarnings() {
+    return this.page.getByTestId("plan-generate-warnings");
+  }
+
+  /** TS-197: shown when a comparison draft was asked for but there was no current plan, so the
+   * new version was made the current plan. */
+  madeCurrentNotice() {
+    return this.page.getByRole("status").filter({ hasText: "this version was made the current plan" });
+  }
+
+  /** TS-197: the open version's "N seated, M unassigned" line. */
+  seatedSummary() {
+    return this.page.getByText(/^\d+ seated, \d+ unassigned$/);
   }
 
   /** TS-189: the open version's badge, "Version N — complete/incomplete". */

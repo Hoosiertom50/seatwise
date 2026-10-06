@@ -4,14 +4,26 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError, apiErrorMessage } from "@/lib/api-client";
 import { useSerialTasks } from "@/lib/serial-tasks";
 import { useUnsavedChanges } from "@/lib/unsaved-changes";
+import { PickThenActControl } from "@/components/PickThenActControl";
 import type {
   GuestDTO,
   PlanVersionDTO,
   PlanVersionDetailDTO,
+  RelationshipDTO,
   SeatingTableDTO,
 } from "@seatwise/shared";
 // TS-193: the same limits the server checks (packages/shared/src/field-limits.ts).
 import { FIELD_LIMITS } from "@seatwise/shared";
+
+// TS-197: shown when Day-of switches to a plan made since it opened (as the Seating plan tab does).
+const NEWER_PLAN_MESSAGE = "A newer plan was made — you're now looking at it.";
+// TS-197: a change sent to the plan that was just replaced -- nothing was saved.
+const SUPERSEDED_CHANGE_MESSAGE = "That wasn't saved — a newer plan was made. Check it and try again.";
+
+// TS-197: "A", "A and B", "A, B and C".
+function nameList(names: string[]): string {
+  return names.length <= 1 ? (names[0] ?? "") : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+}
 
 // TS-11 (Day-Of / Emergency Mode, FR-8.1/8.2/8.3/8.4): a phone-friendly view for the day of the
 // wedding — find a guest fast, mark a no-show or walk-in, re-seat or swap without digging through
@@ -29,6 +41,8 @@ export function DayOfTab({
   canEdit: boolean;
 }) {
   const [tables, setTables] = useState<SeatingTableDTO[]>([]);
+  // TS-197: must-sit-together rules, so "Move to…" offers only tables the whole group fits.
+  const [relationships, setRelationships] = useState<RelationshipDTO[]>([]);
   const [detail, setDetail] = useState<PlanVersionDetailDTO | null>(null);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
@@ -58,6 +72,8 @@ export function DayOfTab({
   const [walkInLast, setWalkInLast] = useState("");
   const [walkInTableId, setWalkInTableId] = useState("");
   const [addingWalkIn, setAddingWalkIn] = useState(false);
+  // TS-199: shown in the walk-in form itself, next to the names.
+  const [walkInNameError, setWalkInNameError] = useState<string | null>(null);
 
   const [swapAId, setSwapAId] = useState("");
   const [swapBId, setSwapBId] = useState("");
@@ -84,11 +100,13 @@ export function DayOfTab({
   useUnsavedChanges("day-of-walk-in", canEdit && (walkInFirst.trim() !== "" || walkInLast.trim() !== ""));
 
   async function load() {
-    const [{ tables: tableList }, { planVersions }] = await Promise.all([
+    const [{ tables: tableList }, { planVersions }, { relationships: rules }] = await Promise.all([
       api.get<{ tables: SeatingTableDTO[] }>(`/api/v1/weddings/${weddingId}/tables`),
       api.get<{ planVersions: PlanVersionDTO[] }>(`/api/v1/weddings/${weddingId}/plan-versions`),
+      api.get<{ relationships: RelationshipDTO[] }>(`/api/v1/weddings/${weddingId}/relationships`),
     ]);
     setTables(tableList);
+    setRelationships(rules);
     // FR-5.6 (TS-8): a Comparison Draft can now have a higher versionNumber than Current without
     // replacing it, so "listed newest-first" no longer implies "first entry is Current" — find it
     // by isCurrent explicitly. Day-of mode must always act on the real Current version.
@@ -110,6 +128,84 @@ export function DayOfTab({
       .finally(() => setLoading(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [weddingId]);
+
+  // TS-197: the plan open here (`openId`, or none yet) is no longer the current one -- someone made
+  // or restored a newer plan. Opens the current plan, with the tables and rules as they are now,
+  // and says so -- unless another plan was opened here meanwhile, which is then left alone.
+  async function switchToCurrentPlan(openId: string | null, isCancelled: () => boolean) {
+    const stillOpen = () => !isCancelled() && (detailRef.current?.id ?? null) === openId;
+    const { planVersions } = await api.get<{ planVersions: PlanVersionDTO[] }>(`/api/v1/weddings/${weddingId}/plan-versions`);
+    if (!stillOpen()) return;
+    const newCurrent = planVersions.find((v) => v.isCurrent);
+    if (!newCurrent || newCurrent.id === openId) return;
+    const [opened, { tables: tableList }, { relationships: rules }] = await Promise.all([
+      api.get<{ planVersion: PlanVersionDetailDTO }>(`/api/v1/weddings/${weddingId}/plan-versions/${newCurrent.id}`),
+      api.get<{ tables: SeatingTableDTO[] }>(`/api/v1/weddings/${weddingId}/tables`),
+      api.get<{ relationships: RelationshipDTO[] }>(`/api/v1/weddings/${weddingId}/relationships`),
+    ]);
+    if (!stillOpen()) return;
+    setTables(tableList);
+    setRelationships(rules);
+    applyDetail(opened.planVersion);
+    setNotice(openId ? NEWER_PLAN_MESSAGE : "A seating plan was made — you're now looking at it.");
+  }
+
+  // TS-197: a refused change came back with the plan as it is now. When that's a different plan --
+  // a newer one replaced the plan open here -- Day-of switches to it and says so (tables and rules
+  // are reloaded too, best-effort); otherwise it's the same plan with a newer revision.
+  // Returns whether it was a switch.
+  function takeFreshPlan(fresh: PlanVersionDetailDTO): boolean {
+    const openId = detailRef.current?.id;
+    applyDetail(fresh);
+    if (!openId || fresh.id === openId) return false;
+    setNotice(NEWER_PLAN_MESSAGE);
+    Promise.all([
+      api.get<{ tables: SeatingTableDTO[] }>(`/api/v1/weddings/${weddingId}/tables`),
+      api.get<{ relationships: RelationshipDTO[] }>(`/api/v1/weddings/${weddingId}/relationships`),
+    ])
+      .then(([{ tables: tableList }, { relationships: rules }]) => {
+        setTables(tableList);
+        setRelationships(rules);
+      })
+      .catch(() => {});
+    return true;
+  }
+
+  // TS-197: the same 4-second check the Seating plan tab makes (FR-7.7): a change saved elsewhere
+  // shows up here, and when the plan open here stops being the current one (or a first plan is
+  // made), Day-of switches to the current plan. Paused while a change from this screen is queued or
+  // on its way, and only ever takes a newer copy than the one on screen.
+  const dayOfBusy = busyIds.size > 0 || addingWalkIn || swapping;
+  const openPlanId = detail?.id ?? null;
+  useEffect(() => {
+    if (loading || dayOfBusy) return;
+    let cancelled = false;
+    const interval = setInterval(async () => {
+      try {
+        if (!openPlanId) {
+          await switchToCurrentPlan(null, () => cancelled);
+          return;
+        }
+        const res = await api.get<{ planVersion: PlanVersionDetailDTO }>(
+          `/api/v1/weddings/${weddingId}/plan-versions/${openPlanId}`
+        );
+        if (cancelled) return;
+        if (!res.planVersion.isCurrent) {
+          await switchToCurrentPlan(openPlanId, () => cancelled);
+          return;
+        }
+        const shown = detailRef.current;
+        if (shown && shown.id === openPlanId && shown.revision < res.planVersion.revision) applyDetail(res.planVersion);
+      } catch {
+        // Best-effort, like the Seating plan tab's check -- the next tick tries again.
+      }
+    }, 4000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- TS-197: switchToCurrentPlan only uses setters and refs.
+  }, [openPlanId, weddingId, loading, dayOfBusy]);
 
   const tableLabelByGuestId = useMemo(() => {
     const map = new Map<string, string>();
@@ -145,6 +241,64 @@ export function DayOfTab({
     }
     return tables.map((t) => ({ table: t, seated: counts.get(t.id) ?? 0 }));
   }, [detail, tables, guests]);
+
+  // TS-197: each attending guest's must-sit-together partners (directly), for working out the
+  // whole group a move takes along -- guests who aren't attending don't count, as on the server.
+  const mustSitPartners = useMemo(() => {
+    const attending = new Set(guests.filter((g) => g.dayOfAttendance === "ATTENDING").map((g) => g.id));
+    const map = new Map<string, string[]>();
+    for (const r of relationships) {
+      if (r.type !== "MUST_SIT_TOGETHER" || !attending.has(r.guestAId) || !attending.has(r.guestBId)) continue;
+      map.set(r.guestAId, [...(map.get(r.guestAId) ?? []), r.guestBId]);
+      map.set(r.guestBId, [...(map.get(r.guestBId) ?? []), r.guestAId]);
+    }
+    return map;
+  }, [guests, relationships]);
+
+  // TS-197: the tables a seated guest can be moved to -- the ones the server would accept for their
+  // whole must-sit-together group: enough free seats for everyone (headcount, not counting the
+  // group's own seats), accessible if anyone in the group needs it, and not a Restricted table
+  // unless everyone is on its list (a guest on a Restricted table's list can only go there).
+  // Before, only the one guest's party size was checked, so a table could be offered and refused.
+  function moveChoicesFor(guest: GuestDTO): { table: SeatingTableDTO; free: number }[] {
+    const fromTableId = tableIdByGuestId.get(guest.id);
+    if (!fromTableId) return [];
+    const byId = new Map(guests.map((g) => [g.id, g]));
+    const groupIds = new Set([guest.id]);
+    const queue = [guest.id];
+    while (queue.length > 0) {
+      for (const partner of mustSitPartners.get(queue.pop()!) ?? []) {
+        if (!groupIds.has(partner)) {
+          groupIds.add(partner);
+          queue.push(partner);
+        }
+      }
+    }
+    const group = [...groupIds].map((id) => byId.get(id)).filter((g): g is GuestDTO => g !== undefined);
+    const needed = group.reduce((sum, g) => sum + g.headcount, 0);
+    const needsAccessible = group.some((g) => g.requiresAccessibleTable);
+    const requiredAt = new Set(
+      group.flatMap((g) => tables.filter((t) => t.isRestricted && t.requiredGuestIds.includes(g.id)).map((t) => t.id))
+    );
+    return occupancy
+      .map(({ table, seated }) => {
+        // The group's own seats at this table don't count against it -- they'd just stay.
+        const groupHere = group
+          .filter((g) => tableIdByGuestId.get(g.id) === table.id)
+          .reduce((sum, g) => sum + g.headcount, 0);
+        return { table, free: table.capacity - seated, room: table.capacity - (seated - groupHere) };
+      })
+      .filter(
+        ({ table, room }) =>
+          table.id !== fromTableId &&
+          !group.every((g) => tableIdByGuestId.get(g.id) === table.id) &&
+          room >= needed &&
+          (!needsAccessible || table.isAccessible) &&
+          (!table.isRestricted || group.every((g) => table.requiredGuestIds.includes(g.id))) &&
+          [...requiredAt].every((id) => id === table.id)
+      )
+      .map(({ table, free }) => ({ table, free }));
+  }
 
   const attendingSeatedGuests = useMemo(() => {
     if (!detail) return [];
@@ -219,14 +373,24 @@ export function DayOfTab({
       );
       applyDetail(res.planVersion);
       if (moving) {
-        const guest = guestsRef.current.find((g) => g.id === guestId);
+        // TS-197: everyone who went to that table -- a must-sit-together group moves together, and
+        // the notice used to name only the guest whose row was used.
         const table = res.planVersion.assignments.find((a) => a.guestId === guestId)?.tableLabel;
-        const moved = guest && table ? `Moved ${guest.firstName} ${guest.lastName} to ${table}.` : "Moved.";
+        const wasAt = new Map(current.assignments.map((a) => [a.guestId, a.tableId]));
+        const movedNames = res.planVersion.assignments
+          .filter((a) => a.tableId === tableId && wasAt.get(a.guestId) !== tableId)
+          .sort((a, b) => (a.guestId === guestId ? -1 : b.guestId === guestId ? 1 : a.guestName.localeCompare(b.guestName)))
+          .map((a) => a.guestName);
+        const moved = table && movedNames.length > 0 ? `Moved ${nameList(movedNames)} to ${table}.` : "Moved.";
         setNotice(res.warnings.length > 0 ? `${moved} ${res.warnings.join(" ")}` : moved);
       } else if (res.warnings.length > 0) setNotice(res.warnings.join(" "));
     } catch (err) {
       const fresh = conflictPlanVersion(err);
-      if (fresh) applyDetail(fresh);
+      // TS-197: a newer plan replaced this one -- Day-of is now showing it; the change wasn't made.
+      if (fresh && takeFreshPlan(fresh)) {
+        setRowError(guestId, SUPERSEDED_CHANGE_MESSAGE);
+        return;
+      }
       setRowError(guestId, apiErrorMessage(err, [], moving ? "Couldn't move that guest." : "Couldn't seat that guest."));
     } finally {
       markBusy(guestId, false);
@@ -244,50 +408,70 @@ export function DayOfTab({
 
   async function onAddWalkIn(e: React.FormEvent) {
     e.preventDefault();
-    if (!walkInFirst.trim() || !walkInLast.trim()) return;
+    // TS-199: a name of only spaces got past the browser's "required" check and then nothing
+    // happened -- now it says why.
+    if (!walkInFirst.trim() || !walkInLast.trim()) {
+      setWalkInNameError(!walkInFirst.trim() ? "Enter the walk-in's first name." : "Enter the walk-in's last name.");
+      return;
+    }
+    setWalkInNameError(null);
     setError(null);
     setNotice(null);
     setAddingWalkIn(true);
+    const tableId = walkInTableId;
+    const firstName = walkInFirst;
+    const lastName = walkInLast;
     // TS-151: once the guest exists, a failure is only about seating them -- the form clears and
     // says so, so pressing Add again can't create the same walk-in twice.
-    let added: GuestDTO | null = null;
+    // (Kept in an object: it's set inside the queued task below.)
+    const progress: { added: GuestDTO | null } = { added: null };
     try {
-      const { guest } = await api.post<{ guest: GuestDTO }>(`/api/v1/weddings/${weddingId}/guests`, {
-        firstName: walkInFirst,
-        lastName: walkInLast,
-        headcount: 1,
-        dayOfAttendance: "ATTENDING",
-      });
-      added = guest;
-      setGuests((cur) => [...cur, guest]);
-      setWalkInFirst("");
-      setWalkInLast("");
-      if (walkInTableId && detail) {
-        const tableId = walkInTableId;
-        const res = await queuePlanChange(async () => {
-          const current = await refreshAfterGuestAdded();
-          return api.post<{ planVersion: PlanVersionDetailDTO; warnings: string[] }>(
-            `/api/v1/weddings/${weddingId}/plan-versions/${current.id}/assignments`,
-            { guestId: guest.id, tableId, expectedRevision: current.revision }
-          );
+      // TS-197: adding the guest, taking the plan as that left it, and seating them are one queued
+      // task -- before, the guest was added outside the queue, so a seat change queued just ahead
+      // could run in between and be refused (or this one refused) as working from an old copy.
+      const seated = await queuePlanChange(async () => {
+        const { guest } = await api.post<{ guest: GuestDTO }>(`/api/v1/weddings/${weddingId}/guests`, {
+          firstName,
+          lastName,
+          headcount: 1,
+          dayOfAttendance: "ATTENDING",
         });
-        applyDetail(res.planVersion);
+        progress.added = guest;
+        guestsRef.current = [...guestsRef.current, guest];
+        setGuests((cur) => [...cur, guest]);
+        setWalkInFirst("");
+        setWalkInLast("");
+        if (!detailRef.current) return null;
+        // TS-189: adding a guest moves the plan on a revision (they're a new unseated guest) -- take
+        // the plan as it is now, so seating them (or a later "Seat at…") isn't refused as out of date.
+        if (!tableId) {
+          // (If that reload fails, the next change is refused as out of date and refreshes then.)
+          await refreshAfterGuestAdded().catch(() => {});
+          return null;
+        }
+        const current = await refreshAfterGuestAdded();
+        return api.post<{ planVersion: PlanVersionDetailDTO; warnings: string[] }>(
+          `/api/v1/weddings/${weddingId}/plan-versions/${current.id}/assignments`,
+          { guestId: guest.id, tableId, expectedRevision: current.revision }
+        );
+      });
+      const guest = progress.added!;
+      if (seated) {
+        applyDetail(seated.planVersion);
         setNotice(
           `Added walk-in ${guest.firstName} ${guest.lastName} and seated them` +
-            (res.warnings.length > 0 ? ` — ${res.warnings.join(" ")}` : ".")
+            (seated.warnings.length > 0 ? ` — ${seated.warnings.join(" ")}` : ".")
         );
       } else {
         setNotice(`Added walk-in ${guest.firstName} ${guest.lastName} — not yet seated.`);
       }
       setWalkInTableId("");
-      // TS-189: adding a guest moves the plan on a revision (they're a new unseated guest) -- take
-      // the plan as it is now, so a later "Seat at…" isn't refused as out of date.
-      // (If that reload fails, the next change is refused as out of date and refreshes then.)
-      if (detail && !walkInTableId) await queuePlanChange(refreshAfterGuestAdded).catch(() => {});
     } catch (err) {
       const fresh = conflictPlanVersion(err);
-      if (fresh) applyDetail(fresh);
+      if (fresh) takeFreshPlan(fresh);
+      const added = progress.added;
       if (added) {
+        setWalkInTableId("");
         setNotice(`Added walk-in ${added.firstName} ${added.lastName} — not yet seated.`);
         setError(apiErrorMessage(err, [], "Couldn't seat them") + " Seat them from the guest list below.");
       } else {
@@ -317,7 +501,13 @@ export function DayOfTab({
       setSwapBId("");
     } catch (err) {
       const fresh = conflictPlanVersion(err);
-      if (fresh) applyDetail(fresh);
+      // TS-197: a newer plan replaced this one -- Day-of is now showing it; nothing was swapped.
+      if (fresh && takeFreshPlan(fresh)) {
+        setSwapAId("");
+        setSwapBId("");
+        setError(SUPERSEDED_CHANGE_MESSAGE);
+        return;
+      }
       setError(apiErrorMessage(err, [], "Couldn't complete that swap."));
     } finally {
       setSwapping(false);
@@ -406,10 +596,8 @@ export function DayOfTab({
           const seatedAt = tableLabelByGuestId.get(g.id);
           const notAttending = g.dayOfAttendance === "NOT_ATTENDING";
           // TS-191: the other tables with enough free seats for this guest's party.
-          const fromTableId = tableIdByGuestId.get(g.id);
-          const moveChoices = seatedAt
-            ? occupancy.filter(({ table, seated }) => table.id !== fromTableId && table.capacity - seated >= g.headcount)
-            : [];
+          // TS-197: ...and for their whole must-sit-together group, by every rule the server checks.
+          const moveChoices = seatedAt ? moveChoicesFor(g) : [];
           return (
             <li
               key={g.id}
@@ -417,8 +605,9 @@ export function DayOfTab({
                 notAttending ? "border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-900 opacity-60" : "border-neutral-200 dark:border-neutral-700"
               }`}
             >
-              <div>
-                <p className="font-medium">
+              {/* TS-199: a long name wraps instead of pushing the row off a phone screen. */}
+              <div className="min-w-0">
+                <p className="break-words font-medium [overflow-wrap:anywhere]">
                   {g.firstName} {g.lastName}
                   {g.headcount > 1 ? ` (+${g.headcount - 1})` : ""}
                 </p>
@@ -432,43 +621,41 @@ export function DayOfTab({
               </div>
               {canEdit && (
                 <div className="flex min-h-11 flex-wrap items-center gap-2">
+                  {/* TS-199: pick a table, then press Seat -- the arrow keys no longer seat the guest
+                      at every table on the way (see PickThenActControl). */}
                   {!notAttending && detail && !seatedAt && (
-                    <select
-                      aria-label={`Seat ${g.firstName} ${g.lastName} at a table`}
-                      className="min-h-11 rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-2 text-sm disabled:opacity-50"
-                      value=""
-                      disabled={busyIds.has(g.id)}
-                      onChange={(e) => onSeatGuest(g.id, e.target.value)}
-                    >
-                      <option value="" disabled>
-                        {busyIds.has(g.id) ? "Seating..." : "Seat at..."}
-                      </option>
-                      {tables.map((t) => (
-                        <option key={t.id} value={t.id}>
-                          {t.label}
-                        </option>
-                      ))}
-                    </select>
+                    <PickThenActControl
+                      id={`dayof-move-${g.id}`}
+                      label={`Seat ${g.firstName} ${g.lastName} at a table`}
+                      placeholder="Seat at..."
+                      busy={busyIds.has(g.id)}
+                      busyLabel="Seating..."
+                      options={tables.map((t) => ({ value: t.id, label: t.label }))}
+                      actLabel="Seat"
+                      actAriaLabel={`Seat ${g.firstName} ${g.lastName}`}
+                      selectClassName="min-h-11 max-w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-2 text-sm disabled:opacity-50"
+                      onAct={(tableId) => onSeatGuest(g.id, tableId)}
+                    />
                   )}
                   {/* TS-191 (Tom's decision): a seated guest can be moved to any other table with
                       enough free seats for their party. Swap (below) stays for full tables. */}
                   {!notAttending && detail && seatedAt && (
-                    <select
-                      aria-label={`Move ${g.firstName} ${g.lastName} to another table`}
-                      className="min-h-11 rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-2 text-sm disabled:opacity-50"
-                      value=""
-                      disabled={busyIds.has(g.id) || moveChoices.length === 0}
-                      onChange={(e) => onSeatGuest(g.id, e.target.value, true)}
-                    >
-                      <option value="" disabled>
-                        {busyIds.has(g.id) ? "Moving..." : moveChoices.length === 0 ? "No other table has room" : "Move to..."}
-                      </option>
-                      {moveChoices.map(({ table, seated }) => (
-                        <option key={table.id} value={table.id}>
-                          {table.label} ({table.capacity - seated} free)
-                        </option>
-                      ))}
-                    </select>
+                    <PickThenActControl
+                      id={`dayof-move-${g.id}`}
+                      label={`Move ${g.firstName} ${g.lastName} to another table`}
+                      placeholder={moveChoices.length === 0 ? "No other table has room" : "Move to..."}
+                      busy={busyIds.has(g.id)}
+                      busyLabel="Moving..."
+                      disabled={moveChoices.length === 0}
+                      options={moveChoices.map(({ table, free }) => ({
+                        value: table.id,
+                        label: `${table.label} (${free} free)`,
+                      }))}
+                      actLabel="Move"
+                      actAriaLabel={`Move ${g.firstName} ${g.lastName}`}
+                      selectClassName="min-h-11 max-w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-2 text-sm disabled:opacity-50"
+                      onAct={(tableId) => onSeatGuest(g.id, tableId, true)}
+                    />
                   )}
                   <button
                     onClick={() => onToggleAttendance(g)}
@@ -526,6 +713,11 @@ export function DayOfTab({
               required
             />
           </div>
+          {walkInNameError && (
+            <p role="alert" className="text-sm text-red-600 dark:text-red-400">
+              {walkInNameError}
+            </p>
+          )}
           {detail && (
             <select
               aria-label="Seat the walk-in at a table"

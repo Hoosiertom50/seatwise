@@ -4,6 +4,7 @@ import {
   getWeddingById,
   type AccessLevel,
   type WeddingRow,
+  type ActorAccess,
 } from "@seatwise/db";
 import { errorResponse } from "./api-response";
 
@@ -43,4 +44,18 @@ export async function canManageApproval(
   if (accessLevel === "OWNER") return true;
   const detail = await getWeddingAccessDetail(weddingId, userId);
   return detail.role === "COUPLE" && detail.accessLevel !== null && detail.accessLevel !== "VIEW";
+}
+
+// TS-195: the access (and, for a collaborator, the role) a request was let in with, for a long
+// change to read again under its lock (recheckActorAccess in packages/db) -- refused if it dropped
+// while the change waited.
+export async function actorAccessFor(
+  weddingId: string,
+  userId: string,
+  accessLevel: AccessLevel
+): Promise<ActorAccess | undefined> {
+  if (!accessLevel) return undefined;
+  if (accessLevel === "OWNER") return { userId, accessLevel };
+  const { role } = await getWeddingAccessDetail(weddingId, userId);
+  return { userId, accessLevel, role };
 }

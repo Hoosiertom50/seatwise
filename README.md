@@ -207,6 +207,25 @@ should be live together, so the gap between them is as short as possible:
    TS-187: someone who signed up in the gap between steps 2 and 3 got their "confirm your email"
    link from the old code. If it doesn't work for them, they can use **Resend link** on the
    confirm-your-email banner (shown once they sign in) to get a fresh one from the new code.
+6. **Optional, once (TS-195): time limits for every query.** The app gives each of its own
+   transactions a 20-second limit per statement and ends one left idle for 30 seconds (TS-180/
+   TS-187, set inside the transaction). Queries the app runs *outside* a transaction — most simple
+   reads and single-statement saves — get no limit from the app, so one stuck query could hold a
+   connection (and, for a save, a row lock) for as long as it runs. To give those the same limits,
+   open Neon's **SQL Editor** for the production database and run (once — it stays set; replace
+   `<app role>` with the role in the app's `DATABASE_URL`, the part before the `:` after `//`;
+   `SELECT current_user;` in a connection made with that string also shows it):
+
+   ```sql
+   ALTER ROLE <app role> SET statement_timeout = '20s';
+   ALTER ROLE <app role> SET idle_in_transaction_session_timeout = '30s';
+   ```
+
+   They apply to new connections from then on — every connection made with that role, including
+   the migrate command and the data steps above. Those finish well within 20 seconds at today's
+   size; if one ever stops with "canceling statement due to statement timeout", run
+   `ALTER ROLE <app role> RESET statement_timeout;`, re-run the step, then set the limit again.
+   Nothing in the app depends on this step.
 
 **Backups.** Two layers:
 - **Neon** keeps 6 hours of history — for a mistake noticed right away, restore to a point in time

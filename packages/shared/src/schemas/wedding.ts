@@ -2,7 +2,7 @@ import { z } from "zod";
 // TS-180: free text refuses hidden control characters (see ../safe-text).
 import { safeText } from "../safe-text";
 import { FIELD_LIMITS } from "../field-limits";
-import { calendarDateField } from "./common";
+import { calendarDateField, lengthFirst } from "./common";
 import {
   WEDDING_NAME_PATTERN,
   WEDDING_NAME_MESSAGE,
@@ -15,18 +15,20 @@ import {
 } from "../validation";
 
 // TS-168: the rules for a wedding's name, wherever one is given (creating, renaming, copying).
-export const weddingNameField = z
-  .string()
-  .trim()
-  .min(1, "Wedding name is required")
-  .max(FIELD_LIMITS.weddingName)
-  .regex(WEDDING_NAME_PATTERN, WEDDING_NAME_MESSAGE)
-  // TS-156: the wedding name goes into RSVP and invite emails.
-  .refine((v) => !looksLikeWebAddress(v), NO_WEB_ADDRESS_MESSAGE)
-  // TS-171: nor can it carry a phone number.
-  .refine((v) => !looksLikePhoneNumber(v), NO_PHONE_NUMBER_MESSAGE)
-  // TS-178: nor mix look-alike letters from different alphabets in one word.
-  .refine((v) => !hasMixedScriptWord(v), NO_MIXED_SCRIPT_MESSAGE);
+// TS-200: the length is checked first, and a name that's too long goes no further (lengthFirst).
+export const weddingNameField = lengthFirst(
+  FIELD_LIMITS.weddingName,
+  z
+    .string()
+    .min(1, "Wedding name is required")
+    .regex(WEDDING_NAME_PATTERN, WEDDING_NAME_MESSAGE)
+    // TS-156: the wedding name goes into RSVP and invite emails.
+    .refine((v) => !looksLikeWebAddress(v), NO_WEB_ADDRESS_MESSAGE)
+    // TS-171: nor can it carry a phone number.
+    .refine((v) => !looksLikePhoneNumber(v), NO_PHONE_NUMBER_MESSAGE)
+    // TS-178: nor mix look-alike letters from different alphabets in one word.
+    .refine((v) => !hasMixedScriptWord(v), NO_MIXED_SCRIPT_MESSAGE)
+);
 
 /** TS-168: the default name for a copy -- within the length limit and the allowed characters. */
 export function copiedWeddingName(original: string): string {

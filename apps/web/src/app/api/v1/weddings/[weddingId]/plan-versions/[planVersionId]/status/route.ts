@@ -10,7 +10,7 @@ import {
 } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
 import { errorResponse, zodErrorResponse, concurrentChangeResponse } from "@/lib/api-response";
-import { requireAccess, canManageApproval } from "@/lib/access";
+import { requireAccess, canManageApproval, actorAccessFor } from "@/lib/access";
 
 type Params = { params: Promise<{ weddingId: string; planVersionId: string }> };
 
@@ -45,8 +45,14 @@ export async function POST(req: NextRequest, { params }: Params) {
   // loaded it is shown the plan as it is now, not refused over a status they haven't seen yet. And
   // someone who can undo an approval but not otherwise move a plan between Draft and In review is
   // also left to that check (it tells them the approval was already undone).
+  // TS-197: whether the person asking saw this plan approved. With expectedRevision, the plan's
+  // status is checked under its lock against the copy they had (a changed copy is refused as stale
+  // first), so what they saw is what is there -- not approved, if it gets that far. Without it, it's
+  // what was read just below.
+  let sawApproved = false;
   if (parsed.data.expectedRevision === undefined) {
     const currentStatus = await getPlanVersionStatusForWedding(planVersionId, weddingId);
+    sawApproved = currentStatus === "APPROVED";
     const touchesApproval = parsed.data.status === "APPROVED" || currentStatus === "APPROVED";
     if (touchesApproval) {
       if (!mayManageApproval) {
@@ -70,7 +76,14 @@ export async function POST(req: NextRequest, { params }: Params) {
       parsed.data.status,
       user.id,
       parsed.data.expectedRevision,
-      { mayApprove: mayManageApproval, mayLeaveApproved: mayManageApproval, mayMoveDraftAndReview }
+      {
+        mayApprove: mayManageApproval,
+        mayLeaveApproved: mayManageApproval,
+        mayMoveDraftAndReview,
+        sawApproved,
+        // TS-195: what these were worked out from, read again under the plan's lock.
+        judgedAccess: await actorAccessFor(weddingId, user.id, access.accessLevel),
+      }
     );
     if (!planVersion) return errorResponse("Plan version not found", 404);
     return NextResponse.json({ planVersion });
@@ -84,6 +97,8 @@ export async function POST(req: NextRequest, { params }: Params) {
       );
     }
     if (err instanceof PlanVersionStatusError) {
+      // TS-197: "can't be approved yet" carries the plan as it is now (re-checked, maybe a new revision).
+      if (err.planVersion) return NextResponse.json({ error: err.message, planVersion: err.planVersion }, { status: 409 });
       return errorResponse(err.message, 409);
     }
     // TS-187: lost a race with another change (nothing saved) -- 409, not a server error.

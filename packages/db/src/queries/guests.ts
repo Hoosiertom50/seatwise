@@ -15,6 +15,8 @@ import {
   type TableSeatingFlagReason,
 } from "./seat-checks";
 import { hashLinkToken, isPlainStoredLinkToken, newLinkToken, readStoredLinkToken } from "../link-tokens";
+import { lockWeddingRow } from "./wedding-lock";
+import { AttendanceError } from "./plan-versions";
 
 export interface GuestRow {
   id: string;
@@ -142,8 +144,10 @@ export async function createGuest(weddingId: string, input: CreateGuestData): Pr
 }
 
 export async function listGuestsByWedding(weddingId: string): Promise<GuestRow[]> {
+  // TS-196: g.id breaks ties between guests with the same name, so they always come back in the
+  // same order (and generating a plan from them always gives the same result).
   const { rows } = await pool.query(
-    `SELECT ${COLUMNS} ${FROM_JOINED} WHERE g."weddingId" = $1 ORDER BY g."lastName", g."firstName"`,
+    `SELECT ${COLUMNS} ${FROM_JOINED} WHERE g."weddingId" = $1 ORDER BY g."lastName", g."firstName", g.id`,
     [weddingId]
   );
   return rows.map(decryptGuestNotes);
@@ -158,6 +162,18 @@ export async function getGuestForWedding(id: string, weddingId: string): Promise
   return decryptGuestNotes(rows[0]);
 }
 
+// TS-195: what a guest edit did to the guest's attendance, beyond saving the fields -- for the
+// route's message and notification (attendanceChange is null when it didn't change it).
+export interface GuestUpdateResult {
+  attendanceChange: "ATTENDING" | "NOT_ATTENDING" | null;
+  /** They gave up a seat they actually had. */
+  seatFreed: boolean;
+  /** The guest's name, as saved (for the route's notification). */
+  guestName: string;
+  /** The current plan when the change was saved, if there is one. */
+  planVersionId: string | null;
+}
+
 // FR-7.7, extended to guests: an optional expectedRevision locks the guest's row (FOR UPDATE,
 // inside this function's own transaction) and compares it against the current revision before
 // writing anything. A mismatch means someone else's edit landed first -- rather than proceeding
@@ -165,12 +181,24 @@ export async function getGuestForWedding(id: string, weddingId: string): Promise
 // (a plain read from a second connection isn't blocked by the row lock, so it safely sees the
 // latest committed state) and writes nothing. A caller that passes no expectedRevision at all
 // (an internal/legacy call site) skips the check entirely, matching the plan-version pattern.
+// TS-195: the attendance change an edit brings is now part of the same transaction -- an explicit
+// dayOfAttendance, or the one a change of RSVP answer brings (Declined -> Not Attending, which
+// frees their seat; back from Declined -> Attending again, waiting for a seat; TS-167/TS-169).
+// It's decided from the guest's row as it is under the lock, not from a copy read before. Before,
+// the route saved the fields, then changed attendance in a second transaction, deciding from the
+// answer it had read before either: so a guest's own RSVP landing in between could leave someone
+// Confirmed but Not Attending (or the mirror), a failed seat release couldn't be retried (the
+// answer was already saved), and refusing to bring someone back answered 422 after the rest of
+// the edit had already been saved. Now a refusal refuses the whole edit, and nothing is saved.
+// Returns null if there's no such guest.
 export async function updateGuestForWedding(
   id: string,
   weddingId: string,
   input: Partial<CreateGuestData>,
-  expectedRevision?: number
-): Promise<boolean> {
+  expectedRevision?: number,
+  /** TS-195: who made the edit, for the plan's history of an attendance change. */
+  actorUserId: string | null = null
+): Promise<GuestUpdateResult | null> {
   const columnMap: Record<string, string> = {
     firstName: `"firstName"`,
     lastName: `"lastName"`,
@@ -180,7 +208,8 @@ export async function updateGuestForWedding(
     rsvpStatus: `"rsvpStatus"`,
     requiresAccessibleTable: `"requiresAccessibleTable"`,
     isLocked: `"isLocked"`,
-    dayOfAttendance: `"dayOfAttendance"`,
+    // TS-195: dayOfAttendance isn't written here -- it goes through applyAttendanceChange below,
+    // which frees the seat and keeps the plan in step.
     notes: `notes`,
     side: `side`,
     ageCategory: `"ageCategory"`,
@@ -200,26 +229,43 @@ export async function updateGuestForWedding(
   // TS-154: a planner setting the party size makes that the guest's new limit.
   if (input.headcount !== undefined) fields.push(`"partySizeLimit" = NULL`);
 
+  // TS-195: an edit that can change the guest's attendance -- one that sets it, or changes their
+  // RSVP answer -- takes the wedding's lock first, as setGuestAttendance and a guest's own RSVP do,
+  // so it and a guest answering by link at the same moment take turns.
+  const mayChangeAttendance = input.dayOfAttendance !== undefined || input.rsvpStatus !== undefined;
+  // Bringing someone back to Attending is checked against their Restricted table's list, and so
+  // are a bigger party and needing an accessible table -- those take the lists' lock.
+  const mayBringBack =
+    input.dayOfAttendance === "ATTENDING" || (input.rsvpStatus !== undefined && input.rsvpStatus !== "DECLINED");
+  const checksLists = input.headcount !== undefined || input.requiresAccessibleTable !== undefined || mayBringBack;
+
   const client = await pool.connect();
   try {
     await beginTransaction(client);
-    // TS-187: a party-size change may need the Restricted tables' lists checked (below), so it takes
-    // the locks in the usual order first -- the current plan, then the lists -- before the guest's
-    // row. Before, it locked the guest first and the tables after, the other way round from saving
-    // a list, so the two could each wait for the other.
-    if (input.headcount !== undefined) {
-      await lockCurrentPlan(client, weddingId);
-      await lockRestrictedLists(client, weddingId);
-    }
-    const { rows } = await client.query(
+    // TS-187/TS-195: the locks in the usual order -- the wedding (when attendance may change), the
+    // current plan, the Restricted tables' lists -- before the guest's row. Before, an edit of
+    // whether a guest needs an accessible table locked the guest first and the tables after, the
+    // other way round from saving a list, so the two could each wait for the other.
+    if (mayChangeAttendance) await lockWeddingRow(client, weddingId);
+    let planVersionId: string | null = null;
+    if (mayChangeAttendance || checksLists) planVersionId = await lockCurrentPlan(client, weddingId);
+    if (checksLists) await lockRestrictedLists(client, weddingId);
+    const { rows } = await client.query<{
+      revision: number;
+      headcount: number;
+      rsvpStatus: string;
+      dayOfAttendance: string;
+      name: string;
+    }>(
       // TS-187: NO KEY UPDATE -- see resyncSeatsAtTable in seat-checks.ts.
-      `SELECT revision, headcount FROM "guests" WHERE id = $1 AND "weddingId" = $2 FOR NO KEY UPDATE`,
+      `SELECT revision, headcount, "rsvpStatus", "dayOfAttendance", ("firstName" || ' ' || "lastName") AS name
+       FROM "guests" WHERE id = $1 AND "weddingId" = $2 FOR NO KEY UPDATE`,
       [id, weddingId]
     );
     const current = rows[0];
     if (!current) {
       await client.query("ROLLBACK").catch(() => {});
-      return false;
+      return null;
     }
     if (expectedRevision !== undefined && current.revision !== expectedRevision) {
       // TS-187: the locks are let go before the fresh copy is read on another connection.
@@ -238,6 +284,32 @@ export async function updateGuestForWedding(
         values
       );
     }
+
+    // TS-195: the attendance this edit leaves them at, from the row as it is under the lock.
+    // An attendance given in the edit wins; otherwise a change of answer brings its own (TS-167:
+    // marking them Declined frees their seat, the same as when they decline themselves; TS-169:
+    // changing them back from Declined brings them back -- Attending, waiting for a seat).
+    let attendance: "ATTENDING" | "NOT_ATTENDING" | null = null;
+    if (input.dayOfAttendance !== undefined) {
+      attendance = input.dayOfAttendance as "ATTENDING" | "NOT_ATTENDING";
+    } else if (input.rsvpStatus === "DECLINED" && current.rsvpStatus !== "DECLINED") {
+      attendance = "NOT_ATTENDING";
+    } else if (input.rsvpStatus !== undefined && input.rsvpStatus !== "DECLINED" && current.rsvpStatus === "DECLINED") {
+      attendance = "ATTENDING";
+    }
+    let attendanceChange: GuestUpdateResult["attendanceChange"] = null;
+    let seatFreed = false;
+    // The name as this edit leaves it, for the plan's history and the messages.
+    const { rows: savedName } = await client.query<{ name: string }>(
+      `SELECT ("firstName" || ' ' || "lastName") AS name FROM "guests" WHERE id = $1`,
+      [id]
+    );
+    const name = savedName[0]?.name ?? current.name;
+    if (attendance && attendance !== current.dayOfAttendance) {
+      attendanceChange = attendance;
+      ({ seatFreed } = await applyAttendanceChange(client, weddingId, planVersionId, { id, name }, attendance, actorUserId));
+    }
+
     // TS-181: a guest on a Restricted table's required-guest list can only grow their party while
     // the list still fits the table -- otherwise there'd be nowhere they're allowed to sit.
     if (input.headcount !== undefined && input.headcount > current.headcount) {
@@ -245,6 +317,17 @@ export async function updateGuestForWedding(
       if (over) {
         throw new GuestHeadcountError(
           `${over.guestNames[0] ?? "This guest"} is on "${over.tableLabel}"'s required-guest list, and a party of ${input.headcount} would need ${over.seats} seats there — it has ${over.capacity}. Give that table more seats, or take them off its list first.`
+        );
+      }
+    }
+    // TS-188: Restricted lists count only attending guests, so someone coming back counts again --
+    // the planner can't bring them back if their table's list would then need more seats than it
+    // has. TS-195: refused as part of the whole edit, so nothing of it is saved.
+    if (attendanceChange === "ATTENDING") {
+      const [over] = await restrictedListsOverCapacity(client, [id]);
+      if (over) {
+        throw new AttendanceError(
+          `${name} is on "${over.tableLabel}"'s required-guest list, which would then need ${over.seats} seats — it has ${over.capacity}. Give that table more seats, or take someone off its list first.`
         );
       }
     }
@@ -260,7 +343,7 @@ export async function updateGuestForWedding(
       }
     }
     await client.query("COMMIT");
-    return true;
+    return { attendanceChange, seatFreed, guestName: name, planVersionId };
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});
     throw err;
@@ -287,14 +370,20 @@ export async function deleteGuestForWedding(id: string, weddingId: string, actor
           [planVersionId, id]
         )
       : { rows: [] as { name: string }[] };
-    const { rowCount } = await client.query(`DELETE FROM "guests" WHERE id = $1 AND "weddingId" = $2`, [
-      id,
-      weddingId,
-    ]);
-    const deleted = (rowCount ?? 0) > 0;
-    if (deleted && planVersionId && affected.length > 0) {
-      const { changed } = await resyncTables(client, weddingId, planVersionId, affected);
-      await refreshPlanCompleteness(client, weddingId, planVersionId, { bumpRevision: changed || seated.length > 0 });
+    // TS-197: whether they were attending -- an attending guest leaving changes the plan's list of
+    // guests waiting for a seat, so the plan moves on a revision here, once (the route's follow-up
+    // recount used to move it on a second time).
+    const { rows: deletedRows } = await client.query(
+      `DELETE FROM "guests" WHERE id = $1 AND "weddingId" = $2 RETURNING "dayOfAttendance"`,
+      [id, weddingId]
+    );
+    const deleted = deletedRows.length > 0;
+    const wasAttending = deletedRows[0]?.dayOfAttendance === "ATTENDING";
+    if (deleted && planVersionId) {
+      const { changed } = affected.length > 0 ? await resyncTables(client, weddingId, planVersionId, affected) : { changed: false };
+      await refreshPlanCompleteness(client, weddingId, planVersionId, {
+        bumpRevision: changed || seated.length > 0 || wasAttending,
+      });
     }
     // TS-169: removing a seated guest changes an approved plan -- it shows "Modified since approval".
     if (deleted && planVersionId && seated[0]) {

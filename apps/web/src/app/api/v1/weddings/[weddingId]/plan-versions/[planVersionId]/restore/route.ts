@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { restorePlanVersion, RestoreError } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
 import { errorResponse, concurrentChangeResponse } from "@/lib/api-response";
-import { requireAccess, canManageApproval } from "@/lib/access";
+import { requireAccess, canManageApproval, actorAccessFor } from "@/lib/access";
 import { SAVED_AS_DRAFT_BECAUSE_APPROVED } from "@/lib/plan-approval-text";
 
 type Params = { params: Promise<{ weddingId: string; planVersionId: string }> };
@@ -29,7 +29,8 @@ export async function POST(req: NextRequest, { params }: Params) {
       planVersionId,
       weddingId,
       user.id,
-      { mayReplaceApproved }
+      // TS-195: the access read again under the restore's lock -- refused if it dropped meanwhile.
+      { mayReplaceApproved, actorAccess: await actorAccessFor(weddingId, user.id, access.accessLevel) }
     );
     return NextResponse.json(
       {

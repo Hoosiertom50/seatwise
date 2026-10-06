@@ -113,6 +113,11 @@ export class TablesTabPage extends BasePage {
     await this.page.getByRole("button", { name: "Floor plan", exact: true }).click();
   }
 
+  /** TS-199: the room itself (the canvas holding the table boxes), e.g. to walk its Tab order. */
+  floorPlanRegion() {
+    return this.page.getByRole("group", { name: "Room floor plan", exact: true });
+  }
+
   /** Any message the tab shows the user (e.g. its red error banner), matched by its text -- a
    * string matches the whole element text exactly, so the same reason echoed inside the header's
    * save status ("Not saved: <reason>", TS-93) isn't a second match. */

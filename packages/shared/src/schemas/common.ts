@@ -23,3 +23,16 @@ export const calendarDateField = z
     const year = Number(v.slice(0, 4));
     return year >= MIN_CALENDAR_YEAR && year <= MAX_CALENDAR_YEAR;
   }, `Use a date between ${MIN_CALENDAR_YEAR} and ${MAX_CALENDAR_YEAR}`);
+
+/**
+ * TS-200: a string whose length is checked before anything else, and nothing else runs when it's
+ * too long. zod runs every check on a string even after one fails, so `.max(100).regex(...)` used
+ * to run the pattern (and any .refine) on a 100,000-character value too -- and some of those
+ * patterns take time that grows with the square of the length (a 40,000-character sign-up name
+ * took about a second of server time). Here the value is trimmed (unless `trim: false`), held to
+ * `max`, and only a value that fits is passed on to `then` for the remaining rules.
+ */
+export function lengthFirst<T extends z.ZodTypeAny>(max: number, then: T, opts: { trim?: boolean } = {}) {
+  const base = opts.trim === false ? z.string() : z.string().trim();
+  return base.max(max).pipe(then);
+}
