@@ -1,0 +1,56 @@
+# GitHub's own security scanner (CodeQL), as an independent check alongside the AI reviews: it runs
+# a fixed set of security rules (injection, unsafe redirects, leaked secrets, unsafe workflow
+# settings, ...) over the app's TypeScript/JavaScript and over these GitHub Actions workflows.
+# Free for public repositories. Results show under the repository's Security tab -> Code scanning,
+# and as comments on pull requests.
+name: CodeQL security scan
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  # Weekly as well, so rules GitHub adds later are run against code that hasn't changed.
+  schedule:
+    - cron: "17 9 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      # Needed to upload the results to the Security tab; nothing else is granted.
+      security-events: write
+      contents: read
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [javascript-typescript, actions]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: ${{ matrix.language }}
+          # No build needed: CodeQL reads TypeScript/JavaScript and workflow files directly.
+          build-mode: none
+          # The default rules plus GitHub's extended security set.
+          queries: security-extended
+          config: |
+            paths-ignore:
+              - node_modules
+              - "**/node_modules"
+              - apps/mobile/ios
+              - apps/mobile/android
+              - artifacts
+
+      - name: Run the scan
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: "/language:${{ matrix.language }}"
