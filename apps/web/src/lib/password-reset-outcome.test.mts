@@ -24,8 +24,15 @@ test("asking again while a link still works says it was already sent; a used-up 
   const { RESET_ALREADY_SENT_MESSAGE, RESET_EMAIL_LIMITED_MESSAGE } = await import("./password-reset-outcome");
   assert.deepEqual(resetOutcome(true, "already-sent"), { sent: true, alreadySent: true, message: RESET_ALREADY_SENT_MESSAGE });
   assert.match(RESET_ALREADY_SENT_MESSAGE, /already sent you a link/);
-  for (const result of ["limited", "recipient-limited"] as const) {
-    assert.deepEqual(resetOutcome(true, result), { sent: false, emailFailed: true, message: RESET_EMAIL_LIMITED_MESSAGE });
-  }
+  assert.deepEqual(resetOutcome(true, "limited"), { sent: false, emailFailed: true, message: RESET_EMAIL_LIMITED_MESSAGE });
   assert.match(RESET_EMAIL_LIMITED_MESSAGE, /try again tomorrow/);
+});
+
+// TS-186: an address that has had its emails for today is told that -- not that Seatwise has stopped.
+test("an address at its own daily limit is told it's that address, and to try tomorrow", async () => {
+  const { RESET_RECIPIENT_LIMITED_MESSAGE, RESET_EMAIL_LIMITED_MESSAGE } = await import("./password-reset-outcome");
+  assert.deepEqual(resetOutcome(true, "recipient-limited"), { sent: false, emailFailed: true, message: RESET_RECIPIENT_LIMITED_MESSAGE });
+  assert.notEqual(RESET_RECIPIENT_LIMITED_MESSAGE, RESET_EMAIL_LIMITED_MESSAGE);
+  assert.match(RESET_RECIPIENT_LIMITED_MESSAGE, /This email address has had as many emails from Seatwise as it can today/);
+  assert.match(RESET_RECIPIENT_LIMITED_MESSAGE, /try again tomorrow/);
 });

@@ -65,6 +65,15 @@ export const ACCOUNT_EMAIL_LIMITS = {
 };
 export const accountEmailAddressKey = (address: string) => `account-email:addr:day:${address}`;
 
+// TS-186: of those, sign-ups that send a confirmation email from one network address in a day --
+// so one source can't take the whole day's share for confirmations (CONFIRMATION_SHARE_OF_EVERYDAY
+// in packages/db/src/email.ts). Past it the account is still made, without the email (the banner
+// offers "Resend link", which has its own limits).
+export const CONFIRMATION_EMAIL_LIMITS = {
+  signupsPerAddressDay: { limit: 20, windowSeconds: 86_400 },
+};
+export const signupConfirmationAddressKey = (address: string) => `confirm-email:signup:addr:day:${address}`;
+
 // TS-142: "forgot password" -- requests per address and per email (the per-email cap is what keeps
 // one inbox from being flooded), and attempts to use a link per address. Links are 64 random hex
 // characters, so guessing one isn't feasible; that limit only stops abuse, hence generous.
@@ -74,8 +83,27 @@ export const PASSWORD_RESET_LIMITS = {
   // TS-168: daily ceilings -- reset emails share a reserved part of the daily email allowance.
   requestsPerAddressDay: { limit: 100, windowSeconds: 86_400 },
   requestsPerEmailDay: { limit: 6, windowSeconds: 86_400 },
+  // TS-186: while the account is locked by the sign-in limits, the same daily count may go this
+  // high instead -- so someone who locked the owner out can't also leave them no reset, yet one
+  // inbox still can't be flooded without end.
+  requestsPerEmailDayWhileLocked: { limit: 12, windowSeconds: 86_400 },
   resetsPerAddress: { limit: 100, windowSeconds: 900 },
 };
+
+// TS-186: wrong passwords when deleting the account (the person is already signed in), per
+// account. Counted with the sign-in counter for this account from this network address -- but not
+// the account-wide one, which anyone can fill from many addresses (it would let a stranger stop
+// someone deleting their own account).
+export const ACCOUNT_DELETE_LIMITS = {
+  failuresPerAccount: { limit: 10, windowSeconds: 3600 },
+};
+export function accountDeleteFailureLimits(userId: string, email: string, address: string) {
+  const account = email.trim().toLowerCase();
+  return [
+    { key: `login:account-addr:${account}:${address}`, ...LOGIN_LIMITS.failuresPerAccountAndAddress },
+    { key: `account-delete:failures:${userId}`, ...ACCOUNT_DELETE_LIMITS.failuresPerAccount },
+  ];
+}
 
 // TS-113: failed sign-in attempts (a correct password never counts), so real use can never lock
 // anyone out. Per account, so no one can keep guessing one person's password; per address, so one
@@ -125,8 +153,9 @@ export async function countSignInAttempt(
   return {
     allowed: results.every((r) => r.allowed),
     retryAfterSeconds: Math.max(0, ...results.filter((r) => !r.allowed).map((r) => r.retryAfterSeconds)),
+    // TS-186: each count is taken back from the window it was made in.
     giveBack: async () => {
-      await Promise.all(limits.map(({ key, windowSeconds }) => undoRateLimitHit(key, windowSeconds)));
+      await Promise.all(limits.map(({ key, windowSeconds }, i) => undoRateLimitHit(key, windowSeconds, results[i].windowStart)));
     },
   };
 }
@@ -168,17 +197,41 @@ export {
 // null to carry on. TS-177: the message follows the window (a daily limit says "tomorrow", not "a
 // few minutes"), and `message` replaces it where the generic text wouldn't be accurate (a limit
 // counted per link from anywhere, say, isn't "from here").
+// TS-186: a refused request is given back, as sign-in does -- so tries made while refused don't
+// keep the limit going for longer.
 export async function rateLimitOr429(
+  key: string,
+  limits: { limit: number; windowSeconds: number },
+  message?: string
+): Promise<NextResponse | null> {
+  return (await countOr429(key, limits, message)).limited;
+}
+
+/**
+ * TS-186: rateLimitOr429, plus `giveBack` to take this request's count back later (from exactly
+ * the window it was counted in) -- for a request that turns out to send nothing.
+ */
+export async function countOr429(
   key: string,
   { limit, windowSeconds }: { limit: number; windowSeconds: number },
   message?: string
-): Promise<NextResponse | null> {
+): Promise<{ limited: NextResponse | null; giveBack: () => Promise<void> }> {
   const result = await hitRateLimit(key, limit, windowSeconds);
-  if (result.allowed) return null;
-  return NextResponse.json(
-    { error: message ?? tooManyAttemptsMessage(windowSeconds) },
-    { status: 429, headers: { "Retry-After": String(result.retryAfterSeconds) } }
-  );
+  let counted = true;
+  const giveBack = async () => {
+    if (!counted) return;
+    counted = false;
+    await undoRateLimitHit(key, windowSeconds, result.windowStart);
+  };
+  if (result.allowed) return { limited: null, giveBack };
+  await giveBack();
+  return {
+    limited: NextResponse.json(
+      { error: message ?? tooManyAttemptsMessage(windowSeconds) },
+      { status: 429, headers: { "Retry-After": String(result.retryAfterSeconds) } }
+    ),
+    giveBack,
+  };
 }
 
 // TS-156: how many emails one signed-in person can make Seatwise send to other people. Seatwise
@@ -198,18 +251,13 @@ export const EMAIL_SEND_LIMITS: Record<"invites" | "rsvpEmails", readonly { limi
 };
 
 // TS-177: refused, with which limit it was (see emailSendRefusedMessage for the words).
-export type EmailSendReservation = { allowed: true } | { allowed: false; reason: EmailLimitReason };
+// TS-186: allowed comes with `release`, which gives the counts back from the windows they were made in.
+export type EmailSendReservation =
+  | { allowed: true; release: () => Promise<void> }
+  | { allowed: false; reason: EmailLimitReason };
 
-/**
- * TS-156: counts one email of `kind` sent by `userId` against every window; refused once any
- * window is over its limit (the email should then not be sent). TS-171: and against the account's
- * daily allowance for all kinds of email together.
- *
- * TS-177: a refused email uses nothing up -- the counters that did allow it get their hit back, so
- * one full window can't quietly drain the others.
- */
-export async function reserveEmailSend(kind: keyof typeof EMAIL_SEND_LIMITS, userId: string): Promise<EmailSendReservation> {
-  const counters = [
+function emailSendCounters(kind: keyof typeof EMAIL_SEND_LIMITS, userId: string) {
+  return [
     ...EMAIL_SEND_LIMITS[kind].map(({ limit, windowSeconds }) => ({
       key: `email:${kind}:${windowSeconds}:${userId}`,
       limit,
@@ -218,23 +266,57 @@ export async function reserveEmailSend(kind: keyof typeof EMAIL_SEND_LIMITS, use
     })),
     { key: accountDailyEmailKey(userId), ...ACCOUNT_EMAILS_PER_DAY, accountDaily: true },
   ];
+}
+
+/**
+ * TS-156: counts one email of `kind` sent by `userId` against every window; refused once any
+ * window is over its limit (the email should then not be sent). TS-171: and against the account's
+ * daily allowance for all kinds of email together.
+ *
+ * TS-177: a refused email uses nothing up, so one full window can't quietly drain the others.
+ * TS-186: that now includes the windows that refused it, so refused tries don't keep a full
+ * window full for longer.
+ */
+export async function reserveEmailSend(kind: keyof typeof EMAIL_SEND_LIMITS, userId: string): Promise<EmailSendReservation> {
+  const counters = emailSendCounters(kind, userId);
   const results = await Promise.all(counters.map(({ key, limit, windowSeconds }) => hitRateLimit(key, limit, windowSeconds)));
-  if (results.every((r) => r.allowed)) return { allowed: true };
-
-  await Promise.all(counters.map((c, i) => (results[i].allowed ? undoRateLimitHit(c.key, c.windowSeconds) : null)));
-
+  let counted = true;
+  const release = async () => {
+    if (!counted) return;
+    counted = false;
+    await Promise.all(counters.map((c, i) => undoRateLimitHit(c.key, c.windowSeconds, results[i].windowStart)));
+  };
+  if (results.every((r) => r.allowed)) return { allowed: true, release };
+  await release();
   return { allowed: false, reason: emailLimitReason(counters.filter((_, i) => !results[i].allowed)) };
 }
 
-/** TS-168: gives back one email counted by reserveEmailSend, when nothing was sent after all. */
-export async function releaseEmailSend(kind: keyof typeof EMAIL_SEND_LIMITS, userId: string): Promise<void> {
-  await Promise.all([
-    ...EMAIL_SEND_LIMITS[kind].map(({ windowSeconds }) => undoRateLimitHit(`email:${kind}:${windowSeconds}:${userId}`, windowSeconds)),
-    undoRateLimitHit(accountDailyEmailKey(userId), ACCOUNT_EMAILS_PER_DAY.windowSeconds),
-  ]);
+/**
+ * TS-168: gives back one email counted by reserveEmailSend, when nothing was sent after all.
+ * TS-186: pass the reservation, so the counts come back from exactly the windows they were made
+ * in; without it, the current windows are used (as before).
+ */
+export async function releaseEmailSend(
+  kind: keyof typeof EMAIL_SEND_LIMITS,
+  userId: string,
+  reservation?: EmailSendReservation
+): Promise<void> {
+  if (reservation?.allowed) return reservation.release();
+  await Promise.all(emailSendCounters(kind, userId).map(({ key, windowSeconds }) => undoRateLimitHit(key, windowSeconds)));
 }
 
 // TS-171: once a guest has been emailed their RSVP link, asking for the link again (to copy it)
-// doesn't email them again until the next hour -- so the button can't be used to flood one inbox.
-// A brand-new link ("New link", or a corrected address) is still emailed straight away.
+// doesn't email them again for an hour -- so the button can't be used to flood one inbox. A
+// brand-new link ("New link", "Reset all guest and vendor links", or a corrected address) is still
+// emailed straight away.
+// TS-186: a real hour from the last email (see claimCooldown) -- clicks in between don't add to it.
 export const RSVP_RESEND_COOLDOWN_SECONDS = 3600;
+
+/**
+ * TS-186: the key the hour is kept under: the guest, the address, and the link itself (by the
+ * start of its stored hash, never the link) -- so once the links are reset, the new one can be
+ * emailed straight away.
+ */
+export function rsvpLinkCooldownKey(guestId: string, email: string, linkHash: string): string {
+  return `email:rsvp-link:${guestId}:${email.trim().toLowerCase()}:${linkHash.slice(0, 16)}`;
+}

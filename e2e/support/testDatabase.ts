@@ -179,17 +179,75 @@ export async function plantPreHashingRsvpLink(guestId: string): Promise<string> 
 }
 
 /**
- * TS-163: how many times a test guest's responses have asked to email the planners this hour. Only
- * the first in the hour is emailed (the key's limit is 1), so 3 means one email and two skipped.
+ * TS-163: how many times a test guest's repeated (unchanged) responses have emailed the planners
+ * in the last hour. TS-186: the app keeps one row per email sent (the moment it was sent), and
+ * responses held back by the once-an-hour rule add nothing -- so this is at most 1.
  */
 export async function rsvpNotificationEmailRequests(guestId: string): Promise<number> {
   await storedGuestRsvpLink(guestId); // throws unless the guest is on a test wedding
   const { rows } = await testPool().query<{ n: number }>(
     `SELECT COALESCE(SUM(count), 0)::int AS n FROM "rate_limit_counters"
-     WHERE key = $1 AND "windowStart" > now() - interval '1 hour'`,
-    [`email:rsvp-notify:${guestId}`],
+     WHERE key = $1 AND "windowStart" > $2`,
+    [`email:rsvp-notify:${guestId}`, new Date(Date.now() - 3_600_000)],
   );
   return rows[0].n;
+}
+
+/**
+ * TS-186: when a test guest was emailed their RSVP link, as the app's once-an-hour rule keeps it
+ * (one row per email, for whichever link the guest had then), oldest first.
+ */
+export async function rsvpLinkEmailTimes(guestId: string): Promise<Date[]> {
+  await storedGuestRsvpLink(guestId); // throws unless the guest is on a test wedding
+  const { rows } = await testPool().query<{ windowStart: Date }>(
+    `SELECT "windowStart" FROM "rate_limit_counters"
+     WHERE key LIKE $1 AND count > 0 ORDER BY "windowStart"`,
+    [`email:rsvp-link:${guestId}:%`],
+  );
+  return rows.map((r) => new Date(r.windowStart));
+}
+
+/**
+ * TS-186: moves a test guest's RSVP-link email times `minutes` into the past -- as if that much
+ * time had gone by -- so a test can reach the end of the hour without waiting for it.
+ */
+export async function moveRsvpLinkEmailTimesBack(guestId: string, minutes: number): Promise<void> {
+  await storedGuestRsvpLink(guestId);
+  await testPool().query(
+    `UPDATE "rate_limit_counters" SET "windowStart" = "windowStart" - make_interval(mins => $2)
+     WHERE key LIKE $1`,
+    [`email:rsvp-link:${guestId}:%`, minutes],
+  );
+}
+
+/**
+ * TS-186: sets how many of a test guest's changed RSVP answers have been emailed to the planners
+ * today (CHANGED_RSVP_EMAILS_PER_GUEST_PER_DAY in packages/db/src/queries/notifications.ts).
+ */
+export async function setChangedRsvpEmailsToday(guestId: string, count: number): Promise<void> {
+  await storedGuestRsvpLink(guestId);
+  await setCounter(`email:rsvp-changed:day:${guestId}`, 86_400, count);
+}
+
+/** TS-186: sets how much of a test wedding's daily pool for guests' RSVP emails has been used today. */
+export async function setWeddingNotificationEmailsToday(weddingId: string, count: number): Promise<void> {
+  await weddingNotificationEmailsThisHour(weddingId); // throws unless it's a test wedding
+  await setCounter(`email:notify-wedding:86400:${weddingId}`, 86_400, count);
+}
+
+/** TS-186: how many of a test guest's changed RSVP answers have been emailed today. */
+export async function changedRsvpEmailsToday(guestId: string): Promise<number> {
+  await storedGuestRsvpLink(guestId);
+  return readCounter(`email:rsvp-changed:day:${guestId}`, 86_400);
+}
+
+/**
+ * TS-186: how many emails nobody signed in set off (guests' RSVPs) a test wedding has sent today,
+ * out of its own daily pool (NOTIFICATION_EMAILS_PER_WEDDING_WITHOUT_ACTOR).
+ */
+export async function weddingNotificationEmailsToday(weddingId: string): Promise<number> {
+  await weddingNotificationEmailsThisHour(weddingId); // throws unless it's a test wedding
+  return readCounter(`email:notify-wedding:86400:${weddingId}`, 86_400);
 }
 
 /**

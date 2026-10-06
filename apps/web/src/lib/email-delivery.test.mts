@@ -15,9 +15,14 @@ const {
   setRecipientEmailCounterForTests,
   EMAILS_PER_RECIPIENT_PER_DAY,
   setConfirmationEmailCounterForTests,
+  setResetEmailCountersForTests,
   recipientCountAddress,
   maskEmailAddress,
 } = await import("@seatwise/db");
+
+// TS-186: every counter's hit returns the window it counted in, and undo is handed that window.
+const TODAY = new Date(Date.UTC(2026, 9, 6));
+const undoneFrom: Date[] = [];
 
 // TS-163: the daily email ceiling's counter lives in the database; here it's an in-memory one.
 let sentToday = 0;
@@ -25,13 +30,34 @@ let sentToday = 0;
 let toAddress = new Map<string, number>();
 // TS-178: and so does the confirmations' share of the day.
 let confirmationsToday = 0;
+// TS-186: and the password resets' own counts.
+let resetsToday = 0;
+let unconfirmedResetsToday = 0;
 beforeEach(() => {
   sentToday = 0;
   confirmationsToday = 0;
+  resetsToday = 0;
+  unconfirmedResetsToday = 0;
+  undoneFrom.length = 0;
   setConfirmationEmailCounterForTests({
-    hit: async () => ++confirmationsToday,
-    undo: async () => {
+    hit: async () => ({ count: ++confirmationsToday, windowStart: TODAY }),
+    undo: async (windowStart) => {
+      undoneFrom.push(windowStart);
       confirmationsToday--;
+    },
+  });
+  setResetEmailCountersForTests({
+    confirmed: {
+      hit: async () => ({ count: ++resetsToday, windowStart: TODAY }),
+      undo: async () => {
+        resetsToday--;
+      },
+    },
+    unconfirmed: {
+      hit: async () => ({ count: ++unconfirmedResetsToday, windowStart: TODAY }),
+      undo: async () => {
+        unconfirmedResetsToday--;
+      },
     },
   });
   toAddress = new Map();
@@ -39,14 +65,14 @@ beforeEach(() => {
     hit: async (to) => {
       const n = (toAddress.get(to.toLowerCase()) ?? 0) + 1;
       toAddress.set(to.toLowerCase(), n);
-      return n;
+      return { count: n, windowStart: TODAY };
     },
     undo: async (to) => {
       toAddress.set(to.toLowerCase(), (toAddress.get(to.toLowerCase()) ?? 1) - 1);
     },
   });
   setDailyEmailCounterForTests({
-    hit: async () => ++sentToday,
+    hit: async () => ({ count: ++sentToday, windowStart: TODAY }),
     undo: async () => {
       sentToday--;
     },
@@ -55,6 +81,7 @@ beforeEach(() => {
 afterEach(() => {
   setEmailSenderForTests();
   setConfirmationEmailCounterForTests();
+  setResetEmailCountersForTests();
   setDailyEmailCounterForTests();
   setRecipientEmailCounterForTests();
 });
@@ -172,10 +199,13 @@ const GMAIL = { NODE_ENV: "production", SMTP_USER: "seatwise.notifications@gmail
 
 test("the daily ceiling defaults to 400 everyday emails, with 80 more kept for password resets", () => {
   // TS-178: and a quarter of the everyday allowance at most for email-address confirmations.
-  assert.deepEqual(dailyEmailLimits({}), { everyday: 400, essential: 480, confirmations: 100 });
-  assert.deepEqual(dailyEmailLimits({ EMAIL_DAILY_LIMIT: "100" }), { everyday: 100, essential: 180, confirmations: 25 });
-  assert.deepEqual(dailyEmailLimits({ EMAIL_DAILY_LIMIT: "nonsense" }), { everyday: 400, essential: 480, confirmations: 100 });
+  // TS-186: resets have their own 80 (not counted in the 400), and unconfirmed accounts' resets a
+  // tenth of the everyday allowance.
+  assert.deepEqual(dailyEmailLimits({}), { everyday: 400, resets: 80, confirmations: 100, unconfirmedResets: 40 });
+  assert.deepEqual(dailyEmailLimits({ EMAIL_DAILY_LIMIT: "100" }), { everyday: 100, resets: 80, confirmations: 25, unconfirmedResets: 10 });
+  assert.deepEqual(dailyEmailLimits({ EMAIL_DAILY_LIMIT: "nonsense" }), { everyday: 400, resets: 80, confirmations: 100, unconfirmedResets: 40 });
   assert.equal(dailyEmailLimits({ EMAIL_DAILY_LIMIT: "2" }).confirmations, 1);
+  assert.equal(dailyEmailLimits({ EMAIL_DAILY_LIMIT: "2" }).unconfirmedResets, 1);
 });
 
 test("over the daily ceiling, everyday emails aren't sent (and don't use up the reset headroom); resets still go", async () => {
@@ -190,9 +220,11 @@ test("over the daily ceiling, everyday emails aren't sent (and don't use up the 
   assert.equal(await sendEmail("d@example.invalid", "s", "t", env), "limited");
   assert.equal(sentToday, 2, "refused emails are taken back off the count");
   assert.equal(emailDelivered("limited"), false);
-  // A password reset still goes out, up to the extra headroom.
+  // A password reset still goes out, from the resets' own allowance.
   assert.equal(await sendEmail("me@example.invalid", "Reset", "t", env, { essential: true }), "sent");
   assert.deepEqual(sent, ["a@example.invalid", "b@example.invalid", "me@example.invalid"]);
+  assert.equal(resetsToday, 1);
+  assert.equal(sentToday, 2, "a reset doesn't count against the everyday allowance");
 });
 
 test("the log transport used locally and in CI never counts against the ceiling", async () => {
@@ -237,7 +269,69 @@ test("with the everyday allowance used up, an email-confirmation (an everyday em
     assert.equal(await sendEmail("b@example.invalid", "Confirm your email for Seatwise", "t", env), "limited");
     assert.equal(await sendEmail("c@example.invalid", "Reset your Seatwise password", "t", env, { essential: true }), "sent");
   });
-  assert.equal(sentToday, 2);
+  assert.equal(sentToday, 1);
+  assert.equal(resetsToday, 1);
+});
+
+// TS-186: password resets have a budget of their own, both ways.
+test("confirmed accounts' resets stop at their own 80 a day, and never use the everyday allowance", async () => {
+  setEmailSenderForTests(async () => {});
+  const env = { ...GMAIL, EMAIL_DAILY_LIMIT: "3" };
+  resetsToday = 79;
+  await quietly(async () => {
+    assert.equal(await sendEmail("a@example.invalid", "Reset", "t", env, { essential: true }), "sent");
+    assert.equal(await sendEmail("b@example.invalid", "Reset", "t", env, { essential: true }), "limited");
+    // The everyday allowance is all still there.
+    for (let i = 0; i < 3; i++) assert.equal(await sendEmail(`g${i}@example.invalid`, "RSVP", "t", env), "sent", `RSVP ${i}`);
+  });
+  assert.equal(resetsToday, 80, "the refused reset was taken back off the count");
+  assert.equal(sentToday, 3);
+});
+
+test("unconfirmed accounts' resets stop at their share of the everyday allowance, and count in it", async () => {
+  const sent: string[] = [];
+  setEmailSenderForTests(async (_config, message) => {
+    sent.push(message.to);
+  });
+  const env = { ...GMAIL, EMAIL_DAILY_LIMIT: "20" }; // a share of 2
+  await quietly(async () => {
+    assert.equal(await sendEmail("a@example.invalid", "Reset", "t", env, { unconfirmedReset: true }), "sent");
+    assert.equal(await sendEmail("b@example.invalid", "Reset", "t", env, { unconfirmedReset: true }), "sent");
+    assert.equal(await sendEmail("c@example.invalid", "Reset", "t", env, { unconfirmedReset: true }), "limited");
+  });
+  assert.equal(unconfirmedResetsToday, 2);
+  assert.equal(sentToday, 2, "they're everyday emails");
+  assert.equal(resetsToday, 0, "not the confirmed accounts' reset budget");
+  assert.equal(toAddress.get("c@example.invalid"), 0, "a refused one doesn't count against its address");
+  assert.deepEqual(sent, ["a@example.invalid", "b@example.invalid"]);
+});
+
+test("an unconfirmed account's reset is held to the per-address cap; a refused one gives back its share", async () => {
+  setEmailSenderForTests(async () => {});
+  const env = { ...GMAIL, EMAIL_DAILY_LIMIT: "1" };
+  await quietly(async () => {
+    for (let i = 0; i < EMAILS_PER_RECIPIENT_PER_DAY; i++) await sendEmail("me@example.invalid", "s", "t", { EMAIL_TRANSPORT: "log" });
+    assert.equal(await sendEmail("me@example.invalid", "Reset", "t", env, { unconfirmedReset: true }), "recipient-limited");
+    // With the everyday allowance used up, its share is given back too.
+    await sendEmail("x@example.invalid", "RSVP", "t", env);
+    assert.equal(await sendEmail("y@example.invalid", "Reset", "t", env, { unconfirmedReset: true }), "limited");
+  });
+  assert.equal(unconfirmedResetsToday, 0);
+  assert.equal(sentToday, 1);
+});
+
+test("counts are given back from the window they were made in", async () => {
+  setEmailSenderForTests(async () => {
+    throw new Error("421 try again later");
+  });
+  const { error } = console;
+  console.error = () => {};
+  try {
+    assert.equal(await sendEmail("a@example.invalid", "Confirm", "t", GMAIL, { confirmation: true }), "failed");
+  } finally {
+    console.error = error;
+  }
+  assert.deepEqual(undoneFrom, [TODAY]);
 });
 
 test("one address gets at most 5 capped emails a day, however it's written; other addresses are unaffected", async () => {
