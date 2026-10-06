@@ -158,7 +158,7 @@ export async function updateCollaboratorPermission(
   collaboratorId: string,
   permissionLevel?: "VIEW" | "COMMENT" | "EDIT",
   role?: CollaboratorRole
-): Promise<void> {
+): Promise<{ permissionLevel: "VIEW" | "COMMENT" | "EDIT"; role: CollaboratorRole }> {
   if (permissionLevel === undefined && role === undefined) {
     throw new CollaboratorError("Nothing to update.", "NOT_FOUND");
   }
@@ -173,16 +173,18 @@ export async function updateCollaboratorPermission(
     sets.push(`"role" = $${params.length}::"CollaboratorRole"`);
   }
   params.push(collaboratorId, weddingId);
-  const { rowCount } = await pool.query(
+  // TS-195: returns the access level and role as saved, so the screen shows what's really stored.
+  const { rows } = await pool.query(
     `UPDATE "wedding_collaborators" SET ${sets.join(", ")}
-     WHERE id = $${params.length - 1} AND "weddingId" = $${params.length}`,
+     WHERE id = $${params.length - 1} AND "weddingId" = $${params.length}
+     RETURNING "userId", "permissionLevel", "role"`,
     params
   );
-  if (!rowCount) {
+  if (!rows[0]) {
     throw new CollaboratorError("Collaborator not found.", "NOT_FOUND");
   }
-  const { rows } = await pool.query(`SELECT "userId" FROM "wedding_collaborators" WHERE id = $1`, [collaboratorId]);
-  if (rows[0]) await revokePendingInvitesForUser(weddingId, rows[0].userId);
+  await revokePendingInvitesForUser(weddingId, rows[0].userId);
+  return { permissionLevel: rows[0].permissionLevel, role: rows[0].role };
 }
 
 // TS-148: a collaborator's access row (null when it isn't on this wedding) -- e.g. to let someone

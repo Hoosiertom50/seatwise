@@ -21,11 +21,11 @@ interface GuestListRow {
 defineQualityTest(
   {
     id: "guest-list.rejected-name-edit-shows-the-saved-name-again.failure-blank-and-conflict",
-    title: "a guest-name edit that fails, is blank, or loses a conflict puts the saved name back in the input",
+    title: "a guest-name edit that fails keeps the typed text marked unsaved; a blank one or a lost conflict puts the saved name back",
     objective:
-      "Confirms the inline first-name input on the Guests tab never keeps text that wasn't saved: after a server error it shows the last saved name (with the error visible and nothing persisted), after blanking the field it shows the saved name again, and after losing a revision conflict it shows the other collaborator's name.",
+      "Confirms the inline first-name input on the Guests tab never passes off unsaved text as saved: after a server error it keeps what was typed with the error and a 'Not saved yet' note visible and nothing persisted (TS-199), after blanking the field it shows the saved name again, and after losing a revision conflict it shows the other collaborator's name.",
     expectedOutcome:
-      "After the injected 500 the input reads the original first name, the error is shown, and the server still has the original. After a blank edit the input reads the original with the blank-name error shown. After the conflicting edit the input reads the other collaborator's name.",
+      "After the injected 500 the input still reads the typed name, the error and the 'Not saved yet' note are shown, and the server still has the original. After a blank edit the input reads the original with the blank-name error shown. After the conflicting edit the input reads the other collaborator's name.",
     requirementIds: ["REQ-GUEST-LIST-MANAGEMENT"],
     tags: ["@mutating", "@feature:guests", "@risk:high", "@suite:regression"],
   },
@@ -42,7 +42,9 @@ defineQualityTest(
       await weddingGuestsPage.guestRow(fullName).expectVisible();
     });
 
-    await test.step("Act + Assert: a rename the server refuses puts the saved name back and says so", async () => {
+    // TS-199 (decision): a save that fails for any reason but a conflict keeps the typed text in the
+    // box, says so, and keeps it unsaved -- only a conflict puts the saved name back.
+    await test.step("Act + Assert: a rename the server fails to save keeps the typed name in the box and says it isn't saved", async () => {
       const fault = await failRequests(page, `**/api/v1/weddings/${managedWedding.id}/guests/${guestId}`, "PATCH", {
         status: 500,
         error: "Simulated outage while saving the guest.",
@@ -51,7 +53,8 @@ defineQualityTest(
       await row.editFirstName("Renamed");
       await expect(weddingGuestsPage.message("Simulated outage while saving the guest.")).toBeVisible();
       expect(fault.hits).toBe(1);
-      await expect.poll(() => row.firstName()).toBe(name.firstName);
+      await expect.poll(() => row.firstName()).toBe("Renamed");
+      await expect(row.notSavedYetNote()).toBeVisible();
       await fault.clear();
 
       const res = await context.request.get(`/api/v1/weddings/${managedWedding.id}/guests`);

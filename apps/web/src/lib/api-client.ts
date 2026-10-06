@@ -133,6 +133,17 @@ export function resolveRetriedPatchConflict(
   return { ...route.extra, [route.key]: fresh };
 }
 
+/** TS-199: true only when asking "who is signed in?" answers 401 (no account any more). */
+async function accountIsGone(): Promise<boolean> {
+  try {
+    const check = await fetchWithRetry(ACCOUNT_PATH, { method: "GET", credentials: "include" });
+    return check.status === 401;
+  } catch {
+    // No answer at all -- can't tell, so don't claim it was deleted.
+    return false;
+  }
+}
+
 // TS-166: non-GET requests that don't save anything the planner made.
 const NOT_A_SAVE = [/\/guests\/import\/preview$/, /^\/api\/v1\/notifications(\/[^/]+\/read)?$/];
 
@@ -171,8 +182,14 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   // was lost) -- that's success. It used to count as a failure, and the item came back on screen.
   // TS-186: the same for deleting one's own account -- a retry after the first try deleted it finds
   // no signed-in account (401), which means it worked.
+  // TS-199: but a 401 on that retry could also be a session that ran out while the first try never
+  // arrived. Before saying the account is gone, ask who is signed in: still signed in (200) means
+  // it wasn't deleted; no account (401) means it was.
+  const retriedAccount401 =
+    options.method === "DELETE" && retriedResponses.has(res) && res.status === 401 && path === ACCOUNT_PATH;
+  const accountReallyGone = retriedAccount401 ? await accountIsGone() : false;
   const alreadyGone =
-    options.method === "DELETE" && retriedResponses.has(res) && (res.status === 404 || (res.status === 401 && path === ACCOUNT_PATH));
+    options.method === "DELETE" && retriedResponses.has(res) && (res.status === 404 || accountReallyGone);
   // TS-177: likewise a retried edit "refused" only because the first try already saved it.
   const alreadySaved =
     options.method === "PATCH" && res.status === 409 && retriedResponses.has(res)

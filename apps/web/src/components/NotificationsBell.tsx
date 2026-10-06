@@ -32,12 +32,20 @@ export function NotificationsBell({
   const [unreadCount, setUnreadCount] = useState(0);
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  // TS-199: each load is numbered, and marking read counts as a newer change -- an older answer
+  // that arrives late (a slow connection) is dropped instead of bringing back read notifications
+  // as unread, or an older count.
+  const lastSent = useRef(0);
+  const lastApplied = useRef(0);
 
   async function load() {
+    const request = ++lastSent.current;
     try {
       const res = await api.get<{ notifications: NotificationDTO[]; unreadCount: number }>(
         "/api/v1/notifications"
       );
+      if (request < lastApplied.current) return;
+      lastApplied.current = request;
       setNotifications(res.notifications);
       setUnreadCount(res.unreadCount);
     } catch {
@@ -80,6 +88,8 @@ export function NotificationsBell({
       (newest, n) => (newest === null || Date.parse(n.createdAt) > Date.parse(newest) ? n.createdAt : newest),
       null
     );
+    // TS-199: a load already on its way is older than this.
+    lastApplied.current = ++lastSent.current;
     setNotifications((prev) => prev.map((n) => ({ ...n, isRead: true })));
     setUnreadCount(0);
     try {
@@ -94,6 +104,8 @@ export function NotificationsBell({
     // TS-182: clicking one that was already read no longer takes one off the unread count.
     const wasUnread = notifications.some((n) => n.id === id && !n.isRead);
     if (!wasUnread) return;
+    // TS-199: a load already on its way is older than this.
+    lastApplied.current = ++lastSent.current;
     setNotifications((prev) => prev.map((n) => (n.id === id ? { ...n, isRead: true } : n)));
     setUnreadCount((c) => Math.max(0, c - 1));
     try {
@@ -122,7 +134,14 @@ export function NotificationsBell({
 
       {open && (
         // TS-175: never wider than the screen (it was cut off on phones).
-        <div className="absolute right-0 z-20 mt-2 w-80 max-w-[calc(100vw-2rem)] rounded-lg border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 shadow-lg">
+        // TS-199: on a phone it's pinned 16px in from both screen edges, below the top bar -- hung
+        // off the bell's right edge it still ran off the left side when the bell wasn't at the far
+        // right. From the small-screen breakpoint up it hangs under the bell as before.
+        <div
+          role="region"
+          aria-label="Notifications"
+          className="fixed inset-x-4 top-16 z-20 rounded-lg border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 shadow-lg sm:absolute sm:inset-x-auto sm:right-0 sm:top-auto sm:mt-2 sm:w-80 sm:max-w-[calc(100vw-2rem)]"
+        >
           <div className="flex items-center justify-between border-b border-neutral-100 dark:border-neutral-800 px-4 py-2">
             <p className="text-sm font-medium">Notifications</p>
             {unreadCount > 0 && (

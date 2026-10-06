@@ -226,6 +226,7 @@ export function RulesTab({
                 </div>
                 {canEdit && (
                   <ConfirmDeleteButton
+                    id={`rule-${r.id}-remove`}
                     ariaLabel={`Remove the rule for ${r.guestAName} & ${r.guestBName}`}
                     question={`Remove this rule for ${r.guestAName} & ${r.guestBName}? This can't be undone.`}
                     confirmLabel="Yes, remove rule"

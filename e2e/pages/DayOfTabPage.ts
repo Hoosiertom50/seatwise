@@ -49,7 +49,41 @@ export class DayOfTabPage extends BasePage {
     const option = options.find((o) => o.startsWith(`${tableLabel} (`));
     if (!option) throw new Error(`DayOfTabPage.moveGuestTo: ${tableLabel} isn't offered (have: ${options.join(" | ")})`);
     await select.selectOption({ label: option });
+    // TS-199: choosing only picks the table; the Move button next to the list makes the move.
+    await this.moveButton(guestName).click();
     await this.guestStatusText(guestName).filter({ hasText: `Seated at ${tableLabel}` }).waitFor();
+  }
+
+  /** TS-199: the button that makes the move once a table is picked in the "Move to…" list. */
+  moveButton(guestName: string) {
+    return this.guestRow(guestName).getByRole("button", { name: `Move ${guestName}`, exact: true });
+  }
+
+  /** TS-199: the button that seats an unseated guest once a table is picked in "Seat at…". */
+  seatButton(guestName: string) {
+    return this.guestRow(guestName).getByRole("button", { name: `Seat ${guestName}`, exact: true });
+  }
+
+  /** TS-199: focuses a seated guest's "Move to…" list and presses the down arrow `times` times,
+   * the way a keyboard user looks through the tables -- nothing should move until Move. */
+  async arrowThroughMoveChoices(guestName: string, times: number): Promise<void> {
+    await this.moveToSelect(guestName).focus();
+    for (let i = 0; i < times; i++) await this.page.keyboard.press("ArrowDown");
+  }
+
+  /** TS-199: the table label (without "(n free)") picked in a seated guest's "Move to…" list, or
+   * "" when none is picked. */
+  async pickedMoveChoice(guestName: string): Promise<string> {
+    const select = this.moveToSelect(guestName);
+    const value = await select.inputValue();
+    if (!value) return "";
+    const text = await select.locator(`option[value="${value}"]`).textContent();
+    return (text ?? "").replace(/ \(\d+ free\)$/, "");
+  }
+
+  /** TS-199: whether a seated guest's "Move to…" list has focus. */
+  moveToList(guestName: string) {
+    return this.moveToSelect(guestName);
   }
 
   private walkInFirstNameInput() {
@@ -170,6 +204,8 @@ export class DayOfTabPage extends BasePage {
 
   async seatGuestAt(guestName: string, tableLabel: string): Promise<void> {
     await this.seatAtSelect(guestName).selectOption({ label: tableLabel });
+    // TS-199: choosing only picks the table; the Seat button seats them.
+    await this.seatButton(guestName).click();
   }
 
   async addWalkIn(firstName: string, lastName: string, tableLabel?: string): Promise<void> {

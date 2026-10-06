@@ -57,7 +57,8 @@ export function ActivityTab({ weddingId }: { weddingId: string }) {
                   {formatDateTime(e.createdAt)}
                 </span>
               </div>
-              <p className="mt-1 text-sm text-neutral-700 dark:text-neutral-300">{e.description}</p>
+              {/* TS-199: a long description (a long guest or table name) wraps on a phone. */}
+              <p className="mt-1 break-words text-sm text-neutral-700 dark:text-neutral-300 [overflow-wrap:anywhere]">{e.description}</p>
               {e.actorName && <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">by {e.actorName}</p>}
             </li>
           ))}

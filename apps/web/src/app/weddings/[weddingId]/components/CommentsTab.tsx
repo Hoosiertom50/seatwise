@@ -40,6 +40,8 @@ export function CommentsTab({
   const [replyingTo, setReplyingTo] = useState<string | null>(null);
   // TS-151: which reply is being posted, so a double-click can't post it twice.
   const [postingReply, setPostingReply] = useState<string | null>(null);
+  // TS-199: the reply box whose Reply was pressed with nothing (or only spaces) in it.
+  const [replyEmpty, setReplyEmpty] = useState<string | null>(null);
   // TS-159: tell the page this tab has input that leaving it would lose.
   // TS-182: only while the comment boxes are there (they're hidden without Comment access).
   // TS-191: only the reply box that's open counts. A draft left in a closed one is kept (it's back
@@ -323,6 +325,20 @@ export function CommentsTab({
                 {canComment && !root.targetRemoved && (
                   <div className="mt-3">
                     {replyingTo === root.id ? (
+                      // TS-199: a form, so Enter in the box sends the reply like the button does;
+                      // Cancel closes it (the draft is kept for next time).
+                      <form
+                        className="flex flex-col gap-2"
+                        onSubmit={(e) => {
+                          e.preventDefault();
+                          if (!(replyBodies[root.id] ?? "").trim()) {
+                            setReplyEmpty(root.id);
+                            return;
+                          }
+                          setReplyEmpty(null);
+                          void onReply(root.id, root.targetType, root.guestId, root.tableId, root.timelineEntryId);
+                        }}
+                      >
                       <div className="flex flex-col gap-2 sm:flex-row">
                         <input
                           // TS-191: opening Reply puts focus in the box.
@@ -332,20 +348,42 @@ export function CommentsTab({
                           className="flex-1 rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
                           placeholder="Write a reply..."
                           value={replyBodies[root.id] ?? ""}
-                          onChange={(e) => setReplyBodies({ ...replyBodies, [root.id]: e.target.value })}
+                          onChange={(e) => {
+                            setReplyBodies({ ...replyBodies, [root.id]: e.target.value });
+                            if (replyEmpty === root.id && e.target.value.trim()) setReplyEmpty(null);
+                          }}
+                          aria-describedby={replyEmpty === root.id ? `reply-empty-${root.id}` : undefined}
                         />
                         <button
-                          onClick={() =>
-                            onReply(root.id, root.targetType, root.guestId, root.tableId, root.timelineEntryId)
-                          }
+                          type="submit"
                           disabled={postingReply === root.id}
                           className="rounded-md bg-neutral-900 dark:bg-neutral-100 px-3 py-2 text-sm font-medium text-white dark:text-neutral-900 hover:bg-neutral-700 dark:hover:bg-neutral-300 disabled:opacity-50"
                         >
                           {postingReply === root.id ? "Posting..." : "Reply"}
                         </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setReplyingTo(null);
+                            setReplyEmpty(null);
+                            // Back to the Reply button that opened the box.
+                            setTimeout(() => document.getElementById(`reply-open-${root.id}`)?.focus(), 0);
+                          }}
+                          disabled={postingReply === root.id}
+                          className="rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50"
+                        >
+                          Cancel
+                        </button>
                       </div>
+                      {replyEmpty === root.id && (
+                        <p id={`reply-empty-${root.id}`} role="alert" className="text-sm text-red-600 dark:text-red-400">
+                          Write something first.
+                        </p>
+                      )}
+                      </form>
                     ) : (
                       <button
+                        id={`reply-open-${root.id}`}
                         onClick={() => setReplyingTo(root.id)}
                         className="text-sm text-neutral-500 dark:text-neutral-400 hover:underline"
                       >

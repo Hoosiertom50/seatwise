@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ConfirmDeleteButton } from "@/components/ConfirmDeleteButton";
+import { CommitSelect } from "@/components/CommitSelect";
 import { api, ApiError, apiErrorMessage } from "@/lib/api-client";
 import { formatMomentDate } from "@/lib/display-format";
 import type {
@@ -443,7 +444,9 @@ export function GuestsTab({
   async function onDeleteGuest(guestId: string) {
     const removed = guests.find((g) => g.id === guestId);
     // TS-182: a removed guest's half-typed fields are gone with their row.
-    for (const field of ["firstName", "lastName", "notes", "email"]) rowFields.markDirty(`guest-row-${guestId}-${field}`, false);
+    // TS-199: and its Side and RSVP lists, and any text that couldn't be saved.
+    for (const field of ["firstName", "lastName", "notes", "email", "side", "rsvpStatus"]) rowFields.markDirty(`guest-row-${guestId}-${field}`, false);
+    for (const field of ["firstName", "lastName", "notes", "email"] as const) dropUnsavedText(guestId, field);
     setGuests((cur) => cur.filter((g) => g.id !== guestId));
     try {
       await api.delete(`/api/v1/weddings/${weddingId}/guests/${guestId}`);
@@ -509,6 +512,27 @@ export function GuestsTab({
     saveChain.current.set(guestId, next);
     return next;
   }
+  // TS-199: text typed into a row's name, notes or email box that couldn't be saved (no connection,
+  // or the server refused it as invalid) stays in the box -- it used to be swapped back for the
+  // saved value, so the planner lost what they typed. The box keeps counting as unsaved, and a line
+  // under the row says so, until it saves or the planner puts the saved value back. Only a 409
+  // (someone else changed the guest) replaces it, with their fresh copy.
+  type RowTextField = "firstName" | "lastName" | "notes" | "email";
+  const [unsavedText, setUnsavedText] = useState<Record<string, string>>({});
+  const unsavedTextKey = (guestId: string, field: RowTextField) => `${guestId}-${field}`;
+  function keepUnsavedText(guestId: string, field: RowTextField, text: string) {
+    setUnsavedText((cur) => ({ ...cur, [unsavedTextKey(guestId, field)]: text }));
+    rowFields.markDirty(`guest-row-${guestId}-${field}`, true);
+  }
+  function dropUnsavedText(guestId: string, field: RowTextField) {
+    const key = unsavedTextKey(guestId, field);
+    setUnsavedText((cur) => {
+      if (!(key in cur)) return cur;
+      const next = { ...cur };
+      delete next[key];
+      return next;
+    });
+  }
   function showConflict(fresh: GuestDTO) {
     putGuest(fresh);
     setRowError(fresh.id, 
@@ -573,7 +597,11 @@ export function GuestsTab({
   // rejected edit writes the committed email back into the input itself.
   async function onUpdateEmail(guestId: string, input: HTMLInputElement) {
     const current = guests.find((g) => g.id === guestId);
-    const normalized = input.value.trim() || null;
+    const typed = input.value;
+    const normalized = typed.trim() || null;
+    dropUnsavedText(guestId, "email");
+    // TS-199: typed back to what's saved -- nothing to send.
+    if (current && normalized === (current.email ?? null)) return;
     patchRow(guestId, { email: normalized });
     try {
       const { guest, rsvpEmail } = await saveGuest(guestId, { email: normalized });
@@ -586,7 +614,8 @@ export function GuestsTab({
         input.value = fresh.email ?? "";
       } else {
         patchRow(guestId, { email: current?.email ?? null });
-        input.value = current?.email ?? "";
+        // TS-199: the typed address stays in the box (see keepUnsavedText).
+        keepUnsavedText(guestId, "email", typed);
         // TS-135: a 422's top-level message is just "Validation failed" -- show the field's own reason.
         setRowError(guestId, apiErrorMessage(err, ["email"], "Couldn't update that guest's email."));
       }
@@ -598,7 +627,9 @@ export function GuestsTab({
   // that doesn't keep the planner's text writes the committed note back into the textarea itself.
   async function onUpdateNotes(guestId: string, input: HTMLTextAreaElement) {
     const current = guests.find((g) => g.id === guestId);
-    const normalized = input.value.trim() || null;
+    const typed = input.value;
+    const normalized = typed.trim() || null;
+    dropUnsavedText(guestId, "notes");
     if (!current || normalized === (current.notes ?? null)) return;
     patchRow(guestId, { notes: normalized });
     try {
@@ -610,7 +641,8 @@ export function GuestsTab({
         input.value = fresh.notes ?? "";
       } else {
         patchRow(guestId, { notes: current.notes });
-        input.value = current.notes ?? "";
+        // TS-199: the typed note stays in the box (see keepUnsavedText).
+        keepUnsavedText(guestId, "notes", typed);
         setRowError(guestId, apiErrorMessage(err, ["notes"], "Couldn't update that guest's notes."));
       }
     }
@@ -626,8 +658,10 @@ export function GuestsTab({
   // text on screen. Every path that doesn't keep the user's text writes the committed name back
   // into the input element itself.
   async function onUpdateName(guestId: string, field: "firstName" | "lastName", input: HTMLInputElement) {
-    const trimmed = input.value.trim();
+    const typed = input.value;
+    const trimmed = typed.trim();
     const current = guests.find((g) => g.id === guestId);
+    dropUnsavedText(guestId, field);
     if (!current || trimmed === current[field]) return;
     if (trimmed === "") {
       setRowError(guestId, field === "firstName" ? "First name can't be blank." : "Last name can't be blank.");
@@ -644,7 +678,8 @@ export function GuestsTab({
         input.value = fresh[field];
       } else {
         patchRow(guestId, { [field]: current[field] });
-        input.value = current[field];
+        // TS-199: the typed name stays in the box (see keepUnsavedText).
+        keepUnsavedText(guestId, field, typed);
         setRowError(guestId, 
           apiErrorMessage(
             err,
@@ -1017,8 +1052,8 @@ export function GuestsTab({
           type="file"
           accept=".csv,text/csv"
           onChange={onFileSelected}
-          // TS-191: no new file while a preview is being checked.
-          disabled={previewing}
+          // TS-191: no new file while a preview is being checked. TS-199: or while one is being imported.
+          disabled={previewing || committing}
           // TS-175: never wider than the space it is in (with Linux fonts it ran 6px off a phone screen).
           className="mb-3 block w-full max-w-full text-sm"
           // TS-53 (AC-079): no visible <label> wraps this input (the paragraph/button above it are
@@ -1047,7 +1082,8 @@ export function GuestsTab({
                     value={mapping[field] ?? ""}
                     onChange={(e) => onMappingChange(field, e.target.value)}
                     // TS-191: the columns stay as they are while the preview is checked.
-                    disabled={previewing}
+                    // TS-199: and while the import is being saved.
+                    disabled={previewing || committing}
                   >
                     <option value="">— not in file —</option>
                     {csvHeaders.map((h) => (
@@ -1062,14 +1098,14 @@ export function GuestsTab({
             <div className="mt-3 flex flex-wrap items-center gap-2">
               <button
                 onClick={onRequestPreview}
-                disabled={previewing || !mapping.firstName || !mapping.lastName}
+                disabled={previewing || committing || !mapping.firstName || !mapping.lastName}
                 className="rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50"
               >
                 {previewing ? "Checking..." : "Preview import"}
               </button>
               <button
                 onClick={resetImport}
-                disabled={previewing}
+                disabled={previewing || committing}
                 className="rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50"
               >
                 Cancel
@@ -1171,6 +1207,8 @@ export function GuestsTab({
                   type="checkbox"
                   className="mt-0.5"
                   checked={overwriteChanged}
+                  // TS-199: the choice can't change while the import it belongs to is being saved.
+                  disabled={committing}
                   onChange={(e) => setOverwriteChanged(e.target.checked)}
                 />
                 <span>
@@ -1243,11 +1281,16 @@ export function GuestsTab({
                 <div className="flex flex-wrap items-center font-medium">
                   {canEdit ? (
                     <span className="flex items-center gap-1">
+                      {/* TS-199: data-blur-save marks a box that saves when you leave it (Back on the
+                          wedding page saves it instead of asking), and the id lets focus find it
+                          again after it's drawn anew. */}
                       <input
+                        id={`guest-${g.id}-firstName`}
+                        data-blur-save=""
                         aria-label={`First name for ${g.firstName} ${g.lastName}`}
                         className="w-24 rounded-md border border-transparent px-1 py-0.5 font-medium hover:border-neutral-200 dark:hover:border-neutral-700 focus:border-neutral-300 dark:focus:border-neutral-600 focus:outline-none"
-                        key={`${g.id}-first-${g.firstName}`}
-                        defaultValue={g.firstName}
+                        key={`${g.id}-first-${g.firstName}-${unsavedText[unsavedTextKey(g.id, "firstName")] ?? ""}`}
+                        defaultValue={unsavedText[unsavedTextKey(g.id, "firstName")] ?? g.firstName}
                         onInput={(e) => rowFields.markDirty(`guest-row-${g.id}-firstName`, e.currentTarget.value.trim() !== g.firstName)}
                         onBlur={(e) => {
                           rowFields.markDirty(`guest-row-${g.id}-firstName`, false);
@@ -1256,10 +1299,12 @@ export function GuestsTab({
                         maxLength={FIELD_LIMITS.personName}
                       />
                       <input
+                        id={`guest-${g.id}-lastName`}
+                        data-blur-save=""
                         aria-label={`Last name for ${g.firstName} ${g.lastName}`}
                         className="w-28 rounded-md border border-transparent px-1 py-0.5 font-medium hover:border-neutral-200 dark:hover:border-neutral-700 focus:border-neutral-300 dark:focus:border-neutral-600 focus:outline-none"
-                        key={`${g.id}-last-${g.lastName}`}
-                        defaultValue={g.lastName}
+                        key={`${g.id}-last-${g.lastName}-${unsavedText[unsavedTextKey(g.id, "lastName")] ?? ""}`}
+                        defaultValue={unsavedText[unsavedTextKey(g.id, "lastName")] ?? g.lastName}
                         onInput={(e) => rowFields.markDirty(`guest-row-${g.id}-lastName`, e.currentTarget.value.trim() !== g.lastName)}
                         onBlur={(e) => {
                           rowFields.markDirty(`guest-row-${g.id}-lastName`, false);
@@ -1323,30 +1368,36 @@ export function GuestsTab({
               <div className="flex flex-wrap items-center gap-2">
                 {canEdit ? (
                   <>
-                    <select
+                    {/* TS-199: arrowing through these no longer saves each value on the way -- see
+                        CommitSelect (Enter or leaving the list saves; a mouse pick saves at once). */}
+                    <CommitSelect
+                      id={`guest-${g.id}-side`}
                       aria-label={`Side for ${g.firstName} ${g.lastName}`}
                       className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm"
                       value={g.side}
-                      onChange={(e) => onUpdateSide(g.id, e.target.value as GuestSide)}
+                      onCommit={(v) => onUpdateSide(g.id, v as GuestSide)}
+                      onPendingChange={(p) => rowFields.markDirty(`guest-row-${g.id}-side`, p)}
                     >
                       {SIDE_OPTIONS.map((o) => (
                         <option key={o.value} value={o.value}>
                           {o.label}
                         </option>
                       ))}
-                    </select>
-                    <select
+                    </CommitSelect>
+                    <CommitSelect
+                      id={`guest-${g.id}-rsvpStatus`}
                       aria-label={`RSVP status for ${g.firstName} ${g.lastName}`}
                       className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm"
                       value={g.rsvpStatus}
-                      onChange={(e) => onUpdateRsvp(g.id, e.target.value as RsvpStatus)}
+                      onCommit={(v) => onUpdateRsvp(g.id, v as RsvpStatus)}
+                      onPendingChange={(p) => rowFields.markDirty(`guest-row-${g.id}-rsvpStatus`, p)}
                     >
                       {RSVP_STATUSES.map((s) => (
                         <option key={s} value={s}>
                           {RSVP_STATUS_LABELS[s]}
                         </option>
                       ))}
-                    </select>
+                    </CommitSelect>
                     <button
                       onClick={() => onToggleLock(g.id, !g.isLocked)}
                       title="Locking keeps this guest at their current table when a new plan is generated, whenever the rules allow."
@@ -1374,6 +1425,7 @@ export function GuestsTab({
                       New link
                     </button>
                     <ConfirmDeleteButton
+                      id={`guest-${g.id}-remove`}
                       ariaLabel={`Remove ${g.firstName} ${g.lastName}`}
                       question={`Remove ${g.firstName} ${g.lastName} from the guest list? Their seat and any seating rules involving them are removed too, including from saved past versions of the plan. This can't be undone.`}
                       confirmLabel="Yes, remove guest"
@@ -1404,14 +1456,16 @@ export function GuestsTab({
                     Comment collaborators don't get them at all (TS-154), here or in the CSV export. */}
                 {canEdit ? (
                   <textarea
+                    id={`guest-${g.id}-notes`}
+                    data-blur-save=""
                     aria-label={`Notes for ${g.firstName} ${g.lastName}`}
                     title="Private to your planning team — the guest never sees this."
                     rows={1}
                     maxLength={FIELD_LIMITS.guestNotes}
                     className="mt-1 block w-72 max-w-full rounded-md border border-neutral-200 dark:border-neutral-700 px-2 py-1 text-xs"
                     placeholder="Private notes (dietary, accessibility…)"
-                    key={`${g.id}-notes-${g.notes ?? ""}`}
-                    defaultValue={g.notes ?? ""}
+                    key={`${g.id}-notes-${g.notes ?? ""}-${unsavedText[unsavedTextKey(g.id, "notes")] ?? ""}`}
+                    defaultValue={unsavedText[unsavedTextKey(g.id, "notes")] ?? g.notes ?? ""}
                     onInput={(e) => rowFields.markDirty(`guest-row-${g.id}-notes`, (e.currentTarget.value.trim() || null) !== (g.notes ?? null))}
                     onBlur={(e) => {
                       rowFields.markDirty(`guest-row-${g.id}-notes`, false);
@@ -1427,22 +1481,33 @@ export function GuestsTab({
                 )}
                 {canEdit ? (
                   <input
+                    id={`guest-${g.id}-email`}
+                    data-blur-save=""
                     maxLength={FIELD_LIMITS.email}
                     type="email"
                     aria-label={`Email for ${g.firstName} ${g.lastName}`}
-                    className="mt-1 w-56 rounded-md border border-neutral-200 dark:border-neutral-700 px-2 py-1 text-xs"
+                    className="mt-1 w-56 max-w-full rounded-md border border-neutral-200 dark:border-neutral-700 px-2 py-1 text-xs"
                     placeholder="Email (for their RSVP link)"
-                    key={`${g.id}-email-${g.email ?? ""}`}
-                    defaultValue={g.email ?? ""}
+                    key={`${g.id}-email-${g.email ?? ""}-${unsavedText[unsavedTextKey(g.id, "email")] ?? ""}`}
+                    defaultValue={unsavedText[unsavedTextKey(g.id, "email")] ?? g.email ?? ""}
                     onInput={(e) => rowFields.markDirty(`guest-row-${g.id}-email`, e.currentTarget.value !== (g.email ?? ""))}
                     onBlur={(e) => {
                       rowFields.markDirty(`guest-row-${g.id}-email`, false);
-                      if (e.target.value !== (g.email ?? "")) onUpdateEmail(g.id, e.currentTarget);
+                      // TS-199: always checked, so a box put back to the saved address stops showing
+                      // "not saved yet" (onUpdateEmail sends nothing when it matches).
+                      onUpdateEmail(g.id, e.currentTarget);
                     }}
                   />
                 ) : (
-                  g.email && <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">{g.email}</p>
+                  g.email && <p className="mt-1 break-all text-xs text-neutral-500 dark:text-neutral-400">{g.email}</p>
                 )}
+                {/* TS-199 */}
+                {canEdit &&
+                  (["firstName", "lastName", "notes", "email"] as const).some((f) => unsavedTextKey(g.id, f) in unsavedText) && (
+                    <p className="mt-1 text-xs text-amber-800 dark:text-amber-300">
+                      Not saved yet — what you typed is still in the box. Click into it and away again to try once more.
+                    </p>
+                  )}
                 {rsvpLinkResult[g.id] && (
                   <p role="status" className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">{rsvpLinkResult[g.id]}</p>
                 )}

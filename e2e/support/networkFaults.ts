@@ -73,6 +73,16 @@ export async function delayRequests(
   };
 }
 
+/** TS-199: starts watching for a `method` request to a URL matching `urlPattern`; the returned
+ * promise says whether one was sent within `ms` -- for checking that something (an arrow key, say)
+ * did NOT save. Start it before the action, await it after. */
+export function watchForRequest(page: Page, urlPattern: RegExp, method: string, ms: number): Promise<boolean> {
+  return page
+    .waitForRequest((req) => req.method() === method && urlPattern.test(req.url()), { timeout: ms })
+    .then(() => true)
+    .catch(() => false);
+}
+
 /** TS-182: lets every `method` request to a URL matching `urlPattern` reach the real server at
  * once, then holds its answer for `ms` before the page gets it -- so a test can make a save that
  * was done first come back last (its answer then carries what the server held at that moment). */

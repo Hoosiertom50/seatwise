@@ -117,6 +117,33 @@ export class GuestRow {
     await this.firstNameInput().press("Tab");
   }
 
+  /** TS-199: the line under the row saying typed text couldn't be saved and is still in its box. */
+  notSavedYetNote(): Locator {
+    return this.root.getByText(/^Not saved yet — what you typed is still in the box/);
+  }
+
+  /** TS-199: types into the first-name box without leaving it (nothing saved yet). */
+  async typeFirstNameWithoutLeaving(value: string): Promise<void> {
+    await this.firstNameInput().fill(value);
+  }
+
+  /** TS-199: whether the first-name box has keyboard focus. */
+  firstNameBox(): Locator {
+    return this.firstNameInput();
+  }
+
+  /** TS-199: focuses the RSVP list and presses the down arrow `times` times, the way a keyboard
+   * user looks through the choices -- nothing should save until Enter or leaving the list. */
+  async arrowThroughRsvpStatus(times: number): Promise<void> {
+    await this.rsvpStatusSelect().focus();
+    for (let i = 0; i < times; i++) await this.rsvpStatusSelect().press("ArrowDown");
+  }
+
+  /** TS-199: presses Enter on the RSVP list (saves a keyboard change). */
+  async confirmRsvpStatusWithEnter(): Promise<void> {
+    await this.rsvpStatusSelect().press("Enter");
+  }
+
   /** TS-129: the notes as the editable textarea currently shows them. */
   async notes(): Promise<string> {
     return this.notesInput().inputValue();

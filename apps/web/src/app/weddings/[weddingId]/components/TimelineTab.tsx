@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ConfirmDeleteButton } from "@/components/ConfirmDeleteButton";
 import { api, ApiError, apiErrorMessage } from "@/lib/api-client";
 import type { TimelineEntryDTO } from "@seatwise/shared";
@@ -62,6 +62,7 @@ export function TimelineTab({ weddingId, canEdit }: { weddingId: string; canEdit
         { time, description }
       );
       // TS-166: built from the list as it is now, so another change made meanwhile isn't lost.
+      listChange.current++; // TS-199
       setEntries((cur) =>
         [...cur, entry].sort((a, b) => a.time.localeCompare(b.time) || a.sortOrder - b.sortOrder)
       );
@@ -100,6 +101,7 @@ export function TimelineTab({ weddingId, canEdit }: { weddingId: string; canEdit
         }
       );
       // TS-182: applied to the list as it is now, so an entry added or removed meanwhile stays.
+      listChange.current++; // TS-199
       setEntries((cur) =>
         cur
           .map((e) => (e.id === entryId ? entry : e))
@@ -130,6 +132,7 @@ export function TimelineTab({ weddingId, canEdit }: { weddingId: string; canEdit
     setEntries((cur) => cur.filter((e) => e.id !== entryId));
     try {
       await api.delete(`/api/v1/weddings/${weddingId}/timeline-entries/${entryId}`);
+      listChange.current++; // TS-199
     } catch {
       if (removed)
         setEntries((cur) =>
@@ -149,8 +152,25 @@ export function TimelineTab({ weddingId, canEdit }: { weddingId: string; canEdit
       await reorderAndReload(entryId, direction);
     } finally {
       setReordering(false);
+      // TS-199: an arrow that can't be used any more (the entry is now first or last at its time)
+      // is turned off, which dropped keyboard focus to the top of the page. Focus goes to the
+      // entry's other arrow instead.
+      setTimeout(() => {
+        const pressed = document.getElementById(`timeline-${entryId}-${direction}`) as HTMLButtonElement | null;
+        const other = document.getElementById(`timeline-${entryId}-${direction === "UP" ? "DOWN" : "UP"}`) as HTMLButtonElement | null;
+        const active = document.activeElement;
+        const lost = !active || active === document.body || !active.isConnected;
+        if (pressed && !pressed.disabled) {
+          if (lost) pressed.focus();
+        } else if (other && !other.disabled && (lost || active === pressed)) other.focus();
+      }, 0);
     }
   }
+
+  // TS-199: each change to the list gets a number; a reload that comes back after a newer change
+  // (an edit, an add or a remove made while it was on its way) is dropped instead of putting the
+  // older list back over it.
+  const listChange = useRef(0);
 
   async function reorderAndReload(entryId: string, direction: "UP" | "DOWN") {
     try {
@@ -166,11 +186,19 @@ export function TimelineTab({ weddingId, canEdit }: { weddingId: string; canEdit
     // approach is to refetch the full list rather than guess at the neighbor's new sortOrder.
     // TS-182: in its own try -- the move was saved even if this reload fails, and it used to say
     // "Couldn't reorder" when it had.
+    // TS-199: if something newer changed the list meanwhile, this answer is out of date -- ask again
+    // (a fresh answer has both changes) rather than show it.
     try {
-      const res = await api.get<{ entries: TimelineEntryDTO[] }>(
-        `/api/v1/weddings/${weddingId}/timeline-entries`
-      );
-      setEntries(res.entries);
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const seq = ++listChange.current;
+        const res = await api.get<{ entries: TimelineEntryDTO[] }>(
+          `/api/v1/weddings/${weddingId}/timeline-entries`
+        );
+        if (seq === listChange.current) {
+          setEntries(res.entries);
+          return;
+        }
+      }
     } catch {
       setError(REFRESH_FAILED_MESSAGE);
     }
@@ -285,13 +313,15 @@ export function TimelineTab({ weddingId, canEdit }: { weddingId: string; canEdit
                   </div>
                 ) : (
                   <>
-                    <div>
+                    {/* TS-199: a long description wraps instead of pushing the row off a phone screen. */}
+                    <div className="min-w-0">
                       <p className="font-medium">{formatTime(entry.time)}</p>
-                      <p className="text-sm text-neutral-500 dark:text-neutral-400">{entry.description}</p>
+                      <p className="break-words text-sm text-neutral-500 dark:text-neutral-400 [overflow-wrap:anywhere]">{entry.description}</p>
                     </div>
                     {canEdit && (
                       <div className="flex flex-wrap items-center gap-2">
                         <button
+                          id={`timeline-${entry.id}-UP`}
                           onClick={() => onReorder(entry.id, "UP")}
                           disabled={!sameTimeAbove}
                           // TS-191: busy while a reorder is on its way (still focusable, so the keyboard keeps its place)
@@ -304,6 +334,7 @@ export function TimelineTab({ weddingId, canEdit }: { weddingId: string; canEdit
                           ↑
                         </button>
                         <button
+                          id={`timeline-${entry.id}-DOWN`}
                           onClick={() => onReorder(entry.id, "DOWN")}
                           disabled={!sameTimeBelow}
                           aria-disabled={reordering || undefined}
@@ -321,6 +352,7 @@ export function TimelineTab({ weddingId, canEdit }: { weddingId: string; canEdit
                           Edit
                         </button>
                         <ConfirmDeleteButton
+                          id={`timeline-${entry.id}-remove`}
                           ariaLabel={`Remove ${entry.description}`}
                           question={`Remove "${entry.description}" from the timeline? This can't be undone.`}
                           confirmLabel="Yes, remove entry"

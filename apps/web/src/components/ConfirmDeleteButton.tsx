@@ -17,6 +17,7 @@ export function ConfirmDeleteButton({
   disabled = false,
   className,
   busyLabel = "Removing…",
+  id,
 }: {
   /** The trigger button's visible text. */
   label?: string;
@@ -32,6 +33,11 @@ export function ConfirmDeleteButton({
   className?: string;
   /** Shown on the confirm button while it works. */
   busyLabel?: string;
+  /**
+   * TS-199: a stable id for the trigger. Lists that take a row away first and put it back if the
+   * delete fails draw a new trigger, so focus goes back to it by this id (the old one is gone).
+   */
+  id?: string;
 }) {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -43,10 +49,17 @@ export function ConfirmDeleteButton({
     if (open) cancelRef.current?.focus();
   }, [open]);
 
+  // TS-199: the trigger as it is now -- this one, or the one drawn in its place (found by id).
+  function currentTrigger(): HTMLElement | null {
+    const trigger = triggerRef.current;
+    if (trigger && trigger.isConnected) return trigger;
+    return id ? document.getElementById(id) : null;
+  }
+
   function close() {
     setOpen(false);
     // Put focus back where the planner was, so keyboard users don't lose their place.
-    setTimeout(() => triggerRef.current?.focus(), 0);
+    setTimeout(() => currentTrigger()?.focus(), 0);
   }
 
   async function confirm() {
@@ -58,9 +71,16 @@ export function ConfirmDeleteButton({
       setOpen(false);
       // TS-191: if the thing is still listed (removing it failed), focus goes back to the trigger
       // instead of falling to the top of the page. When the row is gone, the trigger went with it.
+      // TS-199: including a row that was taken away first and put back -- found by its id (looked
+      // for again a moment later, in case the row is still being drawn).
       setTimeout(() => {
-        const trigger = triggerRef.current;
-        if (trigger && trigger.isConnected) trigger.focus();
+        const trigger = currentTrigger();
+        if (trigger) trigger.focus();
+        else
+          setTimeout(() => {
+            const active = document.activeElement;
+            if (!active || active === document.body) currentTrigger()?.focus();
+          }, 100);
       }, 0);
     }
   }
@@ -69,6 +89,7 @@ export function ConfirmDeleteButton({
     <>
       <button
         ref={triggerRef}
+        id={id}
         type="button"
         onClick={() => setOpen(true)}
         aria-label={ariaLabel}

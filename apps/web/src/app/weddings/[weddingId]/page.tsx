@@ -79,7 +79,19 @@ export default function WeddingDetailPage() {
   // TS-170: the browser's Back button with unsaved input asks first, like the links do.
   const unsaved = useUnsavedChangesProvider({
     onBackRequested: () => {
+      // TS-199: Back while typing in a box that saves when you leave it (a guest's name, notes or
+      // email; a wedding setting) -- leaving it saves it, so the box is left (which saves it) and
+      // Back carries on without asking. Anything else unsaved still asks, as before.
+      const active = document.activeElement;
       rememberOpener();
+      if (active instanceof HTMLElement && active.hasAttribute("data-blur-save")) {
+        active.blur();
+        if (!unsaved.hasUnsaved()) {
+          questionOpener.current = null;
+          unsaved.goBackPastPage(() => router.replace("/dashboard"));
+          return;
+        }
+      }
       setPendingHref(BACK);
     },
   });
@@ -89,19 +101,25 @@ export default function WeddingDetailPage() {
   const [pendingHref, setPendingHref] = useState<string | null>(null);
   // TS-191: the control that brought up the "unsaved changes" question, so focus can go back to it
   // when the question closes (it used to fall to the top of the page).
-  const questionOpener = useRef<HTMLElement | null>(null);
+  // TS-199: remembered by id too -- a guest row's box is often drawn anew (after a save elsewhere on
+  // the row, say) while the question is up, and the old element is then gone.
+  const questionOpener = useRef<{ node: HTMLElement; id: string } | null>(null);
   function rememberOpener(preferred?: HTMLElement | null) {
     const active = document.activeElement;
-    questionOpener.current =
-      preferred ?? (active instanceof HTMLElement && active !== document.body ? active : null);
+    const node = preferred ?? (active instanceof HTMLElement && active !== document.body ? active : null);
+    questionOpener.current = node ? { node, id: node.id } : null;
   }
-  function restoreFocus(target: HTMLElement | null) {
+  function restoreFocus(target: { node: HTMLElement; id: string } | HTMLElement | null) {
     setTimeout(() => {
       // Only if focus was lost with the question (it falls to the page) -- someone who has already
       // clicked into another box keeps their place, rather than having what they type land here.
       const active = document.activeElement;
       const focusLost = !active || active === document.body || !active.isConnected;
-      if (focusLost && target && target.isConnected) target.focus();
+      if (!focusLost || !target) return;
+      const remembered = target instanceof HTMLElement ? { node: target, id: target.id } : target;
+      const byId = remembered.id ? document.getElementById(remembered.id) : null;
+      const element = byId ?? (remembered.node.isConnected ? remembered.node : null);
+      element?.focus();
     }, 0);
   }
   function goToTab(next: Tab) {
@@ -149,7 +167,11 @@ export default function WeddingDetailPage() {
   }
   // TS-182: arrow keys move along the tab list (and open that tab, asking first if needed).
   function onTabKeyDown(e: React.KeyboardEvent<HTMLDivElement>) {
-    const index = TABS.findIndex((t) => t.value === tab);
+    // TS-199: counted from the tab that has focus -- while "unsaved changes?" is up, the open tab
+    // and the focused one differ, and arrows used to jump from the open one.
+    const focusedTab = e.target instanceof HTMLElement && e.target.id.startsWith("tab-") ? e.target.id.slice(4) : null;
+    const focusedIndex = TABS.findIndex((t) => t.value === focusedTab);
+    const index = focusedIndex >= 0 ? focusedIndex : TABS.findIndex((t) => t.value === tab);
     let next = -1;
     if (e.key === "ArrowRight") next = (index + 1) % TABS.length;
     else if (e.key === "ArrowLeft") next = (index - 1 + TABS.length) % TABS.length;
@@ -225,12 +247,19 @@ export default function WeddingDetailPage() {
     // TS-182: a poll that was already in flight when the page closed could still answer 404 and
     // start the redirect timer after the cleanup below had run -- nothing then cancelled it.
     let cancelled = false;
+    // TS-199: each check is numbered; on a slow connection an older answer can arrive after a newer
+    // one, and it's dropped (once a newer answer has been used) rather than putting back access
+    // that has since changed.
+    let lastSent = 0;
+    let lastAnswered = 0;
     const interval = setInterval(async () => {
+      const check = ++lastSent;
       try {
         const res = await api.get<{ wedding: WeddingDTO; accessLevel: AccessLevel; role: string | null }>(
           `/api/v1/weddings/${weddingId}`
         );
-        if (cancelled) return;
+        if (cancelled || check < lastAnswered) return;
+        lastAnswered = check;
         // TS-182: the role (Couple or Collaborator) can change too, and decides who may approve.
         setRole(res.role ?? null);
         if (res.accessLevel !== accessLevelRef.current) {
@@ -251,8 +280,9 @@ export default function WeddingDetailPage() {
           }
         }
       } catch (err) {
-        if (cancelled) return;
+        if (cancelled || check < lastAnswered) return;
         if (err instanceof ApiError && err.status === 404) {
+          lastAnswered = check;
           setAccessRevoked(true);
           setAccessNotice("Your access to this wedding has been removed.");
           clearInterval(interval);

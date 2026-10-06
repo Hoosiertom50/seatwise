@@ -72,7 +72,19 @@ test("a retried account deletion told 'not signed in' counts as deleted; a first
       return new Response(JSON.stringify({ error: "Not authenticated" }), { status: 401 });
     }) as typeof fetch;
     assert.deepEqual(await api.delete("/api/v1/auth/me", { password: "x" }), {});
-    assert.equal(calls, 2);
+    // TS-199: the third call is the check that nobody is signed in any more.
+    assert.equal(calls, 3);
+
+    // TS-199: still signed in when checked (e.g. the retry's 401 was a wrong password) -- not deleted.
+    calls = 0;
+    globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+      calls++;
+      if (calls === 1) throw new Error("connection dropped");
+      if (init?.method === "GET") return new Response(JSON.stringify({ user: { id: "u1" } }), { status: 200 });
+      return new Response(JSON.stringify({ error: "Wrong password" }), { status: 401 });
+    }) as typeof fetch;
+    await assert.rejects(api.delete("/api/v1/auth/me", { password: "x" }), (err) => err instanceof ApiError && err.status === 401);
+    assert.equal(calls, 3);
 
     globalThis.fetch = (async () => new Response(JSON.stringify({ error: "Not authenticated" }), { status: 401 })) as typeof fetch;
     await assert.rejects(api.delete("/api/v1/auth/me", { password: "x" }), (err) => err instanceof ApiError && err.status === 401);

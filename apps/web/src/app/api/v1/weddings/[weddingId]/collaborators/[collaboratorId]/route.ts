@@ -20,8 +20,9 @@ export async function PATCH(req: NextRequest, { params }: Params) {
   if (!parsed.success) return zodErrorResponse(parsed.error);
 
   try {
-    await updateCollaboratorPermission(weddingId, collaboratorId, parsed.data.permissionLevel, parsed.data.role);
-    return NextResponse.json({ ok: true });
+    // TS-195: the saved level and role go back to the screen, which shows them.
+    const saved = await updateCollaboratorPermission(weddingId, collaboratorId, parsed.data.permissionLevel, parsed.data.role);
+    return NextResponse.json({ ok: true, collaborator: saved });
   } catch (err) {
     if (err instanceof CollaboratorError) return errorResponse(err.message, 404);
     throw err;
