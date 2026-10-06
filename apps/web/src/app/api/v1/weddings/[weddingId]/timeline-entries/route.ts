@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createTimelineEntrySchema } from "@seatwise/shared";
 import { createTimelineEntry, listTimelineEntriesForWedding } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
-import { errorResponse, zodErrorResponse } from "@/lib/api-response";
+import { errorResponse, zodErrorResponse, weddingDeletedResponse } from "@/lib/api-response";
 import { requireAccess } from "@/lib/access";
 
 type Params = { params: Promise<{ weddingId: string }> };
@@ -34,6 +34,13 @@ export async function POST(req: NextRequest, { params }: Params) {
   const parsed = createTimelineEntrySchema.safeParse(body);
   if (!parsed.success) return zodErrorResponse(parsed.error);
 
-  const entry = await createTimelineEntry(weddingId, parsed.data);
-  return NextResponse.json({ entry }, { status: 201 });
+  try {
+    const entry = await createTimelineEntry(weddingId, parsed.data);
+    return NextResponse.json({ entry }, { status: 201 });
+  } catch (err) {
+    // TS-195: the wedding was deleted while this was being saved -- 404, not a server error.
+    const gone = weddingDeletedResponse(err);
+    if (gone) return gone;
+    throw err;
+  }
 }

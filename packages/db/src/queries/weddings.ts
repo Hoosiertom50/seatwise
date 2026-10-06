@@ -289,7 +289,7 @@ export async function updateWeddingForOwner(
     sideLabel2: string;
     rsvpCutoffDate: string | null;
   }>
-): Promise<boolean> {
+): Promise<"UPDATED" | "NOT_FOUND" | "SIDE_LABELS_CLASH"> {
   const fields: string[] = [];
   const values: unknown[] = [];
   let i = 1;
@@ -329,11 +329,27 @@ export async function updateWeddingForOwner(
   }
   fields.push(`"updatedAt" = now()`);
   values.push(id, ownerId);
+  // TS-195: a side name saved on its own must differ from the other one as it is when this saves
+  // -- checked in the UPDATE itself, against the row as Postgres writes it. Before, the route
+  // compared it with the other name read a moment earlier, so two tabs (one renaming each side to
+  // the same name) could both pass and leave both sides called the same. The second now waits for
+  // the first, sees its name, and is refused.
+  let clashCheck = "";
+  if (input.sideLabel1 !== undefined && input.sideLabel2 === undefined) {
+    clashCheck = ` AND lower(btrim("sideLabel2")) <> lower(btrim($${values.length + 1}::text))`;
+    values.push(input.sideLabel1);
+  } else if (input.sideLabel2 !== undefined && input.sideLabel1 === undefined) {
+    clashCheck = ` AND lower(btrim("sideLabel1")) <> lower(btrim($${values.length + 1}::text))`;
+    values.push(input.sideLabel2);
+  }
   const { rowCount } = await pool.query(
-    `UPDATE "weddings" SET ${fields.join(", ")} WHERE id = $${i++} AND "ownerId" = $${i}`,
+    `UPDATE "weddings" SET ${fields.join(", ")} WHERE id = $${i++} AND "ownerId" = $${i}${clashCheck}`,
     values
   );
-  return (rowCount ?? 0) > 0;
+  if ((rowCount ?? 0) > 0) return "UPDATED";
+  if (!clashCheck) return "NOT_FOUND";
+  const { rows } = await pool.query(`SELECT 1 FROM "weddings" WHERE id = $1 AND "ownerId" = $2`, [id, ownerId]);
+  return rows[0] ? "SIDE_LABELS_CLASH" : "NOT_FOUND";
 }
 
 export async function deleteWeddingForOwner(id: string, ownerId: string): Promise<boolean> {

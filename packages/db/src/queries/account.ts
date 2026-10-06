@@ -39,13 +39,32 @@ export async function transferWeddingOwnership(
     if (!weddingRows[0] || weddingRows[0].ownerId !== currentOwnerId) {
       throw new OwnershipTransferError("Only the wedding's owner can hand it off.");
     }
+    // TS-195: the new owner's account row next (FOR KEY SHARE: "it must stay there"), before their
+    // access row is touched. Before, the hand-off locked and deleted their access row first and only
+    // reached their account when it made them the owner -- while their account delete, which had
+    // already locked the account, waited to delete that same access row: each waiting for the
+    // other (reproduced; Postgres broke it with an error, a 500). Now whichever comes second waits
+    // for the first to finish: a delete that came first leaves no account here (refused below,
+    // nothing changed); a hand-off that came first makes the delete see the wedding it now owns.
+    const { rows: who } = await client.query<{ userId: string }>(
+      `SELECT "userId" FROM "wedding_collaborators" WHERE id = $1 AND "weddingId" = $2`,
+      [collaboratorId, weddingId]
+    );
+    if (!who[0]) throw new OwnershipTransferError("Pick someone who already has access to this wedding.");
+    const { rows: account } = await client.query(`SELECT id FROM "users" WHERE id = $1 FOR KEY SHARE`, [who[0].userId]);
+    if (!account[0]) {
+      throw new OwnershipTransferError("That person's account was just deleted — pick someone else to hand this wedding to.");
+    }
     const { rows: collabRows } = await client.query(
       `SELECT wc."userId", u.name FROM "wedding_collaborators" wc JOIN "users" u ON u.id = wc."userId"
        WHERE wc.id = $1 AND wc."weddingId" = $2 FOR UPDATE OF wc`,
       [collaboratorId, weddingId]
     );
     const target = collabRows[0] as { userId: string; name: string } | undefined;
-    if (!target) throw new OwnershipTransferError("Pick someone who already has access to this wedding.");
+    // Their access was removed (or given to someone else's row) while this waited -- checked again.
+    if (!target || target.userId !== who[0].userId) {
+      throw new OwnershipTransferError("Pick someone who already has access to this wedding.");
+    }
 
     await client.query(`DELETE FROM "wedding_collaborators" WHERE id = $1`, [collaboratorId]);
     await client.query(`UPDATE "weddings" SET "ownerId" = $1, "updatedAt" = now() WHERE id = $2`, [
@@ -63,8 +82,14 @@ export async function transferWeddingOwnership(
     await client.query("ROLLBACK").catch(() => {});
     // TS-187: the person it was being handed to deleted their account at that same moment -- the
     // database refused to make a deleted account the owner. Nothing changed.
-    if ((err as { code?: string }).code === "23503") {
+    const code = (err as { code?: string }).code;
+    if (code === "23503") {
       throw new OwnershipTransferError("That person's account was just deleted — pick someone else to hand this wedding to.");
+    }
+    // TS-195: lost a race with another change to this wedding's access (Postgres broke a deadlock,
+    // or asked for a retry) -- in words about the hand-off, not "the plan changed". Nothing changed.
+    if (code === "40P01" || code === "40001") {
+      throw new OwnershipTransferError("Someone changed who has access to this wedding at the same moment — it wasn't handed off. Please try again.");
     }
     throw err;
   } finally {
@@ -79,7 +104,12 @@ export async function transferWeddingOwnership(
  */
 export async function deleteUserAccount(
   userId: string
-): Promise<{ deleted: true } | { deleted: false; ownedWeddings: OwnedWeddingRow[] }> {
+): Promise<
+  | { deleted: true }
+  | { deleted: false; ownedWeddings: OwnedWeddingRow[] }
+  // TS-195: it ran into another change at the same moment (nothing was deleted) -- try again.
+  | { deleted: false; tryAgain: true }
+> {
   const owned = await listWeddingsOwnedBy(userId);
   if (owned.length > 0) return { deleted: false, ownedWeddings: owned };
   // TS-187: a wedding being handed to this person at this very moment used to be deleted along
@@ -113,7 +143,11 @@ export async function deleteUserAccount(
     return { deleted: true };
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});
-    if ((err as { code?: string }).code === "23503") {
+    const code = (err as { code?: string }).code;
+    // TS-195: Postgres broke a deadlock with another change (a hand-off, say), or asked for a
+    // retry -- nothing was deleted. Answered as "try again", not a server error.
+    if (code === "40P01" || code === "40001") return { deleted: false, tryAgain: true };
+    if (code === "23503") {
       return { deleted: false, ownedWeddings: await listWeddingsOwnedBy(userId) };
     }
     throw err;

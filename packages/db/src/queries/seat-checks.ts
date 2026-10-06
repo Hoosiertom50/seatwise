@@ -183,8 +183,10 @@ export async function resyncSeatsAtTable(
 // TS-181: the Restricted tables any of these guests is on the required-guest list of, where the
 // list as it now stands needs more seats than the table has -- for a change that grows a listed
 // guest's party (the planner's edit, an import), checked after writing it on the same
-// transaction so the caller can refuse it. Locks those tables' rows (guests before tables, as
-// everywhere), so a list saved at the same moment is counted too.
+// transaction so the caller can refuse it. Locks those tables' rows, so a table edit at the same
+// moment is counted too. TS-195: the caller must already hold the lists' lock (lockRestrictedLists,
+// taken before any guest's row) -- that, not this table lock, is what keeps a list saved at the
+// same moment from slipping past.
 export async function restrictedListsOverCapacity(
   q: Queryable,
   guestIds: string[]
@@ -217,9 +219,13 @@ export async function restrictedListsOverCapacity(
 
 // TS-188: which of these guests is on the required-guest list of a Restricted table that isn't
 // accessible -- for a change that marks them as needing an accessible table (the planner's edit,
-// an import), checked on the same transaction so the caller can refuse it. Share-locks those
-// tables' rows (guests before tables, as everywhere), so switching a table's Accessible flag off
-// at the same moment waits for this change and then sees it.
+// an import), checked on the same transaction so the caller can refuse it.
+// TS-195: the caller takes the locks in the usual order first -- the current plan, then the lists
+// (lockRestrictedLists), then the guest's row -- and it's the lists' lock that makes a table edit
+// at the same moment (switching its Accessible flag off, saving its list) wait for this change and
+// then see it: a table edit takes that same lock before the table's row. The share lock on the
+// tables here is only a second guard. (This used to say "guests before tables, as everywhere",
+// which isn't the order: the lists come before any guest.)
 export async function requiredAtNonAccessibleTable(
   q: Queryable,
   guestIds: string[]

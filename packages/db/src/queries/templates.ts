@@ -1,6 +1,7 @@
 import { randomUUID } from "crypto";
 import { pool, beginTransaction } from "../pool";
 import { compareTableLabels, cutToLimit } from "@seatwise/shared";
+import { lockWeddingRow } from "./wedding-lock";
 
 // TS-19 (FR-14.1/FR-14.2): a template is a reusable snapshot of a wedding's table layout plus its
 // "rule-shape" (the wedding's Side-Mixing setting). It deliberately never stores anything
@@ -216,6 +217,10 @@ async function insertLayoutTables(
   weddingId: string,
   tables: LayoutTable[]
 ): Promise<number> {
+  // TS-195: the wedding's lock first (FOR NO KEY UPDATE), so a template added in two tabs at once,
+  // or alongside a quick-create, takes turns -- each reads the labels the other just saved, and no
+  // two tables end up with the same name. Also stops here, as "this wedding was deleted", if it was.
+  await lockWeddingRow(client, weddingId);
   const { rows: existing } = await client.query<{ label: string }>(
     `SELECT label FROM "seating_tables" WHERE "weddingId" = $1`,
     [weddingId]

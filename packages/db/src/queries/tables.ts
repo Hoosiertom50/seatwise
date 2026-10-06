@@ -12,6 +12,7 @@ import {
   HISTORY_CREATED_AT,
   type NewlyFlaggedSeat,
 } from "./seat-checks";
+import { lockWeddingRow } from "./wedding-lock";
 
 export interface SeatingTableRow {
   id: string;
@@ -144,6 +145,11 @@ export async function quickCreateSeatingTables(
   const client = await pool.connect();
   try {
     await beginTransaction(client);
+    // TS-195: the wedding's lock first, so two quick-creates (two tabs, a double click) -- or a
+    // quick-create and a template being added -- take turns: each reads the labels the other just
+    // saved. Before, both read the same labels and both made "Table 5". Also stops here, as "this
+    // wedding was deleted", if it was.
+    await lockWeddingRow(client, weddingId);
     const { rows: existingRows } = await client.query<{ label: string }>(
       `SELECT label FROM "seating_tables" WHERE "weddingId" = $1`,
       [weddingId]
@@ -614,7 +620,9 @@ export async function removeSeatingTable(
   id: string,
   weddingId: string,
   actorUserId: string,
-  confirmed: boolean
+  confirmed: boolean,
+  /** TS-195: how many seated guests the person confirmed removing (omitted: any number). */
+  confirmedSeatedCount?: number
 ): Promise<RemoveTableResult> {
   const client = await pool.connect();
   try {
@@ -643,7 +651,11 @@ export async function removeSeatingTable(
       );
       seatedCount = rows[0].n;
     }
-    if (seatedCount > 0 && !confirmed) {
+    // TS-195: and asked again if the number seated there changed since they confirmed (someone was
+    // seated at it meanwhile) -- they agreed to leave that many guests unassigned, not more or
+    // fewer. A table that's empty by now is simply removed.
+    const confirmedThisMany = confirmedSeatedCount === undefined || confirmedSeatedCount === seatedCount;
+    if (seatedCount > 0 && (!confirmed || !confirmedThisMany)) {
       await client.query("ROLLBACK").catch(() => {});
       return { status: "NEEDS_CONFIRMATION", label, seatedCount };
     }

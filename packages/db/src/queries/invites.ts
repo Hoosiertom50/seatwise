@@ -14,12 +14,15 @@ export const INVITE_TTL_DAYS = 7;
 export class InviteError extends Error {
   constructor(
     message: string,
-    public code: "NOT_FOUND" | "ALREADY_OWNER" | "ALREADY_COLLABORATOR"
+    // TS-195: NOT_OWNER -- the person asking isn't the wedding's owner any more.
+    public code: "NOT_FOUND" | "ALREADY_OWNER" | "ALREADY_COLLABORATOR" | "NOT_OWNER"
   ) {
     super(message);
     this.name = "InviteError";
   }
 }
+
+const NOT_OWNER_MESSAGE = "Only the wedding's owner can manage invites — and you aren't its owner any more.";
 
 export type InviteStatus = "PENDING" | "ACCEPTED" | "REVOKED" | "EXPIRED";
 
@@ -75,6 +78,7 @@ export async function createInvite(
   if (!wedding) {
     throw new InviteError("Wedding not found.", "NOT_FOUND");
   }
+  if (wedding.ownerId !== invitedByUserId) throw new InviteError(NOT_OWNER_MESSAGE, "NOT_OWNER");
 
   const { rows: ownerRows } = await pool.query(`SELECT id, email FROM "users" WHERE id = $1`, [
     wedding.ownerId,
@@ -108,15 +112,19 @@ export async function createInvite(
     // TS-187: the expiry is worked out by the database, in UTC (the column has no time zone and is
     // read as UTC). Before, it was a JavaScript date, which is sent in the server's own time zone
     // -- so on a server not set to UTC an invite lasted hours longer or shorter than 7 days.
+    // TS-195: only while the person sending it still owns the wedding (it could have been handed
+    // off since the check above) -- checked in the same statement that saves it.
     `INSERT INTO "wedding_invites"
        (id, "weddingId", email, role, "permissionLevel", token, status, "invitedByUserId", "expiresAt")
-     VALUES ($1, $2, $3, $4::"CollaboratorRole", $5::"CollaboratorPermission", $6, 'PENDING', $7,
-             ${UTC_NOW} + make_interval(days => $8::int))
+     SELECT $1, $2, $3, $4::"CollaboratorRole", $5::"CollaboratorPermission", $6, 'PENDING', $7,
+             ${UTC_NOW} + make_interval(days => $8::int)
+     WHERE EXISTS (SELECT 1 FROM "weddings" WHERE id = $2 AND "ownerId" = $7)
      RETURNING ${INVITE_COLUMNS}`,
     // TS-160: only the token's hash is stored; the token itself goes out in the email and nowhere else.
     [id, weddingId, normalizedEmail, role, permissionLevel, hashLinkToken(token), invitedByUserId, INVITE_TTL_DAYS]
   );
 
+  if (!rows[0]) throw new InviteError(NOT_OWNER_MESSAGE, "NOT_OWNER");
   return { ...withDerivedStatus(rows[0]), token };
 }
 
@@ -129,13 +137,18 @@ export async function listInvitesForWedding(weddingId: string): Promise<WeddingI
   return rows.map(withDerivedStatus);
 }
 
-export async function revokeInvite(weddingId: string, inviteId: string): Promise<void> {
+// TS-195: only by the wedding's owner, checked in the same statement (it could have been handed off
+// since the route's own check).
+export async function revokeInvite(weddingId: string, inviteId: string, actorUserId: string): Promise<void> {
   const { rowCount } = await pool.query(
     `UPDATE "wedding_invites" SET status = 'REVOKED'
-     WHERE id = $1 AND "weddingId" = $2 AND status = 'PENDING'`,
-    [inviteId, weddingId]
+     WHERE id = $1 AND "weddingId" = $2 AND status = 'PENDING'
+       AND EXISTS (SELECT 1 FROM "weddings" WHERE id = $2 AND "ownerId" = $3)`,
+    [inviteId, weddingId, actorUserId]
   );
   if (!rowCount) {
+    const { rows: owned } = await pool.query(`SELECT 1 FROM "weddings" WHERE id = $1 AND "ownerId" = $2`, [weddingId, actorUserId]);
+    if (!owned[0]) throw new InviteError(NOT_OWNER_MESSAGE, "NOT_OWNER");
     throw new InviteError("Invite not found or already resolved.", "NOT_FOUND");
   }
 }

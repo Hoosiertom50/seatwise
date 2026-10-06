@@ -94,7 +94,10 @@ export async function POST(req: NextRequest, { params }: Params) {
     );
   } catch (err) {
     // TS-168: no invite was made, so no email went out -- this one doesn't count (given back below).
-    if (err instanceof InviteError) return errorResponse(err.message, err.code === "NOT_FOUND" ? 404 : 409);
+    // TS-195: NOT_OWNER -- handed off a moment ago.
+    if (err instanceof InviteError) {
+      return errorResponse(err.message, err.code === "NOT_FOUND" ? 404 : err.code === "NOT_OWNER" ? 403 : 409);
+    }
     throw err;
   } finally {
     if (!emailWentOut) {

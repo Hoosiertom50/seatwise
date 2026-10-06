@@ -58,6 +58,14 @@ export async function DELETE(req: NextRequest) {
   await attempt.giveBack();
 
   const result = await deleteUserAccount(user.id);
+  // TS-195: it ran into another change at that same moment (a wedding being handed to you, say) --
+  // nothing was deleted, and trying again works. Before, this was a server error.
+  if (!result.deleted && "tryAgain" in result) {
+    return errorResponse(
+      "Something else changed on your account at that same moment, so it wasn't deleted. Please try again.",
+      409
+    );
+  }
   if (!result.deleted) {
     return NextResponse.json(
       {
