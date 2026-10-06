@@ -5,3 +5,12 @@
 export function formatGuestCounts(invitations: number, people: number): string {
   return `${invitations} invitation${invitations === 1 ? "" : "s"} · ${people} ${people === 1 ? "person" : "people"}`;
 }
+
+/**
+ * TS-198: the plus-ones to print with a guest on the door lookup list and the place cards -- only
+ * when their party is bigger than one. A guest whose party went back to just themselves keeps the
+ * old names on their record, and printing them used to put people at the door who aren't coming.
+ */
+export function plusOnesToPrint(guest: { headcount: number; plusOneNames: string | null }): string | null {
+  return guest.headcount > 1 && guest.plusOneNames?.trim() ? guest.plusOneNames : null;
+}
