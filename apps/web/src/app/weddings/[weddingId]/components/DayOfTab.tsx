@@ -233,6 +233,15 @@ export function DayOfTab({
     }
   }
 
+  // TS-189: the open plan as it is now, after adding a guest moved it on a revision.
+  async function refreshAfterGuestAdded(): Promise<PlanVersionDetailDTO> {
+    const { planVersion } = await api.get<{ planVersion: PlanVersionDetailDTO }>(
+      `/api/v1/weddings/${weddingId}/plan-versions/${detailRef.current!.id}`
+    );
+    applyDetail(planVersion);
+    return planVersion;
+  }
+
   async function onAddWalkIn(e: React.FormEvent) {
     e.preventDefault();
     if (!walkInFirst.trim() || !walkInLast.trim()) return;
@@ -255,8 +264,8 @@ export function DayOfTab({
       setWalkInLast("");
       if (walkInTableId && detail) {
         const tableId = walkInTableId;
-        const res = await queuePlanChange(() => {
-          const current = detailRef.current!;
+        const res = await queuePlanChange(async () => {
+          const current = await refreshAfterGuestAdded();
           return api.post<{ planVersion: PlanVersionDetailDTO; warnings: string[] }>(
             `/api/v1/weddings/${weddingId}/plan-versions/${current.id}/assignments`,
             { guestId: guest.id, tableId, expectedRevision: current.revision }
@@ -271,6 +280,10 @@ export function DayOfTab({
         setNotice(`Added walk-in ${guest.firstName} ${guest.lastName} — not yet seated.`);
       }
       setWalkInTableId("");
+      // TS-189: adding a guest moves the plan on a revision (they're a new unseated guest) -- take
+      // the plan as it is now, so a later "Seat at…" isn't refused as out of date.
+      // (If that reload fails, the next change is refused as out of date and refreshes then.)
+      if (detail && !walkInTableId) await queuePlanChange(refreshAfterGuestAdded).catch(() => {});
     } catch (err) {
       const fresh = conflictPlanVersion(err);
       if (fresh) applyDetail(fresh);

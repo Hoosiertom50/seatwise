@@ -94,6 +94,7 @@ defineQualityTest(
 
     await test.step("Open the table's edit form and change its name", async () => {
       await tables.goto(w);
+      await tables.openTablesTab();
       await tables.openTableEdit(label);
       await tables.fillTableEdit(label, { name: `${label} changed` });
     });

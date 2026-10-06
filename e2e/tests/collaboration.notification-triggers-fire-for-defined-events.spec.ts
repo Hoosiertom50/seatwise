@@ -75,15 +75,23 @@ defineQualityTest(
       guestBName = `${guestB.firstName} ${guestB.lastName}`;
 
       const tableA = await weddingData.createTable(managedWedding.id, { label: "Table A", capacity: 2 });
-      await weddingData.createTable(managedWedding.id, { label: "Table B", capacity: 2 });
+      const tableB = await weddingData.createTable(managedWedding.id, { label: "Table B", capacity: 2 });
       const tableC = await weddingData.createTable(managedWedding.id, { label: "Table C", capacity: 1 });
       tableAId = tableA.id;
-      tableCId = tableC.id;
-      tableCLabel = tableC.label;
 
       const generated = await weddingData.generatePlanVersion(managedWedding.id);
       expect(generated.isComplete).toBe(true);
       planVersionId = generated.id;
+
+      // TS-189: a move to the table a guest is already at changes nothing and notifies no one, so the
+      // later move takes guest A to whichever of Table C / Table B they aren't at (the engine may
+      // put them at either) -- a real move. Table A keeps room for the Draft-stage move back.
+      const seatedAt = (await weddingData.getPlanVersionDetail(managedWedding.id, planVersionId)).assignments.find(
+        (a) => a.guestId === guestAId,
+      )?.tableId;
+      const target = seatedAt === tableC.id ? tableB : tableC;
+      tableCId = target.id;
+      tableCLabel = target.label;
     });
 
     const baseURL = getEnv().APP_URL;
