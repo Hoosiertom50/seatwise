@@ -532,11 +532,14 @@ export async function setAccountEmailCount(email: string, counter: AccountEmailC
 
 /** TS-178: sets one counter's value in its current window. Every caller below checks first that the
  * key belongs to a test address or test account. */
-async function setCounter(key: string, windowSeconds: number, count: number): Promise<void> {
+async function setCounter(key: string, windowSeconds: number, count: number, window: "current" | "previous" = "current"): Promise<void> {
+  const start = currentWindowStart(windowSeconds);
+  // TS-184: "previous" is the window just before the current one, which shorter limits still count.
+  if (window === "previous") start.setTime(start.getTime() - windowSeconds * 1000);
   await testPool().query(
     `INSERT INTO "rate_limit_counters" (key, "windowStart", count) VALUES ($1, $2, $3)
      ON CONFLICT (key, "windowStart") DO UPDATE SET count = $3`,
-    [key, currentWindowStart(windowSeconds), count],
+    [key, start, count],
   );
 }
 
@@ -575,9 +578,13 @@ export async function emailsToAddressToday(email: string): Promise<number> {
  * (LOGIN_LIMITS.failuresPerAccount in apps/web/src/lib/rate-limit.ts) -- `count` at that limit
  * locks the account, as many wrong guesses would.
  */
-export async function setSignInFailuresForAccount(email: string, count: number): Promise<void> {
+export async function setSignInFailuresForAccount(
+  email: string,
+  count: number,
+  window: "current" | "previous" = "current",
+): Promise<void> {
   await testAccountId(email); // throws unless it's a test account
-  await setCounter(`login:account:${requireTestEmail(email)}`, 900, count);
+  await setCounter(`login:account:${requireTestEmail(email)}`, 900, count, window);
 }
 
 /** TS-178: the "Forgot password?" counters for one test email (PASSWORD_RESET_LIMITS), by window. */

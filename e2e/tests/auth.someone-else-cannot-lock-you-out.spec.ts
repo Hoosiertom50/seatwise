@@ -13,7 +13,7 @@ import { randomBytes } from "node:crypto";
 import { expect, defineQualityTest, test } from "../fixtures/index.js";
 import { uniqueTestAddress, uniqueToken } from "../data/ids.js";
 import { TEST_ACCOUNT_EMAIL_DOMAIN } from "../support/auth.js";
-import { usableResetTokenCount } from "../support/testDatabase.js";
+import { setSignInFailuresForAccount, usableResetTokenCount } from "../support/testDatabase.js";
 
 const FAILURES_PER_ACCOUNT_AND_ADDRESS = 10;
 const FAILURES_PER_ACCOUNT = 100;
@@ -83,6 +83,21 @@ defineQualityTest(
           }),
         );
         expect((await signIn(await client(uniqueTestAddress()), target)).status()).toBe(429);
+      });
+
+      // TS-184: the limit counts the last 15 minutes, not the current quarter hour -- so failures just
+      // before the quarter hour still count just after it. Set straight in the counters, so the result
+      // doesn't depend on what time the test runs: 99 failures now plus 100 in the previous quarter hour
+      // is over the limit at any point in the current one; 99 now and none before is not.
+      await test.step("Failures from the previous quarter hour still count toward the account's lock", async () => {
+        const carried = await newAccount();
+        await setSignInFailuresForAccount(carried.email, FAILURES_PER_ACCOUNT, "previous");
+        await setSignInFailuresForAccount(carried.email, FAILURES_PER_ACCOUNT - 1);
+        expect((await signIn(await client(uniqueTestAddress()), carried)).status()).toBe(429);
+
+        const fresh = await newAccount();
+        await setSignInFailuresForAccount(fresh.email, FAILURES_PER_ACCOUNT - 1);
+        expect((await signIn(await client(uniqueTestAddress()), fresh)).status()).toBe(200);
       });
 
       await test.step("IPv6: every address in one /64 shares that network's limit", async () => {

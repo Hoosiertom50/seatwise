@@ -1,7 +1,29 @@
 import { pool } from "../pool";
 
-// TS-98: fixed-window rate limiting backed by Postgres, so a limit holds across every server
+// TS-98: window-based rate limiting backed by Postgres, so a limit holds across every server
 // instance (serverless hosts run many that share no memory) and survives restarts.
+
+// TS-184: limits shorter than a day (sign-in failures, hourly email caps) also count the previous
+// window, weighted by how much of it still falls inside the last `windowSeconds`. Before, the
+// count started again from zero on the quarter hour, so tries made just before and just after it
+// got twice the limit (and 100 wrong passwords spread across 2:15 never locked the account).
+// Daily limits stay calendar days (UTC), because their messages say "today" and "tomorrow".
+function slides(windowSeconds: number): boolean {
+  return windowSeconds < 86_400;
+}
+
+// The previous window's count still inside the last `windowMs` -- rounded up, so a split can
+// never come out below the real number of tries.
+async function carriedOver(key: string, windowStart: Date, windowMs: number, nowMs: number): Promise<number> {
+  const { rows } = await pool.query<{ count: number }>(
+    `SELECT count FROM "rate_limit_counters" WHERE key = $1 AND "windowStart" = $2`,
+    [key, new Date(windowStart.getTime() - windowMs)]
+  );
+  const previous = rows[0]?.count ?? 0;
+  if (previous === 0) return 0;
+  const stillInside = 1 - (nowMs - windowStart.getTime()) / windowMs;
+  return Math.ceil(previous * stillInside);
+}
 
 export interface RateLimitResult {
   allowed: boolean;
@@ -28,8 +50,9 @@ export async function hitRateLimit(key: string, limit: number, windowSeconds: nu
     pool.query(`DELETE FROM "rate_limit_counters" WHERE "windowStart" < now() - interval '1 day'`).catch(() => {});
   }
 
+  const counted = rows[0].count + (slides(windowSeconds) ? await carriedOver(key, windowStart, windowMs, nowMs) : 0);
   return {
-    allowed: rows[0].count <= limit,
+    allowed: counted <= limit,
     retryAfterSeconds: Math.max(1, Math.ceil((windowStart.getTime() + windowMs - nowMs) / 1000)),
   };
 }
@@ -59,8 +82,10 @@ export async function peekRateLimit(key: string, limit: number, windowSeconds: n
     `SELECT count FROM "rate_limit_counters" WHERE key = $1 AND "windowStart" = $2`,
     [key, windowStart]
   );
+  const counted =
+    (rows[0]?.count ?? 0) + (slides(windowSeconds) ? await carriedOver(key, windowStart, windowMs, nowMs) : 0);
   return {
-    allowed: (rows[0]?.count ?? 0) < limit,
+    allowed: counted < limit,
     retryAfterSeconds: Math.max(1, Math.ceil((windowStart.getTime() + windowMs - nowMs) / 1000)),
   };
 }
