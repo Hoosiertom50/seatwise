@@ -184,7 +184,8 @@ export class GuestRow {
   /** TS-143: the line shown after the RSVP link was emailed automatically (added with an email, or
    * given a first email). */
   autoRsvpResult(): Locator {
-    return this.root.getByText(/^(Emailed RSVP link to |Couldn't email )/);
+    // TS-177: or, after the RSVP cutoff, the note that the guest wasn't emailed.
+    return this.root.getByText(/^(Emailed RSVP link to |Couldn't email |RSVPs have closed, so this guest wasn't emailed)/);
   }
 
   rsvpLinkResult(): Locator {

@@ -35,7 +35,7 @@ export async function POST(req: NextRequest) {
   // TS-171: while the last link sent still works (it lasts an hour), asking again sends nothing
   // new and cancels nothing -- the answer is the same as when it was sent. Otherwise anyone could
   // use up the person's resets for the day (each new link used to cancel the one before).
-  if (user && (await hasUsablePasswordResetToken(user.id))) return NextResponse.json(resetOutcome(true, "sent"));
+  if (user && (await hasUsablePasswordResetToken(user.id))) return NextResponse.json(resetOutcome(true, "already-sent"));
 
   const perEmail =
     (await rateLimitOr429(`pw-reset:email:${email.toLowerCase()}`, PASSWORD_RESET_LIMITS.requestsPerEmail)) ??

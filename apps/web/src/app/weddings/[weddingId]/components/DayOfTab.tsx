@@ -166,8 +166,9 @@ export function DayOfTab({
       if (res.planVersion) applyDetail(res.planVersion);
       setNotice(
         nextAttendance === "NOT_ATTENDING"
-          ? `${guest.firstName} ${guest.lastName} marked not attending — their seat is now free.`
-          : `${guest.firstName} ${guest.lastName} marked attending again — seat them below.`
+          ? // TS-177: only say a seat was freed when they had one.
+            `${guest.firstName} ${guest.lastName} marked not attending${tableLabelByGuestId.has(guest.id) ? " — their seat is now free" : ""}.`
+          : `${guest.firstName} ${guest.lastName} marked attending again${detail ? " — seat them below" : " — they'll need a seat once there's a plan"}.`
       );
     } catch (err) {
       setRowError(guest.id, apiErrorMessage(err, [], "Couldn't update attendance."));
@@ -298,7 +299,8 @@ export function DayOfTab({
         <h2 className="mb-1 text-lg font-medium">Day-of mode</h2>
         <p className="text-sm text-neutral-500 dark:text-neutral-400">
           Mark no-shows and walk-ins, re-seat or swap guests fast — without a full regeneration.
-          Nobody else&apos;s seat changes unless you move them.
+          Nobody else&apos;s seat changes unless you move them — except that guests who must sit
+          together always move together.
         </p>
       </div>
 

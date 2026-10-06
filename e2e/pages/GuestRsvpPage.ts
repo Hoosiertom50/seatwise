@@ -66,7 +66,8 @@ export class GuestRsvpPage extends BasePage {
   }
 
   notFoundMessage() {
-    return this.page.getByText("This RSVP link doesn't exist.", { exact: true });
+    // TS-177: also shown for an older link once the couple made a new one.
+    return this.page.getByText(/^This RSVP link isn't active\./);
   }
 
   closedMessage() {
@@ -74,10 +75,8 @@ export class GuestRsvpPage extends BasePage {
   }
 
   successBanner() {
-    return this.page.getByText(
-      "Thanks — your RSVP has been recorded. You can come back to this link any time to update it.",
-      { exact: true },
-    );
+    // TS-177: the rest of the line says until when the answer can be changed.
+    return this.page.getByText(/^Thanks — your RSVP has been recorded\. You can come back to this link to change it/);
   }
 
   /** Whether the whole form is disabled -- true once RSVP responses have closed (the enclosing

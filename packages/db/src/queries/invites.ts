@@ -8,7 +8,8 @@ import { type CollaboratorRole } from "./collaborators";
 // wedding it belongs to until it's read) and carries no guest data of its own -- only a role, a
 // permission level, and who it was sent to.
 
-const INVITE_TTL_DAYS = 7;
+// TS-177: exported, so the invite email states the real number.
+export const INVITE_TTL_DAYS = 7;
 
 export class InviteError extends Error {
   constructor(

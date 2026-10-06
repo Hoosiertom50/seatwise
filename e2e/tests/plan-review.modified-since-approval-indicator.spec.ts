@@ -19,6 +19,7 @@
  */
 
 import { expect, defineQualityTest, test } from "../fixtures/index.js";
+import { shownDateTime } from "../data/dates.js";
 import { uniquePersonName } from "../data/ids.js";
 import { PlanTabPage } from "../pages/PlanTabPage.js";
 
@@ -81,7 +82,8 @@ defineQualityTest(
       const planTab = new PlanTabPage(page);
       await planTab.goto(managedWedding.id);
       await expect(planTab.modifiedSinceApprovalBanner()).toBeVisible();
-      const expectedFirstChangeText = new Date(firstModifiedAt).toLocaleString();
+      // TS-177: MM-DD-YYYY with a 12-hour time.
+      const expectedFirstChangeText = shownDateTime(firstModifiedAt);
       await expect(planTab.modifiedSinceApprovalDetail()).toContainText(`First change ${expectedFirstChangeText}`);
     });
 

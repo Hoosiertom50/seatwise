@@ -4,7 +4,7 @@ import { deleteUserAccount, findUserById } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
 import { errorResponse, zodErrorResponse } from "@/lib/api-response";
 import { AUTH_COOKIE_NAME, isSecureCookieContext, verifyPassword } from "@/lib/auth";
-import { clientAddress, countSignInAttempt, signInFailureLimits, TOO_MANY_SIGN_INS } from "@/lib/rate-limit";
+import { clientAddress, countSignInAttempt, signInFailureLimits } from "@/lib/rate-limit";
 
 export async function GET(req: NextRequest) {
   const user = await getAuthUser(req);
@@ -34,7 +34,13 @@ export async function DELETE(req: NextRequest) {
   if (!attempt.allowed) {
     // TS-157: a refused attempt doesn't count.
     await attempt.giveBack();
-    return errorResponse(TOO_MANY_SIGN_INS, 429);
+    // TS-177: the person is already signed in, so the sign-in wording ("reset your password and
+    // sign in") didn't fit -- and a reset doesn't clear these counters anyway.
+    const minutes = Math.max(1, Math.ceil(attempt.retryAfterSeconds / 60));
+    return NextResponse.json(
+      { error: `Too many wrong passwords. Please wait ${minutes} minute${minutes === 1 ? "" : "s"} and try again.` },
+      { status: 429, headers: { "Retry-After": String(attempt.retryAfterSeconds) } }
+    );
   }
   const record = await findUserById(user.id);
   if (!record || !(await verifyPassword(parsed.data.password, record.passwordHash))) {

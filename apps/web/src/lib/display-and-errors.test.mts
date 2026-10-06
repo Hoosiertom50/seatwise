@@ -2,13 +2,21 @@
 // `pnpm --filter @seatwise/web test`.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { formatShortEventDate, localTodayIso } from "./display-format";
+import { formatDate, formatDateTime, formatMomentDate, localTodayIso } from "./display-format";
 import { ApiError, apiErrorMessage } from "./api-client";
 
-test("a wedding date shows as that same date whatever the time zone", () => {
+test("a wedding date shows as that same date, MM-DD-YYYY, whatever the time zone", () => {
   process.env.TZ = "America/Los_Angeles";
-  assert.equal(formatShortEventDate("2027-06-12").includes("12"), true);
-  assert.equal(formatShortEventDate("2027-06-12").includes("11"), false);
+  // TS-177 (Tom): every date is MM-DD-YYYY.
+  assert.equal(formatDate("2027-06-12"), "06-12-2027");
+  assert.equal(formatDate("2026-01-05"), "01-05-2026");
+});
+
+test("a moment shows as MM-DD-YYYY with a 12-hour time and AM/PM, never 24-hour time", () => {
+  assert.equal(formatDateTime(new Date(2026, 9, 5, 17, 12, 15)), "10-05-2026, 5:12 PM");
+  assert.equal(formatDateTime(new Date(2026, 0, 9, 0, 5)), "01-09-2026, 12:05 AM");
+  assert.equal(formatDateTime(new Date(2026, 0, 9, 12, 0)), "01-09-2026, 12:00 PM");
+  assert.equal(formatMomentDate(new Date(2026, 9, 5, 23, 59)), "10-05-2026");
 });
 
 test("today is the planner's own date, not UTC's", () => {

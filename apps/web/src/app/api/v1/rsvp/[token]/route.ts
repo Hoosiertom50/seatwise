@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { submitGuestRsvpSchema, type GuestRsvpPreviewDTO, isRsvpCutoffPast } from "@seatwise/shared";
 import { getGuestByRsvpToken, hashLinkToken, submitGuestRsvp, RsvpSubmissionError, notifyWeddingCollaborators } from "@seatwise/db";
 import { errorResponse, zodErrorResponse } from "@/lib/api-response";
-import { clientAddress, rateLimitOr429, RSVP_LIMITS } from "@/lib/rate-limit";
+import { clientAddress, rateLimitOr429, RSVP_LIMITS, RSVP_LINK_TOO_MANY_SUBMITS } from "@/lib/rate-limit";
 
 type Params = { params: Promise<{ token: string }> };
 
@@ -63,7 +63,12 @@ export async function POST(req: NextRequest, { params }: Params) {
   const limited =
     (await rateLimitOr429(`rsvp:addr:${clientAddress(req)}`, RSVP_LIMITS.perAddress)) ??
     // TS-160: keyed by the link's hash, so the counters table never holds a working link either.
-    (await rateLimitOr429(`rsvp:submit:${hashLinkToken(token)}`, RSVP_LIMITS.submitsPerLink));
+    // TS-177: this one counts submits on the link from anywhere, so the message can't say "from here".
+    (await rateLimitOr429(
+      `rsvp:submit:${hashLinkToken(token)}`,
+      RSVP_LIMITS.submitsPerLink,
+      RSVP_LINK_TOO_MANY_SUBMITS
+    ));
   if (limited) return limited;
 
   const body = await req.json().catch(() => null);

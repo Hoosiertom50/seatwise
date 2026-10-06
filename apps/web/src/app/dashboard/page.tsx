@@ -5,8 +5,8 @@ import { ConfirmDeleteButton } from "@/components/ConfirmDeleteButton";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { api, ApiError, apiErrorMessage } from "@/lib/api-client";
-import { formatShortEventDate, localTodayIso } from "@/lib/display-format";
-import type { WeddingSummaryDTO, SeatingTemplateDTO } from "@seatwise/shared";
+import { formatDate, localTodayIso } from "@/lib/display-format";
+import { formatGuestCounts, type WeddingSummaryDTO, type SeatingTemplateDTO } from "@seatwise/shared";
 import { NotificationsBell } from "@/components/NotificationsBell";
 import { EmailVerificationNotice } from "@/components/EmailVerificationNotice";
 
@@ -367,7 +367,7 @@ export default function DashboardPage() {
                     checked={applyTemplateRules}
                     onChange={(e) => setApplyTemplateRules(e.target.checked)}
                   />
-                  Use its rule-shape (
+                  Use its side-mixing setting (
                   {SIDE_MIXING_LABELS[
                     templates.find((t) => t.id === selectedTemplateId)?.sideMixing ?? "BALANCED_MIX"
                   ]}
@@ -484,7 +484,7 @@ export default function DashboardPage() {
             <option value="urgency">Sort: Needs attention first</option>
             <option value="eventDate">Sort: Event date (soonest)</option>
             <option value="name">Sort: Name (A–Z)</option>
-            <option value="guestCount">Sort: Guest count (most)</option>
+            <option value="guestCount">Sort: Invitations (most)</option>
             <option value="issues">Sort: Outstanding issues (most)</option>
           </select>
         </div>
@@ -547,7 +547,7 @@ export default function DashboardPage() {
                         </span>
                       </p>
                       <p className="text-sm text-neutral-500 dark:text-neutral-400">
-                        {w.eventDate ? formatShortEventDate(w.eventDate) : "No date set"}
+                        {w.eventDate ? formatDate(w.eventDate) : "No date set"}
                         {w.venueName ? ` · ${w.venueName}` : ""}
                       </p>
                     </div>
@@ -560,8 +560,9 @@ export default function DashboardPage() {
                             `${w.needsReassignmentCount} needs reassignment`}
                         </span>
                       )}
+                      {/* TS-177: invitations and people, the same as the Guests tab's header. */}
                       <span>
-                        {w.guestCount} guest{w.guestCount === 1 ? "" : "s"}
+                        {formatGuestCounts(w.guestCount, w.peopleCount)}
                       </span>
                     </div>
                   </Link>

@@ -30,24 +30,30 @@ export function formatClockTime(hhmm: string): string {
   return `${h12}:${String(m).padStart(2, "0")} ${period}`;
 }
 
-/** "2027-06-12" -> "Saturday, June 12, 2027" (read as a calendar date, never shifted by time zone). */
-export function formatEventDate(isoDate: string): string {
-  const [y, m, d] = isoDate.split("-").map(Number);
-  return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString(undefined, {
-    weekday: "long",
-    year: "numeric",
-    month: "long",
-    day: "numeric",
-    timeZone: "UTC",
-  });
+// TS-177 (Tom, 2026-10-06): every date anywhere -- screens, emails, messages -- is shown as
+// MM-DD-YYYY. Use these two helpers; never toLocaleDateString / toLocaleString directly.
+const pad2 = (n: number) => String(n).padStart(2, "0");
+
+/**
+ * A calendar date ("YYYY-MM-DD", e.g. a wedding date or RSVP cutoff) as "MM-DD-YYYY". Read as the
+ * date it is, never through a time zone (TS-151: going through Date made it a day early in the US).
+ */
+export function formatDate(isoDate: string): string {
+  const [y, m, d] = isoDate.slice(0, 10).split("-");
+  return `${m}-${d}-${y}`;
 }
 
-// TS-151: a wedding date ("YYYY-MM-DD") in the short local style, e.g. "6/12/2027". Reading the
-// string with new Date() treats it as midnight UTC, which is the evening before anywhere in the
-// Americas -- the date showed a day early on the dashboard and wedding page.
-export function formatShortEventDate(isoDate: string): string {
-  const [y, m, d] = isoDate.split("-").map(Number);
-  return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString(undefined, { timeZone: "UTC" });
+/** A moment (a timestamp) as "MM-DD-YYYY, h:mm AM/PM" in the viewer's own time zone. */
+export function formatDateTime(moment: string | Date): string {
+  const t = typeof moment === "string" ? new Date(moment) : moment;
+  const date = `${pad2(t.getMonth() + 1)}-${pad2(t.getDate())}-${t.getFullYear()}`;
+  return `${date}, ${formatClockTime(`${pad2(t.getHours())}:${pad2(t.getMinutes())}`)}`;
+}
+
+/** A moment as just its date, "MM-DD-YYYY", in the viewer's own time zone. */
+export function formatMomentDate(moment: string | Date): string {
+  const t = typeof moment === "string" ? new Date(moment) : moment;
+  return `${pad2(t.getMonth() + 1)}-${pad2(t.getDate())}-${t.getFullYear()}`;
 }
 
 // TS-151: today's date where the planner is, as "YYYY-MM-DD" (toISOString() gives UTC's date,

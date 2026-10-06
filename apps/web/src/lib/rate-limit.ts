@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { ACCOUNT_EMAILS_PER_DAY, accountDailyEmailKey, hitRateLimit, peekRateLimit, undoRateLimitHit } from "@seatwise/db";
+import { emailLimitReason, tooManyAttemptsMessage, type EmailLimitReason } from "./limit-messages";
 
 // TS-98: limits for the public, unauthenticated guest RSVP link -- the one part of the API anyone
 // on the internet can call without signing in. Generous enough that no real guest (or a household
@@ -132,16 +133,29 @@ export async function over429(
 // so every existing caller keeps importing it from this module.
 export { clientAddress } from "./client-address";
 
+// TS-177: the refusal messages live in ./limit-messages (unit-testable without a database).
+export {
+  ACCOUNT_DAILY_EMAIL_LIMIT_REACHED,
+  emailSendRefusedMessage,
+  RSVP_LINK_TOO_MANY_SUBMITS,
+  TOO_MANY_INVITES,
+  tooManyAttemptsMessage,
+  type EmailLimitReason,
+} from "./limit-messages";
+
 // Counts this request against `key`; returns a ready 429 response when it's over the limit, or
-// null to carry on.
+// null to carry on. TS-177: the message follows the window (a daily limit says "tomorrow", not "a
+// few minutes"), and `message` replaces it where the generic text wouldn't be accurate (a limit
+// counted per link from anywhere, say, isn't "from here").
 export async function rateLimitOr429(
   key: string,
-  { limit, windowSeconds }: { limit: number; windowSeconds: number }
+  { limit, windowSeconds }: { limit: number; windowSeconds: number },
+  message?: string
 ): Promise<NextResponse | null> {
   const result = await hitRateLimit(key, limit, windowSeconds);
   if (result.allowed) return null;
   return NextResponse.json(
-    { error: "Too many attempts from here in a short time. Please wait a few minutes and try again." },
+    { error: message ?? tooManyAttemptsMessage(windowSeconds) },
     { status: 429, headers: { "Retry-After": String(result.retryAfterSeconds) } }
   );
 }
@@ -162,22 +176,33 @@ export const EMAIL_SEND_LIMITS: Record<"invites" | "rsvpEmails", readonly { limi
   rsvpEmails: [{ limit: 100, windowSeconds: 3600 }],
 };
 
-export const TOO_MANY_INVITES =
-  "You've sent a lot of invites in a short time. Please wait a while before sending more.";
+// TS-177: refused, with which limit it was (see emailSendRefusedMessage for the words).
+export type EmailSendReservation = { allowed: true } | { allowed: false; reason: EmailLimitReason };
 
 /**
- * TS-156: counts one email of `kind` sent by `userId` against every window; false once any window
- * is over its limit (the email should then not be sent). TS-171: and against the account's daily
- * allowance for all kinds of email together.
+ * TS-156: counts one email of `kind` sent by `userId` against every window; refused once any
+ * window is over its limit (the email should then not be sent). TS-171: and against the account's
+ * daily allowance for all kinds of email together.
+ *
+ * TS-177: a refused email uses nothing up -- the counters that did allow it get their hit back, so
+ * one full window can't quietly drain the others.
  */
-export async function reserveEmailSend(kind: keyof typeof EMAIL_SEND_LIMITS, userId: string): Promise<boolean> {
-  const results = await Promise.all([
-    ...EMAIL_SEND_LIMITS[kind].map(({ limit, windowSeconds }) =>
-      hitRateLimit(`email:${kind}:${windowSeconds}:${userId}`, limit, windowSeconds)
-    ),
-    hitRateLimit(accountDailyEmailKey(userId), ACCOUNT_EMAILS_PER_DAY.limit, ACCOUNT_EMAILS_PER_DAY.windowSeconds),
-  ]);
-  return results.every((r) => r.allowed);
+export async function reserveEmailSend(kind: keyof typeof EMAIL_SEND_LIMITS, userId: string): Promise<EmailSendReservation> {
+  const counters = [
+    ...EMAIL_SEND_LIMITS[kind].map(({ limit, windowSeconds }) => ({
+      key: `email:${kind}:${windowSeconds}:${userId}`,
+      limit,
+      windowSeconds,
+      accountDaily: false,
+    })),
+    { key: accountDailyEmailKey(userId), ...ACCOUNT_EMAILS_PER_DAY, accountDaily: true },
+  ];
+  const results = await Promise.all(counters.map(({ key, limit, windowSeconds }) => hitRateLimit(key, limit, windowSeconds)));
+  if (results.every((r) => r.allowed)) return { allowed: true };
+
+  await Promise.all(counters.map((c, i) => (results[i].allowed ? undoRateLimitHit(c.key, c.windowSeconds) : null)));
+
+  return { allowed: false, reason: emailLimitReason(counters.filter((_, i) => !results[i].allowed)) };
 }
 
 /** TS-168: gives back one email counted by reserveEmailSend, when nothing was sent after all. */

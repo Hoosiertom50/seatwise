@@ -11,7 +11,8 @@ export type InvitePageState = "NOT_FOUND" | "REVOKED" | "EXPIRED" | "ACCEPTED" |
 
 const STATE_TEXT: Record<InvitePageState, string> = {
   NOT_FOUND: "This invite link doesn't exist.",
-  REVOKED: "This invite has been revoked by the wedding's owner.",
+  // TS-177: also shown for an older link once a newer invite was sent.
+  REVOKED: "This invite link is no longer active. If you were sent a newer invite, use the link in that email; otherwise ask the person who invited you for a new one.",
   EXPIRED: "This invite has expired.",
   ACCEPTED: "This invite has already been accepted.",
   MISMATCHED_ACCOUNT: "This invite was sent to a different email address",

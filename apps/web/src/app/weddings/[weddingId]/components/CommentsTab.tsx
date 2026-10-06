@@ -1,5 +1,6 @@
 "use client";
 
+import { formatClockTime, formatDateTime } from "@/lib/display-format";
 import { useEffect, useMemo, useState, useRef } from "react";
 import { api, ApiError } from "@/lib/api-client";
 import type { CommentDTO, GuestDTO, SeatingTableDTO, TimelineEntryDTO } from "@seatwise/shared";
@@ -209,7 +210,7 @@ export function CommentsTab({
                 {targetType === "TIMELINE_ENTRY" &&
                   timelineEntries.map((e) => (
                     <option key={e.id} value={e.id}>
-                      {e.time} — {e.description}
+                      {formatClockTime(e.time)} — {e.description}
                     </option>
                   ))}
               </select>
@@ -259,7 +260,7 @@ export function CommentsTab({
                     </p>
                     <p className="mt-1 text-sm text-neutral-700 dark:text-neutral-300">{root.body}</p>
                     <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
-                      {root.authorName} · {new Date(root.createdAt).toLocaleString()}
+                      {root.authorName} · {formatDateTime(root.createdAt)}
                     </p>
                   </div>
                   {root.resolvedAt ? (
@@ -284,7 +285,7 @@ export function CommentsTab({
                       <li key={r.id}>
                         <p className="text-sm text-neutral-700 dark:text-neutral-300">{r.body}</p>
                         <p className="mt-0.5 text-xs text-neutral-500 dark:text-neutral-400">
-                          {r.authorName} · {new Date(r.createdAt).toLocaleString()}
+                          {r.authorName} · {formatDateTime(r.createdAt)}
                         </p>
                       </li>
                     ))}

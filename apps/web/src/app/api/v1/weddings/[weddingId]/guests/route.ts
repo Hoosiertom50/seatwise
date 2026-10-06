@@ -11,7 +11,8 @@ import { getAuthUser } from "@/lib/session";
 import { errorResponse, zodErrorResponse } from "@/lib/api-response";
 import { requireAccess } from "@/lib/access";
 import { guestForViewer } from "@/lib/guest-privacy";
-import { sendGuestRsvpLink } from "@/lib/rsvp-email";
+import { rsvpEmailOutcome, sendGuestRsvpLink } from "@/lib/rsvp-email";
+import { SAVED_BUT_NOT_RECHECKED } from "@/lib/post-save";
 
 type Params = { params: Promise<{ weddingId: string }> };
 
@@ -48,8 +49,15 @@ export async function POST(req: NextRequest, { params }: Params) {
     ...(parsed.data.rsvpStatus === "DECLINED" && !explicitAttendance ? { dayOfAttendance: "NOT_ATTENDING" as const } : {}),
   });
   // TS-165: a new attending guest makes the current plan incomplete until they're seated.
+  // TS-177: the guest is saved by now -- if this re-check fails, say so rather than "not saved".
+  const warnings: string[] = [];
   if (guest.dayOfAttendance === "ATTENDING") {
-    await refreshPlanAfterGuestAdded(weddingId, `${guest.firstName} ${guest.lastName}`, user.id);
+    try {
+      await refreshPlanAfterGuestAdded(weddingId, `${guest.firstName} ${guest.lastName}`, user.id);
+    } catch (err) {
+      console.error("Guest added, but refreshing the plan failed", err);
+      warnings.push(SAVED_BUT_NOT_RECHECKED);
+    }
   }
 
   // FR-10.2: guest addition is only notification-worthy post-approval.
@@ -68,7 +76,7 @@ export async function POST(req: NextRequest, { params }: Params) {
   const rsvpEmail = guest.email ? await sendGuestRsvpLink(guest, access.wedding, user) : null;
 
   return NextResponse.json(
-    { guest, ...(rsvpEmail ? { rsvpEmail: { emailed: rsvpEmail.emailed, emailFailed: rsvpEmail.emailFailed, emailLimited: rsvpEmail.emailLimited ?? false, confirmEmailFirst: rsvpEmail.confirmEmailFirst ?? false, recentlyEmailed: rsvpEmail.recentlyEmailed ?? false, recipientLimited: rsvpEmail.recipientLimited ?? false } } : {}) },
+    { guest, warnings, ...(rsvpEmail ? { rsvpEmail: rsvpEmailOutcome(rsvpEmail) } : {}) },
     { status: 201 }
   );
 }

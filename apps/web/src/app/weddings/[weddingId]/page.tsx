@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { api, ApiError } from "@/lib/api-client";
-import { formatShortEventDate } from "@/lib/display-format";
+import { formatDate } from "@/lib/display-format";
 import { useUnsavedChangesProvider } from "@/lib/unsaved-changes";
 import { loginUrlReturningTo } from "@/lib/safe-next";
 import type { WeddingDTO, GuestDTO } from "@seatwise/shared";
@@ -288,7 +288,7 @@ export default function WeddingDetailPage() {
       )}
       <h1 className="mt-2 mb-1 text-2xl font-semibold">{wedding?.name}</h1>
       <p className="mb-6 text-sm text-neutral-500 dark:text-neutral-400">
-        {wedding?.eventDate ? formatShortEventDate(wedding.eventDate) : "No date set"}
+        {wedding?.eventDate ? formatDate(wedding.eventDate) : "No date set"}
         {wedding?.venueName ? ` · ${wedding.venueName}` : ""}
         {accessLevel && accessLevel !== "OWNER" && (
           <span className="ml-2 rounded-full bg-neutral-100 dark:bg-neutral-800 px-2 py-0.5 text-xs text-neutral-500 dark:text-neutral-400">
@@ -303,6 +303,7 @@ export default function WeddingDetailPage() {
         <GettingStarted
           weddingId={weddingId}
           guestCount={guests.length}
+          peopleCount={guests.reduce((sum, g) => sum + g.headcount, 0)}
           initialCounts={startCounts}
           refreshKey={tab}
           onGoTo={goToTab}

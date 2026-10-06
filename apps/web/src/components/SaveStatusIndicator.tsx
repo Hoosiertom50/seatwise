@@ -51,7 +51,10 @@ export function SaveStatusIndicator() {
     tone = "text-red-700 dark:text-red-400";
     content = (
       <>
-        <span title={status.lastError}>Not saved: {status.lastError}</span>
+        {/* TS-177: no "Not saved:" in front of a message that already says what happened. */}
+        <span title={status.lastError}>
+          {/^not saved\b|\bwas(n't| not) saved\b|\bwere saved\b/i.test(status.lastError ?? "") ? status.lastError : `Not saved: ${status.lastError}`}
+        </span>
         <button onClick={saveStatusStore.dismissError} className="ml-2 underline hover:no-underline">
           Dismiss
         </button>

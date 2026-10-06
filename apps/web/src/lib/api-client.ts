@@ -76,6 +76,53 @@ export async function fetchWithRetry(path: string, init: RequestInit, timeoutMs 
   }
 }
 
+// TS-177: the PATCH routes whose 409 hands back the fresh record under the same key their success
+// answer uses -- so a retried save that turns out to have landed can be answered as a success.
+const CONFLICT_RECORD_KEYS: { pattern: RegExp; key: string; extra?: Record<string, unknown> }[] = [
+  { pattern: /^\/api\/v1\/weddings\/[^/]+\/guests\/[^/]+$/, key: "guest", extra: { warnings: [] } },
+  { pattern: /^\/api\/v1\/weddings\/[^/]+\/tables\/[^/]+$/, key: "table", extra: { ok: true, warnings: [] } },
+  { pattern: /^\/api\/v1\/weddings\/[^/]+\/vendors\/[^/]+$/, key: "vendor" },
+  { pattern: /^\/api\/v1\/weddings\/[^/]+\/plan-versions\/[^/]+$/, key: "planVersion" },
+  { pattern: /^\/api\/v1\/weddings\/[^/]+\/timeline-entries\/[^/]+$/, key: "entry" },
+  { pattern: /^\/api\/v1\/weddings\/[^/]+\/budget$/, key: "summary" },
+];
+
+function sameValue(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (a === null || b === null || typeof a !== "object" || typeof b !== "object") return false;
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+/**
+ * TS-177: a PATCH whose first try got no answer is retried (TS-93). If the first try did save, the
+ * retry's expectedRevision is now stale, so it gets a 409 saying the edit wasn't saved -- untrue.
+ * When the 409 carries the fresh record and every field that was sent already has the value sent,
+ * the edit did land: this returns the success answer (the fresh record under the route's usual
+ * key). Otherwise null -- a real conflict, or a route whose answer can't be rebuilt this way.
+ */
+export function resolveRetriedPatchConflict(
+  path: string,
+  sentBody: string | undefined,
+  data: Record<string, unknown>
+): Record<string, unknown> | null {
+  const route = CONFLICT_RECORD_KEYS.find((r) => r.pattern.test(path));
+  if (!route || !sentBody) return null;
+  const fresh = data[route.key];
+  if (!fresh || typeof fresh !== "object") return null;
+  let sent: Record<string, unknown>;
+  try {
+    sent = JSON.parse(sentBody) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+  if (!sent || typeof sent !== "object") return null;
+  const fields = Object.keys(sent).filter((k) => k !== "expectedRevision");
+  if (fields.length === 0) return null;
+  const record = fresh as Record<string, unknown>;
+  if (!fields.every((k) => k in record && sameValue(sent[k], record[k]))) return null;
+  return { ...route.extra, [route.key]: fresh };
+}
+
 // TS-166: non-GET requests that don't save anything the planner made.
 const NOT_A_SAVE = [/\/guests\/import\/preview$/, /^\/api\/v1\/notifications(\/[^/]+\/read)?$/];
 
@@ -113,7 +160,12 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   // TS-175: a retried delete that finds nothing means the first try did delete it (only its answer
   // was lost) -- that's success. It used to count as a failure, and the item came back on screen.
   const alreadyGone = options.method === "DELETE" && res.status === 404 && retriedResponses.has(res);
-  const ok = res.ok || alreadyGone;
+  // TS-177: likewise a retried edit "refused" only because the first try already saved it.
+  const alreadySaved =
+    options.method === "PATCH" && res.status === 409 && retriedResponses.has(res)
+      ? resolveRetriedPatchConflict(path, typeof options.body === "string" ? options.body : undefined, data)
+      : null;
+  const ok = res.ok || alreadyGone || alreadySaved !== null;
 
   if (tracksSave) {
     if (ok) writeSucceeded();
@@ -136,6 +188,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   }
 
   if (alreadyGone) return {} as T;
+  if (alreadySaved) return alreadySaved as T;
   if (!res.ok) {
     throw new ApiError(data.error || "Something went wrong", res.status, data.fieldErrors, data);
   }

@@ -29,7 +29,8 @@ const ENTRY_ORDER = `time ASC, "sortOrder" ASC, "createdAt" ASC, id ASC`;
 // nothing was reordered; the caller shows the latest and the planner can try again.
 export class TimelineReorderConflictError extends Error {
   constructor() {
-    super("This timeline entry changed while it was being moved — nothing was reordered. The latest is shown; please try again.");
+    // TS-177: the screen doesn't reload the list on this answer, so it mustn't claim to.
+    super("This timeline entry changed while it was being moved — nothing was reordered. Refresh the page to see the latest, then try again.");
   }
 }
 
@@ -38,7 +39,7 @@ export class TimelineReorderConflictError extends Error {
 export class TimelineConflictError extends Error {
   entry: TimelineEntryRow;
   constructor(entry: TimelineEntryRow) {
-    super("Someone else changed this timeline entry after you opened it — showing the latest. Your edit wasn't saved; make it again if it's still needed.");
+    super("This timeline entry changed since you opened it (maybe in another tab, or by someone else) — showing the latest. Your edit wasn't saved; make it again if it's still needed.");
     this.entry = entry;
   }
 }

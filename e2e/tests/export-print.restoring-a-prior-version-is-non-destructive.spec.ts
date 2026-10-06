@@ -158,6 +158,8 @@ defineQualityTest(
       expect(preview.keptCount).toBe(4); // 6 guests - 2 dropped
       expect(preview.unassignedGuestIds.sort()).toEqual([capGuestId, expectedDroppedMnstId].sort());
       expect(preview.isComplete).toBe(false);
+      // TS-177: the Must-Sit-Together pair is kept, but at different tables -- both will be flagged.
+      expect(preview.needsFixingCount).toBe(2);
 
       expect(preview.warnings).toHaveLength(1);
       expect(preview.warnings[0]).toContain(mtogA.firstName);

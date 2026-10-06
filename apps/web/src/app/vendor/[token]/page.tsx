@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { api, ApiError } from "@/lib/api-client";
 import type { VendorViewDTO } from "@seatwise/shared";
-import { formatClockTime, formatEventDate, vendorCategoryLabel } from "@/lib/display-format";
+import { formatClockTime, formatDate, vendorCategoryLabel } from "@/lib/display-format";
 
 // TS-114: a vendor's read-only page, opened from the private link the planner shares -- no account
 // or sign-in. Shows the wedding's date and venue, the whole day-of timeline, this vendor's own
@@ -57,7 +57,7 @@ export default function VendorViewPage() {
       <p className="text-sm text-neutral-500 dark:text-neutral-400">Day-of information for {vendor.name}</p>
       <h1 className="mb-1 text-2xl font-semibold">{wedding.name}</h1>
       <p className="mb-6 text-sm text-neutral-600 dark:text-neutral-300">
-        {wedding.eventDate ? formatEventDate(wedding.eventDate) : "Date not set yet"}
+        {wedding.eventDate ? formatDate(wedding.eventDate) : "Date not set yet"}
         {wedding.venueName ? ` · ${wedding.venueName}` : ""}
       </p>
 

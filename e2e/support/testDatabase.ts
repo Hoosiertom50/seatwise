@@ -405,3 +405,51 @@ export async function useUpAccountEmailAllowance(address: string, limit: number,
     [`account-email:addr:day:${address}`, new Date(Math.floor(Date.now() / day) * day), limit - remaining],
   );
 }
+
+/**
+ * TS-177: the email limits a signed-in account's sends count against (apps/web/src/lib/rate-limit.ts
+ * EMAIL_SEND_LIMITS, plus the account's daily allowance for every kind together), by the key and
+ * window the app uses for each.
+ */
+export type AccountEmailCounter = "account-day" | "invites-hour" | "invites-day" | "rsvp-emails-hour";
+const ACCOUNT_EMAIL_COUNTERS: Record<AccountEmailCounter, { prefix: string; windowSeconds: number }> = {
+  "account-day": { prefix: "email:account:day:", windowSeconds: 86_400 },
+  "invites-hour": { prefix: "email:invites:3600:", windowSeconds: 3600 },
+  "invites-day": { prefix: "email:invites:86400:", windowSeconds: 86_400 },
+  "rsvp-emails-hour": { prefix: "email:rsvpEmails:3600:", windowSeconds: 3600 },
+};
+
+async function testAccountId(email: string): Promise<string> {
+  const { rows } = await testPool().query<{ id: string }>(`SELECT id FROM "users" WHERE email = $1 AND email LIKE $2`, [
+    email.toLowerCase(),
+    TEST_EMAIL_PATTERN,
+  ]);
+  if (!rows[0]) throw new Error(`testDatabase: no test account ${email}.`);
+  return rows[0].id;
+}
+
+function currentWindowStart(windowSeconds: number): Date {
+  const ms = windowSeconds * 1000;
+  return new Date(Math.floor(Date.now() / ms) * ms);
+}
+
+/** TS-177: how many emails a test account has counted against one of its limits in the current window. */
+export async function accountEmailCount(email: string, counter: AccountEmailCounter): Promise<number> {
+  const { prefix, windowSeconds } = ACCOUNT_EMAIL_COUNTERS[counter];
+  const { rows } = await testPool().query<{ count: number }>(
+    `SELECT count FROM "rate_limit_counters" WHERE key = $1 AND "windowStart" = $2`,
+    [`${prefix}${await testAccountId(email)}`, currentWindowStart(windowSeconds)],
+  );
+  return rows[0]?.count ?? 0;
+}
+
+/** TS-177: sets a test account's count against one of its email limits, so a test can reach a limit
+ * without sending a hundred emails. */
+export async function setAccountEmailCount(email: string, counter: AccountEmailCounter, count: number): Promise<void> {
+  const { prefix, windowSeconds } = ACCOUNT_EMAIL_COUNTERS[counter];
+  await testPool().query(
+    `INSERT INTO "rate_limit_counters" (key, "windowStart", count) VALUES ($1, $2, $3)
+     ON CONFLICT (key, "windowStart") DO UPDATE SET count = $3`,
+    [`${prefix}${await testAccountId(email)}`, currentWindowStart(windowSeconds), count],
+  );
+}

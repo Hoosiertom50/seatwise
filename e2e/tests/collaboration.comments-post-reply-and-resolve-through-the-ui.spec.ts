@@ -37,7 +37,7 @@ defineQualityTest(
     await test.step("A comment about a guest, a table and a timeline entry", async () => {
       await comments.postComment("GUEST", `${name.firstName} ${name.lastName}`, "Vegetarian meal confirmed?");
       await comments.postComment("TABLE", "Head Table", "Move closer to the dance floor?");
-      await comments.postComment("TIMELINE_ENTRY", "17:30 — Cocktail hour", "Band starts late");
+      await comments.postComment("TIMELINE_ENTRY", "5:30 PM — Cocktail hour", "Band starts late");
       await expect(comments.commentsHeading(3)).toBeVisible();
       await expect(comments.threadByBody("Move closer to the dance floor?").first()).toContainText("Head Table");
       await expect(comments.threadByBody("Band starts late").first()).toContainText("Cocktail hour");

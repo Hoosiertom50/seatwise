@@ -112,8 +112,8 @@ export default function AccountPage() {
         </h2>
         <p className="mb-3 text-sm text-neutral-600 dark:text-neutral-300">
           You&apos;ll lose access to every wedding you collaborate on, and your notifications and saved
-          templates are deleted. Every wedding you own must be handed off to someone first, so none is
-          left without an owner.
+          templates are deleted. Every wedding you own must first be handed off to someone (or deleted),
+          so none is left without an owner.
         </p>
         <label htmlFor="delete-password" className="mb-1 block text-sm font-medium">
           Your password
@@ -145,7 +145,8 @@ export default function AccountPage() {
                 <Link href={`/weddings/${w.id}`} className="underline">
                   {w.name}
                 </Link>{" "}
-                — open it, then Collaborators → Hand off this wedding
+                — open it, then Collaborators → Hand off this wedding (once someone else has access), or
+                Delete this wedding
               </li>
             ))}
           </ul>

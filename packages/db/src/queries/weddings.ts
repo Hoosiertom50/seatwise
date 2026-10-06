@@ -12,6 +12,8 @@ export interface WeddingRow {
   note: string | null;
   status: string;
   guestCount: number;
+  // TS-177: everyone the guests bring (the sum of headcounts) -- guestCount counts invitations.
+  peopleCount: number;
   emailNotificationsEnabled: boolean;
   // FR-3.4
   sideMixing: string;
@@ -40,10 +42,11 @@ const SELECT_WITH_GUEST_COUNT = `
          w.status, w."emailNotificationsEnabled", w."sideMixing", w."sideLabel1", w."sideLabel2",
          w."rsvpCutoffDate"::text AS "rsvpCutoffDate",
          w."createdAt", w."updatedAt",
-         COALESCE(g.count, 0)::int AS "guestCount"
+         COALESCE(g.count, 0)::int AS "guestCount",
+         COALESCE(g.people, 0)::int AS "peopleCount"
   FROM "weddings" w
   LEFT JOIN (
-    SELECT "weddingId", COUNT(*) AS count FROM "guests" GROUP BY "weddingId"
+    SELECT "weddingId", COUNT(*) AS count, SUM(headcount) AS people FROM "guests" GROUP BY "weddingId"
   ) g ON g."weddingId" = w.id
 `;
 
@@ -62,12 +65,13 @@ const SELECT_WITH_SUMMARY = `
          w."rsvpCutoffDate"::text AS "rsvpCutoffDate",
          w."createdAt", w."updatedAt",
          COALESCE(g.count, 0)::int AS "guestCount",
+         COALESCE(g.people, 0)::int AS "peopleCount",
          cpv.status AS "planStatus",
          COALESCE(unassigned.count, 0)::int AS "unassignedCount",
          COALESCE(reassign.count, 0)::int AS "needsReassignmentCount"
   FROM "weddings" w
   LEFT JOIN (
-    SELECT "weddingId", COUNT(*) AS count FROM "guests" GROUP BY "weddingId"
+    SELECT "weddingId", COUNT(*) AS count, SUM(headcount) AS people FROM "guests" GROUP BY "weddingId"
   ) g ON g."weddingId" = w.id
   LEFT JOIN LATERAL (
     SELECT id, status FROM "plan_versions" pv
@@ -201,7 +205,7 @@ export async function createWedding(
     }
 
     await client.query("COMMIT");
-    return { ...wedding, guestCount: 0 };
+    return { ...wedding, guestCount: 0, peopleCount: 0 };
   } catch (err) {
     await client.query("ROLLBACK");
     throw err;

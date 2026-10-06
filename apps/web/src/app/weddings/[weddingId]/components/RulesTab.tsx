@@ -106,9 +106,10 @@ export function RulesTab({
         <>
       <h2 className="mb-3 text-lg font-medium">Add a seating rule</h2>
       <p className="mb-3 text-sm text-neutral-500 dark:text-neutral-400">
-        &ldquo;Must&rdquo; rules are hard rules — they can never be violated once a seating chart
-        is generated. &ldquo;Prefer&rdquo; and &ldquo;avoid&rdquo; are soft preferences the
-        planner will try to honor.
+        {/* TS-177: a new rule doesn't change an existing plan -- it flags anyone it affects. */}
+        &ldquo;Must&rdquo; rules are hard rules: a generated plan always follows them, and a move that
+        breaks one is blocked. Adding one to an existing plan flags anyone it affects as Needs
+        Reassignment. &ldquo;Prefer&rdquo; and &ldquo;avoid&rdquo; are wishes Seatwise tries to meet.
       </p>
       <form
         onSubmit={onAdd}

@@ -71,6 +71,16 @@ export async function checkGuestHardRuleViolation(
 
 export type TableSeatingFlagReason = "accessible" | "capacity" | "restricted" | "rule";
 
+// A guest a re-check has just flagged Needs Reassignment, and why. TS-177: with the table they're
+// seated at, so a message can tell "this table" (the one being edited) from the guest's own table
+// elsewhere -- a required-guest list change re-checks other tables too.
+export interface NewlyFlaggedSeat {
+  guestId: string;
+  name: string;
+  reason: TableSeatingFlagReason;
+  tableId: string;
+}
+
 // FR-4.6 / TS-120 / TS-150: re-checks everyone seated at one table in the given plan version and
 // sets Needs Reassignment exactly where a hard rule is broken or the table has no room left for
 // them -- flagging and clearing alike, so the answer is always the whole truth for that table.
@@ -82,7 +92,7 @@ export async function resyncSeatsAtTable(
   weddingId: string,
   planVersionId: string,
   tableId: string
-): Promise<{ newlyFlagged: { guestId: string; name: string; reason: TableSeatingFlagReason }[]; changed: boolean }> {
+): Promise<{ newlyFlagged: NewlyFlaggedSeat[]; changed: boolean }> {
   const { rows: tableRows } = await client.query(
     `SELECT capacity, "isRestricted", "isAccessible" FROM "seating_tables" WHERE id = $1 AND "weddingId" = $2 FOR UPDATE`,
     [tableId, weddingId]
@@ -113,7 +123,7 @@ export async function resyncSeatsAtTable(
     needsReassignment: boolean;
   }[];
 
-  const newlyFlagged: { guestId: string; name: string; reason: TableSeatingFlagReason }[] = [];
+  const newlyFlagged: NewlyFlaggedSeat[] = [];
   let changed = false;
   let seatsUsed = 0;
   for (const a of seated) {
@@ -143,7 +153,7 @@ export async function resyncSeatsAtTable(
             : table.isRestricted && !required.has(a.guestId)
               ? "restricted"
               : "rule";
-        newlyFlagged.push({ guestId: a.guestId, name: a.name, reason });
+        newlyFlagged.push({ guestId: a.guestId, name: a.name, reason, tableId });
       }
     }
   }
@@ -184,8 +194,8 @@ export async function resyncTables(
   weddingId: string,
   planVersionId: string,
   tableIds: Iterable<string>
-): Promise<{ newlyFlagged: { guestId: string; name: string; reason: TableSeatingFlagReason }[]; changed: boolean }> {
-  const newlyFlagged: { guestId: string; name: string; reason: TableSeatingFlagReason }[] = [];
+): Promise<{ newlyFlagged: NewlyFlaggedSeat[]; changed: boolean }> {
+  const newlyFlagged: NewlyFlaggedSeat[] = [];
   let changed = false;
   for (const tableId of [...new Set(tableIds)].sort()) {
     const result = await resyncSeatsAtTable(client, weddingId, planVersionId, tableId);
@@ -318,7 +328,7 @@ export async function currentPlanVersionId(q: Queryable, weddingId: string): Pro
 export async function resyncGuestsSeats(
   weddingId: string,
   guestIds: string[]
-): Promise<{ newlyFlagged: { guestId: string; name: string; reason: TableSeatingFlagReason }[] }> {
+): Promise<{ newlyFlagged: NewlyFlaggedSeat[] }> {
   if (guestIds.length === 0) return { newlyFlagged: [] };
   const client = await pool.connect();
   try {
@@ -334,7 +344,7 @@ export async function resyncGuestsSeats(
        ORDER BY 1`,
       [planVersionId, guestIds]
     );
-    const newlyFlagged: { guestId: string; name: string; reason: TableSeatingFlagReason }[] = [];
+    const newlyFlagged: NewlyFlaggedSeat[] = [];
     let changed = false;
     for (const { tableId } of rows as { tableId: string }[]) {
       const result = await resyncSeatsAtTable(client, weddingId, planVersionId, tableId);

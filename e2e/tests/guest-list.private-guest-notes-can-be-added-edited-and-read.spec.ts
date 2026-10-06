@@ -21,7 +21,7 @@ defineQualityTest(
     objective:
       "Confirms the add-guest form's Notes field saves a note that then shows in the guest's row, that an inline edit persists across a reload and that emptying it clears the note, that an edit based on a stale guest is refused with a message and the textarea shows the other change, that a View collaborator sees neither the note nor an editor, and that the CSV export carries the note.",
     expectedOutcome:
-      "The new row's notes read 'Vegetarian, nut allergy' and the API agrees. After the edit and a reload they read 'Vegan; uses a wheelchair'; after emptying them the API has null. After the conflicting edit the 'was just edited elsewhere' message shows and the textarea reads 'Theirs'. The View user sees no note and no notes textarea. The export contains 'Theirs' in that guest's row.",
+      "The new row's notes read 'Vegetarian, nut allergy' and the API agrees. After the edit and a reload they read 'Vegan; uses a wheelchair'; after emptying them the API has null. After the conflicting edit the 'changed since you loaded it' message shows and the textarea reads 'Theirs'. The View user sees no note and no notes textarea. The export contains 'Theirs' in that guest's row.",
     requirementIds: ["REQ-GUEST-LIST-MANAGEMENT"],
     tags: ["@mutating", "@feature:guests", "@risk:high", "@suite:regression"],
   },
@@ -59,7 +59,7 @@ defineQualityTest(
       expect(theirs.ok()).toBe(true);
 
       await weddingGuestsPage.guestRow(fullName).editNotes("Mine");
-      await expect(weddingGuestsPage.message(/was just edited elsewhere/)).toBeVisible();
+      await expect(weddingGuestsPage.message(/changed since you loaded it .*— showing the latest/)).toBeVisible();
       await expect.poll(() => weddingGuestsPage.guestRow(fullName).notes()).toBe("Theirs");
       expect(await notesNow()).toBe("Theirs");
     });

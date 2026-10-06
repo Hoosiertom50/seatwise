@@ -52,6 +52,10 @@ defineQualityTest(
         const refused = await guest.post(`/api/v1/rsvp/${token}`, { data: submit });
         expect(refused.status()).toBe(429);
         expect(Number(refused.headers()["retry-after"])).toBeGreaterThan(0);
+        // TS-177: counted per link from anywhere, so the message doesn't say "from here".
+        expect(((await refused.json()) as { error: string }).error).toBe(
+          "This RSVP has been sent many times in the last few minutes — please wait a few minutes and try again.",
+        );
         expect((await guest.post(`/api/v1/rsvp/${other}`, { data: submit })).status()).toBe(200);
       } finally {
         await guest.dispose();
@@ -82,7 +86,7 @@ defineQualityTest(
         const rsvpPage = new GuestRsvpPage(await guestContext.newPage());
         await rsvpPage.goto(token);
         await expect(rsvpPage.pageText(/Too many attempts from here/)).toBeVisible();
-        await expect(rsvpPage.pageText("This RSVP link doesn't exist.")).toHaveCount(0);
+        await expect(rsvpPage.notFoundMessage()).toHaveCount(0);
       } finally {
         await guestContext.close();
       }

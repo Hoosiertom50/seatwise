@@ -299,7 +299,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
         // TS-175: close the editor, as Timeline does. It used to stay open with the old values,
         // and a second Save then wrote them over the other person's change.
         setEditingId(null);
-        setError(`"${fresh.name}" was just edited elsewhere — showing the latest. Try again if you still want to make this change.`);
+        setError(`"${fresh.name}" changed since you loaded it (maybe in another tab, or by someone else) — showing the latest. Try again if you still want to make this change.`);
       } else {
         // TS-151: say which field was refused, not just "Validation failed".
         setError(apiErrorMessage(err, ["name", "categoryOther", "contactEmail", "costCents", "arrivalTime", "contractNotes"], "Couldn't save that vendor."));

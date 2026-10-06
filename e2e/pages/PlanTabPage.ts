@@ -340,7 +340,8 @@ export class PlanTabPage extends BasePage {
     await this.selectOptionMatching(this.versionSelect(), optionLabel);
   }
   pastVersionNotice() {
-    return this.page.getByText(/^This is a past version — status can only be changed on the current one\./);
+    // TS-177: also shown for a comparison draft.
+    return this.page.getByText(/^This isn't the current version \(it's an older one, or a comparison draft\) — status can only be changed on the current one\./);
   }
   restoreButton(versionNumber: number) {
     return this.page.getByRole("button", { name: `Restore version ${versionNumber}...`, exact: true });
@@ -363,7 +364,15 @@ export class PlanTabPage extends BasePage {
     return typeof text === "string" ? this.page.getByText(text, { exact: true }) : this.page.getByText(text);
   }
   private async selectOptionMatching(select: ReturnType<PlanTabPage["versionSelect"]>, label: RegExp): Promise<void> {
-    const options = await select.locator("option").allTextContents();
+    // TS-177: the list fills in after the tab loads -- wait for the option rather than reading it once.
+    let options: string[] = [];
+    await expect
+      .poll(async () => {
+        options = await select.locator("option").allTextContents();
+        return options.some((o) => label.test(o));
+      })
+      .toBe(true)
+      .catch(() => undefined);
     const match = options.find((o) => label.test(o));
     if (!match) throw new Error(`No option matching ${label} (have: ${options.join(" | ")})`);
     await select.selectOption({ label: match });

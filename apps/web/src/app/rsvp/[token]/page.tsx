@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { api, ApiError, apiErrorMessage } from "@/lib/api-client";
-import { formatEventDate } from "@/lib/display-format";
+import { formatDate } from "@/lib/display-format";
 import type { GuestRsvpPreviewDTO } from "@seatwise/shared";
 
 // TS-17 (FR-12.1/FR-12.2/FR-12.3): the guest's own RSVP page, reached via their unique
@@ -128,7 +128,11 @@ export default function GuestRsvpPage() {
       <main className="flex flex-1 items-center justify-center px-6">
         <div className="w-full max-w-sm text-center">
           <h1 className="mb-4 text-2xl font-semibold">RSVP</h1>
-          <p className="text-sm text-neutral-600 dark:text-neutral-300">This RSVP link doesn&apos;t exist.</p>
+          {/* TS-177: also what an older link shows once the couple made a new one. */}
+          <p className="text-sm text-neutral-600 dark:text-neutral-300">
+            This RSVP link isn&apos;t active. If you were sent a newer link, use that one — or ask the couple for your
+            current link.
+          </p>
         </div>
       </main>
     );
@@ -149,15 +153,17 @@ export default function GuestRsvpPage() {
         {closed && (
           <p className="mb-6 rounded-md bg-neutral-100 dark:bg-neutral-800 px-3 py-2 text-sm text-neutral-600 dark:text-neutral-300">
             RSVP responses have closed
-            {/* TS-175: written out ("Saturday, June 12, 2027"), not as 2027-06-12. */}
-            {preview.rsvpCutoffDate ? ` (the deadline was ${formatEventDate(preview.rsvpCutoffDate)})` : ""}. Shown
+            {/* TS-177: dates are shown as MM-DD-YYYY. */}
+            {preview.rsvpCutoffDate ? ` (the deadline was ${formatDate(preview.rsvpCutoffDate)})` : ""}. Shown
             below is what&apos;s currently on file — contact the couple directly if anything needs
             to change.
           </p>
         )}
         {!closed && justSubmitted && (
           <p className="mb-6 rounded-md bg-green-50 dark:bg-green-950 px-3 py-2 text-sm text-green-700 dark:text-green-400">
-            Thanks — your RSVP has been recorded. You can come back to this link any time to update it.
+            {/* TS-177: answers can be changed only while RSVPs are open. */}
+            Thanks — your RSVP has been recorded. You can come back to this link to change it
+            {preview.rsvpCutoffDate ? ` until ${formatDate(preview.rsvpCutoffDate)}` : " while RSVPs are open"}.
           </p>
         )}
 

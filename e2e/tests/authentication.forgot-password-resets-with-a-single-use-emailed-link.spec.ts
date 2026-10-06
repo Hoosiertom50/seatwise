@@ -68,7 +68,10 @@ defineQualityTest(
         expect(await usableResetTokenCount(email)).toBe(2);
         const again = await visitor.request.post("/api/v1/auth/forgot-password", { data: { email } });
         expect(again.ok()).toBe(true);
-        expect(((await again.json()) as { sent: boolean }).sent).toBe(true);
+        const answer = (await again.json()) as { sent: boolean; message: string };
+        expect(answer.sent).toBe(true);
+        // TS-177: and says the link was already sent, not that another is on its way.
+        expect(answer.message).toMatch(/^We've already sent you a link to reset your password, and it still works\./);
         expect(await usableResetTokenCount(email)).toBe(2);
       });
 

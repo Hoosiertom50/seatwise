@@ -2,7 +2,7 @@
  * TS-151 (REQ-NON-FUNCTIONAL) — everyday edits behave the way a planner expects, in a US time zone.
  * - A wedding's date shows as that date, not the day before.
  * - A vendor's cost can be typed one key at a time when editing.
- * - Two quick edits to one guest both save, with no false "edited elsewhere".
+ * - Two quick edits to one guest both save, with no false "changed since you loaded it".
  * - When a guest is refreshed from elsewhere, their text fields show the new values, and tabbing
  *   through them doesn't write the old text back.
  * - A Day-of walk-in whose seating fails is still added once, never twice.
@@ -26,9 +26,9 @@ defineQualityTest(
     id: "cross-cutting.everyday-edits-behave-as-typed.dates-cost-quick-edits-walk-in-reply-approve",
     title: "dates show the right day, costs can be typed, quick or refreshed guest edits keep the newest values, walk-ins and replies aren't doubled, and Couple members can approve",
     objective:
-      "In a US time zone, confirms that a wedding dated 2027-06-12 shows 6/12/2027 on the dashboard; that typing 1500 into a vendor's Edit cost saves $1,500.00; that changing a guest's RSVP and side back to back saves both with no conflict message; that after a guest's notes change elsewhere and the page refreshes that guest, the notes box shows the new text and tabbing through it keeps it; that a walk-in whose table is full is added exactly once with the form cleared; that double-clicking Reply posts one reply; and that a Couple member with Comment access sees and uses Approve while a non-Couple Edit collaborator sees no Approve button.",
+      "In a US time zone, confirms that a wedding dated 2027-06-12 shows 06-12-2027 on the dashboard; that typing 1500 into a vendor's Edit cost saves $1,500.00; that changing a guest's RSVP and side back to back saves both with no conflict message; that after a guest's notes change elsewhere and the page refreshes that guest, the notes box shows the new text and tabbing through it keeps it; that a walk-in whose table is full is added exactly once with the form cleared; that double-clicking Reply posts one reply; and that a Couple member with Comment access sees and uses Approve while a non-Couple Edit collaborator sees no Approve button.",
     expectedOutcome:
-      "Dashboard row shows 6/12/2027. Vendor cost reads $1,500.00. Guest is CONFIRMED and GROOM with no error. Notes box shows the new text and the server still has it after blur. One walk-in guest exists and the form is empty. The thread has exactly one reply. Couple approves (badge Approved); the Edit user has no Approve button.",
+      "Dashboard row shows 06-12-2027. Vendor cost reads $1,500.00. Guest is CONFIRMED and GROOM with no error. Notes box shows the new text and the server still has it after blur. One walk-in guest exists and the form is empty. The thread has exactly one reply. Couple approves (badge Approved); the Edit user has no Approve button.",
     requirementIds: ["REQ-NON-FUNCTIONAL"],
     tags: ["@mutating", "@feature:guests", "@feature:budget", "@feature:seating-plan", "@risk:high", "@suite:regression"],
   },
@@ -40,7 +40,7 @@ defineQualityTest(
       const dated = await weddingData.createWedding(uniqueTitle(testInfo.workerIndex, "Dated Wedding"), { eventDate: "2027-06-12" });
       const dashboard = new DashboardPage(page);
       await dashboard.goto();
-      await expect(dashboard.weddingLink(dated.name)).toContainText("6/12/2027");
+      await expect(dashboard.weddingLink(dated.name)).toContainText("06-12-2027");
     });
 
     await test.step("A vendor's cost can be typed one key at a time when editing", async () => {
@@ -63,7 +63,7 @@ defineQualityTest(
       const row = weddingGuestsPage.guestRow(fullName);
       await Promise.all([row.setRsvpStatus("CONFIRMED"), row.setSide("GROOM")]);
       await page.waitForLoadState("networkidle");
-      await expect(weddingGuestsPage.message(/edited elsewhere/)).toHaveCount(0);
+      await expect(weddingGuestsPage.message(/changed since you loaded it .*— showing the latest/)).toHaveCount(0);
       const saved = ((await (await context.request.get(`/api/v1/weddings/${w}/guests/${guest.id}`)).json()) as {
         guest: { rsvpStatus: string; side: string };
       }).guest;
@@ -81,7 +81,7 @@ defineQualityTest(
         data: { notes: "Needs a high chair", expectedRevision: current.revision },
       });
       await row.setRsvpStatus("DECLINED");
-      await expect(weddingGuestsPage.message(/edited elsewhere/)).toBeVisible();
+      await expect(weddingGuestsPage.message(/changed since you loaded it .*— showing the latest/)).toBeVisible();
       expect(await row.notes()).toBe("Needs a high chair");
       await row.editNotes("Needs a high chair");
       const after = ((await (await context.request.get(`/api/v1/weddings/${w}/guests/${guest.id}`)).json()) as {
