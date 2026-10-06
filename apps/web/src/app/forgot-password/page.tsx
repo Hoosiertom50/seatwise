@@ -3,6 +3,8 @@
 import { useState } from "react";
 import Link from "next/link";
 import { api, ApiError } from "@/lib/api-client";
+// TS-193: the same limits the server checks (packages/shared/src/field-limits.ts).
+import { FIELD_LIMITS } from "@seatwise/shared";
 
 // TS-142: ask for a password-reset link. Says plainly when there's no account for the email
 // (Tom's decision, 2026-10-02), with a way to sign up instead.
@@ -57,6 +59,7 @@ export default function ForgotPasswordPage() {
                 Email
               </label>
               <input
+                maxLength={FIELD_LIMITS.email}
                 id="forgot-email"
                 type="email"
                 autoComplete="email"

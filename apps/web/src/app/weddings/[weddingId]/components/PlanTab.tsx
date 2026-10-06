@@ -23,6 +23,8 @@ import type {
   RestorePreviewDTO,
   SeatingTableDTO,
 } from "@seatwise/shared";
+// TS-193: the same limits the server checks (packages/shared/src/field-limits.ts).
+import { FIELD_LIMITS } from "@seatwise/shared";
 
 const COMPARISON_STATUS_LABEL: Record<PlanVersionComparisonDTO["guests"][number]["status"], string> = {
   unchanged: "Unchanged",
@@ -987,7 +989,7 @@ export function PlanTab({
                   value={labelInput}
                   onChange={(e) => setLabelInput(e.target.value)}
                   placeholder="Version nickname"
-                  maxLength={100}
+                  maxLength={FIELD_LIMITS.planVersionLabel}
                   className="min-h-11 rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm"
                 />
                 <button

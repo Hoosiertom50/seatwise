@@ -18,6 +18,7 @@ import { expect, defineQualityTest, test } from "../fixtures/index.js";
 import { tagTestName, uniquePersonName, uniqueTestAddress, uniqueToken } from "../data/ids.js";
 import { TEST_ACCOUNT_EMAIL_DOMAIN } from "../support/auth.js";
 import { useUpAccountEmailAllowance } from "../support/testDatabase.js";
+import { waitUntilSafelyInsideUtcDay } from "../support/utcDay.js";
 
 type RsvpEmail = { emailed: boolean; emailFailed: boolean; emailLimited: boolean; recipientLimited: boolean };
 type RsvpLink = { url: string; emailed: boolean; emailFailed: boolean; recentlyEmailed?: boolean };
@@ -39,6 +40,8 @@ defineQualityTest(
   },
   async ({ managedWedding, context }, testInfo) => {
     test.setTimeout(180_000);
+    // TS-192: the daily counters this test sets and reads must all be in one UTC day.
+    await waitUntilSafelyInsideUtcDay(testInfo);
     const w = managedWedding.id;
     const invite = () =>
       context.request.post(`/api/v1/weddings/${w}/invites`, {
@@ -93,6 +96,8 @@ defineQualityTest(
     tags: ["@mutating", "@feature:guests", "@feature:rsvp", "@risk:high", "@suite:regression"],
   },
   async ({ managedWedding, context }, testInfo) => {
+    // TS-192: the daily counters this test sets and reads must all be in one UTC day.
+    await waitUntilSafelyInsideUtcDay(testInfo);
     const w = managedWedding.id;
     const addGuest = async (email: string) => {
       const res = await context.request.post(`/api/v1/weddings/${w}/guests`, { data: { ...uniquePersonName(testInfo.workerIndex), email } });
@@ -154,6 +159,8 @@ defineQualityTest(
     tags: ["@mutating", "@feature:authentication", "@risk:high", "@suite:regression"],
   },
   async ({ playwright }, testInfo) => {
+    // TS-192: the daily counters this test sets and reads must all be in one UTC day.
+    await waitUntilSafelyInsideUtcDay(testInfo);
     const baseURL = testInfo.project.use.baseURL;
     const address = uniqueTestAddress();
     const from = (a: string) => playwright.request.newContext({ baseURL, extraHTTPHeaders: { "x-forwarded-for": a } });

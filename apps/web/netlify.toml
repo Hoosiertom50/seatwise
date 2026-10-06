@@ -16,12 +16,16 @@
 
   # Credits: every production deploy costs 15 of the free plan's 300 a month. Skip the build
   # (exit 0 = skip) when nothing the web app is built from changed -- e.g. a commit that only
-  # touches tests, the mobile app, docs or CI. $CACHED_COMMIT_REF is the last deployed commit.
+  # touches tests, the mobile app, docs or CI. $CACHED_COMMIT_REF is the last built commit
+  # (Netlify's build cache, not necessarily what's live).
   # TS-176: .npmrc and .nvmrc change how it installs and builds too.
   # TS-183: when the cached commit IS this commit (a "Retry deploy", "Clear cache and deploy", or a
   # deploy after an environment-variable change) the diff is empty and the build used to be
   # skipped -- so a new secret never reached the site. Same commit = always build (exit 1).
-  ignore = "[ \"$CACHED_COMMIT_REF\" = \"$COMMIT_REF\" ] && exit 1; git diff --quiet $CACHED_COMMIT_REF $COMMIT_REF -- apps/web packages package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc .nvmrc"
+  # TS-192: with no cached commit (first build, or after the cache was cleared) there is nothing to
+  # compare against, so always build -- an empty ref used to make the diff compare the wrong thing.
+  # Variables are quoted so an empty or odd value can't change the command.
+  ignore = "[ -z \"$CACHED_COMMIT_REF\" ] && exit 1; [ \"$CACHED_COMMIT_REF\" = \"$COMMIT_REF\" ] && exit 1; git diff --quiet \"$CACHED_COMMIT_REF\" \"$COMMIT_REF\" -- apps/web packages package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc .nvmrc"
 
 [build.environment]
   # Same major version CI builds and tests with (.github/workflows/ci.yml), and .nvmrc.

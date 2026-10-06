@@ -30,6 +30,11 @@
 //      or printed (see production-target.ts). The development key and keys shorter than 32
 //      characters are refused, and so is a key that can't read the links already encrypted there
 //      (a wrong key would make every link the planner's buttons show unreadable).
+//      TS-192: when no link is encrypted there yet, the key is checked against encrypted guest notes
+//      instead (notes / rsvpNotes, encrypted with the same key). When nothing at all is encrypted
+//      there, nothing can prove the key is right, so --confirm also asks for the key to be typed
+//      twice more (not shown) and both must match -- a mistyped or wrong-site key would otherwise be
+//      written into every link.
 //
 // Usage (from the repo root):
 //   pnpm --filter @seatwise/db encrypt-old-link-tokens            # dry run, prints counts
@@ -46,8 +51,9 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import type { Pool } from "pg";
 import { decryptTextWithSecret, devEncryptionSecret, encryptTextWithSecret } from "../src/crypto";
+import { isPlaceholderSecret } from "@seatwise/shared";
 import { hashLinkToken, isPlainStoredLinkToken } from "../src/link-tokens";
-import { readSecret, targetsProduction, useProductionDatabase } from "./production-target";
+import { askSecret, readSecret, targetsProduction, useProductionDatabase } from "./production-target";
 
 // TS-183: loaded only once the target database is known (see main) -- importing it connects.
 let pool: Pool;
@@ -131,6 +137,24 @@ async function checkKeyAgainstExistingLinks(secret: string): Promise<{ checked: 
   return { checked, unreadable };
 }
 
+// TS-192: the same check against encrypted guest notes, for a database with no encrypted link yet.
+// A sample is enough: every note is encrypted with the one ENCRYPTION_KEY.
+async function checkKeyAgainstGuestNotes(secret: string): Promise<{ checked: number; unreadable: number }> {
+  const { rows } = await pool.query<{ notes: string | null; rsvpNotes: string | null }>(
+    `SELECT notes, "rsvpNotes" FROM "guests" WHERE notes LIKE 'enc:v1:%' OR "rsvpNotes" LIKE 'enc:v1:%' LIMIT 200`,
+  );
+  let checked = 0;
+  let unreadable = 0;
+  for (const r of rows) {
+    for (const stored of [r.notes, r.rsvpNotes]) {
+      if (!stored?.startsWith("enc:v1:")) continue;
+      checked += 1;
+      if (decryptTextWithSecret(stored, secret) === "[unable to decrypt]") unreadable += 1;
+    }
+  }
+  return { checked, unreadable };
+}
+
 async function main() {
   const confirmed = process.argv.includes("--confirm");
   const production = targetsProduction();
@@ -140,6 +164,8 @@ async function main() {
     secret = await readSecret("PRODUCTION_ENCRYPTION_KEY", "Production ENCRYPTION_KEY (not shown): ");
     if (secret.length < 32) throw new Error("The production encryption key is shorter than 32 characters -- refusing.");
     if (secret === devEncryptionSecret()) throw new Error("That's the development key, not the live site's -- refusing.");
+    // TS-192: and any other known placeholder (the .env.example value, the README's stand-ins).
+    if (isPlaceholderSecret(secret)) throw new Error("That's a placeholder from the repo, not the live site's key -- refusing.");
   } else {
     secret = webAppEncryptionSecret();
     if (secret === devEncryptionSecret()) {
@@ -148,13 +174,29 @@ async function main() {
   }
   ({ pool } = await import("../src/index"));
 
-  const keyCheck = await checkKeyAgainstExistingLinks(secret);
+  let keyCheck = await checkKeyAgainstExistingLinks(secret);
+  // TS-192: no encrypted link to check against -- use encrypted guest notes instead.
+  if (keyCheck.checked === 0) {
+    const noteCheck = await checkKeyAgainstGuestNotes(secret);
+    if (noteCheck.checked > 0) {
+      console.log(`No encrypted links yet -- checking the key against ${noteCheck.checked} encrypted guest note(s) instead.`);
+      keyCheck = noteCheck;
+    }
+  }
+  if (production && confirmed && keyCheck.checked === 0) {
+    console.log("Nothing on the live site is encrypted yet, so nothing can prove this key is the web app's.");
+    const first = await askSecret("Type the production ENCRYPTION_KEY again to confirm (not shown): ");
+    const second = await askSecret("And once more (not shown): ");
+    if (first !== secret || second !== secret) {
+      throw new Error("The key typed didn't match the one given -- nothing was changed.");
+    }
+  }
   if (keyCheck.unreadable > 0) {
-    const message = `${keyCheck.unreadable} of ${keyCheck.checked} already-encrypted link(s) can't be read with this key.`;
+    const message = `${keyCheck.unreadable} of ${keyCheck.checked} already-encrypted value(s) can't be read with this key.`;
     if (production) throw new Error(`${message} It isn't the live web app's ENCRYPTION_KEY -- nothing was changed.`);
     console.log(`Warning: ${message} Check LINK_ENCRYPTION_KEY / apps/web/.env before using --confirm.`);
   } else if (keyCheck.checked > 0) {
-    console.log(`Key check: all ${keyCheck.checked} already-encrypted link(s) read back correctly.`);
+    console.log(`Key check: all ${keyCheck.checked} already-encrypted value(s) read back correctly.`);
   }
 
   for (const t of LINK_TABLES) await encryptTable(t, secret, confirmed);

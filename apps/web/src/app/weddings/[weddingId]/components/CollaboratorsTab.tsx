@@ -12,6 +12,8 @@ import type {
   WeddingInviteDTO,
 } from "@seatwise/shared";
 import { useUnsavedChanges, useUnsavedFields } from "@/lib/unsaved-changes";
+// TS-193: the same limits the server checks (packages/shared/src/field-limits.ts).
+import { FIELD_LIMITS } from "@seatwise/shared";
 
 // TS-179: guest RSVP and vendor links someone copied while they had access aren't tied to them,
 // so taking access away doesn't stop those links -- the owner's reset below does.
@@ -471,6 +473,7 @@ export function CollaboratorsTab({
                 Email address
               </label>
               <input
+                maxLength={FIELD_LIMITS.email}
                 id="collab-email"
                 type="email"
                 className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
@@ -599,7 +602,7 @@ export function CollaboratorsTab({
                   settingFields.markDirty("setting-name", false);
                   void onSaveName();
                 }}
-                maxLength={200}
+                maxLength={FIELD_LIMITS.weddingName}
                 disabled={savingName}
               />
             </div>
@@ -645,7 +648,7 @@ export function CollaboratorsTab({
                       setVenueName(e.target.value);
                       setDetailsSaved(false);
                     }}
-                    maxLength={200}
+                    maxLength={FIELD_LIMITS.venueName}
                   />
                 </div>
               </div>
@@ -691,7 +694,7 @@ export function CollaboratorsTab({
                       settingFields.markDirty("setting-side-1", false);
                       void onSaveSideLabel(1);
                     }}
-                    maxLength={40}
+                    maxLength={FIELD_LIMITS.sideLabel}
                   />
                 </div>
                 <div>
@@ -710,7 +713,7 @@ export function CollaboratorsTab({
                       settingFields.markDirty("setting-side-2", false);
                       void onSaveSideLabel(2);
                     }}
-                    maxLength={40}
+                    maxLength={FIELD_LIMITS.sideLabel}
                   />
                 </div>
               </div>
@@ -729,7 +732,7 @@ export function CollaboratorsTab({
                 aria-label="Wedding note"
                 className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm disabled:opacity-50"
                 rows={3}
-                maxLength={2000}
+                maxLength={FIELD_LIMITS.weddingNote}
                 value={note}
                 onChange={(e) => {
                   setNote(e.target.value);
@@ -942,6 +945,7 @@ export function CollaboratorsTab({
           </label>
           <div className="flex flex-wrap items-center gap-2">
             <input
+              maxLength={FIELD_LIMITS.weddingName}
               id="delete-wedding-confirm"
               className="min-w-0 flex-1 rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 text-sm"
               value={deleteConfirmName}

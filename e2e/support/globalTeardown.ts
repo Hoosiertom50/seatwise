@@ -42,11 +42,17 @@
 // wedding never reaches them. Critically, they are matched on the marker ONLY, never on
 // `sourceWeddingId IS NULL`: a template legitimately orphaned by a real planner deleting its source
 // wedding is a supported product state, not test residue, and must never be swept.
+//
+// TS-192: rate-limit counters the run left behind are cleared too -- only rows whose key holds a
+// made-up test network address (198.18.x.x / 198.19.x.x, from uniqueTestAddress), a test account's
+// email (@example.invalid) or a test account's id. Those can only have come from this suite, and
+// leaving them for a day meant a later run that happened to reuse an address started out limited.
+// Same guards as everything else here: never production, only a local database, dry run honoured.
 
 import { Pool } from "pg";
 import { getEnv } from "./env";
 import { isLocalDatabaseUrl, resolveIsProduction } from "./productionGuard";
-import { TEST_DATA_MARKER } from "../data/ids";
+import { TEST_ADDRESS_PREFIXES, TEST_DATA_MARKER } from "../data/ids";
 import { TEST_ACCOUNT_EMAIL_DOMAIN } from "./auth";
 import { resolveDatabaseUrl } from "./testDatabase";
 
@@ -109,7 +115,21 @@ export default async function globalTeardown(): Promise<void> {
       [TEST_ACCOUNT_EMAIL_DOMAIN],
     );
 
-    if (weddings.length === 0 && templates.length === 0 && users.length === 0) {
+    // TS-192: counters keyed on a test address, a test email or a test account's id. Keys end in
+    // ":<address>", ":<email>" or ":<user id>" (apps/web/src/lib/rate-limit.ts); ids are generated
+    // by the database and hold no LIKE wildcards.
+    const counterPatterns = [
+      ...TEST_ADDRESS_PREFIXES.map((prefix) => `%:${prefix}%`),
+      `%${TEST_ACCOUNT_EMAIL_DOMAIN}%`,
+      ...users.map((u) => `%:${u.id}`),
+    ];
+    const { rows: counterRows } = await pool.query<{ n: number }>(
+      `SELECT COUNT(*)::int AS n FROM "rate_limit_counters" WHERE key LIKE ANY($1::text[])`,
+      [counterPatterns],
+    );
+    const counters = counterRows[0]?.n ?? 0;
+
+    if (weddings.length === 0 && templates.length === 0 && users.length === 0 && counters === 0) {
       console.log("[teardown-sweep] Nothing to sweep -- no test-created rows remain.");
       return;
     }
@@ -118,7 +138,8 @@ export default async function globalTeardown(): Promise<void> {
     if (dryRun) {
       console.log(
         `[teardown-sweep] DRY RUN -- ${weddings.length} wedding(s), ${templates.length} template(s) and ` +
-          `${users.length} test account(s) would be deleted. Unset PW_TEARDOWN_SWEEP to actually delete them.`,
+          `${users.length} test account(s) and ${counters} test rate-limit counter(s) would be deleted. ` +
+          `Unset PW_TEARDOWN_SWEEP to actually delete them.`,
       );
       for (const row of weddings.slice(0, 5)) console.log(`  wedding:  "${row.name}" (${row.id})`);
       if (weddings.length > 5) console.log(`  ... and ${weddings.length - 5} more weddings`);
@@ -152,10 +173,16 @@ export default async function globalTeardown(): Promise<void> {
       `DELETE FROM "users" WHERE email LIKE '%' || $1`,
       [TEST_ACCOUNT_EMAIL_DOMAIN],
     );
+    // TS-192: the run's rate-limit counters (see the note at the top).
+    const { rowCount: countersDeleted } = await pool.query(
+      `DELETE FROM "rate_limit_counters" WHERE key LIKE ANY($1::text[])`,
+      [counterPatterns],
+    );
 
     console.log(
       `[teardown-sweep] Deleted ${weddingsDeleted ?? 0} marker-tagged wedding(s), ` +
-        `${templatesDeleted ?? 0} template(s) and ${usersDeleted ?? 0} test account(s).`,
+        `${templatesDeleted ?? 0} template(s), ${usersDeleted ?? 0} test account(s) and ` +
+        `${countersDeleted ?? 0} test rate-limit counter(s).`,
     );
   } catch (err) {
     // Guard 4: never fail the run over cleanup.

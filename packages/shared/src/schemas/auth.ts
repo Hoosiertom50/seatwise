@@ -1,9 +1,11 @@
 import { z } from "zod";
+import { FIELD_LIMITS } from "../field-limits";
 import { PERSON_NAME_PATTERN, PERSON_NAME_MESSAGE, looksLikeWebAddress, NO_WEB_ADDRESS_MESSAGE, hasMixedScriptWord, NO_MIXED_SCRIPT_MESSAGE } from "../validation";
 
 // TS-163: bcrypt only uses a password's first 72 bytes, so anything longer would be silently cut
 // short -- capped (in bytes, since one letter can take several) rather than quietly ignored.
-const MAX_PASSWORD_BYTES = 72;
+// TS-193: the number lives in ../field-limits, shared with the password boxes' maxLength.
+const MAX_PASSWORD_BYTES = FIELD_LIMITS.password;
 const PASSWORD_TOO_LONG = "Password must be at most 72 characters (fewer if it uses accented letters or symbols)";
 const newPassword = z
   .string()
@@ -17,25 +19,27 @@ export const signupSchema = z.object({
     .string()
     .trim()
     .min(1, "Name is required")
-    .max(100)
+    .max(FIELD_LIMITS.personName)
     .regex(PERSON_NAME_PATTERN, PERSON_NAME_MESSAGE)
     .refine((v) => !looksLikeWebAddress(v), NO_WEB_ADDRESS_MESSAGE)
     // TS-178: nor mix look-alike letters from different alphabets in one word.
     .refine((v) => !hasMixedScriptWord(v), NO_MIXED_SCRIPT_MESSAGE),
-  email: z.string().email("Enter a valid email address"),
+  email: z.string().max(FIELD_LIMITS.email).email("Enter a valid email address"),
   password: newPassword,
 });
 export type SignupInput = z.infer<typeof signupSchema>;
 
 // TS-142
-export const forgotPasswordSchema = z.object({ email: z.string().trim().email("Enter the email you signed up with") });
+export const forgotPasswordSchema = z.object({ email: z.string().trim().max(FIELD_LIMITS.email).email("Enter the email you signed up with") });
 export const resetPasswordSchema = z.object({
   token: z.string().regex(/^[0-9a-f]{64}$/, "This reset link is no longer valid — request a new one."),
   password: newPassword,
 });
 
 export const loginSchema = z.object({
-  email: z.string().email("Enter a valid email address"),
+  email: z.string().max(FIELD_LIMITS.email).email("Enter a valid email address"),
+  // Longer than any password can be (TS-163 caps new ones at 72 bytes); only a guard against huge
+  // bodies, so it stays its own number rather than a field limit.
   password: z.string().min(1, "Password is required").max(1000),
 });
 export type LoginInput = z.infer<typeof loginSchema>;

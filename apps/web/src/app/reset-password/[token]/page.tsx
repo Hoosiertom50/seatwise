@@ -4,6 +4,8 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { api, ApiError } from "@/lib/api-client";
+// TS-193: the same limits the server checks (packages/shared/src/field-limits.ts).
+import { FIELD_LIMITS } from "@seatwise/shared";
 
 // TS-142: opened from the emailed reset link. Checks the link still works, then lets the planner
 // choose a new password; saving it uses up the link and signs them in.
@@ -67,6 +69,7 @@ export default function ResetPasswordPage() {
                 New password
               </label>
               <input
+                maxLength={FIELD_LIMITS.password}
                 id="reset-password"
                 type="password"
                 autoComplete="new-password"
@@ -83,6 +86,7 @@ export default function ResetPasswordPage() {
                 Type it again
               </label>
               <input
+                maxLength={FIELD_LIMITS.password}
                 id="reset-password-confirm"
                 type="password"
                 autoComplete="new-password"

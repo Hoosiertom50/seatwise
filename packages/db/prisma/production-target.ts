@@ -32,6 +32,12 @@ export async function readSecret(envName: string, prompt: string): Promise<strin
   if (!process.stdin.isTTY) {
     throw new Error(`${envName} is not set, and there's no terminal to ask for it. Set it (e.g. read -rs ${envName}).`);
   }
+  return askSecret(prompt);
+}
+
+/** TS-192: always asks at the terminal (never reads the environment), without echoing what's typed. */
+export async function askSecret(prompt: string): Promise<string> {
+  if (!process.stdin.isTTY) throw new Error("There's no terminal to type into -- run this from a terminal.");
   return new Promise<string>((resolve, reject) => {
     const stdin = process.stdin;
     let value = "";

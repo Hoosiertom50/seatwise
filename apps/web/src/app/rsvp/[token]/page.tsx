@@ -5,6 +5,8 @@ import { useParams } from "next/navigation";
 import { api, ApiError, apiErrorMessage } from "@/lib/api-client";
 import { formatDate } from "@/lib/display-format";
 import type { GuestRsvpPreviewDTO } from "@seatwise/shared";
+// TS-193: the same limits the server checks (packages/shared/src/field-limits.ts).
+import { FIELD_LIMITS } from "@seatwise/shared";
 
 // TS-17 (FR-12.1/FR-12.2/FR-12.3): the guest's own RSVP page, reached via their unique
 // unauthenticated link. No sign-in of any kind -- mirrors /invites/[token] structurally (a
@@ -215,6 +217,7 @@ export default function GuestRsvpPage() {
                 <label className="text-sm">
                   <span className="mb-1 block text-neutral-700 dark:text-neutral-300">Total in your party (including you)</span>
                   <input
+                    inputMode="numeric"
                     type="number"
                     min={1}
                     max={preview?.maxHeadcount ?? 20}
@@ -232,7 +235,7 @@ export default function GuestRsvpPage() {
                       value={plusOneNames}
                       onChange={(e) => setPlusOneNames(e.target.value)}
                       // TS-180: the most the server accepts, so typing stops there instead of failing on send.
-                      maxLength={500}
+                      maxLength={FIELD_LIMITS.plusOneNames}
                       placeholder="e.g. Jamie Lee"
                       className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
                     />
@@ -258,7 +261,7 @@ export default function GuestRsvpPage() {
                 value={notes}
                 onChange={(e) => setNotes(e.target.value)}
                 // TS-180: the most the server accepts.
-                maxLength={2000}
+                maxLength={FIELD_LIMITS.rsvpNotes}
                 rows={3}
                 className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
               />

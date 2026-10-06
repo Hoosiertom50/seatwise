@@ -5,6 +5,8 @@ import { useEffect, useMemo, useState, useRef } from "react";
 import { api, ApiError } from "@/lib/api-client";
 import type { CommentDTO, GuestDTO, SeatingTableDTO, TimelineEntryDTO } from "@seatwise/shared";
 import { useUnsavedChanges } from "@/lib/unsaved-changes";
+// TS-193: the same limits the server checks (packages/shared/src/field-limits.ts).
+import { FIELD_LIMITS } from "@seatwise/shared";
 
 // TS-13 (Collaboration & Notifications, FR-10.3): comments attached to a guest or table. A
 // dedicated tab (rather than inline per-row) keeps this tractable — pick a target, see its
@@ -239,6 +241,7 @@ export function CommentsTab({
               </select>
             </div>
             <textarea
+              maxLength={FIELD_LIMITS.comment}
               aria-label="Comment text"
               className="rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
               rows={2}
@@ -324,6 +327,7 @@ export function CommentsTab({
                         <input
                           // TS-191: opening Reply puts focus in the box.
                           autoFocus
+                          maxLength={FIELD_LIMITS.comment}
                           aria-label="Reply text"
                           className="flex-1 rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
                           placeholder="Write a reply..."

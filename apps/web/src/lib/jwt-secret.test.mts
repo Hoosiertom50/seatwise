@@ -37,3 +37,8 @@ test("local development keeps working with the README's example value", () => {
   assert.equal(jwtSecretProblem("a long random string", "development"), null);
   assert.equal(jwtSecretProblem("replace-with-a-long-random-secret", undefined), null);
 });
+
+test("TS-192: in production, the published development encryption key is refused as a JWT secret too", async () => {
+  const { DEV_ONLY_ENCRYPTION_KEY } = await import("../../../../packages/shared/src/placeholder-secrets");
+  assert.match(jwtSecretProblem(DEV_ONLY_ENCRYPTION_KEY, "production") ?? "", /placeholder/);
+});

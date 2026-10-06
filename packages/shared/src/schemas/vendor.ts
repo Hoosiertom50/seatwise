@@ -1,6 +1,7 @@
 import { z } from "zod";
 // TS-180: free text refuses hidden control characters (see ../safe-text).
 import { safeText } from "../safe-text";
+import { CONTACT_PHONE_MESSAGE, FIELD_LIMITS, isAllowedContactPhone } from "../field-limits";
 import { expectedRevisionField } from "./common";
 
 // TS-20 (FR-15.1): FR-15.1's own list of examples, plus the handful of other common wedding
@@ -53,18 +54,22 @@ function validateCategoryOther(
 }
 
 const vendorBaseSchema = z.object({
-  name: safeText(200, { required: "Vendor name is required" }),
+  name: safeText(FIELD_LIMITS.vendorName, { required: "Vendor name is required" }),
   category: vendorCategoryEnum,
-  categoryOther: safeText(100).optional().nullable(),
-  contactName: safeText(200).optional().nullable(),
+  categoryOther: safeText(FIELD_LIMITS.vendorCategoryOther).optional().nullable(),
+  contactName: safeText(FIELD_LIMITS.vendorContactName).optional().nullable(),
   // Same "blank means omitted, not invalid" treatment as a guest's own optional email.
   contactEmail: z
-    .union([z.string().trim().max(320).email("Not a valid email address"), z.literal(""), z.null()])
+    .union([z.string().trim().max(FIELD_LIMITS.email).email("Not a valid email address"), z.literal(""), z.null()])
     .optional()
     .transform((v) => (v === "" ? null : v)),
-  contactPhone: safeText(40).optional().nullable(),
+  // TS-193: only the characters a phone number is written with (see ../field-limits).
+  contactPhone: safeText(FIELD_LIMITS.vendorContactPhone)
+    .refine(isAllowedContactPhone, CONTACT_PHONE_MESSAGE)
+    .optional()
+    .nullable(),
   costCents: costCentsField,
-  contractNotes: safeText(4000, { multiline: true }).optional().nullable(),
+  contractNotes: safeText(FIELD_LIMITS.vendorContractNotes, { multiline: true }).optional().nullable(),
   // TS-114: "HH:MM" (24-hour), what an <input type="time"> sends. Blank clears it.
   arrivalTime: z
     .union([z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Use a time like 14:30"), z.literal(""), z.null()])

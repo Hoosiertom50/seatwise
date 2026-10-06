@@ -5,6 +5,8 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { api, ApiError, SESSION_EXPIRED_EVENT, SESSION_RESTORED_EVENT } from "@/lib/api-client";
 import { loginUrlReturningTo } from "@/lib/safe-next";
+// TS-193: the same limits the server checks (packages/shared/src/field-limits.ts).
+import { FIELD_LIMITS } from "@seatwise/shared";
 
 // TS-109: an expired session used to surface as "Your access to this wedding has been removed"
 // (the wedding page treated a 401 like a 404) and tore the page down. This says what actually
@@ -70,6 +72,7 @@ export function SessionExpiredNotice() {
           Email
         </label>
         <input
+          maxLength={FIELD_LIMITS.email}
           id="reauth-email"
           type="email"
           autoComplete="email"
@@ -83,6 +86,7 @@ export function SessionExpiredNotice() {
           Password
         </label>
         <input
+          maxLength={FIELD_LIMITS.password}
           id="reauth-password"
           type="password"
           autoComplete="current-password"

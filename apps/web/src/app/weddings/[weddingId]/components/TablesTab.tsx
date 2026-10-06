@@ -17,6 +17,8 @@ import { compareTableLabels, GUEST_TIER_LABELS, type GuestTier } from "@seatwise
 import { useUnsavedChanges } from "@/lib/unsaved-changes";
 import { useSerialTasks } from "@/lib/serial-tasks";
 import { OPEN_EDIT_MESSAGE } from "@/lib/display-format";
+// TS-193: the same limits the server checks (packages/shared/src/field-limits.ts).
+import { FIELD_LIMITS } from "@seatwise/shared";
 
 const SHAPES: TableShape[] = ["ROUND", "RECTANGULAR", "SQUARE", "OVAL", "OTHER"];
 
@@ -521,6 +523,7 @@ export function TablesTab({
             Table name
           </label>
           <input
+            maxLength={FIELD_LIMITS.tableLabel}
             id="table-name"
             className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
             placeholder="Table 1"
@@ -534,6 +537,7 @@ export function TablesTab({
             Capacity
           </label>
           <input
+            inputMode="numeric"
             id="table-capacity"
             type="number"
             min={1}
@@ -566,6 +570,7 @@ export function TablesTab({
             Purpose (optional)
           </label>
           <input
+            maxLength={FIELD_LIMITS.tablePurpose}
             id="table-purpose"
             className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
             placeholder="e.g. Kids table, Head table"
@@ -668,6 +673,7 @@ export function TablesTab({
               How many
             </label>
             <input
+              inputMode="numeric"
               id="qc-count"
               type="number"
               min={1}
@@ -682,6 +688,7 @@ export function TablesTab({
               Seats each
             </label>
             <input
+              inputMode="numeric"
               id="qc-capacity"
               type="number"
               min={1}
@@ -713,6 +720,7 @@ export function TablesTab({
               Name prefix
             </label>
             <input
+              maxLength={FIELD_LIMITS.tableLabelPrefix}
               id="qc-prefix"
               className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1.5 text-sm"
               value={qcPrefix}
@@ -747,6 +755,7 @@ export function TablesTab({
               Template name
             </label>
             <input
+              maxLength={FIELD_LIMITS.templateName}
               id="template-name"
               className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1.5 text-sm"
               placeholder="e.g. Standard reception layout"
@@ -1383,11 +1392,12 @@ function TableEditForm({
     >
       <div>
         <label htmlFor={`${idBase}-label`} className="mb-1 block text-sm font-medium">Table name</label>
-        <input id={`${idBase}-label`} className={field} value={label} onChange={(e) => setLabel(e.target.value)} required maxLength={100} />
+        <input id={`${idBase}-label`} className={field} value={label} onChange={(e) => setLabel(e.target.value)} required maxLength={FIELD_LIMITS.tableLabel} />
       </div>
       <div>
         <label htmlFor={`${idBase}-capacity`} className="mb-1 block text-sm font-medium">Seats</label>
         <input
+          inputMode="numeric"
           id={`${idBase}-capacity`}
           type="number"
           min={1}
@@ -1410,7 +1420,7 @@ function TableEditForm({
       </div>
       <div>
         <label htmlFor={`${idBase}-purpose`} className="mb-1 block text-sm font-medium">Purpose (optional)</label>
-        <input id={`${idBase}-purpose`} className={field} value={purpose} onChange={(e) => setPurpose(e.target.value)} maxLength={200} />
+        <input id={`${idBase}-purpose`} className={field} value={purpose} onChange={(e) => setPurpose(e.target.value)} maxLength={FIELD_LIMITS.tablePurpose} />
       </div>
       <div className="sm:col-span-2">
         <label htmlFor={`${idBase}-criterion`} className="mb-1 block text-sm font-medium">Favors</label>

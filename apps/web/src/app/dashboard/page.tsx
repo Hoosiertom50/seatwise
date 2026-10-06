@@ -9,6 +9,8 @@ import { formatDate, localTodayIso } from "@/lib/display-format";
 import { formatGuestCounts, type WeddingSummaryDTO, type SeatingTemplateDTO } from "@seatwise/shared";
 import { NotificationsBell } from "@/components/NotificationsBell";
 import { EmailVerificationNotice } from "@/components/EmailVerificationNotice";
+// TS-193: the same limits the server checks (packages/shared/src/field-limits.ts).
+import { FIELD_LIMITS } from "@seatwise/shared";
 
 // TS-19 (FR-14.2): human-readable labels for a template's captured rule-shape.
 const SIDE_MIXING_LABELS: Record<string, string> = {
@@ -314,7 +316,7 @@ export default function DashboardPage() {
               value={newName}
               onChange={(e) => setNewName(e.target.value)}
               required
-              maxLength={200}
+              maxLength={FIELD_LIMITS.weddingName}
             />
           </div>
           <div>
@@ -334,6 +336,7 @@ export default function DashboardPage() {
               Venue
             </label>
             <input
+              maxLength={FIELD_LIMITS.venueName}
               id="new-wedding-venue"
               className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
               value={newVenue}
@@ -411,6 +414,7 @@ export default function DashboardPage() {
               Note (optional)
             </label>
             <textarea
+              maxLength={FIELD_LIMITS.weddingNote}
               id="new-wedding-note"
               className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
               rows={2}
@@ -485,6 +489,7 @@ export default function DashboardPage() {
         <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex flex-1 flex-col gap-2 sm:flex-row">
             <input
+              maxLength={FIELD_LIMITS.search}
               type="search"
               aria-label="Search weddings"
               placeholder="Search by name or venue..."
