@@ -32,3 +32,20 @@ test("CI's production build (emails only logged, no APP_URL) keeps the localhost
   // Logging email doesn't excuse a wrong address that *is* set.
   assert.throws(() => appBaseUrl({ NODE_ENV: "production", EMAIL_TRANSPORT: "log", APP_URL: "http://seatwise.example" }), AppUrlNotConfiguredError);
 });
+
+// TS-192: on Netlify the local allowances don't apply.
+test("on Netlify, http://localhost and the email-logging fallback are refused", () => {
+  for (const netlify of [{ NETLIFY: "true" }, { CONTEXT: "production" }, { SITE_ID: "abc" }, { DEPLOY_ID: "123" }]) {
+    const label = JSON.stringify(netlify);
+    assert.throws(() => appBaseUrl({ NODE_ENV: "production", APP_URL: "http://localhost:3000", ...netlify }), AppUrlNotConfiguredError, label);
+    assert.throws(() => appBaseUrl({ NODE_ENV: "production", APP_URL: "https://localhost", ...netlify }), AppUrlNotConfiguredError, label);
+    assert.throws(() => appBaseUrl({ NODE_ENV: "production", EMAIL_TRANSPORT: "log", ...netlify }), AppUrlNotConfiguredError, label);
+    // Even if NODE_ENV somehow isn't production there.
+    assert.throws(() => appBaseUrl({ NODE_ENV: "development", ...netlify }), AppUrlNotConfiguredError, label);
+    assert.equal(appBaseUrl({ NODE_ENV: "production", APP_URL: "https://seatwise-app.netlify.app/", ...netlify }), "https://seatwise-app.netlify.app");
+  }
+});
+
+test("netlify dev on this machine keeps the local rules", () => {
+  assert.equal(appBaseUrl({ NODE_ENV: "development", NETLIFY_DEV: "true", CONTEXT: "dev", SITE_ID: "abc" }), "http://localhost:3000");
+});

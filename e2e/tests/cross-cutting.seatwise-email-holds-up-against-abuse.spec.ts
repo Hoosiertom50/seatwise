@@ -30,6 +30,7 @@ import {
   weddingNotificationEmailsThisHour,
   weddingsCreatedToday,
 } from "../support/testDatabase.js";
+import { waitUntilSafelyInsideUtcDay } from "../support/utcDay.js";
 
 const ACCOUNT_EMAILS_PER_DAY = 100;
 const WEDDINGS_PER_DAY = 10;
@@ -51,6 +52,8 @@ defineQualityTest(
   },
   async ({ account, managedWedding, weddingData, context, playwright }, testInfo) => {
     test.setTimeout(90_000);
+    // TS-192: the daily counters this test sets and reads must all be in one UTC day.
+    await waitUntilSafelyInsideUtcDay(testInfo);
     const baseURL = testInfo.project.use.baseURL;
     const w = managedWedding.id;
     const guestResponds = async () => {
@@ -88,12 +91,15 @@ defineQualityTest(
     });
 
     await test.step("An account can create 10 weddings a day; the 11th, or a copy, is refused until tomorrow", async () => {
+      // TS-192: counted right before the loop and checked against that, not assumed to be 1 -- the
+      // test's own wedding may have been made before a UTC midnight wait (then it's yesterday's).
       const already = await weddingsCreatedToday(account.email);
-      expect(already).toBe(1); // the test's own wedding
+      expect(already).toBeLessThanOrEqual(1); // at most the test's own wedding
       for (let n = already + 1; n <= WEDDINGS_PER_DAY; n++) {
         const { status } = await weddingData.createWeddingRaw({ name: uniqueTitle(testInfo.workerIndex, `Cap ${n}`) });
         expect(status, `wedding ${n}`).toBe(201);
       }
+      expect(await weddingsCreatedToday(account.email)).toBe(WEDDINGS_PER_DAY); // already + the ones just made
       const refused = await weddingData.createWeddingRaw({ name: uniqueTitle(testInfo.workerIndex, "Cap over") });
       expect(refused.status).toBe(429);
       expect(refused.body.error).toBe("You've created a lot of weddings today — you can create more tomorrow.");
@@ -116,6 +122,8 @@ defineQualityTest(
     tags: ["@mutating", "@feature:authentication", "@risk:high", "@suite:regression"],
   },
   async ({ browser, playwright }, testInfo) => {
+    // TS-192: the daily counters this test sets and reads must all be in one UTC day.
+    await waitUntilSafelyInsideUtcDay(testInfo);
     const baseURL = testInfo.project.use.baseURL;
     const visitor = await playwright.request.newContext({ baseURL, extraHTTPHeaders: { "x-forwarded-for": uniqueTestAddress() } });
     const unconfirmed = await signUpFreshAccountInNewContext(browser, testInfo.workerIndex, "reset-unconfirmed", { confirmEmail: false });
@@ -177,6 +185,8 @@ defineQualityTest(
     tags: ["@mutating", "@feature:authentication", "@risk:normal", "@suite:regression"],
   },
   async ({ browser }, testInfo) => {
+    // TS-192: the daily counters this test sets and reads must all be in one UTC day.
+    await waitUntilSafelyInsideUtcDay(testInfo);
     const session = await signUpFreshAccountInNewContext(browser, testInfo.workerIndex, "resend-gives-back", { confirmEmail: false });
     const resend = () => session.context.request.post("/api/v1/auth/verification-email", { data: {} });
     try {

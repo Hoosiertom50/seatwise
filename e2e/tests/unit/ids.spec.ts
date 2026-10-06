@@ -15,7 +15,11 @@ import {
   tagTestName,
   isTestDataName,
   TEST_DATA_MARKER,
+  uniqueTestAddress,
+  TEST_ADDRESS_BLOCK_SIZE,
+  TEST_ADDRESS_PREFIXES,
 } from "../../data/ids.js";
+import { msUntilUtcMidnight, waitNeededBeforeDailyCounters } from "../../support/utcDay.js";
 
 // Mirrors packages/shared/src/validation.ts's PERSON_NAME_PATTERN. Not imported directly: this
 // project's tsconfig deliberately excludes packages/ (see tsconfig.json) and the root package.json
@@ -205,5 +209,36 @@ test.describe("TS-103 test-account predicate", () => {
     // RFC 2606 reserves .invalid so it can never resolve -- that is the whole safety property.
     expect(TEST_ACCOUNT_EMAIL_DOMAIN).toBe("@example.invalid");
     expect(isTestAccountEmail("@example.invalid@real.com")).toBe(false);
+  });
+});
+
+// TS-192: test network addresses no longer wrap after 128 per worker.
+test.describe("uniqueTestAddress", () => {
+  test("hands out distinct addresses inside 198.18.0.0/15, well past the old 128", () => {
+    // Uses part of this worker's block only -- never all of it, so later tests in the worker still have addresses.
+    const count = Math.min(200, TEST_ADDRESS_BLOCK_SIZE / 2);
+    const seen = new Set<string>();
+    for (let i = 0; i < count; i++) {
+      const address = uniqueTestAddress();
+      expect(seen.has(address), address).toBe(false);
+      seen.add(address);
+      expect(TEST_ADDRESS_PREFIXES.some((prefix) => address.startsWith(prefix)), address).toBe(true);
+      expect(address).toMatch(/^198\.(18|19)\.\d{1,3}\.\d{1,3}$/);
+    }
+  });
+});
+
+// TS-192: tests that set daily counters wait out UTC midnight instead of straddling it.
+test.describe("waitNeededBeforeDailyCounters", () => {
+  const midnight = Date.UTC(2026, 9, 7);
+  test("no wait when the UTC day has room for the test", () => {
+    expect(waitNeededBeforeDailyCounters(midnight - 10 * 60_000, 60_000)).toBe(0);
+    expect(waitNeededBeforeDailyCounters(midnight + 1_000, 60_000)).toBe(0);
+  });
+  test("waits until just past midnight when the test wouldn't fit", () => {
+    expect(msUntilUtcMidnight(midnight - 30_000)).toBe(30_000);
+    const wait = waitNeededBeforeDailyCounters(midnight - 30_000, 60_000);
+    expect(wait).toBeGreaterThan(30_000);
+    expect(wait).toBeLessThan(40_000);
   });
 });

@@ -18,3 +18,10 @@ test("TS-183: never on Netlify, whatever else is set", () => {
   assert.equal(directCollaboratorAddAllowed({ NODE_ENV: "production", ALLOW_DIRECT_COLLABORATOR_ADD: "1", NETLIFY: "true" }), false);
   assert.equal(directCollaboratorAddAllowed({ NODE_ENV: "development", NETLIFY: "true" }), false);
 });
+
+test("TS-192: never when Netlify's runtime variables are set, even without NETLIFY", () => {
+  for (const runtime of [{ SITE_ID: "abc" }, { DEPLOY_ID: "123" }, { URL: "https://seatwise-app.netlify.app" }]) {
+    assert.equal(directCollaboratorAddAllowed({ NODE_ENV: "production", ALLOW_DIRECT_COLLABORATOR_ADD: "1", ...runtime }), false, JSON.stringify(runtime));
+    assert.equal(directCollaboratorAddAllowed({ NODE_ENV: "development", ...runtime }), false, JSON.stringify(runtime));
+  }
+});

@@ -70,3 +70,21 @@ test("a stored note whose authentication tag has been shortened doesn't decrypt"
   assert.equal(decryptText([prefix1, prefix2, iv, shortTag, data].join(":")), "[unable to decrypt]");
   assert.equal(decryptText(stored), "Allergic to shellfish");
 });
+
+// TS-192: a placeholder that is long enough to pass the length check is still refused.
+test("production refuses the .env.example value, the dev key and other known placeholders", async () => {
+  const { DEV_ONLY_ENCRYPTION_KEY, PLACEHOLDER_SECRETS } = await import("../../../../packages/shared/src/placeholder-secrets");
+  env.NODE_ENV = "production";
+  for (const placeholder of ["replace-with-a-long-random-secret", DEV_ONLY_ENCRYPTION_KEY, "  Replace-With-A-Long-Random-Secret ", ...PLACEHOLDER_SECRETS]) {
+    env.ENCRYPTION_KEY = placeholder;
+    assert.throws(() => encryptText("Vegetarian"), /placeholder/, `expected "${placeholder}" to be refused`);
+  }
+});
+
+test("the placeholder check only applies in production (local dev may use the example value)", async () => {
+  const { encryptionKeyProblem } = await import("../../../../packages/db/src/crypto");
+  assert.equal(encryptionKeyProblem("replace-with-a-long-random-secret", "development"), null);
+  assert.equal(encryptionKeyProblem(undefined, "test"), null);
+  assert.match(encryptionKeyProblem("replace-with-a-long-random-secret", "production") ?? "", /placeholder/);
+  assert.equal(encryptionKeyProblem(randomBytes(32).toString("hex"), "production"), null);
+});
