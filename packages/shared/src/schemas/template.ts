@@ -1,4 +1,6 @@
 import { z } from "zod";
+// TS-180: free text refuses hidden control characters (see ../safe-text).
+import { safeText } from "../safe-text";
 import { weddingNameField } from "./wedding";
 import type { SideMixing } from "./wedding";
 import type { TableShape, TablePurposeCriterionType } from "./table";
@@ -11,7 +13,7 @@ import type { TableShape, TablePurposeCriterionType } from "./table";
 // applyTemplateFields below) -- composable, but only at the two-piece granularity FR-14.4 itself
 // names ("table layout and/or rule-shape"), not per-table or per-field.
 export const saveWeddingAsTemplateSchema = z.object({
-  name: z.string().min(1, "Template name is required").max(150),
+  name: safeText(150, { required: "Template name is required" }),
 });
 export type SaveWeddingAsTemplateInput = z.infer<typeof saveWeddingAsTemplateSchema>;
 

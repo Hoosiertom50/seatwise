@@ -1,4 +1,6 @@
 import { z } from "zod";
+// TS-180: free text refuses hidden control characters (see ../safe-text).
+import { safeText } from "../safe-text";
 import { expectedRevisionField } from "./common";
 import { PERSON_NAME_PATTERN, PERSON_NAME_MESSAGE, looksLikeWebAddress, NO_WEB_ADDRESS_MESSAGE, hasMixedScriptWord, NO_MIXED_SCRIPT_MESSAGE } from "../validation";
 
@@ -60,14 +62,14 @@ export const createGuestSchema = z.object({
     .regex(PERSON_NAME_PATTERN, PERSON_NAME_MESSAGE)
     .refine((v) => !looksLikeWebAddress(v), NO_WEB_ADDRESS_MESSAGE)
     .refine((v) => !hasMixedScriptWord(v), NO_MIXED_SCRIPT_MESSAGE),
-  partyName: z.string().max(200).optional().nullable(),
+  partyName: safeText(200).optional().nullable(),
   headcount: z.number().int().min(1).max(20).default(1),
   tier: guestTierEnum.default("OTHER"),
   rsvpStatus: rsvpStatusEnum.default("PENDING"),
   requiresAccessibleTable: z.boolean().default(false),
   isLocked: z.boolean().default(false),
   dayOfAttendance: dayOfAttendanceEnum.default("ATTENDING"),
-  notes: z.string().max(2000).optional().nullable(),
+  notes: safeText(2000, { multiline: true }).optional().nullable(),
   side: guestSideEnum.default("BOTH"),
   ageCategory: ageCategoryEnum.default("ADULT"),
   // TS-17 (FR-12.4): optional -- lets a planner send/resend this guest their own RSVP link. An
@@ -78,7 +80,7 @@ export const createGuestSchema = z.object({
     .optional()
     .transform((v) => (v === "" ? null : v)),
   // TS-17 (FR-12.1): free-text "who's coming with you", only meaningful when headcount > 1.
-  plusOneNames: z.string().max(500).optional().nullable(),
+  plusOneNames: safeText(500, { multiline: true }).optional().nullable(),
 });
 export type CreateGuestInput = z.infer<typeof createGuestSchema>;
 

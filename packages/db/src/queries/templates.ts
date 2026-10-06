@@ -198,10 +198,14 @@ interface LayoutTable {
 
 // A label already used in the wedding gets " (2)", " (3)"… so two tables are never both called
 // "Table 1" -- every other attribute is copied as-is.
+// TS-180: a table name is at most 100 characters, so a long name is shortened to make room for the
+// number (it used to run past the limit, which the table's own edit form then refused).
+const MAX_TABLE_LABEL = 100;
 function uniqueLabel(label: string, taken: Set<string>): string {
   if (!taken.has(label)) return label;
   for (let n = 2; ; n++) {
-    const candidate = `${label} (${n})`;
+    const suffix = ` (${n})`;
+    const candidate = `${label.slice(0, MAX_TABLE_LABEL - suffix.length).trimEnd()}${suffix}`;
     if (!taken.has(candidate)) return candidate;
   }
 }

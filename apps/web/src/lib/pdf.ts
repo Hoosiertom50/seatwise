@@ -16,6 +16,27 @@ const MARGIN = 54; // 0.75in
 export interface ExportGuestRow {
   guestName: string;
   tableLabel: string;
+  // TS-180: who's coming with them -- shown on the lookup list.
+  plusOneNames?: string | null;
+}
+
+/**
+ * TS-180: `text` cut short with an ellipsis so it fits `maxWidth` at `size` -- long names and table
+ * names used to run off the page, into the table column, or over a place card's cut line.
+ */
+export function fitText(font: PDFFont, text: string, size: number, maxWidth: number): string {
+  if (font.widthOfTextAtSize(text, size) <= maxWidth) return text;
+  const ellipsis = "…";
+  const chars = [...text];
+  let low = 0;
+  let high = chars.length;
+  // The longest start of the text that fits with the ellipsis after it.
+  while (low < high) {
+    const mid = Math.ceil((low + high) / 2);
+    if (font.widthOfTextAtSize(chars.slice(0, mid).join("").trimEnd() + ellipsis, size) <= maxWidth) low = mid;
+    else high = mid - 1;
+  }
+  return chars.slice(0, low).join("").trimEnd() + ellipsis;
 }
 
 interface Fonts {
@@ -72,11 +93,16 @@ async function newDoc(): Promise<{ doc: PDFDocument; fonts: Fonts }> {
 }
 
 function safeRow(fonts: Fonts, row: ExportGuestRow): ExportGuestRow {
-  return { guestName: fonts.text(row.guestName), tableLabel: fonts.text(row.tableLabel) };
+  return {
+    guestName: fonts.text(row.guestName),
+    tableLabel: fonts.text(row.tableLabel),
+    plusOneNames: row.plusOneNames ? fonts.text(row.plusOneNames) : null,
+  };
 }
 
 function drawHeader(page: PDFPage, fonts: Fonts, title: string, weddingName: string) {
-  page.drawText(weddingName, {
+  // TS-180: a long wedding name is cut short rather than running off the page.
+  page.drawText(fitText(fonts.regular, weddingName, 11, PAGE_WIDTH - MARGIN * 2), {
     x: MARGIN,
     y: PAGE_HEIGHT - MARGIN,
     size: 11,
@@ -113,7 +139,7 @@ export async function buildSeatingChartPdf(
       page = doc.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
       y = PAGE_HEIGHT - MARGIN;
     }
-    page.drawText(table.label, { x: MARGIN, y, size: 13, font: fonts.bold });
+    page.drawText(fitText(fonts.bold, table.label, 13, PAGE_WIDTH - MARGIN * 2), { x: MARGIN, y, size: 13, font: fonts.bold });
     y -= tableHeaderGap;
 
     if (table.guestNames.length === 0) {
@@ -131,7 +157,12 @@ export async function buildSeatingChartPdf(
         page = doc.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
         y = PAGE_HEIGHT - MARGIN;
       }
-      page.drawText(`•  ${name}`, { x: MARGIN + 14, y, size: 11, font: fonts.regular });
+      page.drawText(fitText(fonts.regular, `•  ${name}`, 11, PAGE_WIDTH - MARGIN * 2 - 14), {
+        x: MARGIN + 14,
+        y,
+        size: 11,
+        font: fonts.regular,
+      });
       y -= lineHeight;
     }
     y -= 10;
@@ -159,9 +190,18 @@ export async function buildLookupListPdf(
       page = doc.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
       y = PAGE_HEIGHT - MARGIN;
     }
-    page.drawText(row.guestName, { x: MARGIN, y, size: 11, font: fonts.regular });
-    const tableText = row.tableLabel;
+    // TS-180: the table name gets up to 40% of the line and the guest's name (with who's coming
+    // with them) the rest, each cut short with "…" if it's longer -- they used to overlap.
+    const lineWidth = PAGE_WIDTH - MARGIN * 2;
+    const tableText = fitText(fonts.bold, row.tableLabel, 11, lineWidth * 0.4);
     const tableWidth = fonts.bold.widthOfTextAtSize(tableText, 11);
+    const nameText = row.plusOneNames ? `${row.guestName}  + ${row.plusOneNames}` : row.guestName;
+    page.drawText(fitText(fonts.regular, nameText, 11, lineWidth - tableWidth - 16), {
+      x: MARGIN,
+      y,
+      size: 11,
+      font: fonts.regular,
+    });
     page.drawText(tableText, {
       x: PAGE_WIDTH - MARGIN - tableWidth,
       y,
@@ -232,7 +272,9 @@ export async function buildPlaceCardsPdf(rows: ExportGuestRow[]): Promise<Uint8A
     // TS-158: a long name goes onto two lines and/or shrinks, rather than running over the cut line.
     const { lines, size: nameSize } = fitCardName(fonts.bold, row.guestName, cardW - 16);
     const lineGap = nameSize * 1.2;
-    lines.forEach((line, i) => {
+    lines.forEach((fullLine, i) => {
+      // TS-180: still too wide at the smallest size (one very long word) -- cut short with "…".
+      const line = fitText(fonts.bold, fullLine, nameSize, cardW - 16);
       const lineWidth = fonts.bold.widthOfTextAtSize(line, nameSize);
       page!.drawText(line, {
         x: x + (cardW - lineWidth) / 2,
@@ -242,8 +284,9 @@ export async function buildPlaceCardsPdf(rows: ExportGuestRow[]): Promise<Uint8A
       });
     });
 
-    const tableText = row.tableLabel;
     const tableSize = 12;
+    // TS-180: a long table name is cut short rather than running over the cut line.
+    const tableText = fitText(fonts.regular, row.tableLabel, tableSize, cardW - 16);
     const tableWidth = fonts.regular.widthOfTextAtSize(tableText, tableSize);
     page!.drawText(tableText, {
       x: x + (cardW - tableWidth) / 2,

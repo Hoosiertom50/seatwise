@@ -24,3 +24,4 @@ export * from "./rsvp-cutoff";
 export * from "./email-safe-names";
 export * from "./guest-side";
 export * from "./guest-counts";
+export * from "./safe-text";

@@ -19,6 +19,11 @@ export const guestImportFieldEnum = z.enum([
   "side",
   "ageCategory",
   "notes",
+  // TS-180: the export's "Plus-ones" column (who's coming with the guest).
+  "plusOneNames",
+  // TS-180: the export's "Version" column -- the guest's revision when the file was exported, so a
+  // re-import of an older file can spot guests changed since. Not a guest field itself.
+  "version",
 ]);
 export type GuestImportField = z.infer<typeof guestImportFieldEnum>;
 
@@ -33,10 +38,15 @@ export const guestImportRequestSchema = z.object({
   // someone else edited between preview and confirm is refused rather than silently overwritten.
   // Keyed by guest ID. Omitted on preview (and by older clients, which get the old behavior).
   expectedRevisions: z.record(z.string(), revisionNumber).optional(),
+  // TS-180: on commit, the planner ticked "Overwrite guests changed since the export" -- rows the
+  // preview showed as conflicts are then written like any other update. Without it they're skipped.
+  overwriteChanged: z.boolean().optional(),
 });
 export type GuestImportRequest = z.infer<typeof guestImportRequestSchema>;
 
-export type GuestImportRowKind = "new" | "update" | "error";
+// TS-180: "conflict" -- an update row for a guest changed in Seatwise since the file was exported
+// (their revision is newer than the file's Version cell).
+export type GuestImportRowKind = "new" | "update" | "conflict" | "error";
 
 export interface GuestImportRowPreview {
   firstName?: string;
@@ -50,6 +60,8 @@ export interface GuestImportRowPreview {
   side?: string;
   ageCategory?: string;
   notes?: string | null;
+  // TS-180
+  plusOneNames?: string | null;
 }
 
 export interface GuestImportRow {
@@ -67,12 +79,15 @@ export interface GuestImportRow {
 export interface GuestImportPreview {
   headers: string[];
   rows: GuestImportRow[];
-  summary: { newCount: number; updatingCount: number; errorCount: number; totalRows: number };
+  // TS-180: conflictCount -- rows for guests changed since the export (see GuestImportRowKind).
+  summary: { newCount: number; updatingCount: number; conflictCount: number; errorCount: number; totalRows: number };
 }
 
 export interface GuestImportCommitResult {
   createdCount: number;
   updatedCount: number;
+  // TS-180: conflict rows left alone because the planner didn't choose to overwrite them.
+  skippedCount: number;
   // FR-2.9: guests whose current seat assignment was flagged Needs Reassignment as a result of
   // this import (an edited side/tier/household/requires-accessible-table field no longer fits a
   // hard rule at their current table).

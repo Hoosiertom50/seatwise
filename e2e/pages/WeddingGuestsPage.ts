@@ -198,6 +198,18 @@ export class WeddingGuestsPage extends BasePage {
   importMappingHeading() {
     return this.page.getByText(/ — map columns to guest fields:$/);
   }
+  /** TS-180: the preview rows for guests changed in Seatwise since the file was exported. */
+  importChangedSinceExportRows() {
+    return this.page.locator("li").filter({ hasText: "Changed in Seatwise since this file was exported" });
+  }
+  /** TS-180: the box that lets those guests be overwritten anyway. */
+  overwriteChangedCheckbox() {
+    return this.page.getByRole("checkbox", { name: /^Overwrite guests changed since the export/ });
+  }
+  /** TS-180: the Confirm import button, to read the number of guests it will import. */
+  confirmImportButtonLocator() {
+    return this.confirmImportButton();
+  }
 
   /** Returns a GuestRow component object scoped to the row matching this full name. Does not
    * assert the row exists -- callers await `.expectVisible()` (or Playwright's own auto-waiting

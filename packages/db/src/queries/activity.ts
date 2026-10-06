@@ -23,7 +23,7 @@ export async function listActivityForWedding(weddingId: string, limit = 200): Pr
      JOIN "plan_versions" pv ON pv.id = che."planVersionId"
      LEFT JOIN "users" u ON u.id = che."actorUserId"
      WHERE pv."weddingId" = $1
-     ORDER BY che."createdAt" DESC
+     ORDER BY che."createdAt" DESC, che.id DESC -- TS-180: a fixed order for entries made at the same moment
      LIMIT $2`,
     [weddingId, limit]
   );

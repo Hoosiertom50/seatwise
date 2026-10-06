@@ -84,3 +84,31 @@ test("a long place-card name wraps onto two lines and/or shrinks to fit the card
   const greek = fitCardName(bold, "Ελένη Παπαδοπούλου-Καραγιαννοπούλου", 236);
   assert.ok(fits(greek), JSON.stringify(greek));
 });
+
+// TS-180: long names and table names are cut short with "…" instead of running over.
+test("fitText leaves text that fits alone and cuts longer text to fit, with an ellipsis", async () => {
+  const { PDFDocument, StandardFonts } = await import("pdf-lib");
+  const { fitText, buildSeatingChartPdf, buildLookupListPdf, buildPlaceCardsPdf } = await import("./pdf");
+  const doc = await PDFDocument.create();
+  const font = await doc.embedFont(StandardFonts.Helvetica);
+  assert.equal(fitText(font, "Table 1", 11, 200), "Table 1");
+  const long = "The Very Long Head Table Next To The Dance Floor By The Window ".repeat(3).trim();
+  const cut = fitText(font, long, 11, 200);
+  assert.ok(cut.endsWith("…") && cut.length < long.length, cut);
+  assert.ok(font.widthOfTextAtSize(cut, 11) <= 200, cut);
+  assert.ok(long.startsWith(cut.slice(0, -1)), cut);
+  // Even a width too small for any letter gives just the ellipsis rather than failing.
+  assert.equal(fitText(font, long, 11, 1), "…");
+
+  // And the exports build with 100-character names everywhere.
+  const name = "Maximilian".repeat(10);
+  const table = "Head table ".repeat(9).trim();
+  const rows = [{ guestName: name, tableLabel: table, plusOneNames: "Jamie Lee, ".repeat(40) }];
+  for (const pdf of [
+    await buildSeatingChartPdf(name, [{ label: table, guestNames: [name] }, { label: "Empty", guestNames: [] }]),
+    await buildLookupListPdf(name, rows),
+    await buildPlaceCardsPdf(rows),
+  ]) {
+    assert.ok(pdf.length > 500);
+  }
+});
