@@ -24,11 +24,11 @@ const REFRESH_FAILED = "Done — but the list couldn't be refreshed; reload the 
 defineQualityTest(
   {
     id: "cross-cutting.screens-keep-your-work-and-say-the-right-thing.half-typed-guest-notes-are-unsaved-work",
-    title: "a half-typed guest note counts as unsaved: switching tabs asks first, and closing the page makes the browser ask",
+    title: "a half-typed guest note is never lost: clicking another tab saves it, and closing the page makes the browser ask",
     objective:
-      "Confirms that typing in a guest row's notes box (which saves only when you leave it) without leaving it makes a tab switch show the unsaved-changes prompt, with nothing saved yet; that once the box is left (so the note saves) a tab switch needs no prompt; and that with a note half-typed again, closing the page brings up the browser's own leave-page question.",
+      "Confirms that a guest row's notes box (which saves when you leave it) saves a half-typed note when another tab is clicked -- clicking the tab leaves the box -- so no unsaved-changes prompt is needed; and that with a note half-typed again and the box never left, closing the page brings up the browser's own leave-page question.",
     expectedOutcome:
-      "The prompt appears and Stay keeps 'Half-typed note' in the box; the guest's saved notes are still empty. After leaving the box the notes read 'Saved note' on the server and switching tabs shows no prompt. Closing the page with 'Another half' typed raises a 'beforeunload' question.",
+      "Clicking the Tables tab shows no prompt and the guest's saved notes read 'Half-typed note'. Closing the page with ' — another half' typed (box not left) raises a 'beforeunload' question.",
     requirementIds: ["REQ-NON-FUNCTIONAL"],
     tags: ["@mutating", "@feature:guests", "@risk:normal", "@suite:regression"],
   },
@@ -41,20 +41,13 @@ defineQualityTest(
     const guests = new WeddingGuestsPage(page);
     const savedNotes = async () => (await weddingData.listGuests(w)).find((g) => g.id === guest.id)?.notes ?? null;
 
-    await test.step("A half-typed note makes a tab switch ask first, and nothing is saved yet", async () => {
+    // TS-182: clicking a tab first takes the cursor out of the box, which saves the note -- so there
+    // is nothing unsaved by the time the tab changes. The guard matters where the box is never left.
+    await test.step("Clicking another tab leaves the box, so the half-typed note saves with no prompt", async () => {
       await guests.goto(w);
       await guests.guestRow(fullName).typeNotesWithoutLeaving("Half-typed note");
       await wedding.clickTab("Tables");
-      await expect(wedding.unsavedChangesPrompt()).toBeVisible();
-      await wedding.stayOnTab();
-      expect(await guests.guestRow(fullName).notes()).toBe("Half-typed note");
-      expect(await savedNotes()).toBeNull();
-    });
-
-    await test.step("Once the box is left the note saves, and switching tabs needs no prompt", async () => {
-      await guests.guestRow(fullName).editNotes("Saved note");
-      await expect.poll(savedNotes).toBe("Saved note");
-      await wedding.clickTab("Tables");
+      await expect.poll(savedNotes).toBe("Half-typed note");
       await expect(wedding.unsavedChangesPrompt()).toHaveCount(0);
       await wedding.openTab("Guests");
     });
