@@ -446,7 +446,9 @@ export function GuestsTab({
     for (const field of ["firstName", "lastName", "notes", "email"]) rowFields.markDirty(`guest-row-${guestId}-${field}`, false);
     setGuests((cur) => cur.filter((g) => g.id !== guestId));
     try {
-      await api.delete(`/api/v1/weddings/${weddingId}/guests/${guestId}`);
+      // TS-197: removed, but the plan couldn't be re-checked afterwards -- say so.
+      const res = await api.delete<{ warnings?: string[] }>(`/api/v1/weddings/${weddingId}/guests/${guestId}`);
+      if (res.warnings?.length) setWarning(res.warnings.join(" "));
     } catch {
       // TS-166: put back just this guest, not an older copy of the whole list.
       if (removed) setGuests((cur) => [...cur, removed].sort((a, b) => a.lastName.localeCompare(b.lastName)));

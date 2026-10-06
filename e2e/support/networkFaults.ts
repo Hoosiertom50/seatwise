@@ -104,3 +104,28 @@ export async function delayResponses(
     clear: () => page.unroute(urlPattern, handler),
   };
 }
+
+/** TS-197: sends every `method` request to a URL matching `urlPattern` on to the real server with
+ * its JSON body changed by `change` -- for a request the page can't be made to send as it stands
+ * (e.g. a Generate asking for a comparison draft before any plan exists). */
+export async function rewriteRequestJson(
+  page: Page,
+  urlPattern: string | RegExp,
+  method: string,
+  change: (body: Record<string, unknown>) => Record<string, unknown>,
+): Promise<FaultHandle> {
+  let hits = 0;
+  const handler = async (route: Route) => {
+    if (route.request().method() !== method) return route.fallback();
+    hits++;
+    const body = (route.request().postDataJSON() ?? {}) as Record<string, unknown>;
+    return route.fallback({ postData: JSON.stringify(change(body)) });
+  };
+  await page.route(urlPattern, handler);
+  return {
+    get hits() {
+      return hits;
+    },
+    clear: () => page.unroute(urlPattern, handler),
+  };
+}

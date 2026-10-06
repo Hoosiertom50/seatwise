@@ -429,6 +429,23 @@ export class PlanTabPage extends BasePage {
     return this.page.getByRole("status").filter({ hasText: "A newer plan was made — you're now looking at it." });
   }
 
+  /** TS-197: what the last Generate said about its plan -- headed "Couldn't seat everyone:" when
+   * someone was left unseated (with the reasons), otherwise "Notes on this plan:". */
+  generateWarnings() {
+    return this.page.getByTestId("plan-generate-warnings");
+  }
+
+  /** TS-197: shown when a comparison draft was asked for but there was no current plan, so the
+   * new version was made the current plan. */
+  madeCurrentNotice() {
+    return this.page.getByRole("status").filter({ hasText: "this version was made the current plan" });
+  }
+
+  /** TS-197: the open version's "N seated, M unassigned" line. */
+  seatedSummary() {
+    return this.page.getByText(/^\d+ seated, \d+ unassigned$/);
+  }
+
   /** TS-189: the open version's badge, "Version N — complete/incomplete". */
   openVersionBadge(versionNumber: number) {
     return this.page.getByText(new RegExp(`^Version ${versionNumber} — (complete|incomplete)$`));

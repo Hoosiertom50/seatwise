@@ -202,6 +202,9 @@ export interface PlanVersionDetail {
   revision: number;
   assignments: PlanVersionAssignment[];
   unassignedGuestIds: string[];
+  // TS-197: seats held by attending guests, and attending guests without one.
+  assignedGuestCount: number;
+  unassignedGuestCount: number;
   warnings: string[];
   modifiedSinceApproval: ModifiedSinceApproval;
   // TS-47 (FR-9.4): set only on a version created by restoring an earlier one.

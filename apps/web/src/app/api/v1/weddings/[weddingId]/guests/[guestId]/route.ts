@@ -201,7 +201,15 @@ export async function DELETE(req: NextRequest, { params }: Params) {
   // recompute so isComplete doesn't go stale.
   // TS-189: an attending guest leaving changes the plan's list of guests waiting for a seat, so
   // the plan's revision moves on too (anyone with the old copy refreshes before acting on it).
-  await recomputeCurrentPlanCompleteness(weddingId, { unassignedMayHaveChanged: guest.dayOfAttendance === "ATTENDING" });
+  // TS-197: that now happens once, inside the delete itself -- this recount only catches up on
+  // completeness. The guest is already gone, so a failure here is a warning, not an error.
+  const warnings: string[] = [];
+  try {
+    await recomputeCurrentPlanCompleteness(weddingId);
+  } catch (recountErr) {
+    console.error("Guest removed, but re-checking the plan failed", recountErr);
+    warnings.push(SAVED_BUT_NOT_RECHECKED);
+  }
 
   // FR-10.2: guest removal is only notification-worthy post-approval.
   const status = await getCurrentPlanVersionStatus(weddingId);
@@ -214,5 +222,5 @@ export async function DELETE(req: NextRequest, { params }: Params) {
     );
   }
 
-  return NextResponse.json({ ok: true });
+  return NextResponse.json({ ok: true, warnings });
 }

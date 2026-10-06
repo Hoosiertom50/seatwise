@@ -40,10 +40,16 @@ export async function beginTransaction(client: { query: (text: string) => Promis
   await client.query(applyTimeouts ? BEGIN_WITH_LIMITS : "BEGIN");
 }
 
+// TS-197: how many database connections one running copy of the app may hold at once -- set here
+// rather than left to the driver's default (also 10), so it's a known number. DATABASE_POOL_MAX
+// changes it (say, to match what the database's connection pooler allows).
+export const POOL_MAX_CONNECTIONS = Number(process.env.DATABASE_POOL_MAX) > 0 ? Number(process.env.DATABASE_POOL_MAX) : 10;
+
 function createPool(): Pool {
   return new Pool({
     connectionString: process.env.DATABASE_URL,
     connectionTimeoutMillis: CONNECTION_TIMEOUT_MS,
+    max: POOL_MAX_CONNECTIONS,
   });
 }
 
