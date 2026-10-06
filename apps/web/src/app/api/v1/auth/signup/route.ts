@@ -3,7 +3,15 @@ import { signupSchema } from "@seatwise/shared";
 import { createUser, emailDelivered, findUserByEmail, hitRateLimit, undoRateLimitHit } from "@seatwise/db";
 import { hashPassword, signToken, setAuthCookie, wantsBearerToken } from "@/lib/auth";
 import { errorResponse, readJson, zodErrorResponse } from "@/lib/api-response";
-import { accountEmailAddressKey, ACCOUNT_EMAIL_LIMITS, clientAddress, rateLimitOr429, SIGNUP_LIMITS } from "@/lib/rate-limit";
+import {
+  accountEmailAddressKey,
+  ACCOUNT_EMAIL_LIMITS,
+  clientAddress,
+  CONFIRMATION_EMAIL_LIMITS,
+  rateLimitOr429,
+  signupConfirmationAddressKey,
+  SIGNUP_LIMITS,
+} from "@/lib/rate-limit";
 import { sendVerificationEmail } from "@/lib/email-verification";
 
 export async function POST(req: NextRequest) {
@@ -44,18 +52,21 @@ export async function POST(req: NextRequest) {
   // TS-171: the confirmation email counts with resends and resets from this address. Past the
   // address's daily allowance the account is still made (a whole office may sign up from one
   // network) -- just without the email; the banner offers "Resend link" for later.
-  const { allowed: mayEmail } = await hitRateLimit(
-    accountEmailAddressKey(address),
-    ACCOUNT_EMAIL_LIMITS.perAddressDay.limit,
-    ACCOUNT_EMAIL_LIMITS.perAddressDay.windowSeconds
-  );
+  // TS-186: and with this address's sign-up confirmations for the day (20), so one source can't
+  // take the whole day's share for confirmations.
+  const emailCounters = [
+    { key: accountEmailAddressKey(address), ...ACCOUNT_EMAIL_LIMITS.perAddressDay },
+    { key: signupConfirmationAddressKey(address), ...CONFIRMATION_EMAIL_LIMITS.signupsPerAddressDay },
+  ];
+  const hits = await Promise.all(emailCounters.map(({ key, limit, windowSeconds }) => hitRateLimit(key, limit, windowSeconds)));
+  const giveBack = () =>
+    Promise.all(emailCounters.map(({ key, windowSeconds }, i) => undoRateLimitHit(key, windowSeconds, hits[i].windowStart)));
+  const mayEmail = hits.every((h) => h.allowed);
   // TS-178: the email also has to fit in the confirmations' own share of the day's email (see
   // sendEmail's `confirmation`); past it, the same happens -- account made, no email.
   const verificationEmailSent = mayEmail ? emailDelivered(await sendVerificationEmail(user)) : false;
-  // TS-178: nothing went out, so it doesn't use up this network address's allowance.
-  if (mayEmail && !verificationEmailSent) {
-    await undoRateLimitHit(accountEmailAddressKey(address), ACCOUNT_EMAIL_LIMITS.perAddressDay.windowSeconds);
-  }
+  // TS-178 / TS-186: nothing went out (refused, or not sent), so it doesn't use up either allowance.
+  if (!verificationEmailSent) await giveBack();
 
   const response = NextResponse.json(
     {

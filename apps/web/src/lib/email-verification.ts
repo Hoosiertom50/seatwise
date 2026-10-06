@@ -17,7 +17,15 @@ export async function sendVerificationEmail(user: { id: string; email: string })
     console.error(`[email] confirmation not sent: ${err instanceof Error ? err.message : String(err)}`);
     return "failed";
   }
-  const token = await createEmailVerificationToken(user.id);
+  // TS-186: "never throws" includes the database being unreachable while the link is made -- the
+  // account is still created, and the person can ask for another link from the banner.
+  let token: string;
+  try {
+    token = await createEmailVerificationToken(user.id);
+  } catch (err) {
+    console.error(`[email] confirmation not sent: the link couldn't be made: ${err instanceof Error ? err.message : String(err)}`);
+    return "failed";
+  }
   // TS-171: an everyday email, no longer sharing the headroom kept for password resets -- anyone
   // can sign up with someone else's address, so these could otherwise use that headroom up. On a
   // day the allowance runs out, "Resend link" works again tomorrow.

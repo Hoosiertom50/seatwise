@@ -66,6 +66,7 @@ export function requestTimeoutFor(method: string, path: string): number {
 
 // TS-175: responses that came from a retry (an earlier try got no answer, so it may have landed).
 const retriedResponses = new WeakSet<Response>();
+const ACCOUNT_PATH = "/api/v1/auth/me";
 
 export async function fetchWithRetry(path: string, init: RequestInit, timeoutMs = REQUEST_TIMEOUT_MS): Promise<Response> {
   const retryable = init.method !== "POST";
@@ -168,7 +169,10 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const data = await res.json().catch(() => ({}));
   // TS-175: a retried delete that finds nothing means the first try did delete it (only its answer
   // was lost) -- that's success. It used to count as a failure, and the item came back on screen.
-  const alreadyGone = options.method === "DELETE" && res.status === 404 && retriedResponses.has(res);
+  // TS-186: the same for deleting one's own account -- a retry after the first try deleted it finds
+  // no signed-in account (401), which means it worked.
+  const alreadyGone =
+    options.method === "DELETE" && retriedResponses.has(res) && (res.status === 404 || (res.status === 401 && path === ACCOUNT_PATH));
   // TS-177: likewise a retried edit "refused" only because the first try already saved it.
   const alreadySaved =
     options.method === "PATCH" && res.status === 409 && retriedResponses.has(res)

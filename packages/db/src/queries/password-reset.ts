@@ -109,11 +109,17 @@ export async function resetPasswordWithToken(
   }
 }
 
-/** TS-153: once a new link has been emailed, every older unused link for that person stops working. */
+/**
+ * TS-153: once a new link has been emailed, every older unused link for that person stops working.
+ * TS-186: only links made *before* this one -- two requests at the same moment used to retire each
+ * other's link, leaving the person with two emails and no link that worked. Now the newer one
+ * always survives.
+ */
 export async function retireOlderResetTokens(userId: string, keepToken: string): Promise<void> {
   await pool.query(
     `UPDATE "password_reset_tokens" SET "usedAt" = now()
-     WHERE "userId" = $1 AND "usedAt" IS NULL AND "tokenHash" <> $2`,
+     WHERE "userId" = $1 AND "usedAt" IS NULL AND "tokenHash" <> $2
+       AND "createdAt" < (SELECT "createdAt" FROM "password_reset_tokens" WHERE "tokenHash" = $2)`,
     [userId, hashResetToken(keepToken)]
   );
 }

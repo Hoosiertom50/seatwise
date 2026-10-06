@@ -96,43 +96,70 @@ let sender: Sender = realSender;
 // TS-171: the headroom is for password resets only. Email-confirmation links used to share it,
 // and anyone can sign up with someone else's address -- so a few sources could use it all up and
 // stop everyone's password resets. Confirmations now come out of the everyday allowance.
+//
+// TS-186: password resets now have a budget of their own instead of headroom on top of the
+// everyday count. A confirmed account's reset counts only against RESET_EMAILS_PER_DAY, so
+// everyday emails can never use it up -- and resets can never use up the everyday allowance that
+// invites and RSVP emails need. Total real sends stay under Gmail's limit: everyday + resets.
 const DAILY_WINDOW_SECONDS = 86_400;
 const DAILY_KEY = "email:global:day";
-const ESSENTIAL_HEADROOM = 80;
+export const RESET_EMAILS_PER_DAY = 80;
 
 // TS-178: an email-address confirmation (anyone can sign up with any address) may only use this
 // share of the everyday allowance, so a burst of sign-ups can't leave nothing for invites and RSVP
 // emails. Past it the account is still made; "Resend link" works again tomorrow.
 export const CONFIRMATION_SHARE_OF_EVERYDAY = 0.25;
+// TS-186: a reset for an account that hasn't confirmed its address is an everyday email (anyone
+// can sign up with any address), held to this smaller share of the everyday allowance -- so resets
+// asked for on such accounts can't crowd out invites and RSVP emails either.
+export const UNCONFIRMED_RESET_SHARE_OF_EVERYDAY = 0.1;
 
-export function dailyEmailLimits(env: EmailEnv = process.env): { everyday: number; essential: number; confirmations: number } {
+export function dailyEmailLimits(env: EmailEnv = process.env): {
+  everyday: number;
+  resets: number;
+  confirmations: number;
+  unconfirmedResets: number;
+} {
   const configured = Number(env.EMAIL_DAILY_LIMIT);
   const everyday = Number.isInteger(configured) && configured > 0 ? configured : 400;
   return {
     everyday,
-    essential: everyday + ESSENTIAL_HEADROOM,
+    resets: RESET_EMAILS_PER_DAY,
     confirmations: Math.max(1, Math.floor(everyday * CONFIRMATION_SHARE_OF_EVERYDAY)),
+    unconfirmedResets: Math.max(1, Math.floor(everyday * UNCONFIRMED_RESET_SHARE_OF_EVERYDAY)),
   };
 }
 
-type DailyCounter = { hit: () => Promise<number>; undo: () => Promise<void> };
-const realDailyCounter: DailyCounter = {
-  hit: () => hitRateLimitCount(DAILY_KEY, DAILY_WINDOW_SECONDS),
-  undo: () => undoRateLimitHit(DAILY_KEY, DAILY_WINDOW_SECONDS),
-};
+// TS-186: a hit returns the window it was counted in, and undo takes exactly that one back.
+type Counted = { count: number; windowStart: Date };
+type DailyCounter = { hit: () => Promise<Counted>; undo: (windowStart: Date) => Promise<void> };
+const dailyCounterFor = (key: string): DailyCounter => ({
+  hit: () => hitRateLimitCount(key, DAILY_WINDOW_SECONDS),
+  undo: (windowStart) => undoRateLimitHit(key, DAILY_WINDOW_SECONDS, windowStart),
+});
+const realDailyCounter = dailyCounterFor(DAILY_KEY);
 let dailyCounter: DailyCounter = realDailyCounter;
 
 // TS-178: the confirmations' own share, counted the same way (real sends only).
-const CONFIRMATIONS_KEY = "email:global:confirmations:day";
-const realConfirmationCounter: DailyCounter = {
-  hit: () => hitRateLimitCount(CONFIRMATIONS_KEY, DAILY_WINDOW_SECONDS),
-  undo: () => undoRateLimitHit(CONFIRMATIONS_KEY, DAILY_WINDOW_SECONDS),
-};
+const realConfirmationCounter = dailyCounterFor("email:global:confirmations:day");
 let confirmationCounter: DailyCounter = realConfirmationCounter;
 
 /** Tests only: replace the counter for the confirmations' share (pass nothing to restore it). */
 export function setConfirmationEmailCounterForTests(fake?: DailyCounter): void {
   confirmationCounter = fake ?? realConfirmationCounter;
+}
+
+// TS-186: confirmed accounts' resets (their own budget), and unconfirmed accounts' resets (their
+// share of the everyday allowance) -- real sends only, like the rest.
+const realResetCounter = dailyCounterFor("email:global:resets:day");
+let resetCounter: DailyCounter = realResetCounter;
+const realUnconfirmedResetCounter = dailyCounterFor("email:global:unconfirmed-resets:day");
+let unconfirmedResetCounter: DailyCounter = realUnconfirmedResetCounter;
+
+/** Tests only: replace the counters for password resets (pass nothing to restore them). */
+export function setResetEmailCountersForTests(fakes?: { confirmed: DailyCounter; unconfirmed: DailyCounter }): void {
+  resetCounter = fakes?.confirmed ?? realResetCounter;
+  unconfirmedResetCounter = fakes?.unconfirmed ?? realUnconfirmedResetCounter;
 }
 
 // TS-171: at most a few emails a day to any one address, however they're asked for and by however
@@ -169,10 +196,10 @@ export function maskEmailAddress(address: string): string {
   return `${trimmed[0]}***${trimmed.slice(at)}`;
 }
 
-type RecipientCounter = { hit: (to: string) => Promise<number>; undo: (to: string) => Promise<void> };
+type RecipientCounter = { hit: (to: string) => Promise<Counted>; undo: (to: string, windowStart: Date) => Promise<void> };
 const realRecipientCounter: RecipientCounter = {
   hit: (to) => hitRateLimitCount(recipientKey(to), DAILY_WINDOW_SECONDS),
-  undo: (to) => undoRateLimitHit(recipientKey(to), DAILY_WINDOW_SECONDS),
+  undo: (to, windowStart) => undoRateLimitHit(recipientKey(to), DAILY_WINDOW_SECONDS, windowStart),
 };
 let recipientCounter: RecipientCounter = realRecipientCounter;
 
@@ -207,13 +234,19 @@ export async function sendEmail(
     essential = false,
     toWeddingMember = false,
     confirmation = false,
+    unconfirmedReset = false,
   }: {
-    /** A password reset: may use the reserved headroom, and has its own per-address limits. */
+    /**
+     * A password reset for an account that has confirmed its address: counted only against the
+     * resets' own daily budget (TS-186), and held to its own per-address limits.
+     */
     essential?: boolean;
     /** TS-171: a notification to a confirmed member of the wedding -- not a stranger. */
     toWeddingMember?: boolean;
     /** TS-178: an email-address confirmation -- limited to its own share of the everyday allowance. */
     confirmation?: boolean;
+    /** TS-186: a password reset for an unconfirmed account -- its own, smaller share of the everyday allowance. */
+    unconfirmedReset?: boolean;
   } = {}
 ): Promise<EmailResult> {
   // TS-178: addresses are masked in every log line here.
@@ -239,8 +272,8 @@ export async function sendEmail(
   try {
     if (recipientCapped) {
       const toThisAddress = await recipientCounter.hit(recipient);
-      counted.push(() => recipientCounter.undo(recipient));
-      if (toThisAddress > EMAILS_PER_RECIPIENT_PER_DAY) {
+      counted.push(() => recipientCounter.undo(recipient, toThisAddress.windowStart));
+      if (toThisAddress.count > EMAILS_PER_RECIPIENT_PER_DAY) {
         // Taken back, so refused attempts don't pile up on the count.
         await giveBack();
         console.warn(`[email] not sent to ${shown}: this address has had ${EMAILS_PER_RECIPIENT_PER_DAY} emails from Seatwise today.`);
@@ -258,22 +291,25 @@ export async function sendEmail(
       return "logged";
     }
     const limits = dailyEmailLimits(env);
-    if (confirmation) {
-      const confirmationsToday = await confirmationCounter.hit();
-      counted.push(() => confirmationCounter.undo());
-      if (confirmationsToday > limits.confirmations) {
-        await giveBack();
-        console.warn(`[email] not sent to ${shown}: today's share of ${limits.confirmations} email confirmations has been used.`);
+    // Counts one send against `counter`; false (with everything counted so far given back) when
+    // that takes it over `limit`.
+    const fits = async (counter: DailyCounter, limit: number, what: string) => {
+      const today = await counter.hit();
+      counted.push(() => counter.undo(today.windowStart));
+      if (today.count <= limit) return true;
+      await giveBack();
+      console.warn(`[email] not sent to ${shown}: today's ${what} of ${limit} has been used.`);
+      return false;
+    };
+    // TS-186: a confirmed account's reset counts only against the resets' own budget.
+    if (essential) {
+      if (!(await fits(resetCounter, limits.resets, "allowance for password-reset emails"))) return "limited";
+    } else {
+      if (confirmation && !(await fits(confirmationCounter, limits.confirmations, "share for email confirmations"))) return "limited";
+      if (unconfirmedReset && !(await fits(unconfirmedResetCounter, limits.unconfirmedResets, "share for unconfirmed accounts' resets"))) {
         return "limited";
       }
-    }
-    const sentToday = await dailyCounter.hit();
-    counted.push(() => dailyCounter.undo());
-    if (sentToday > (essential ? limits.essential : limits.everyday)) {
-      // Taken back, so refused everyday emails don't eat into the password-reset headroom.
-      await giveBack();
-      console.warn(`[email] not sent to ${shown}: today's limit of ${limits.everyday} emails has been reached.`);
-      return "limited";
+      if (!(await fits(dailyCounter, limits.everyday, "limit for emails"))) return "limited";
     }
   } catch (err) {
     await giveBack();

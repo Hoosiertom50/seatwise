@@ -22,9 +22,9 @@ defineQualityTest(
     id: "cross-cutting.email-cannot-be-flooded-through-seatwise.signups-rsvp-emails-invite-lookups-guest-names",
     title: "sign-ups and invite-link lookups are limited per address, repeated RSVPs email planners once an hour, and guest names can't be web addresses",
     objective:
-      "Confirms that 30 sign-ups from one address succeed and the 31st is refused with 429 while another address can still sign up; that four identical RSVP submits on one link create four in-app notifications while the three repeats count against the once-an-hour email rule (TS-169: a changed answer is always emailed); that the 101st invite-link lookup from one address is refused while another address is unaffected; and that a guest whose first name reads as a web address is refused.",
+      "Confirms that 30 sign-ups from one address succeed and the 31st is refused with 429 while another address can still sign up; that four identical RSVP submits on one link create four in-app notifications while only one of the three repeats is emailed under the once-an-hour rule and the two held back record nothing (TS-169: a changed answer is emailed separately); that the 101st invite-link lookup from one address is refused while another address is unaffected; and that a guest whose first name reads as a web address is refused.",
     expectedOutcome:
-      "Sign-ups 1–30 return 201, the 31st 429; a fresh address gets 201. Four RSVP_RECEIVED notifications for the guest and three repeats counted against the once-an-hour key (one of them emailed). Lookups 1–100 return 200, the 101st 429, another address 200. Creating guest 'Claim at evilsite.com' returns 422 (refused as invalid).",
+      "Sign-ups 1–30 return 201, the 31st 429; a fresh address gets 201. Four RSVP_RECEIVED notifications for the guest and one repeat emailed in the last hour by the once-an-hour rule. Lookups 1–100 return 200, the 101st 429, another address 200. Creating guest 'Claim at evilsite.com' returns 422 (refused as invalid).",
     requirementIds: ["REQ-NON-FUNCTIONAL"],
     tags: ["@mutating", "@feature:authentication", "@feature:rsvp", "@risk:high", "@suite:regression"],
   },
@@ -57,9 +57,10 @@ defineQualityTest(
         notifications: { type: string; message: string }[];
       };
       expect(notifications.filter((n) => n.type === "RSVP_RECEIVED" && n.message.includes(guest.lastName))).toHaveLength(4);
-      // The first answer is a change (from Pending) and always emailed; the three repeats count against
-      // the once-an-hour key, which allows one -- so two were held back.
-      expect(await rsvpNotificationEmailRequests(guest.id)).toBe(3);
+      // The first answer is a change (from Pending) and emailed; of the three repeats, the
+      // once-an-hour rule emails one and holds back two. TS-186: held-back ones add nothing, so the
+      // hour runs from the one email.
+      expect(await rsvpNotificationEmailRequests(guest.id)).toBe(1);
     });
 
     await test.step("Invite-link lookups: 100 per address, then 429; another address is unaffected", async () => {

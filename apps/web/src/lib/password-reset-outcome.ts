@@ -13,6 +13,9 @@ export const RESET_ALREADY_SENT_MESSAGE =
   "We've already sent you a link to reset your password, and it still works. Check your email, including the spam or junk folder. Links last 1 hour; you can ask for a new one after that.";
 // TS-177: the day's email allowance is used up -- trying again in a few minutes won't help.
 export const RESET_EMAIL_LIMITED_MESSAGE = "Seatwise can't send any more emails today — please try again tomorrow.";
+// TS-186: it's this address's share for the day that's used up, not Seatwise's -- say that.
+export const RESET_RECIPIENT_LIMITED_MESSAGE =
+  "This email address has had as many emails from Seatwise as it can today — please try again tomorrow.";
 
 export type ResetOutcome =
   | { sent: true; message: string; alreadySent?: true }
@@ -23,6 +26,7 @@ export function resetOutcome(hasAccount: boolean, email: EmailResult | "already-
   if (!hasAccount) return { sent: false, noAccount: true, message: RESET_NO_ACCOUNT_MESSAGE };
   if (email === "already-sent") return { sent: true, alreadySent: true, message: RESET_ALREADY_SENT_MESSAGE };
   if (email === "sent" || email === "logged") return { sent: true, message: RESET_SENT_MESSAGE };
-  if (email === "limited" || email === "recipient-limited") return { sent: false, emailFailed: true, message: RESET_EMAIL_LIMITED_MESSAGE };
+  if (email === "recipient-limited") return { sent: false, emailFailed: true, message: RESET_RECIPIENT_LIMITED_MESSAGE };
+  if (email === "limited") return { sent: false, emailFailed: true, message: RESET_EMAIL_LIMITED_MESSAGE };
   return { sent: false, emailFailed: true, message: RESET_EMAIL_FAILED_MESSAGE };
 }

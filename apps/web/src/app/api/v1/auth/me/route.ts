@@ -4,7 +4,7 @@ import { deleteUserAccount, findUserById } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
 import { errorResponse, readJson, zodErrorResponse } from "@/lib/api-response";
 import { AUTH_COOKIE_NAME, isSecureCookieContext, verifyPassword } from "@/lib/auth";
-import { clientAddress, countSignInAttempt, signInFailureLimits } from "@/lib/rate-limit";
+import { accountDeleteFailureLimits, clientAddress, countSignInAttempt } from "@/lib/rate-limit";
 
 export async function GET(req: NextRequest) {
   const user = await getAuthUser(req);
@@ -30,18 +30,21 @@ export async function DELETE(req: NextRequest) {
   const parsed = deleteSchema.safeParse(json.body);
   if (!parsed.success) return zodErrorResponse(parsed.error);
 
-  // TS-155: wrong passwords here count against the same per-account limit as signing in, so this
-  // can't be used to keep guessing the password. (TS-171: the same per-account-and-address and
-  // per-account counters as signing in.)
-  const attempt = await countSignInAttempt(signInFailureLimits(user.email, clientAddress(req), { perAddress: false }));
+  // TS-155: wrong passwords here are limited, so this can't be used to keep guessing the password.
+  // TS-186: counted against the sign-in counter for this account from this network address, and
+  // this account's own count of wrong passwords when deleting -- no longer the account-wide
+  // sign-in counter, which anyone can fill from elsewhere and so stop someone deleting their own
+  // account.
+  const attempt = await countSignInAttempt(accountDeleteFailureLimits(user.id, user.email, clientAddress(req)));
   if (!attempt.allowed) {
     // TS-157: a refused attempt doesn't count.
     await attempt.giveBack();
     // TS-177: the person is already signed in, so the sign-in wording ("reset your password and
     // sign in") didn't fit -- and a reset doesn't clear these counters anyway.
+    // TS-186: worded without saying whose tries they were.
     const minutes = Math.max(1, Math.ceil(attempt.retryAfterSeconds / 60));
     return NextResponse.json(
-      { error: `Too many wrong passwords. Please wait ${minutes} minute${minutes === 1 ? "" : "s"} and try again.` },
+      { error: `There have been too many tries with a wrong password. Please wait ${minutes} minute${minutes === 1 ? "" : "s"} and try again.` },
       { status: 429, headers: { "Retry-After": String(attempt.retryAfterSeconds) } }
     );
   }
