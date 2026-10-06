@@ -57,7 +57,15 @@ export interface ModifiedSinceApproval {
   latestModifiedAt: Date | null;
 }
 
-export class PlanVersionStatusError extends Error {}
+// TS-197: a refusal can carry the plan as it is now (the "can't be approved yet" refusal, and a
+// change refused because a newer plan replaced this one), so the screen can show it straight away.
+export class PlanVersionStatusError extends Error {
+  planVersion?: PlanVersionDetail;
+  constructor(message: string, planVersion?: PlanVersionDetail | null) {
+    super(message);
+    if (planVersion) this.planVersion = planVersion;
+  }
+}
 // TS-179: the person changing the status isn't allowed to make this particular change, judged
 // against the status the plan really has under the lock (not the one read before it).
 export class PlanApprovalPermissionError extends Error {}
@@ -67,9 +75,39 @@ export class PlanVersionNotFoundError extends Error {
     super("Plan version not found");
   }
 }
-export class ManualMoveError extends Error {}
+// TS-197: when the move or swap was refused because a newer plan replaced this one, planVersion is
+// the plan that's current now -- Day-of and the Seating plan tab switch to it.
+export class ManualMoveError extends Error {
+  planVersion?: PlanVersionDetail;
+  constructor(message: string, planVersion?: PlanVersionDetail | null) {
+    super(message);
+    if (planVersion) this.planVersion = planVersion;
+  }
+}
 export class AttendanceError extends Error {}
-export class SwapError extends Error {}
+export class SwapError extends Error {
+  planVersion?: PlanVersionDetail;
+  constructor(message: string, planVersion?: PlanVersionDetail | null) {
+    super(message);
+    if (planVersion) this.planVersion = planVersion;
+  }
+}
+
+// TS-197: the words for a seat change sent to a plan that a newer one has replaced.
+const SUPERSEDED_EDIT_MESSAGE = "Only the current plan version can be manually edited — this one has been superseded.";
+
+// TS-197: anything reads can go through -- the pool, or a transaction's own connection (so a fresh
+// copy can be read on the connection already held, instead of waiting for a second one).
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- rows are read field by field, as with pool.query.
+type PlanReader = { query: (text: string, params?: unknown[]) => Promise<{ rows: any[] }> };
+
+// TS-197: the wedding's current plan in full, or null when it has none.
+async function getCurrentPlanDetail(weddingId: string, q: PlanReader = pool): Promise<PlanVersionDetail | null> {
+  const { rows } = await q.query(`SELECT id FROM "plan_versions" WHERE "weddingId" = $1 AND "isCurrent" LIMIT 1`, [
+    weddingId,
+  ]);
+  return rows[0] ? getPlanVersionDetail(rows[0].id as string, weddingId, q) : null;
+}
 export class RestoreError extends Error {}
 // TS-173: a guest or table this new version seats was deleted while it was being worked out (the
 // database refused the seat, 23503). Nothing was saved; trying again works from the new data.
@@ -137,8 +175,9 @@ async function checkPlanVersionRevision(
   planVersionId: string,
   weddingId: string,
   expectedRevision: number | undefined,
-  /** TS-165: for seat edits -- the error to throw if this version is no longer the current one. */
-  superseded?: () => Error
+  /** TS-165: for seat edits -- the error to throw if this version is no longer the current one.
+   * TS-197: given the plan that's current now, so the error can carry it. */
+  superseded?: (currentPlan: PlanVersionDetail | null) => Error
 ): Promise<void> {
   const { rows } = await client.query(
     // TS-148: scoped to the wedding, so another wedding's version is never locked or compared.
@@ -149,14 +188,19 @@ async function checkPlanVersionRevision(
   if (!rows[0]) throw new PlanVersionNotFoundError();
   // TS-165: checked again under the lock -- a Generate committing between the caller's own check
   // and here would otherwise let an edit land on a version that was just replaced.
-  if (superseded && !rows[0].isCurrent) throw superseded();
+  if (superseded && !rows[0].isCurrent) {
+    // TS-197: the transaction ends first, then the plan that's current now is read on this same
+    // connection and sent back with the refusal.
+    await client.query("ROLLBACK").catch(() => {});
+    throw superseded(await getCurrentPlanDetail(weddingId, client));
+  }
   const currentRevision = rows[0].revision as number;
   if (expectedRevision !== undefined && currentRevision !== expectedRevision) {
-    // TS-187: the transaction is ended (and its locks let go) before the fresh copy is read on
-    // another connection -- holding them while waiting for a second connection could leave every
-    // connection waiting on another.
+    // TS-187: the transaction is ended (and its locks let go) before the fresh copy is read.
+    // TS-197: read on this same connection -- waiting for a second one while holding this could
+    // leave every connection waiting on another when they're all busy.
     await client.query("ROLLBACK").catch(() => {});
-    const fresh = await getPlanVersionDetail(planVersionId, weddingId);
+    const fresh = await getPlanVersionDetail(planVersionId, weddingId, client);
     throw new PlanVersionConflictError(
       "This plan changed since you loaded it (maybe in another tab, or by someone else). It's been refreshed with the latest — check it and make your change again if it's still needed.",
       fresh!
@@ -544,7 +588,15 @@ export async function setPlanVersionStatus(
   // TS-179: worked out by the route from who is asking. Checked here, under the plan row lock,
   // against the status the plan has right now -- the route's own earlier read could be stale if
   // someone approved (or un-approved) the plan in between. Omitted means "allowed" (internal use).
-  permissions: { mayApprove?: boolean; mayLeaveApproved?: boolean; mayMoveDraftAndReview?: boolean } = {}
+  permissions: {
+    mayApprove?: boolean;
+    mayLeaveApproved?: boolean;
+    mayMoveDraftAndReview?: boolean;
+    // TS-197: the person asking saw this plan approved (worked out by the route). Only then is a
+    // Draft/In review request from someone who may only undo approvals answered "it isn't approved
+    // any more" -- otherwise it's simply something they don't have permission to do.
+    sawApproved?: boolean;
+  } = {}
 ): Promise<PlanVersionDetail | null> {
   if (!(await isCurrentVersion(id, weddingId))) {
     throw new PlanVersionStatusError(
@@ -572,7 +624,8 @@ export async function setPlanVersionStatus(
     // else had just made, instead of being shown the plan as it now is.
     if (expectedRevision !== undefined && current.revision !== expectedRevision) {
       await client.query("ROLLBACK").catch(() => {});
-      const fresh = await getPlanVersionDetail(id, weddingId);
+      // TS-197: read on this same connection (see checkPlanVersionRevision).
+      const fresh = await getPlanVersionDetail(id, weddingId, client);
       throw new PlanVersionConflictError(
         "This plan changed since you loaded it (maybe in another tab, or by someone else). It's been refreshed with the latest — check it and make your change again if it's still needed.",
         fresh!
@@ -600,9 +653,11 @@ export async function setPlanVersionStatus(
       // review (a Couple member with Comment access) only ever asks for this to undo an approval --
       // so the plan was approved when they looked, and someone has undone it since. Say so, and show
       // them the plan as it is now, rather than "you don't have permission".
-      if (permissions.mayLeaveApproved !== false) {
+      // TS-197: only when they really saw it approved -- a Couple member with Comment access asking
+      // to move a plan they saw as a Draft (or In review) just isn't allowed to.
+      if (permissions.mayLeaveApproved !== false && permissions.sawApproved === true) {
         await client.query("ROLLBACK").catch(() => {});
-        const fresh = await getPlanVersionDetail(id, weddingId);
+        const fresh = await getPlanVersionDetail(id, weddingId, client);
         throw new PlanVersionConflictError("This plan isn't approved any more — it's been refreshed.", fresh!);
       }
       throw new PlanApprovalPermissionError("You don't have permission to do that");
@@ -612,7 +667,8 @@ export async function setPlanVersionStatus(
     // refuse with "can't be approved yet".
     if (current.status === newStatus) {
       await client.query("ROLLBACK").catch(() => {});
-      return getPlanVersionDetail(id, weddingId);
+      // TS-197: read on this same connection (see checkPlanVersionRevision).
+      return getPlanVersionDetail(id, weddingId, client);
     }
 
     // TS-165: approval counts unseated and flagged guests now, under the lock, rather than trusting
@@ -632,6 +688,11 @@ export async function setPlanVersionStatus(
         await recordRecheckIfApproved(client, id, "Seating re-checked before approval — some guests' Needs Reassignment flags changed", actorUserId);
       }
       const { rows: recount } = await client.query(`SELECT "isComplete" FROM "plan_versions" WHERE id = $1`, [id]);
+      // TS-197: the recount changed whether the plan is complete -- that's a change to the plan too,
+      // so its revision moves on (unless the re-check above already moved it).
+      if (!recheckChanged && recount[0].isComplete !== current.isComplete) {
+        await client.query(`UPDATE "plan_versions" SET revision = revision + 1 WHERE id = $1`, [id]);
+      }
       current.isComplete = recount[0].isComplete;
     }
     if (newStatus === "APPROVED" && !current.isComplete) {
@@ -639,9 +700,13 @@ export async function setPlanVersionStatus(
       // TS-189: committed in every case here (with nothing to keep it's an empty commit), so this
       // refusal always leaves the plan the same way.
       await client.query("COMMIT");
+      // TS-197: the plan as it is now goes back with the refusal, so the screen shows who to fix
+      // (and holds the new revision) without a second request.
+      const fresh = await getPlanVersionDetail(id, weddingId, client);
       throw new PlanVersionStatusError(
         // TS-177: a plan is held back by flagged guests too, not just unseated ones.
-        "This plan can't be approved yet — some guests aren't seated, or are flagged Needs Reassignment. Sort those out first."
+        "This plan can't be approved yet — some guests aren't seated, or are flagged Needs Reassignment. Sort those out first.",
+        fresh
       );
     }
 
@@ -701,9 +766,11 @@ export async function setPlanVersionStatus(
 
 export async function getPlanVersionDetail(
   id: string,
-  weddingId: string
+  weddingId: string,
+  // TS-197: a transaction's own connection may be passed, so a fresh copy is read on it.
+  q: PlanReader = pool
 ): Promise<PlanVersionDetail | null> {
-  const { rows: versionRows } = await pool.query(
+  const { rows: versionRows } = await q.query(
     `SELECT pv.id, pv."weddingId", pv."versionNumber", pv.label, pv.status, pv."isComplete",
             pv."approvedAt", pv."createdAt", pv."sideMixingSetting", pv."ruleConfigVersion", pv.revision,
             pv."isCurrent",
@@ -730,7 +797,7 @@ export async function getPlanVersionDetail(
     // edits made afterward. TS-181: those are dated when they're written (clock_timestamp(), and
     // never at or before approvedAt -- see HISTORY_CREATED_AT), so a change that waited for the
     // approval to finish is never dated before it.
-    const { rows: modRows } = await pool.query(
+    const { rows: modRows } = await q.query(
       `SELECT MIN("createdAt") AS "first", MAX("createdAt") AS "latest"
        FROM "change_history_entries"
        WHERE "planVersionId" = $1 AND "createdAt" > $2`,
@@ -750,7 +817,7 @@ export async function getPlanVersionDetail(
   // below with the same numeric-aware comparator used everywhere else tables are listed, so a
   // plan's list view (which groups these assignments table by table) reads in the order a person
   // actually expects.
-  const { rows: assignments } = await pool.query(
+  const { rows: assignments } = await q.query(
     `SELECT sa.id, sa."guestId", (g."firstName" || ' ' || g."lastName") AS "guestName",
             sa."seatingTableId" AS "tableId", t.label AS "tableLabel", sa."needsReassignment"
      FROM "seat_assignments" sa
@@ -764,7 +831,7 @@ export async function getPlanVersionDetail(
 
   // FR-8.1: a guest marked Not Attending doesn't occupy a seat and isn't counted as
   // "unassigned" — they've been excluded from the plan entirely, not left pending.
-  const { rows: allGuests } = await pool.query(
+  const { rows: allGuests } = await q.query(
     `SELECT id FROM "guests" WHERE "weddingId" = $1 AND "dayOfAttendance" = 'ATTENDING'`,
     [weddingId]
   );
@@ -780,7 +847,9 @@ export async function getPlanVersionDetail(
   return {
     ...version,
     isComplete,
-    assignedGuestCount: assignments.length,
+    // TS-197: only attending guests' seats -- an older version still holds seats of guests who have
+    // since declined (the same count the version list gives).
+    assignedGuestCount: assignments.filter((a) => attendingIds.has(a.guestId)).length,
     unassignedGuestCount: unassignedGuestIds.length,
     assignments,
     unassignedGuestIds,
@@ -807,9 +876,8 @@ export async function moveGuestAssignment(
   expectedRevision?: number
 ): Promise<ManualMoveResult> {
   if (!(await isCurrentVersion(planVersionId, weddingId))) {
-    throw new ManualMoveError(
-      "Only the current plan version can be manually edited — this one has been superseded."
-    );
+    // TS-197: with the plan that is current now, so the screen can switch to it.
+    throw new ManualMoveError(SUPERSEDED_EDIT_MESSAGE, await getCurrentPlanDetail(weddingId));
   }
 
   const { rows: guestRows } = await pool.query(
@@ -885,6 +953,9 @@ export async function moveGuestAssignment(
   }
   const root = find(guestId);
   const unit = allGuests.filter((g) => find(g.id) === root);
+  // TS-197: they declined between the first check and this read -- say so, rather than "moving"
+  // nobody and calling it done.
+  if (unit.length === 0) throw new ManualMoveError(`${guest.name} is marked Not Attending, so they can't be seated.`);
   const unitIds = new Set(unit.map((g) => g.id));
   const unitHeadcount = unit.reduce((sum, g) => sum + g.headcount, 0);
   const unitNeedsAccessible = unit.some((g) => g.requiresAccessibleTable);
@@ -1004,7 +1075,7 @@ export async function moveGuestAssignment(
   const client = await pool.connect();
   try {
     await beginTransaction(client);
-    await checkPlanVersionRevision(client, planVersionId, weddingId, expectedRevision, () => new ManualMoveError("Only the current plan version can be manually edited — this one has been superseded."));
+    await checkPlanVersionRevision(client, planVersionId, weddingId, expectedRevision, (currentPlan) => new ManualMoveError(SUPERSEDED_EDIT_MESSAGE, currentPlan));
     // TS-165: the tables this move can affect, as things stand before it.
     const unitIds = unit.map((member) => member.id);
     // TS-169: attendance checked again inside the transaction -- a guest who declined by link a
@@ -1023,7 +1094,8 @@ export async function moveGuestAssignment(
     );
     if (alreadyThere[0].n === unitIds.length) {
       await client.query("ROLLBACK").catch(() => {});
-      const unchanged = await getPlanVersionDetail(planVersionId, weddingId);
+      // TS-197: read on this same connection (see checkPlanVersionRevision).
+      const unchanged = await getPlanVersionDetail(planVersionId, weddingId, client);
       if (!unchanged) throw new ManualMoveError("Plan version not found.");
       return { planVersion: { ...unchanged, warnings: [] }, warnings: [] };
     }
@@ -1086,7 +1158,8 @@ export async function moveGuestAssignment(
 
   const planVersion = await getPlanVersionDetail(planVersionId, weddingId);
   if (!planVersion) throw new ManualMoveError("Plan version not found after move.");
-  planVersion.warnings = warnings;
+  // TS-197: the move's warnings come back once, as `warnings` -- they're no longer copied into the
+  // plan's own list too (the Seating plan tab showed them twice).
 
   // FR-10.2: table changes are only notification-worthy once the plan has been approved (a Draft
   // is expected to be edited constantly and would otherwise spam everyone).
@@ -1153,9 +1226,8 @@ export async function unassignGuestFromPlan(
   expectedRevision?: number
 ): Promise<ManualMoveResult> {
   if (!(await isCurrentVersion(planVersionId, weddingId))) {
-    throw new ManualMoveError(
-      "Only the current plan version can be manually edited — this one has been superseded."
-    );
+    // TS-197: with the plan that is current now, so the screen can switch to it.
+    throw new ManualMoveError(SUPERSEDED_EDIT_MESSAGE, await getCurrentPlanDetail(weddingId));
   }
   const { rows: guestRows } = await pool.query(
     `SELECT id FROM "guests" WHERE id = $1 AND "weddingId" = $2`,
@@ -1164,11 +1236,16 @@ export async function unassignGuestFromPlan(
   if (!guestRows[0]) throw new ManualMoveError("Guest not found.");
 
   const unit = await findMustSitTogetherUnit(weddingId, guestId);
+  // TS-197: they're marked Not Attending (their seat was freed then) -- say so instead of an
+  // "unassign" that did nothing and reported success.
+  if (unit.length === 0) {
+    throw new ManualMoveError("That guest is marked Not Attending, so they don't have a seat to take away.");
+  }
 
   const client = await pool.connect();
   try {
     await beginTransaction(client);
-    await checkPlanVersionRevision(client, planVersionId, weddingId, expectedRevision, () => new ManualMoveError("Only the current plan version can be manually edited — this one has been superseded."));
+    await checkPlanVersionRevision(client, planVersionId, weddingId, expectedRevision, (currentPlan) => new ManualMoveError(SUPERSEDED_EDIT_MESSAGE, currentPlan));
     // TS-165: re-check the table(s) they leave, and their rule partners' tables.
     const affected = await tablesAffectedBy(client, weddingId, planVersionId, unit.map((member) => member.id));
     let seatsFreed = 0;
@@ -1183,7 +1260,8 @@ export async function unassignGuestFromPlan(
     // bump, history line or notification).
     if (seatsFreed === 0) {
       await client.query("ROLLBACK").catch(() => {});
-      const unchanged = await getPlanVersionDetail(planVersionId, weddingId);
+      // TS-197: read on this same connection (see checkPlanVersionRevision).
+      const unchanged = await getPlanVersionDetail(planVersionId, weddingId, client);
       if (!unchanged) throw new ManualMoveError("Plan version not found.");
       return { planVersion: { ...unchanged, warnings: [] }, warnings: [] };
     }
@@ -1354,9 +1432,8 @@ export async function swapGuestAssignments(
   expectedRevision?: number
 ): Promise<ManualMoveResult> {
   if (!(await isCurrentVersion(planVersionId, weddingId))) {
-    throw new SwapError(
-      "Only the current plan version can be manually edited — this one has been superseded."
-    );
+    // TS-197: with the plan that is current now, so the screen can switch to it.
+    throw new SwapError(SUPERSEDED_EDIT_MESSAGE, await getCurrentPlanDetail(weddingId));
   }
   if (guestAId === guestBId) {
     throw new SwapError("Can't swap a guest with themselves.");
@@ -1585,7 +1662,7 @@ export async function swapGuestAssignments(
   const client = await pool.connect();
   try {
     await beginTransaction(client);
-    await checkPlanVersionRevision(client, planVersionId, weddingId, expectedRevision, () => new SwapError("Only the current plan version can be manually edited — this one has been superseded."));
+    await checkPlanVersionRevision(client, planVersionId, weddingId, expectedRevision, (currentPlan) => new SwapError(SUPERSEDED_EDIT_MESSAGE, currentPlan));
     // TS-181: each group is seated at its new table now (see SEAT_ORDER).
     for (const member of unitB) {
       await client.query(
@@ -1629,7 +1706,7 @@ export async function swapGuestAssignments(
 
   const planVersion = await getPlanVersionDetail(planVersionId, weddingId);
   if (!planVersion) throw new SwapError("Plan version not found after swap.");
-  planVersion.warnings = warnings;
+  // TS-197: the warnings come back once, as `warnings` (see moveGuestAssignment).
 
   // FR-10.2: same "only once approved" gating as a plain move.
   if (planVersion.status === "APPROVED") {

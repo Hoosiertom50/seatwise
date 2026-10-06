@@ -289,14 +289,20 @@ export async function deleteGuestForWedding(id: string, weddingId: string, actor
           [planVersionId, id]
         )
       : { rows: [] as { name: string }[] };
-    const { rowCount } = await client.query(`DELETE FROM "guests" WHERE id = $1 AND "weddingId" = $2`, [
-      id,
-      weddingId,
-    ]);
-    const deleted = (rowCount ?? 0) > 0;
-    if (deleted && planVersionId && affected.length > 0) {
-      const { changed } = await resyncTables(client, weddingId, planVersionId, affected);
-      await refreshPlanCompleteness(client, weddingId, planVersionId, { bumpRevision: changed || seated.length > 0 });
+    // TS-197: whether they were attending -- an attending guest leaving changes the plan's list of
+    // guests waiting for a seat, so the plan moves on a revision here, once (the route's follow-up
+    // recount used to move it on a second time).
+    const { rows: deletedRows } = await client.query(
+      `DELETE FROM "guests" WHERE id = $1 AND "weddingId" = $2 RETURNING "dayOfAttendance"`,
+      [id, weddingId]
+    );
+    const deleted = deletedRows.length > 0;
+    const wasAttending = deletedRows[0]?.dayOfAttendance === "ATTENDING";
+    if (deleted && planVersionId) {
+      const { changed } = affected.length > 0 ? await resyncTables(client, weddingId, planVersionId, affected) : { changed: false };
+      await refreshPlanCompleteness(client, weddingId, planVersionId, {
+        bumpRevision: changed || seated.length > 0 || wasAttending,
+      });
     }
     // TS-169: removing a seated guest changes an approved plan -- it shows "Modified since approval".
     if (deleted && planVersionId && seated[0]) {

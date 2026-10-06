@@ -802,7 +802,7 @@ export async function commitGuestImport(
       // TS-150: a change to who's flagged also bumps the plan's revision. TS-169: so does a freed seat.
       // TS-174: and a guest brought back to Attending.
       await client.query(
-        `UPDATE "plan_versions" SET "isComplete" = $1${planFlagsChanged || seatsFreed || attendanceRestored ? ", revision = revision + 1" : ""} WHERE id = $2`,
+        `UPDATE "plan_versions" SET "isComplete" = $1${planFlagsChanged || seatsFreed || attendanceRestored || attendingAdded ? ", revision = revision + 1" : ""} WHERE id = $2`,
         [isComplete, planVersionId]
       );
       // TS-169: an import that changes an approved plan (a seat freed, someone new to seat, flags

@@ -63,6 +63,9 @@ export async function POST(req: NextRequest, { params }: Params) {
       );
     }
     if (err instanceof ManualMoveError) {
+      // TS-197: refused because a newer plan replaced this one -- that plan comes back too, so the
+      // screen switches to it.
+      if (err.planVersion) return NextResponse.json({ error: err.message, planVersion: err.planVersion }, { status: 409 });
       return errorResponse(err.message, 409);
     }
     const conflict = concurrentChangeResponse(err);

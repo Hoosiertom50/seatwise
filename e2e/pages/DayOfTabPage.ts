@@ -52,6 +52,26 @@ export class DayOfTabPage extends BasePage {
     await this.guestStatusText(guestName).filter({ hasText: `Seated at ${tableLabel}` }).waitFor();
   }
 
+  /** TS-197: picks a table in a seated guest's "Move to…" list without waiting for the guest to be
+   * there -- for a move the server is expected to refuse (the row then shows why). */
+  async startMoveGuestTo(guestName: string, tableLabel: string): Promise<void> {
+    const select = this.moveToSelect(guestName);
+    const options = await select.locator("option").allTextContents();
+    const option = options.find((o) => o.startsWith(`${tableLabel} (`));
+    if (!option) throw new Error(`DayOfTabPage.startMoveGuestTo: ${tableLabel} isn't offered (have: ${options.join(" | ")})`);
+    await select.selectOption({ label: option });
+  }
+
+  /** TS-197: the message in a guest's own row (e.g. why a move wasn't saved). */
+  guestRowError(guestName: string) {
+    return this.guestRow(guestName).getByRole("alert");
+  }
+
+  /** TS-197: shown when Day-of switches to a plan made since it opened. */
+  newerPlanNotice() {
+    return this.page.getByRole("status").filter({ hasText: "A newer plan was made — you're now looking at it." });
+  }
+
   private walkInFirstNameInput() {
     return this.page.getByLabel("First name", { exact: true });
   }
