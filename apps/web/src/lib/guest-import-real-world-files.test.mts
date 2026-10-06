@@ -13,8 +13,7 @@ import {
 import { parseCsv, toCsv } from "../../../../packages/shared/src/csv";
 import { parseGuestImportRow } from "../../../../packages/shared/src/guest-import-row";
 import { changedImportFields, type GuestImportCurrentValues } from "../../../../packages/shared/src/guest-import-compare";
-import { safeText, UNREADABLE_TEXT_MESSAGE } from "../../../../packages/shared/src/safe-text";
-import { createGuestSchema } from "../../../../packages/shared/src/schemas/guest";
+import { safeText } from "../../../../packages/shared/src/safe-text";
 import { submitGuestRsvpSchema } from "../../../../packages/shared/src/schemas/rsvp";
 import { createCommentSchema } from "../../../../packages/shared/src/schemas/collaboration";
 import {
@@ -157,14 +156,12 @@ test("a value saved before today's rules comes back unchanged instead of blockin
   assert.equal(roundTrip(old, "", false).errors.length, 2);
 });
 
-// --- Free text refuses the mark when it's typed (item 2) ---
+// --- Free text still accepts the mark: a guest whose saved note already has one must be able to
+// send their RSVP again (only the import refuses it, in a new value, where letters were just lost) ---
 
-test("free text refuses the U+FFFD mark with a clear message", () => {
-  const r = safeText(50).safeParse("M�ller");
-  assert.equal(r.success, false);
-  assert.equal(!r.success && r.error.issues[0].message, UNREADABLE_TEXT_MESSAGE);
-  assert.equal(createGuestSchema.safeParse({ firstName: "Ann", lastName: "Lee", notes: "nuts �" }).success, false);
-  assert.equal(submitGuestRsvpSchema.safeParse({ rsvpStatus: "CONFIRMED", notes: "see you �" }).success, false);
+test("free text accepts the U+FFFD mark, so old saved text can be sent back", () => {
+  assert.equal(safeText(50).parse("M\uFFFDller"), "M\uFFFDller");
+  assert.equal(submitGuestRsvpSchema.safeParse({ rsvpStatus: "CONFIRMED", notes: "see you \uFFFD" }).success, true);
   assert.equal(safeText(50).parse("Müller"), "Müller");
 });
 

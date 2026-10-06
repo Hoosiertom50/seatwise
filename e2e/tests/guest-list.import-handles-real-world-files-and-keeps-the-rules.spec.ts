@@ -5,7 +5,7 @@
  *   need more seats than the table has -- as when the planner marks them Attending by hand.
  * - The "couldn't read this character" mark (U+FFFD) only stops a row when a cell the import uses
  *   says something new with it: a guest's own RSVP note (never imported) or a note the guest already
- *   has comes back fine. Typing the mark into a note is refused with a clear message.
+ *   has comes back fine. A guest whose saved note already has the mark can still send their RSVP.
  * - A stored value that looks like the clear token ("CLEAR", "[clear]") survives export and
  *   re-import.
  * - A value saved before today's rules (a household with a line break) doesn't block re-importing
@@ -49,7 +49,6 @@ const EXPORT_MAPPING = {
   ageCategory: "Age category",
 };
 
-const UNREADABLE_TEXT_MESSAGE = "Can't contain the � character (letters lost when the text was copied) — retype it";
 
 /** The export as rows of cells -- only for files whose values hold no commas, quotes or line breaks. */
 function exportRows(csv: string): { header: string[]; rows: string[][] } {
@@ -113,11 +112,11 @@ defineQualityTest(
 defineQualityTest(
   {
     id: "guest-list.import-handles-real-world-files-and-keeps-the-rules.unreadable-mark-only-stops-a-new-value",
-    title: "a guest's RSVP note or private note holding the U+FFFD mark doesn't stop the export re-importing; a new value with it is refused, and typing it is refused",
+    title: "a guest's RSVP note or private note holding the U+FFFD mark doesn't stop the export re-importing; a new value with it is refused, and a guest whose note has it can still send their RSVP",
     objective:
-      "Plants (as older data could hold) a guest RSVP note and a private note containing U+FFFD, then confirms the untouched export previews on the Guests tab as unchanged with no errors and commits with nothing updated; that changing that guest's Notes cell to a new value with the mark makes the row an error saying the notes have characters that couldn't be read; and that typing the mark into a guest's notes or an RSVP note is refused with a clear message.",
+      "Plants (as older data could hold) a guest RSVP note and a private note containing U+FFFD, then confirms the untouched export previews on the Guests tab as unchanged with no errors and commits with nothing updated; that changing that guest's Notes cell to a new value with the mark makes the row an error saying the notes have characters that couldn't be read; and that a guest whose saved note already has the mark can still send their RSVP.",
     expectedOutcome:
-      "The export's RSVP note cell holds the mark. The preview line reads '0 new, 0 updating, 1 unchanged' with no rows in error; the commit returns updatedCount 0, unchangedCount 1, and the notes are as planted. With Notes changed to 'Changed �' the preview row is an error starting 'Notes has characters that couldn't be read'. Adding a guest with notes 'nuts �' and an RSVP with note 'see you �' each answer 422 with the message \"Can't contain the � character (letters lost when the text was copied) — retype it\".",
+      "The export's RSVP note cell holds the mark. The preview line reads '0 new, 0 updating, 1 unchanged' with no rows in error; the commit returns updatedCount 0, unchangedCount 1, and the notes are as planted. With Notes changed to 'Changed �' the preview row is an error starting 'Notes has characters that couldn't be read'. Sending the RSVP again with the note 'See you there �' answers 200.",
     requirementIds: ["REQ-GUEST-LIST-MANAGEMENT", "REQ-CLIENT-RSVP-COLLECTION"],
     tags: ["@mutating", "@feature:guests", "@feature:rsvp", "@risk:normal", "@suite:regression"],
   },
@@ -162,20 +161,15 @@ defineQualityTest(
       expect(preview.rows[0].reason).toMatch(/^Notes has characters that couldn't be read \(shown as �\)/);
     });
 
-    await test.step("Typing the mark into a note is refused with a clear message", async () => {
-      const add = await context.request.post(api("guests"), {
-        data: { ...uniquePersonName(testInfo.workerIndex), notes: "nuts �" },
-      });
-      expect(add.status()).toBe(422);
-      expect(JSON.stringify(await add.json())).toContain(UNREADABLE_TEXT_MESSAGE);
-
+    await test.step("A guest whose note already has the mark can still send their RSVP", async () => {
       const link = await context.request.post(api(`guests/${guest.id}/rsvp-link`), { data: {} });
       const token = ((await link.json()) as { rsvp: { url: string } }).rsvp.url.split("/").pop()!;
       const visitor = await playwright.request.newContext({ baseURL, extraHTTPHeaders: { "x-forwarded-for": uniqueTestAddress() } });
       try {
-        const rsvp = await visitor.post(`/api/v1/rsvp/${token}`, { data: { rsvpStatus: "CONFIRMED", headcount: 1, notes: "see you �" } });
-        expect(rsvp.status()).toBe(422);
-        expect(JSON.stringify(await rsvp.json())).toContain(UNREADABLE_TEXT_MESSAGE);
+        const rsvp = await visitor.post(`/api/v1/rsvp/${token}`, {
+          data: { rsvpStatus: "CONFIRMED", headcount: 1, notes: "See you there �" },
+        });
+        expect(rsvp.status()).toBe(200);
       } finally {
         await visitor.dispose();
       }

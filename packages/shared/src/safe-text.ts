@@ -13,7 +13,6 @@ export const CONTROL_CHARACTER_MESSAGE = "Can't contain hidden control character
 // TS-198: free text can't hold the "couldn't read this character" mark (U+FFFD) either -- it
 // means letters were already lost (a file or a copy in the wrong encoding), and saving it keeps
 // the loss.
-export const UNREADABLE_TEXT_MESSAGE = "Can't contain the � character (letters lost when the text was copied) — retype it";
 
 // TS-190: a single-line field (a name, a label) can't hold a line break.
 export const LINE_BREAK_MESSAGE = "Can't contain line breaks — keep it on one line";
@@ -40,6 +39,5 @@ export function safeText(max: number, opts: { multiline?: boolean; required?: st
     checked
       .refine((v) => opts.multiline || !/[\r\n]/.test(v), LINE_BREAK_MESSAGE)
       .refine((v) => !hasForbiddenControlCharacter(v), CONTROL_CHARACTER_MESSAGE)
-      .refine((v) => !v.includes("\uFFFD"), UNREADABLE_TEXT_MESSAGE)
   );
 }
