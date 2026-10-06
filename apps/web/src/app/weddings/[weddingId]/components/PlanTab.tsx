@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import { api, ApiError } from "@/lib/api-client";
 import { useSerialTasks } from "@/lib/serial-tasks";
 import { useUnsavedChanges } from "@/lib/unsaved-changes";
+import { SAVED_AS_DRAFT_BECAUSE_APPROVED } from "@/lib/plan-approval-text";
 import { RULE_WEIGHT_CONFIG, compareTableLabels } from "@seatwise/shared";
 import type {
   GuestDTO,
@@ -121,6 +122,9 @@ export function PlanTab({
     detailRef.current = detail;
   }, [detail]);
   const [error, setError] = useState<string | null>(null);
+  // TS-179: set when Generate or Restore was saved as a comparison draft because the current plan
+  // is approved and this person can't replace it. Cleared on the next generate/restore/switch.
+  const [draftNotice, setDraftNotice] = useState<string | null>(null);
   const [moveWarnings, setMoveWarnings] = useState<string[]>([]);
   const [conflicts, setConflicts] = useState<string[]>([]);
   const [restorePreview, setRestorePreview] = useState<RestorePreviewDTO | null>(null);
@@ -245,6 +249,7 @@ export function PlanTab({
 
   async function onGenerate() {
     setError(null);
+    setDraftNotice(null);
     setConflicts([]);
     setMoveWarnings([]);
     setRestorePreview(null);
@@ -254,12 +259,15 @@ export function PlanTab({
     setShowScoreDetail(false);
     setGenerating(true);
     try {
-      const res = await api.post<{ planVersion: PlanVersionDetailDTO; scoreReport?: PlanVersionScoreReportDTO }>(
-        `/api/v1/weddings/${weddingId}/plan-versions/generate`,
-        { makeCurrent: !saveAsDraft }
-      );
+      const res = await api.post<{
+        planVersion: PlanVersionDetailDTO;
+        scoreReport?: PlanVersionScoreReportDTO;
+        savedAsDraftBecauseApproved?: boolean;
+      }>(`/api/v1/weddings/${weddingId}/plan-versions/generate`, { makeCurrent: !saveAsDraft });
+      // TS-179: the new version is opened either way -- as a comparison draft if it was kept back.
       await loadVersions(res.planVersion.id);
       setScoreReport(res.scoreReport ?? null);
+      if (res.savedAsDraftBecauseApproved) setDraftNotice(SAVED_AS_DRAFT_BECAUSE_APPROVED);
     } catch (err) {
       if (err instanceof ApiError && err.status === 409 && err.fieldErrors?.conflicts) {
         setConflicts(err.fieldErrors.conflicts as unknown as string[]);
@@ -273,6 +281,7 @@ export function PlanTab({
 
   async function onSelectVersion(id: string) {
     setMoveWarnings([]);
+    setDraftNotice(null);
     setRestorePreview(null);
     setScoreReport(null);
     setShowScoreDetail(false);
@@ -460,16 +469,20 @@ export function PlanTab({
   async function onConfirmRestore() {
     if (!detail) return;
     setError(null);
+    setDraftNotice(null);
     setRestoring(true);
     try {
-      const res = await api.post<{ planVersion: PlanVersionDetailDTO; warnings: string[] }>(
-        `/api/v1/weddings/${weddingId}/plan-versions/${detail.id}/restore`
-      );
+      const res = await api.post<{
+        planVersion: PlanVersionDetailDTO;
+        warnings: string[];
+        savedAsDraftBecauseApproved?: boolean;
+      }>(`/api/v1/weddings/${weddingId}/plan-versions/${detail.id}/restore`);
       setRestorePreview(null);
       setUndoStack([]);
       setRedoStack([]);
       await loadVersions(res.planVersion.id);
       setMoveWarnings(res.warnings);
+      if (res.savedAsDraftBecauseApproved) setDraftNotice(SAVED_AS_DRAFT_BECAUSE_APPROVED);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't restore that version.");
     } finally {
@@ -610,6 +623,15 @@ export function PlanTab({
         </div>
       )}
       {error && <p role="alert" className="mb-4 text-sm text-red-600 dark:text-red-400">{error}</p>}
+      {draftNotice && (
+        <p
+          role="status"
+          data-testid="plan-saved-as-draft-notice"
+          className="mb-4 rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950 p-3 text-sm text-amber-800 dark:text-amber-300"
+        >
+          {draftNotice}
+        </p>
+      )}
 
       {/* FR-5.3: shown once, right after the generation run that produced it -- not persisted, so
           reloading or switching versions clears it, same as the moveWarnings/conflicts above. */}
@@ -860,7 +882,8 @@ export function PlanTab({
             )}
           </div>
 
-          {detail.status === "APPROVED" && (
+          {/* TS-179: only the current plan exports -- an approved version that was since replaced is out of date. */}
+          {detail.status === "APPROVED" && detail.isCurrent && (
             <div className="mb-6 flex flex-wrap items-center gap-2 rounded-lg border border-neutral-200 dark:border-neutral-700 p-3">
               <span className="text-sm font-medium">Export:</span>
               <a

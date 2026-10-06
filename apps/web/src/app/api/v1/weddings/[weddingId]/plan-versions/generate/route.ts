@@ -19,7 +19,8 @@ import {
 } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
 import { errorResponse, zodErrorResponse, concurrentChangeResponse } from "@/lib/api-response";
-import { requireAccess } from "@/lib/access";
+import { requireAccess, canManageApproval } from "@/lib/access";
+import { SAVED_AS_DRAFT_BECAUSE_APPROVED } from "@/lib/plan-approval-text";
 
 type Params = { params: Promise<{ weddingId: string }> };
 
@@ -115,11 +116,17 @@ export async function POST(req: NextRequest, { params }: Params) {
     });
   }
 
+  // TS-179 (Tom's decision): someone who can't undo an approval can still generate, but if the
+  // current plan is approved the result is saved as a comparison draft and the approved plan stays
+  // current. The plan's status is checked again as the version is saved, under the wedding lock.
+  const mayReplaceApproved = await canManageApproval(weddingId, user.id, access.accessLevel);
+
   let planVersionId: string;
+  let savedAsDraftBecauseApproved: boolean;
   try {
     // TS-173: the new version is re-checked table by table and recounted as it's saved, since
     // tables, rules or lists can change while the plan above was being worked out.
-    planVersionId = await createPlanVersionWithAssignments(weddingId, {
+    ({ planVersionId, savedAsDraftBecauseApproved } = await createPlanVersionWithAssignments(weddingId, {
       isComplete: result.isComplete,
       warnings: result.warnings,
       assignments: result.assignments,
@@ -127,7 +134,8 @@ export async function POST(req: NextRequest, { params }: Params) {
       sideMixingSetting: sideMixing,
       ruleConfigVersion: RULE_WEIGHT_CONFIG_VERSION,
       makeCurrent,
-    });
+      mayReplaceApproved,
+    }));
   } catch (err) {
     const conflict = concurrentChangeResponse(err);
     if (conflict) return conflict;
@@ -142,5 +150,13 @@ export async function POST(req: NextRequest, { params }: Params) {
 
   // FR-5.3: reported once, right alongside the version it was computed for -- same lifecycle as
   // `warnings` above (surfaced in this response only, not persisted for a later reload).
-  return NextResponse.json({ planVersion, scoreReport: result.scoreReport }, { status: 201 });
+  return NextResponse.json(
+    {
+      planVersion,
+      scoreReport: result.scoreReport,
+      savedAsDraftBecauseApproved,
+      ...(savedAsDraftBecauseApproved ? { notice: SAVED_AS_DRAFT_BECAUSE_APPROVED } : {}),
+    },
+    { status: 201 }
+  );
 }

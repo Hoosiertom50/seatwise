@@ -4,18 +4,40 @@ import bcrypt from "bcryptjs";
 
 const JWT_SECRET = process.env.JWT_SECRET;
 
-let warnedShortSecret = false;
+// TS-179: values copied from the README or .env.example (or obvious stand-ins) that must never
+// sign real sessions -- anyone who has read this public repo would know them.
+const PLACEHOLDER_SECRETS = new Set([
+  "replace-with-a-long-random-secret",
+  "a long random string",
+  "changeme",
+  "secret",
+]);
+const MIN_SECRET_LENGTH = 32;
+
+/**
+ * TS-179: why this JWT_SECRET can't be used, or null if it's fine. In production (which includes
+ * `next build && next start`, as CI runs it -- CI generates a 64-character secret per run) a missing,
+ * short or placeholder secret is refused. Outside production only a missing one is, so local
+ * development keeps working with the README's example value.
+ */
+export function jwtSecretProblem(secret: string | undefined, nodeEnv: string | undefined): string | null {
+  if (!secret) return "JWT_SECRET environment variable is not set";
+  if (nodeEnv !== "production") return null;
+  if (PLACEHOLDER_SECRETS.has(secret.trim().toLowerCase())) {
+    return "JWT_SECRET is still a placeholder value -- set it to a long random value (e.g. openssl rand -hex 32).";
+  }
+  if (secret.length < MIN_SECRET_LENGTH) {
+    return `JWT_SECRET is shorter than ${MIN_SECRET_LENGTH} characters -- set it to a long random value (e.g. openssl rand -hex 32).`;
+  }
+  return null;
+}
 
 function getSecretKey() {
-  if (!JWT_SECRET) {
-    throw new Error("JWT_SECRET environment variable is not set");
-  }
-  // TS-172: a short secret could be guessed offline from any session token. It's reported rather
-  // than refused, so a deployment with a shorter secret keeps working while it's replaced.
-  if (process.env.NODE_ENV === "production" && JWT_SECRET.length < 32 && !warnedShortSecret) {
-    warnedShortSecret = true;
-    console.error("[auth] JWT_SECRET is shorter than 32 characters -- replace it with a long random value.");
-  }
+  // TS-172 only logged a short secret; TS-179 refuses it (and a placeholder) in production, the same
+  // way ENCRYPTION_KEY is refused (packages/db/src/crypto.ts). Checked on use, not at import, so
+  // `next build` doesn't need the secret.
+  const problem = jwtSecretProblem(JWT_SECRET, process.env.NODE_ENV);
+  if (problem) throw new Error(problem);
   return new TextEncoder().encode(JWT_SECRET);
 }
 

@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { AUTH_COOKIE_NAME, setAuthCookie, signToken, verifyToken } from "@/lib/auth";
 import { RENEWED_TOKEN_HEADER, shouldRenew } from "@/lib/session-renewal";
+import { isNonJsonBody } from "@/lib/json-body";
 
 // TS-94: sliding session renewal. Runs ahead of every /api/v1 request; when the caller's token is
 // valid but old enough (see session-renewal.ts), the response carries a freshly issued one -- as a
@@ -48,13 +49,11 @@ function refuseCrossSiteWrite(req: NextRequest): NextResponse | null {
   if (req.headers.get("sec-fetch-site") === "cross-site") {
     return NextResponse.json({ error: "Requests from other sites aren't accepted." }, { status: 403 });
   }
-  const type = req.headers.get("content-type");
   // TS-172: a request with a body must say it's JSON. One with no Content-Type at all used to get
   // through -- and a cross-site "no-cors" request can send a body without one, which (in browsers
   // that don't send Sec-Fetch-Site) the routes would still have read as JSON. A write with no body
-  // (Generate, log out) needs no type.
-  const hasBody = Number(req.headers.get("content-length") ?? "0") > 0 || req.headers.has("transfer-encoding");
-  if ((type && !type.toLowerCase().startsWith("application/json")) || (!type && hasBody)) {
+  // (Generate, log out) needs no type. TS-179: the rule lives in json-body.ts, shared with readJson.
+  if (isNonJsonBody(req.headers)) {
     return NextResponse.json({ error: "Send this request as JSON." }, { status: 415 });
   }
   return null;

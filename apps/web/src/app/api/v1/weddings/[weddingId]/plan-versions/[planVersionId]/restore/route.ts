@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { restorePlanVersion, RestoreError } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
 import { errorResponse, concurrentChangeResponse } from "@/lib/api-response";
-import { requireAccess } from "@/lib/access";
+import { requireAccess, canManageApproval } from "@/lib/access";
+import { SAVED_AS_DRAFT_BECAUSE_APPROVED } from "@/lib/plan-approval-text";
 
 type Params = { params: Promise<{ weddingId: string; planVersionId: string }> };
 
@@ -19,9 +20,26 @@ export async function POST(req: NextRequest, { params }: Params) {
   const access = await requireAccess(weddingId, user.id, "EDIT");
   if ("error" in access) return access.error;
 
+  // TS-179 (Tom's decision): someone who can't undo an approval gets the restored version as a
+  // comparison draft when the current plan is approved -- the approved plan stays current.
+  const mayReplaceApproved = await canManageApproval(weddingId, user.id, access.accessLevel);
+
   try {
-    const { planVersion, warnings } = await restorePlanVersion(planVersionId, weddingId, user.id);
-    return NextResponse.json({ planVersion, warnings }, { status: 201 });
+    const { planVersion, warnings, savedAsDraftBecauseApproved } = await restorePlanVersion(
+      planVersionId,
+      weddingId,
+      user.id,
+      { mayReplaceApproved }
+    );
+    return NextResponse.json(
+      {
+        planVersion,
+        warnings,
+        savedAsDraftBecauseApproved,
+        ...(savedAsDraftBecauseApproved ? { notice: SAVED_AS_DRAFT_BECAUSE_APPROVED } : {}),
+      },
+      { status: 201 }
+    );
   } catch (err) {
     if (err instanceof RestoreError) return errorResponse(err.message, 404);
     const conflict = concurrentChangeResponse(err);

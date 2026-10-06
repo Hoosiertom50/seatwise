@@ -17,13 +17,14 @@
     "fill-wedding-details": "tsx prisma/fill-wedding-details.ts",
     "backup-real-weddings": "tsx prisma/backup-real-weddings.ts",
     "copy-weddings": "tsx prisma/copy-weddings-to-production.ts",
-    "encrypt-old-link-tokens": "tsx prisma/encrypt-old-link-tokens.ts"
+    "encrypt-old-link-tokens": "tsx prisma/encrypt-old-link-tokens.ts",
+    "recheck-current-plans": "tsx prisma/recheck-current-plans.ts",
+    "check-schema-drift": "tsx prisma/check-schema-drift.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"
   },
   "dependencies": {
-    "@prisma/adapter-pg": "^7.10.0",
     "@prisma/client": "^6.9.0",
     "@seatwise/shared": "workspace:*",
     "bcryptjs": "^2.4.3",

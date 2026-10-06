@@ -55,6 +55,9 @@ export interface ModifiedSinceApproval {
 }
 
 export class PlanVersionStatusError extends Error {}
+// TS-179: the person changing the status isn't allowed to make this particular change, judged
+// against the status the plan really has under the lock (not the one read before it).
+export class PlanApprovalPermissionError extends Error {}
 // TS-148: the plan version isn't on this wedding at all (as opposed to being an older version).
 export class PlanVersionNotFoundError extends Error {
   constructor() {
@@ -186,6 +189,20 @@ export interface PlanVersionDetail extends PlanVersionRow {
   modifiedSinceApproval: ModifiedSinceApproval;
 }
 
+// TS-179: whether the wedding's current plan is approved, read inside the caller's transaction
+// (which already holds the wedding lock Generate and Restore take). The current plan row is locked
+// too, so a status change in progress on it finishes first and its result is what is read here.
+async function currentPlanIsApproved(
+  client: { query: (text: string, params?: unknown[]) => Promise<{ rows: Record<string, unknown>[] }> },
+  weddingId: string
+): Promise<boolean> {
+  const { rows } = await client.query(
+    `SELECT status FROM "plan_versions" WHERE "weddingId" = $1 AND "isCurrent" FOR UPDATE`,
+    [weddingId]
+  );
+  return rows[0]?.status === "APPROVED";
+}
+
 // Persists the result of generateSeatingPlan() (packages/shared/src/seating-engine.ts) as a
 // new, numbered plan version — versions are immutable snapshots; regenerating never overwrites
 // a prior one. Runs as a single transaction so a partial write can't leave a version with only
@@ -205,15 +222,26 @@ export async function createPlanVersionWithAssignments(
     // (replacing whichever version was Current before) or a non-replacing Comparison Draft that
     // sits alongside it. Defaults to true so every existing call site keeps its old behavior.
     makeCurrent?: boolean;
+    // TS-179: false when the person generating can't undo an approval (anyone but the owner or a
+    // Couple member with Comment/Edit). If the current plan is approved, the new version is then
+    // saved as a comparison draft and the approved plan stays current. Checked under the wedding
+    // lock below, so an approval landing a moment earlier is still respected.
+    mayReplaceApproved?: boolean;
   }
-): Promise<string> {
-  const makeCurrent = input.makeCurrent ?? true;
+): Promise<{ planVersionId: string; savedAsDraftBecauseApproved: boolean }> {
+  let makeCurrent = input.makeCurrent ?? true;
+  let savedAsDraftBecauseApproved = false;
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
     // TS-150: one new version at a time per wedding -- two Generate (or Restore) clicks at once
     // would otherwise both take the same next version number and the second would fail.
     await client.query(`SELECT id FROM "weddings" WHERE id = $1 FOR UPDATE`, [weddingId]);
+
+    if (makeCurrent && input.mayReplaceApproved === false && (await currentPlanIsApproved(client, weddingId))) {
+      makeCurrent = false;
+      savedAsDraftBecauseApproved = true;
+    }
 
     const { rows: versionRows } = await client.query(
       `SELECT COALESCE(MAX("versionNumber"), 0) + 1 AS "next" FROM "plan_versions" WHERE "weddingId" = $1`,
@@ -285,7 +313,7 @@ export async function createPlanVersionWithAssignments(
     );
 
     await client.query("COMMIT");
-    return planVersionId;
+    return { planVersionId, savedAsDraftBecauseApproved };
   } catch (err) {
     await client.query("ROLLBACK");
     if ((err as { code?: string }).code === "23503") throw new PlanSourceChangedError();
@@ -429,7 +457,11 @@ export async function setPlanVersionStatus(
   weddingId: string,
   newStatus: PlanVersionStatusValue,
   actorUserId: string,
-  expectedRevision?: number
+  expectedRevision?: number,
+  // TS-179: worked out by the route from who is asking. Checked here, under the plan row lock,
+  // against the status the plan has right now -- the route's own earlier read could be stale if
+  // someone approved (or un-approved) the plan in between. Omitted means "allowed" (internal use).
+  permissions: { mayApprove?: boolean; mayLeaveApproved?: boolean; mayMoveDraftAndReview?: boolean } = {}
 ): Promise<PlanVersionDetail | null> {
   if (!(await isCurrentVersion(id, weddingId))) {
     throw new PlanVersionStatusError(
@@ -454,6 +486,20 @@ export async function setPlanVersionStatus(
       throw new PlanVersionStatusError(
         "Only the current plan version's status can be changed — this one has been superseded."
       );
+    }
+    // TS-179: the permission rules, against the status as it is under the lock.
+    if (newStatus === "APPROVED" && permissions.mayApprove === false) {
+      throw new PlanApprovalPermissionError(
+        "Only the wedding's owner, or a Couple member with Comment or Edit access, can approve a plan."
+      );
+    }
+    if (current.status === "APPROVED" && newStatus !== "APPROVED" && permissions.mayLeaveApproved === false) {
+      throw new PlanApprovalPermissionError(
+        "This plan has just been approved. Only the wedding's owner, or a Couple member with Comment or Edit access, can undo an approval."
+      );
+    }
+    if (current.status !== "APPROVED" && newStatus !== "APPROVED" && permissions.mayMoveDraftAndReview === false) {
+      throw new PlanApprovalPermissionError("You don't have permission to do that");
     }
     if (expectedRevision !== undefined && current.revision !== expectedRevision) {
       await client.query("ROLLBACK");
@@ -1627,10 +1673,14 @@ export async function previewPlanVersionRestore(
 export async function restorePlanVersion(
   sourceVersionId: string,
   weddingId: string,
-  actorUserId: string
-): Promise<ManualMoveResult> {
+  actorUserId: string,
+  // TS-179: false when the person restoring can't undo an approval -- an approved current plan is
+  // then left current and the restored version is saved as a comparison draft beside it.
+  options: { mayReplaceApproved?: boolean } = {}
+): Promise<ManualMoveResult & { savedAsDraftBecauseApproved: boolean }> {
   const client = await pool.connect();
   let newVersionId: string;
+  let savedAsDraftBecauseApproved = false;
   let result: Awaited<ReturnType<typeof computeRestorePlacement>>;
   try {
     await client.query("BEGIN");
@@ -1647,16 +1697,24 @@ export async function restorePlanVersion(
     );
     const versionNumber: number = versionRows[0].next;
 
-    await client.query(
-      `UPDATE "plan_versions" SET "isCurrent" = false WHERE "weddingId" = $1 AND "isCurrent"`,
-      [weddingId]
-    );
+    // TS-179: checked under the wedding lock taken above, so an approval that lands a moment
+    // before this restore is still respected.
+    savedAsDraftBecauseApproved =
+      options.mayReplaceApproved === false && (await currentPlanIsApproved(client, weddingId));
+    const makeCurrent = !savedAsDraftBecauseApproved;
+
+    if (makeCurrent) {
+      await client.query(
+        `UPDATE "plan_versions" SET "isCurrent" = false WHERE "weddingId" = $1 AND "isCurrent"`,
+        [weddingId]
+      );
+    }
 
     newVersionId = randomUUID();
     await client.query(
       `INSERT INTO "plan_versions" (id, "weddingId", "versionNumber", status, "isComplete", "restoredFromId", "isCurrent")
-       VALUES ($1, $2, $3, 'DRAFT', $4, $5, true)`,
-      [newVersionId, weddingId, versionNumber, result.isComplete, sourceVersionId]
+       VALUES ($1, $2, $3, 'DRAFT', $4, $5, $6)`,
+      [newVersionId, weddingId, versionNumber, result.isComplete, sourceVersionId, makeCurrent]
     );
 
     await insertSeats(client, newVersionId, result.kept);
@@ -1669,7 +1727,8 @@ export async function restorePlanVersion(
       `Restored from version ${result.sourceVersionNumber}` +
       (result.droppedGuests.length > 0
         ? ` (${result.droppedGuests.length} guest(s) left Unassigned — data has changed since then)`
-        : "");
+        : "") +
+      (savedAsDraftBecauseApproved ? " (saved as a comparison draft — the approved plan stays current)" : "");
     await client.query(
       `INSERT INTO "change_history_entries" (id, "planVersionId", action, description, "actorUserId")
        VALUES ($1, $2, 'RESTORE', $3, $4)`,
@@ -1692,7 +1751,7 @@ export async function restorePlanVersion(
     warnings.push(`${d.guestName} was left Unassigned — ${d.reason}.`);
   }
   planVersion.warnings = warnings;
-  return { planVersion, warnings };
+  return { planVersion, warnings, savedAsDraftBecauseApproved };
 }
 
 // TS-10/TS-12: give a plan version a free-text nickname so it's easier to tell apart than just

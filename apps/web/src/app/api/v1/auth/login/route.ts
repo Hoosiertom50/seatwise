@@ -2,12 +2,14 @@ import { NextRequest, NextResponse } from "next/server";
 import { loginSchema } from "@seatwise/shared";
 import { findUserByEmail } from "@seatwise/db";
 import { verifyPassword, signToken, setAuthCookie, wantsBearerToken } from "@/lib/auth";
-import { errorResponse, zodErrorResponse } from "@/lib/api-response";
+import { errorResponse, readJson, zodErrorResponse } from "@/lib/api-response";
 import { clientAddress, countSignInAttempt, signInFailureLimits, TOO_MANY_SIGN_INS } from "@/lib/rate-limit";
 
 export async function POST(req: NextRequest) {
-  const body = await req.json().catch(() => null);
-  const parsed = loginSchema.safeParse(body);
+  // TS-179: refuses a body that isn't JSON (415) here too, not only in proxy.ts.
+  const json = await readJson(req);
+  if (!json.ok) return json.response;
+  const parsed = loginSchema.safeParse(json.body);
   if (!parsed.success) return zodErrorResponse(parsed.error);
 
   // TS-113: refuse early if this account (from this address, or from everywhere) or this address

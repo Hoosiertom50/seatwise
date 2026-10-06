@@ -10,7 +10,7 @@ import {
   retireOlderResetTokens,
   emailDelivered,
 } from "@seatwise/db";
-import { zodErrorResponse } from "@/lib/api-response";
+import { readJson, zodErrorResponse } from "@/lib/api-response";
 import { accountEmailAddressKey, ACCOUNT_EMAIL_LIMITS, clientAddress, rateLimitOr429, PASSWORD_RESET_LIMITS } from "@/lib/rate-limit";
 import { resetOutcome } from "@/lib/password-reset-outcome";
 
@@ -27,7 +27,10 @@ export async function POST(req: NextRequest) {
     (await rateLimitOr429(`pw-reset:addr:day:${address}`, PASSWORD_RESET_LIMITS.requestsPerAddressDay));
   if (limited) return limited;
 
-  const parsed = forgotPasswordSchema.safeParse(await req.json().catch(() => null));
+  // TS-179: refuses a body that isn't JSON (415) here too, not only in proxy.ts.
+  const json = await readJson(req);
+  if (!json.ok) return json.response;
+  const parsed = forgotPasswordSchema.safeParse(json.body);
   if (!parsed.success) return zodErrorResponse(parsed.error);
   const email = parsed.data.email;
   const user = await findUserByEmail(email);

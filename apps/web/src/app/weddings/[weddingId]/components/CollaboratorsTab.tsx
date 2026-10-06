@@ -13,6 +13,11 @@ import type {
 } from "@seatwise/shared";
 import { useUnsavedChanges } from "@/lib/unsaved-changes";
 
+// TS-179: guest RSVP and vendor links someone copied while they had access aren't tied to them,
+// so taking access away doesn't stop those links -- the owner's reset below does.
+const LINKS_KEEP_WORKING =
+  "Any guest or vendor links they copied keep working until you use Reset all guest and vendor links below.";
+
 const LEVELS: { value: CollaboratorPermission; label: string; hint: string }[] = [
   { value: "VIEW", label: "View", hint: "Can see everything, can't change anything" },
   { value: "COMMENT", label: "Comment", hint: "View, plus can leave and resolve their own comments" },
@@ -261,6 +266,11 @@ export function CollaboratorsTab({
   // TS-161: the owner deletes the wedding for everyone, then goes back to the dashboard.
   const [deleteConfirmName, setDeleteConfirmName] = useState("");
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  // TS-179: the owner's "Reset all guest and vendor links" -- what happened, or why it failed.
+  const [resetLinksDone, setResetLinksDone] = useState<string | null>(null);
+  const [resetLinksError, setResetLinksError] = useState<string | null>(null);
+  // TS-179: shown after the owner lowers someone's access (there is no confirmation for that).
+  const [loweredAccessNote, setLoweredAccessNote] = useState<string | null>(null);
   async function onDeleteWedding() {
     setDeleteError(null);
     try {
@@ -310,11 +320,36 @@ export function CollaboratorsTab({
     }
   }
 
+  // TS-179: owner only -- every guest and vendor link gets a new address; the old ones stop working.
+  async function onResetLinks() {
+    setResetLinksDone(null);
+    setResetLinksError(null);
+    try {
+      const res = await api.post<{ guestLinks: number; vendorLinks: number }>(
+        `/api/v1/weddings/${weddingId}/reset-links`
+      );
+      const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
+      setResetLinksDone(
+        `Done — replaced ${plural(res.guestLinks, "guest link")} and ${plural(res.vendorLinks, "vendor link")}. The old links no longer work.`
+      );
+    } catch (err) {
+      setResetLinksError(err instanceof ApiError ? err.message : "Couldn't reset the links. Nothing was changed.");
+    }
+  }
+
   async function onChangeLevel(id: string, permissionLevel: CollaboratorPermission) {
     const prev = collaborators;
+    const before = prev.find((c) => c.id === id);
+    setLoweredAccessNote(null);
     setCollaborators(collaborators.map((c) => (c.id === id ? { ...c, permissionLevel } : c)));
     try {
       await api.patch(`/api/v1/weddings/${weddingId}/collaborators/${id}`, { permissionLevel });
+      const rank = (l: CollaboratorPermission) => LEVELS.findIndex((x) => x.value === l);
+      if (before && rank(permissionLevel) < rank(before.permissionLevel)) {
+        setLoweredAccessNote(
+          `${before.userName}'s access is now ${LEVELS[rank(permissionLevel)].label}. ${LINKS_KEEP_WORKING}`
+        );
+      }
     } catch {
       setCollaborators(prev);
       setError("Couldn't change that collaborator's access level.");
@@ -725,7 +760,7 @@ export function CollaboratorsTab({
                   </select>
                   <ConfirmDeleteButton
                     ariaLabel={`Remove ${c.userName}`}
-                    question={`Remove ${c.userName}'s access to this wedding? They'll lose access right away. You can invite them again later.`}
+                    question={`Remove ${c.userName}'s access to this wedding? They'll lose access right away. You can invite them again later. ${LINKS_KEEP_WORKING}`}
                     confirmLabel="Yes, remove access"
                     onConfirm={() => onRemove(c.id)}
                   />
@@ -758,6 +793,43 @@ export function CollaboratorsTab({
             </li>
           ))}
         </ul>
+      )}
+
+      {loweredAccessNote && (
+        <p role="status" className="mt-3 text-sm text-amber-800 dark:text-amber-300">
+          {loweredAccessNote}
+        </p>
+      )}
+
+      {/* TS-179 (Tom's decision): the owner replaces every guest RSVP link and vendor share link at
+          once, so links copied by someone who no longer has access stop working. No emails go out. */}
+      {isOwner && (
+        <div className="mt-8 rounded-lg border border-neutral-200 dark:border-neutral-700 p-4">
+          <h3 className="mb-1 text-sm font-medium">Reset all guest and vendor links</h3>
+          <p className="mb-3 text-sm text-neutral-500 dark:text-neutral-400">
+            Gives every guest RSVP link and vendor link a new address, so the old ones stop working —
+            for example after removing someone who may have copied them. Nobody is emailed: guests and
+            vendors will need their new links, which you can send from the guest list and the budget tab.
+          </p>
+          <ConfirmDeleteButton
+            label="Reset all guest and vendor links"
+            question="Reset every guest RSVP link and vendor link? The old links stop working straight away, and guests and vendors will need their new links — nothing is emailed automatically."
+            confirmLabel="Yes, reset all links"
+            busyLabel="Resetting…"
+            className="rounded-md border border-red-300 dark:border-red-700 px-3 py-1.5 text-sm font-medium text-red-700 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950 disabled:opacity-50"
+            onConfirm={onResetLinks}
+          />
+          {resetLinksDone && (
+            <p role="status" className="mt-2 text-sm text-green-700 dark:text-green-400">
+              {resetLinksDone}
+            </p>
+          )}
+          {resetLinksError && (
+            <p role="alert" className="mt-2 text-sm text-red-600 dark:text-red-400">
+              {resetLinksError}
+            </p>
+          )}
+        </div>
       )}
 
       {/* TS-105: the owner hands the wedding to someone who already has access. Needed before the

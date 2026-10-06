@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { deleteUserAccount, findUserById } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
-import { errorResponse, zodErrorResponse } from "@/lib/api-response";
+import { errorResponse, readJson, zodErrorResponse } from "@/lib/api-response";
 import { AUTH_COOKIE_NAME, isSecureCookieContext, verifyPassword } from "@/lib/auth";
 import { clientAddress, countSignInAttempt, signInFailureLimits } from "@/lib/rate-limit";
 
@@ -24,7 +24,10 @@ export async function DELETE(req: NextRequest) {
   const user = await getAuthUser(req);
   if (!user) return errorResponse("Not authenticated", 401);
 
-  const parsed = deleteSchema.safeParse(await req.json().catch(() => null));
+  // TS-179: refuses a body that isn't JSON (415) here too, not only in proxy.ts.
+  const json = await readJson(req);
+  if (!json.ok) return json.response;
+  const parsed = deleteSchema.safeParse(json.body);
   if (!parsed.success) return zodErrorResponse(parsed.error);
 
   // TS-155: wrong passwords here count against the same per-account limit as signing in, so this
