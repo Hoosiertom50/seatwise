@@ -401,9 +401,13 @@ export default function WeddingDetailPage() {
 
       {/* TS-182: a real tab list for screen readers -- which tab is open, and which panel it shows.
           Left/Right (and Home/End) move between tabs, like any other tab list. */}
+      {/* TS-199: tabIndex -1 -- on a phone the row scrolls sideways, and Firefox makes any scrolling
+          area its own Tab stop. The selected tab is already the one stop for this row; the arrow
+          keys move along it (and bring each tab into view). */}
       <div
         role="tablist"
         aria-label="Wedding sections"
+        tabIndex={-1}
         onKeyDown={onTabKeyDown}
         className="mb-8 flex gap-1 overflow-x-auto border-b border-neutral-200 dark:border-neutral-700"
       >

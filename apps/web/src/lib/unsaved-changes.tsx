@@ -96,6 +96,14 @@ export function useUnsavedChangesProvider({ onBackRequested }: { onBackRequested
   const ignoreNextPop = useRef(false);
   /** Set while the page is leaving on purpose, so the extra entry isn't taken off in the meantime. */
   const leaving = useRef(false);
+  /** False once this page has closed -- a timer it started must then do nothing (see goBackPastPage). */
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
   const onGuardEntry = () => window.history.state?.seatwiseGuard === true;
 
   const reconcile = useCallback(() => {
@@ -166,8 +174,11 @@ export function useUnsavedChangesProvider({ onBackRequested }: { onBackRequested
     setCount(0);
     window.history.go(onGuardEntry() ? -2 : -1);
     // If the page is still here shortly after, there was nowhere to go back to.
+    // TS-199: only while this page is still open -- leaving within the app doesn't fire pagehide,
+    // so the timer outlived the page, and reopening the same wedding within half a second (the
+    // page's address again) sent it straight back to the dashboard.
     const timer = window.setTimeout(() => {
-      if (window.location.href === pageUrl.current) fallback();
+      if (mounted.current && window.location.href === pageUrl.current) fallback();
     }, 500);
     window.addEventListener("pagehide", () => window.clearTimeout(timer), { once: true });
   }, []);
