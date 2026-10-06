@@ -14,6 +14,7 @@ import {
   GuestConflictError,
   GuestHeadcountError,
   GuestAccessibleTableError,
+  AttendanceError,
   type NewlyFlaggedSeat,
 } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
@@ -107,6 +108,8 @@ export async function PATCH(req: NextRequest, { params }: Params) {
     try {
       await setGuestAttendance(weddingId, guestId, dayOfAttendance, user.id);
     } catch (err) {
+      // TS-188: e.g. bringing someone back would overfill their Restricted table's list.
+      if (err instanceof AttendanceError) return errorResponse(err.message, 422);
       const conflict = concurrentChangeResponse(err);
       if (conflict) return conflict;
       throw err;
@@ -138,8 +141,13 @@ export async function PATCH(req: NextRequest, { params }: Params) {
       newlyFlagged.push(...(await resyncGuestSeat(weddingId, guestId)).newlyFlagged);
     }
   } catch (err) {
-    console.error("Guest saved, but re-checking the seating plan failed", err);
-    warnings.push(SAVED_BUT_NOT_RECHECKED);
+    // TS-188: the answer is saved, but they couldn't be marked attending again -- say why.
+    if (err instanceof AttendanceError) {
+      warnings.push(`Saved, but they're still marked Not Attending: ${err.message}`);
+    } else {
+      console.error("Guest saved, but re-checking the seating plan failed", err);
+      warnings.push(SAVED_BUT_NOT_RECHECKED);
+    }
   }
   const seen = new Set<string>();
   const flagged = newlyFlagged.filter((f) => !seen.has(f.guestId) && !!seen.add(f.guestId));

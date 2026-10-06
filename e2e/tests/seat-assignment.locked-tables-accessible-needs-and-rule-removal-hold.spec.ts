@@ -24,9 +24,9 @@ defineQualityTest(
     id: "seat-assignment.locked-tables-accessible-needs-and-rule-removal-hold.locked-accessible-attending-removal",
     title: "Locked tables take nobody new, a listed guest can't need an accessible seat their table lacks, lists count only Attending guests, and removing a rule never looks failed",
     objective:
-      "Confirms that generating keeps a guest at their locked table and leaves their new must-sit partner unseated with a warning (never adding them there); that marking a guest on a non-accessible Restricted table's list as needing an accessible table is refused by the planner's edit and by an import, and allowed once the table is Accessible; that a Not Attending guest on a list doesn't count toward its seats; and that removing a rule whose follow-up re-check fails still answers with success, a 'Saved, but…' warning, and the rule gone.",
+      "Confirms that generating keeps a guest at their locked table and leaves their new must-sit partner unseated with a warning (never adding them there); that marking a guest on a non-accessible Restricted table's list as needing an accessible table is refused by the planner's edit and by an import, and allowed once the table is Accessible; that a Not Attending guest on a list doesn't count toward its seats, and the planner can't mark them attending again while that would overfill the list; and that removing a rule whose follow-up re-check fails still answers with success, a 'Saved, but…' warning, and the rule gone.",
     expectedOutcome:
-      "The new plan has the guest at the locked table, the partner in unassignedGuestIds, a 'must sit with … is locked' warning, and isComplete false. The edit gets 422 naming the table and the import 422 'Nothing was imported', with the guest unchanged; after the table is made Accessible the edit gets 200. A list of a Not Attending party of 2 plus an Attending guest saves on a 1-seat table. The rule removal gets 200 with ok true and the 'Saved, but…' warning, and the rule is no longer listed.",
+      "The new plan has the guest at the locked table, the partner in unassignedGuestIds, a 'must sit with … is locked' warning, and isComplete false. The edit gets 422 naming the table and the import 422 'Nothing was imported', with the guest unchanged; after the table is made Accessible the edit gets 200. A list of a Not Attending party of 2 plus an Attending guest saves on a 1-seat table; marking that party Attending again gets 409 (attendance) / 422 (edit) naming \"VIP\" and they stay Not Attending. The rule removal gets 200 with ok true and the 'Saved, but…' warning, and the rule is no longer listed.",
     requirementIds: ["REQ-AUTOMATED-SEAT-ASSIGNMENT", "REQ-RELATIONSHIPS-SEATING-RULES", "REQ-GUEST-LIST-MANAGEMENT"],
     tags: ["@mutating", "@feature:seating-plan", "@feature:tables", "@feature:relationships", "@risk:high", "@suite:regression"],
   },
@@ -99,6 +99,15 @@ defineQualityTest(
 
       const list = await context.request.put(api(w, `tables/${vip.id}/required-guests`), { data: { guestIds: [away.id, here.id] } });
       expect(list.status()).toBe(200);
+
+      // The planner can't then bring the party of 2 back: the list would need 3 seats at a 1-seat table.
+      const back = await weddingData.setAttendance(w, away.id, "ATTENDING");
+      expect(back.status).toBe(409);
+      expect(back.body.error).toContain('"VIP"');
+      const backByEdit = await context.request.patch(api(w, `guests/${away.id}`), { data: { dayOfAttendance: "ATTENDING" } });
+      expect(backByEdit.status()).toBe(422);
+      const stillAway = await context.request.get(api(w, `guests/${away.id}`));
+      expect(((await stillAway.json()) as { guest: { dayOfAttendance: string } }).guest.dayOfAttendance).toBe("NOT_ATTENDING");
     });
 
     await test.step("Removing a rule answers with success even when the re-check afterwards fails", async () => {

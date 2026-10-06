@@ -7,6 +7,8 @@ import {
   tablesAffectedBy,
   recordRecheckIfApproved,
   lockCurrentPlan,
+  lockRestrictedLists,
+  restrictedListsOverCapacity,
   applyAttendanceChange,
   HISTORY_CREATED_AT,
   SEAT_ORDER,
@@ -1281,6 +1283,10 @@ export async function setGuestAttendance(
     // TS-173: the current plan's row before the guest's (see lockCurrentPlan) -- a move locks the
     // plan first too, so the two can no longer deadlock.
     currentPlanVersionId = (await lockCurrentPlan(client, weddingId)) ?? undefined;
+    // TS-188: a planner marking someone attending again is checked against their Restricted table's
+    // list below -- so the lists' lock comes next, in the usual order (plan, lists, then rows).
+    const plannerReturning = attendance === "ATTENDING" && actorUserId !== null;
+    if (plannerReturning) await lockRestrictedLists(client, weddingId);
     const { rows: lockedGuest } = await client.query(
       `SELECT "dayOfAttendance" FROM "guests" WHERE id = $1 FOR NO KEY UPDATE`,
       [guestId]
@@ -1294,6 +1300,17 @@ export async function setGuestAttendance(
     // TS-174: the change itself is shared with a guest's own RSVP (submitGuestRsvp), which makes it
     // inside the same transaction as their answer.
     await applyAttendanceChange(client, weddingId, currentPlanVersionId ?? null, { id: guestId, name: guest.name }, attendance, actorUserId);
+    // TS-188: Restricted lists count only attending guests, so someone coming back counts again --
+    // the planner can't bring them back if their table's list would then need more seats than it
+    // has (as with a bigger party). A guest's own RSVP is never refused (Tom's decision).
+    if (plannerReturning) {
+      const [over] = await restrictedListsOverCapacity(client, [guestId]);
+      if (over) {
+        throw new AttendanceError(
+          `${guest.name} is on "${over.tableLabel}"'s required-guest list, which would then need ${over.seats} seats — it has ${over.capacity}. Give that table more seats, or take someone off its list first.`
+        );
+      }
+    }
 
     await client.query("COMMIT");
   } catch (err) {
