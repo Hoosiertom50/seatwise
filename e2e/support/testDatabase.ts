@@ -335,6 +335,22 @@ export async function plantTimelineTie(weddingId: string, entryIdsInCreatedOrder
   if (rowCount !== entryIdsInCreatedOrder.length) throw new Error(`testDatabase: not every entry is on test wedding ${weddingId}.`);
 }
 
+/**
+ * TS-181: clears every Needs Reassignment flag on a test wedding's plan version and marks it
+ * complete -- what a plan looks like when a change was saved but its own re-check never ran. Lets
+ * a test check that approving re-checks the seating itself rather than trusting the stored flags.
+ */
+export async function plantStaleSeatFlags(weddingId: string, planVersionId: string): Promise<void> {
+  const { rowCount } = await testPool().query(
+    `UPDATE "plan_versions" pv SET "isComplete" = true
+     FROM "weddings" w JOIN "users" u ON u.id = w."ownerId"
+     WHERE pv.id = $2 AND pv."weddingId" = $1 AND w.id = pv."weddingId" AND u.email LIKE $3`,
+    [weddingId, planVersionId, TEST_EMAIL_PATTERN],
+  );
+  if (rowCount !== 1) throw new Error(`testDatabase: no plan version ${planVersionId} on test wedding ${weddingId}.`);
+  await testPool().query(`UPDATE "seat_assignments" SET "needsReassignment" = false WHERE "planVersionId" = $1`, [planVersionId]);
+}
+
 /** TS-174: a test timeline entry's row lock, held from outside the app -- see holdTimelineEntry. */
 export interface HeldTimelineEntry {
   /** Resolves once `count` of the app's own database sessions are waiting on this entry. */

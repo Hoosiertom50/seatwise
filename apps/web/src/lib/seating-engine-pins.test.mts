@@ -155,3 +155,64 @@ test("guests at two different locked tables who must sit together are kept toget
   assert.equal(tableOf(result, "A"), "L1");
   assert.equal(tableOf(result, "B"), "L1");
 });
+
+// TS-181: pins are placed in passes -- required, then guests' own locks, then people kept at a
+// locked table -- and a lock that can't be kept is only seated elsewhere after every pin is tried.
+test("a lock that can't be kept doesn't take the seat another guest is locked to", () => {
+  const result = generateSeatingPlan(
+    // A comes first in the list and its table is gone; B is locked to T1, which has one seat.
+    [guest("A", { isLocked: true, currentTableId: "Gone" }), guest("B", { isLocked: true, currentTableId: "T1" })],
+    [],
+    [table("T1", { capacity: 1 }), table("T2", { capacity: 1 })]
+  );
+  assert.equal(tableOf(result, "B"), "T1");
+  assert.equal(tableOf(result, "A"), "T2");
+  assert.doesNotMatch(result.warnings.join("\n"), /Guest B is locked to/);
+  assert.equal(result.isComplete, true);
+});
+
+test("a guest's own lock is kept before someone who's only kept by a locked table", () => {
+  const result = generateSeatingPlan(
+    // Both sit at the locked table, which now has room for only one of them; A comes first.
+    [
+      guest("A", { currentTableId: "L", headcount: 2 }),
+      guest("B", { currentTableId: "L", headcount: 2, isLocked: true }),
+    ],
+    [],
+    [table("L", { isLocked: true, capacity: 2 }), table("T1")]
+  );
+  assert.equal(tableOf(result, "B"), "L");
+  assert.equal(tableOf(result, "A"), "T1");
+  assert.match(result.warnings.join("\n"), /Guest A is locked to "L", but that's no longer possible/);
+});
+
+test("among people kept by a locked table, a group with a locked guest goes first", () => {
+  const result = generateSeatingPlan(
+    [
+      guest("D", { currentTableId: "L", headcount: 2 }),
+      guest("A", { currentTableId: "L", headcount: 2 }),
+      // C is locked but has no seat yet; their must-sit-together partner A is at the locked table.
+      guest("C", { isLocked: true }),
+    ],
+    [{ guestAId: "A", guestBId: "C", type: "MUST_SIT_TOGETHER" }],
+    [table("L", { isLocked: true, capacity: 3 }), table("T1")]
+  );
+  assert.equal(tableOf(result, "A"), "L");
+  assert.equal(tableOf(result, "C"), "L");
+  assert.equal(tableOf(result, "D"), "T1");
+});
+
+test("a required guest keeps their Restricted table, and a lock that can't be kept waits its turn", () => {
+  const result = generateSeatingPlan(
+    [
+      guest("A", { isLocked: true, currentTableId: "Gone" }),
+      guest("R", { requiredTableId: "VIP" }),
+      guest("B", { isLocked: true, currentTableId: "T1" }),
+    ],
+    [],
+    [table("VIP", { isRestricted: true, capacity: 1 }), table("T1", { capacity: 1 }), table("T2", { capacity: 1 })]
+  );
+  assert.equal(tableOf(result, "R"), "VIP");
+  assert.equal(tableOf(result, "B"), "T1");
+  assert.equal(tableOf(result, "A"), "T2");
+});

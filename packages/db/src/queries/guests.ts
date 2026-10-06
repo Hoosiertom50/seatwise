@@ -8,6 +8,7 @@ import {
   recordRecheckIfApproved,
   refreshPlanCompleteness,
   resyncTables,
+  restrictedListsOverCapacity,
   tablesAffectedBy,
   type TableSeatingFlagReason,
 } from "./seat-checks";
@@ -77,6 +78,10 @@ export class GuestConflictError extends Error {
     this.guest = guest;
   }
 }
+
+// TS-181: thrown instead of saving a party size that a guest's Restricted table can't hold for
+// its required-guest list. Nothing is saved.
+export class GuestHeadcountError extends Error {}
 
 export interface CreateGuestData {
   firstName: string;
@@ -192,7 +197,7 @@ export async function updateGuestForWedding(
   try {
     await client.query("BEGIN");
     const { rows } = await client.query(
-      `SELECT revision FROM "guests" WHERE id = $1 AND "weddingId" = $2 FOR UPDATE`,
+      `SELECT revision, headcount FROM "guests" WHERE id = $1 AND "weddingId" = $2 FOR UPDATE`,
       [id, weddingId]
     );
     const current = rows[0];
@@ -214,6 +219,16 @@ export async function updateGuestForWedding(
         `UPDATE "guests" SET ${fields.join(", ")} WHERE id = $${i++} AND "weddingId" = $${i}`,
         values
       );
+    }
+    // TS-181: a guest on a Restricted table's required-guest list can only grow their party while
+    // the list still fits the table -- otherwise there'd be nowhere they're allowed to sit.
+    if (input.headcount !== undefined && input.headcount > current.headcount) {
+      const [over] = await restrictedListsOverCapacity(client, [id]);
+      if (over) {
+        throw new GuestHeadcountError(
+          `${over.guestNames[0] ?? "This guest"} is on "${over.tableLabel}"'s required-guest list, and a party of ${input.headcount} would need ${over.seats} seats there — it has ${over.capacity}. Give that table more seats, or take them off its list first.`
+        );
+      }
     }
     await client.query("COMMIT");
     return true;
@@ -502,8 +517,14 @@ export async function submitGuestRsvp(token: string, input: SubmitGuestRsvpData)
     // instead of silently staying where they no longer fit.
     let newlyFlagged: GuestRsvpResult["newlyFlagged"] = [];
     if (planVersionId) {
+      // TS-181: and the Restricted table they're on the list of, if any -- a guest's own answer is
+      // never refused for growing their party past what that table holds for its list; the
+      // re-check flags whoever no longer fits there, so the planner sees it.
       const { rows: seatedAt } = await client.query<{ tableId: string }>(
-        `SELECT "seatingTableId" AS "tableId" FROM "seat_assignments" WHERE "planVersionId" = $1 AND "guestId" = $2`,
+        `SELECT "seatingTableId" AS "tableId" FROM "seat_assignments" WHERE "planVersionId" = $1 AND "guestId" = $2
+         UNION
+         SELECT rtg."tableId" FROM "restricted_table_guests" rtg JOIN "seating_tables" t ON t.id = rtg."tableId"
+         WHERE rtg."guestId" = $2 AND t."isRestricted"`,
         [planVersionId, guest.id]
       );
       if (seatedAt.length > 0) {

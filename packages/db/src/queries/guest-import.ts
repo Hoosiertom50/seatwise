@@ -1,7 +1,13 @@
 import { randomUUID } from "crypto";
 import { pool } from "../pool";
 import { encryptText } from "../crypto";
-import { lockCurrentPlan, recordRecheckIfApproved, resyncSeatsAtTable, tablesAffectedBy } from "./seat-checks";
+import {
+  lockCurrentPlan,
+  recordRecheckIfApproved,
+  resyncSeatsAtTable,
+  restrictedListsOverCapacity,
+  tablesAffectedBy,
+} from "./seat-checks";
 import {
   parseCsv,
   guestTierEnum,
@@ -354,6 +360,8 @@ export async function commitGuestImport(
     // TS-174: a Declined guest brought back to Attending by this import -- the plan has someone new
     // to seat, as when the planner does it by hand (which bumps the plan's revision too).
     let attendanceRestored = false;
+    // TS-181: updated guests whose party this import makes bigger.
+    const grownGuestIds = new Set<string>();
 
     for (const row of preview.rows) {
       let p = row.preview;
@@ -426,6 +434,8 @@ export async function commitGuestImport(
         if (p.headcount !== undefined) {
           fields.push(`headcount = $${i++}`);
           values.push(p.headcount);
+          // TS-181: checked against their Restricted table's list (if any) once every row is in.
+          if (!current || p.headcount > current.headcount) grownGuestIds.add(row.guestId);
           // TS-154: the planner's new party size is the guest's new limit.
           fields.push(`"partySizeLimit" = NULL`);
         }
@@ -499,6 +509,15 @@ export async function commitGuestImport(
           recheckGuestIds.add(row.guestId);
         }
       }
+    }
+
+    // TS-181: a bigger party for a guest on a Restricted table's required-guest list must still let
+    // the list fit that table -- otherwise nothing is imported, as when the planner edits the guest.
+    const [listOver] = await restrictedListsOverCapacity(client, [...grownGuestIds]);
+    if (listOver) {
+      throw new GuestImportError(
+        `Nothing was imported: ${listOver.guestNames.join(", ") || "a guest"} ${listOver.guestNames.length === 1 ? "is" : "are"} on "${listOver.tableLabel}"'s required-guest list, and the party sizes in this file would need ${listOver.seats} seats there — it has ${listOver.capacity}. Give that table more seats, or take them off its list first.`
+      );
     }
 
     // TS-150: re-check every table an updated guest sits at -- rules *and* room -- inside this
