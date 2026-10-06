@@ -236,7 +236,17 @@ export function GuestsTab({
     URL.revokeObjectURL(url);
   }
 
+  // TS-191: each preview request gets a number; an answer that comes back after the file, the
+  // column choices or Cancel changed things is dropped (it used to show a preview of the old
+  // choices, which the import then used).
+  const previewRequest = useRef(0);
+  function invalidatePreview() {
+    previewRequest.current++;
+    setPreviewing(false);
+  }
+
   function resetImport() {
+    invalidatePreview();
     setCsvText(null);
     setCsvFileName(null);
     setCsvHeaders([]);
@@ -253,6 +263,14 @@ export function GuestsTab({
     setImportError(null);
     setImportResult(null);
     setImportPreview(null);
+    // TS-191: the previous file is gone the moment another is chosen -- if the new one is refused
+    // below, the old file's columns and choices used to stay on screen, ready to import.
+    invalidatePreview();
+    setCsvText(null);
+    setCsvFileName(null);
+    setCsvHeaders([]);
+    setMapping({});
+    setOverwriteChanged(false);
     try {
       // TS-190: read as UTF-8, or as Excel's older Windows encoding when it isn't (see decodeCsvBytes).
       const text = decodeCsvBytes(await file.arrayBuffer());
@@ -306,6 +324,7 @@ export function GuestsTab({
       return next;
     });
     setImportPreview(null);
+    invalidatePreview();
   }
 
   function cleanMapping(): Partial<Record<GuestImportField, string>> {
@@ -322,16 +341,20 @@ export function GuestsTab({
     setImportResult(null);
     setOverwriteChanged(false);
     setPreviewing(true);
+    const request = ++previewRequest.current;
     try {
       const { preview } = await api.post<{ preview: GuestImportPreview }>(
         `/api/v1/weddings/${weddingId}/guests/import/preview`,
         { csv: csvText, mapping: cleanMapping() }
       );
+      if (request !== previewRequest.current) return;
       setImportPreview(preview);
     } catch (err) {
+      if (request !== previewRequest.current) return;
       setImportError(err instanceof ApiError ? err.message : "Couldn't preview that file.");
     } finally {
-      setPreviewing(false);
+      // A newer request (or Cancel) owns the busy state from here.
+      if (request === previewRequest.current) setPreviewing(false);
     }
   }
 
@@ -742,7 +765,11 @@ export function GuestsTab({
         {!showMoreDetails ? (
           <button
             type="button"
-            onClick={() => setShowMoreDetails(true)}
+            onClick={() => {
+              setShowMoreDetails(true);
+              // TS-191: focus moves to the first of the new boxes (it used to be lost with the button).
+              setTimeout(() => document.getElementById("guest-party-name")?.focus(), 0);
+            }}
             aria-expanded={false}
             className="justify-self-start text-sm text-neutral-600 dark:text-neutral-300 underline hover:no-underline sm:col-span-2"
           >
@@ -985,6 +1012,8 @@ export function GuestsTab({
           type="file"
           accept=".csv,text/csv"
           onChange={onFileSelected}
+          // TS-191: no new file while a preview is being checked.
+          disabled={previewing}
           // TS-175: never wider than the space it is in (with Linux fonts it ran 6px off a phone screen).
           className="mb-3 block w-full max-w-full text-sm"
           // TS-53 (AC-079): no visible <label> wraps this input (the paragraph/button above it are
@@ -1012,6 +1041,8 @@ export function GuestsTab({
                     className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1.5 text-sm"
                     value={mapping[field] ?? ""}
                     onChange={(e) => onMappingChange(field, e.target.value)}
+                    // TS-191: the columns stay as they are while the preview is checked.
+                    disabled={previewing}
                   >
                     <option value="">— not in file —</option>
                     {csvHeaders.map((h) => (
@@ -1033,7 +1064,8 @@ export function GuestsTab({
               </button>
               <button
                 onClick={resetImport}
-                className="rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800"
+                disabled={previewing}
+                className="rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50"
               >
                 Cancel
               </button>
@@ -1202,7 +1234,7 @@ export function GuestsTab({
               key={g.id}
               className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-neutral-200 dark:border-neutral-700 px-4 py-3"
             >
-              <div>
+              <div className="min-w-0">
                 <div className="flex flex-wrap items-center font-medium">
                   {canEdit ? (
                     <span className="flex items-center gap-1">
@@ -1289,7 +1321,8 @@ export function GuestsTab({
                 {/* TS-107: the guest's own note from their RSVP link -- read-only here, and kept
                     apart from the planner's private notes, which the guest never sees. */}
                 {g.rsvpNotes && (
-                  <p className="whitespace-pre-line text-sm text-neutral-600 dark:text-neutral-400">
+                  // TS-191: a long unbroken note wraps instead of running off a phone screen.
+                  <p className="whitespace-pre-line break-words text-sm text-neutral-600 dark:text-neutral-400 [overflow-wrap:anywhere]">
                     <span className="font-medium">Guest&apos;s RSVP note:</span> {g.rsvpNotes}
                   </p>
                 )}

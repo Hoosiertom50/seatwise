@@ -23,7 +23,9 @@ export default function GuestRsvpPage() {
   // shown instead of "this link doesn't exist", which would wrongly tell a guest their link is dead.
   const [loadError, setLoadError] = useState<string | null>(null);
 
-  const [attending, setAttending] = useState<"CONFIRMED" | "DECLINED">("CONFIRMED");
+  // TS-191: null until the guest has answered -- a guest who hadn't answered used to be shown as
+  // "Joyfully attending", and on a closed page that read as an answer they never gave.
+  const [attending, setAttending] = useState<"CONFIRMED" | "DECLINED" | null>(null);
   // TS-182: kept as typed, so clearing the box to type a new number doesn't show 0.
   const [headcount, setHeadcount] = useState("1");
   const [plusOneNames, setPlusOneNames] = useState("");
@@ -35,7 +37,9 @@ export default function GuestRsvpPage() {
       const res = await api.get<{ rsvp: GuestRsvpPreviewDTO }>(`/api/v1/rsvp/${token}`);
       setPreview(res.rsvp);
       if (res.rsvp.status !== "NOT_FOUND") {
-        setAttending(res.rsvp.rsvpStatus === "DECLINED" ? "DECLINED" : "CONFIRMED");
+        setAttending(
+          res.rsvp.rsvpStatus === "DECLINED" ? "DECLINED" : res.rsvp.rsvpStatus === "CONFIRMED" ? "CONFIRMED" : null
+        );
         setHeadcount(String(res.rsvp.headcount ?? 1));
         setPlusOneNames(res.rsvp.plusOneNames ?? "");
         setNotes(res.rsvp.notes ?? "");
@@ -73,6 +77,11 @@ export default function GuestRsvpPage() {
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
+    // TS-191: nothing is sent until the guest has picked an answer.
+    if (attending === null) {
+      setError("Choose “Joyfully attending” or “Regretfully declining” first.");
+      return;
+    }
     setSubmitting(true);
     try {
       // TS-170: a cleared party-size box reads as 0 -- and once "declining" hides it, the browser
@@ -144,7 +153,7 @@ export default function GuestRsvpPage() {
   return (
     <main className="flex flex-1 items-center justify-center px-6 py-10">
       <div className="w-full max-w-md">
-        <h1 className="mb-1 text-2xl font-semibold">
+        <h1 className="mb-1 break-words text-2xl font-semibold [overflow-wrap:anywhere]">
           {preview.weddingName}
         </h1>
         <p className="mb-6 text-sm text-neutral-500 dark:text-neutral-400">
@@ -197,6 +206,9 @@ export default function GuestRsvpPage() {
                 Regretfully declining
               </button>
             </div>
+            {closed && attending === null && (
+              <p className="text-sm text-neutral-600 dark:text-neutral-300">No response on file.</p>
+            )}
 
             {attending === "CONFIRMED" && (
               <>

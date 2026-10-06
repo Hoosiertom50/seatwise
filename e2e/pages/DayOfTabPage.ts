@@ -30,6 +30,28 @@ export class DayOfTabPage extends BasePage {
     return this.guestRow(guestName).getByLabel(`Seat ${guestName} at a table`, { exact: true });
   }
 
+  /** TS-191: a seated guest's "Move to…" list -- only tables with enough free seats are offered,
+   * each as "<label> (<n> free)". */
+  private moveToSelect(guestName: string) {
+    return this.guestRow(guestName).getByLabel(`Move ${guestName} to another table`, { exact: true });
+  }
+
+  /** TS-191: the table labels offered in a seated guest's "Move to…" list. */
+  async moveToChoices(guestName: string): Promise<string[]> {
+    const options = await this.moveToSelect(guestName).locator("option:not([disabled])").allTextContents();
+    return options.map((o) => o.replace(/ \(\d+ free\)$/, ""));
+  }
+
+  /** TS-191: moves a seated guest to another table and waits until their row says they're there. */
+  async moveGuestTo(guestName: string, tableLabel: string): Promise<void> {
+    const select = this.moveToSelect(guestName);
+    const options = await select.locator("option").allTextContents();
+    const option = options.find((o) => o.startsWith(`${tableLabel} (`));
+    if (!option) throw new Error(`DayOfTabPage.moveGuestTo: ${tableLabel} isn't offered (have: ${options.join(" | ")})`);
+    await select.selectOption({ label: option });
+    await this.guestStatusText(guestName).filter({ hasText: `Seated at ${tableLabel}` }).waitFor();
+  }
+
   private walkInFirstNameInput() {
     return this.page.getByLabel("First name", { exact: true });
   }

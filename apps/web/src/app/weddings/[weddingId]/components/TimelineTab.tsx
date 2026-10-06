@@ -31,6 +31,16 @@ export function TimelineTab({ weddingId, canEdit }: { weddingId: string; canEdit
   // TS-182: only while the forms are there (they're hidden without Edit access).
   useUnsavedChanges("timeline", canEdit && !!(time || description.trim() || editChanged));
   const [saving, setSaving] = useState(false);
+  // TS-191: a reorder is on its way -- the arrows wait for it (quick presses used to send moves
+  // based on an order that was about to change).
+  const [reordering, setReordering] = useState(false);
+  // TS-191: Edit access taken away while an entry's edit was open -- it can't be saved any more,
+  // so it closes (and stops counting as unsaved).
+  useEffect(() => {
+    if (canEdit) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- TS-191: closes the edit box when Edit access goes.
+    setEditingId(null);
+  }, [canEdit]);
 
   useEffect(() => {
     api
@@ -130,7 +140,17 @@ export function TimelineTab({ weddingId, canEdit }: { weddingId: string; canEdit
   // FR-13.2: only ever reshuffles entries that share this entry's exact same time -- a no-op
   // (entry unchanged) if it's already first/last within that tied group.
   async function onReorder(entryId: string, direction: "UP" | "DOWN") {
+    if (reordering) return;
     setError(null);
+    setReordering(true);
+    try {
+      await reorderAndReload(entryId, direction);
+    } finally {
+      setReordering(false);
+    }
+  }
+
+  async function reorderAndReload(entryId: string, direction: "UP" | "DOWN") {
     try {
       await api.post<{ entry: TimelineEntryDTO }>(
         `/api/v1/weddings/${weddingId}/timeline-entries/${entryId}/reorder`,
@@ -270,19 +290,22 @@ export function TimelineTab({ weddingId, canEdit }: { weddingId: string; canEdit
                         <button
                           onClick={() => onReorder(entry.id, "UP")}
                           disabled={!sameTimeAbove}
+                          // TS-191: busy while a reorder is on its way (still focusable, so the keyboard keeps its place)
+                          aria-disabled={reordering || undefined}
                           // TS-175: names that say which entry, for screen readers ("↑" alone said nothing).
                           aria-label={`Move ${entry.description} earlier`}
                           title="Move earlier among entries at this same time"
-                          className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-30"
+                          className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-30 aria-disabled:opacity-50"
                         >
                           ↑
                         </button>
                         <button
                           onClick={() => onReorder(entry.id, "DOWN")}
                           disabled={!sameTimeBelow}
+                          aria-disabled={reordering || undefined}
                           aria-label={`Move ${entry.description} later`}
                           title="Move later among entries at this same time"
-                          className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-30"
+                          className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-30 aria-disabled:opacity-50"
                         >
                           ↓
                         </button>
