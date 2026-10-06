@@ -25,6 +25,8 @@ import {
   RSVP_STATUS_LABELS,
 } from "@seatwise/shared";
 import { useUnsavedChanges, useUnsavedFields } from "@/lib/unsaved-changes";
+// TS-193: the same limits the server checks (packages/shared/src/field-limits.ts).
+import { FIELD_LIMITS } from "@seatwise/shared";
 
 const TIERS: GuestTier[] = ["VIP", "FAMILY", "FRIEND", "PLUS_ONE", "OTHER"];
 const RSVP_STATUSES: RsvpStatus[] = ["PENDING", "CONFIRMED", "DECLINED"];
@@ -711,7 +713,7 @@ export function GuestsTab({
             value={firstName}
             onChange={(e) => setFirstName(e.target.value)}
             required
-            maxLength={100}
+            maxLength={FIELD_LIMITS.personName}
           />
         </div>
         <div>
@@ -724,7 +726,7 @@ export function GuestsTab({
             value={lastName}
             onChange={(e) => setLastName(e.target.value)}
             required
-            maxLength={100}
+            maxLength={FIELD_LIMITS.personName}
           />
         </div>
         {/* TS-112: only a name is required, so the other eight fields wait behind "More details"
@@ -745,6 +747,7 @@ export function GuestsTab({
               Party / household
             </label>
             <input
+              maxLength={FIELD_LIMITS.partyName}
               id="guest-party-name"
               className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
               placeholder="e.g. The Carter Family"
@@ -757,6 +760,7 @@ export function GuestsTab({
               Email
             </label>
             <input
+              maxLength={FIELD_LIMITS.email}
               id="guest-email"
               type="email"
               className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
@@ -773,7 +777,7 @@ export function GuestsTab({
             <textarea
               id="guest-notes"
               rows={2}
-              maxLength={2000}
+              maxLength={FIELD_LIMITS.guestNotes}
               aria-describedby="guest-notes-hint"
               className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
               placeholder="e.g. vegetarian, nut allergy, uses a wheelchair"
@@ -789,6 +793,7 @@ export function GuestsTab({
               Headcount
             </label>
             <input
+              inputMode="numeric"
               id="guest-headcount"
               type="number"
               min={1}
@@ -1198,7 +1203,7 @@ export function GuestsTab({
                           rowFields.markDirty(`guest-row-${g.id}-firstName`, false);
                           onUpdateName(g.id, "firstName", e.currentTarget);
                         }}
-                        maxLength={100}
+                        maxLength={FIELD_LIMITS.personName}
                       />
                       <input
                         aria-label={`Last name for ${g.firstName} ${g.lastName}`}
@@ -1210,7 +1215,7 @@ export function GuestsTab({
                           rowFields.markDirty(`guest-row-${g.id}-lastName`, false);
                           onUpdateName(g.id, "lastName", e.currentTarget);
                         }}
-                        maxLength={100}
+                        maxLength={FIELD_LIMITS.personName}
                       />
                     </span>
                   ) : (
@@ -1261,66 +1266,10 @@ export function GuestsTab({
                     {g.rsvpRespondedAt ? "responded" : "no self-RSVP yet"}
                   </span>
                 </div>
-                <p className="text-sm text-neutral-500 dark:text-neutral-400">
-                  {g.partyName ? `${g.partyName} · ` : ""}
-                  {GUEST_TIER_LABELS[g.tier]}
-                  {g.side !== "BOTH" ? ` · ${sideLabelFor(g.side)}` : ""}
-                  {g.ageCategory !== "ADULT" ? ` · ${g.ageCategory.charAt(0)}${g.ageCategory.slice(1).toLowerCase()}` : ""}
-                  {g.plusOneNames ? ` · with ${g.plusOneNames}` : ""}
-                </p>
-                {/* TS-107: the guest's own note from their RSVP link -- read-only here, and kept
-                    apart from the planner's private notes, which the guest never sees. */}
-                {g.rsvpNotes && (
-                  <p className="whitespace-pre-line text-sm text-neutral-600 dark:text-neutral-400">
-                    <span className="font-medium">Guest&apos;s RSVP note:</span> {g.rsvpNotes}
-                  </p>
-                )}
-                {/* TS-129: the planner's private notes -- editable by Owner/Edit. TS-180: View and
-                    Comment collaborators don't get them at all (TS-154), here or in the CSV export. */}
-                {canEdit ? (
-                  <textarea
-                    aria-label={`Notes for ${g.firstName} ${g.lastName}`}
-                    title="Private to your planning team — the guest never sees this."
-                    rows={1}
-                    maxLength={2000}
-                    className="mt-1 block w-72 max-w-full rounded-md border border-neutral-200 dark:border-neutral-700 px-2 py-1 text-xs"
-                    placeholder="Private notes (dietary, accessibility…)"
-                    key={`${g.id}-notes-${g.notes ?? ""}`}
-                    defaultValue={g.notes ?? ""}
-                    onInput={(e) => rowFields.markDirty(`guest-row-${g.id}-notes`, (e.currentTarget.value.trim() || null) !== (g.notes ?? null))}
-                    onBlur={(e) => {
-                      rowFields.markDirty(`guest-row-${g.id}-notes`, false);
-                      onUpdateNotes(g.id, e.currentTarget);
-                    }}
-                  />
-                ) : (
-                  g.notes && (
-                    <p className="whitespace-pre-line text-sm text-neutral-600 dark:text-neutral-400">
-                      <span className="font-medium">Notes:</span> {g.notes}
-                    </p>
-                  )
-                )}
-                {canEdit ? (
-                  <input
-                    type="email"
-                    aria-label={`Email for ${g.firstName} ${g.lastName}`}
-                    className="mt-1 w-56 rounded-md border border-neutral-200 dark:border-neutral-700 px-2 py-1 text-xs"
-                    placeholder="Email (for their RSVP link)"
-                    key={`${g.id}-email-${g.email ?? ""}`}
-                    defaultValue={g.email ?? ""}
-                    onInput={(e) => rowFields.markDirty(`guest-row-${g.id}-email`, e.currentTarget.value !== (g.email ?? ""))}
-                    onBlur={(e) => {
-                      rowFields.markDirty(`guest-row-${g.id}-email`, false);
-                      if (e.target.value !== (g.email ?? "")) onUpdateEmail(g.id, e.currentTarget);
-                    }}
-                  />
-                ) : (
-                  g.email && <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">{g.email}</p>
-                )}
-                {rsvpLinkResult[g.id] && (
-                  <p role="status" className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">{rsvpLinkResult[g.id]}</p>
-                )}
               </div>
+              {/* TS-193: the row's buttons come right after the name, before the details below it, so
+                  Tab goes name -> buttons -> notes and email -- the order they read on screen (the
+                  buttons used to sit beside the whole block and were reached only after the email box). */}
               <div className="flex flex-wrap items-center gap-2">
                 {canEdit ? (
                   <>
@@ -1383,6 +1332,68 @@ export function GuestsTab({
                   </>
                 ) : (
                   <span className="text-sm text-neutral-500 dark:text-neutral-400">{RSVP_STATUS_LABELS[g.rsvpStatus]}</span>
+                )}
+              </div>
+              <div className="basis-full">
+                <p className="text-sm text-neutral-500 dark:text-neutral-400">
+                  {g.partyName ? `${g.partyName} · ` : ""}
+                  {GUEST_TIER_LABELS[g.tier]}
+                  {g.side !== "BOTH" ? ` · ${sideLabelFor(g.side)}` : ""}
+                  {g.ageCategory !== "ADULT" ? ` · ${g.ageCategory.charAt(0)}${g.ageCategory.slice(1).toLowerCase()}` : ""}
+                  {g.plusOneNames ? ` · with ${g.plusOneNames}` : ""}
+                </p>
+                {/* TS-107: the guest's own note from their RSVP link -- read-only here, and kept
+                    apart from the planner's private notes, which the guest never sees. */}
+                {g.rsvpNotes && (
+                  <p className="whitespace-pre-line text-sm text-neutral-600 dark:text-neutral-400">
+                    <span className="font-medium">Guest&apos;s RSVP note:</span> {g.rsvpNotes}
+                  </p>
+                )}
+                {/* TS-129: the planner's private notes -- editable by Owner/Edit. TS-180: View and
+                    Comment collaborators don't get them at all (TS-154), here or in the CSV export. */}
+                {canEdit ? (
+                  <textarea
+                    aria-label={`Notes for ${g.firstName} ${g.lastName}`}
+                    title="Private to your planning team — the guest never sees this."
+                    rows={1}
+                    maxLength={FIELD_LIMITS.guestNotes}
+                    className="mt-1 block w-72 max-w-full rounded-md border border-neutral-200 dark:border-neutral-700 px-2 py-1 text-xs"
+                    placeholder="Private notes (dietary, accessibility…)"
+                    key={`${g.id}-notes-${g.notes ?? ""}`}
+                    defaultValue={g.notes ?? ""}
+                    onInput={(e) => rowFields.markDirty(`guest-row-${g.id}-notes`, (e.currentTarget.value.trim() || null) !== (g.notes ?? null))}
+                    onBlur={(e) => {
+                      rowFields.markDirty(`guest-row-${g.id}-notes`, false);
+                      onUpdateNotes(g.id, e.currentTarget);
+                    }}
+                  />
+                ) : (
+                  g.notes && (
+                    <p className="whitespace-pre-line text-sm text-neutral-600 dark:text-neutral-400">
+                      <span className="font-medium">Notes:</span> {g.notes}
+                    </p>
+                  )
+                )}
+                {canEdit ? (
+                  <input
+                    maxLength={FIELD_LIMITS.email}
+                    type="email"
+                    aria-label={`Email for ${g.firstName} ${g.lastName}`}
+                    className="mt-1 w-56 rounded-md border border-neutral-200 dark:border-neutral-700 px-2 py-1 text-xs"
+                    placeholder="Email (for their RSVP link)"
+                    key={`${g.id}-email-${g.email ?? ""}`}
+                    defaultValue={g.email ?? ""}
+                    onInput={(e) => rowFields.markDirty(`guest-row-${g.id}-email`, e.currentTarget.value !== (g.email ?? ""))}
+                    onBlur={(e) => {
+                      rowFields.markDirty(`guest-row-${g.id}-email`, false);
+                      if (e.target.value !== (g.email ?? "")) onUpdateEmail(g.id, e.currentTarget);
+                    }}
+                  />
+                ) : (
+                  g.email && <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">{g.email}</p>
+                )}
+                {rsvpLinkResult[g.id] && (
+                  <p role="status" className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">{rsvpLinkResult[g.id]}</p>
                 )}
               </div>
               {error && errorGuestId === g.id && (

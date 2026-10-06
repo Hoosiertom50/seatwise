@@ -6,6 +6,8 @@ import { api, ApiError, apiErrorMessage } from "@/lib/api-client";
 import type { TimelineEntryDTO } from "@seatwise/shared";
 import { useUnsavedChanges } from "@/lib/unsaved-changes";
 import { OPEN_EDIT_MESSAGE, REFRESH_FAILED_MESSAGE } from "@/lib/display-format";
+// TS-193: the same limits the server checks (packages/shared/src/field-limits.ts).
+import { FIELD_LIMITS } from "@seatwise/shared";
 
 // TS-18 (Day-Of Timeline / Run-of-Show, FR-13.1/FR-13.2): a per-wedding, chronological schedule of
 // day-of events -- its own record, entirely independent of guests/tables/rules/seating plans.
@@ -196,6 +198,7 @@ export function TimelineTab({ weddingId, canEdit }: { weddingId: string; canEdit
                 Event
               </label>
               <input
+                maxLength={FIELD_LIMITS.timelineDescription}
                 id="entry-description"
                 className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
                 placeholder="e.g. Ceremony begins"
@@ -240,6 +243,7 @@ export function TimelineTab({ weddingId, canEdit }: { weddingId: string; canEdit
                       onChange={(e) => setEditTime(e.target.value)}
                     />
                     <input
+                      maxLength={FIELD_LIMITS.timelineDescription}
                       aria-label="Edit description"
                       className="flex-1 rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm"
                       value={editDescription}

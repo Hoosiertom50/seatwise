@@ -10,6 +10,8 @@ import type {
   PlanVersionDetailDTO,
   SeatingTableDTO,
 } from "@seatwise/shared";
+// TS-193: the same limits the server checks (packages/shared/src/field-limits.ts).
+import { FIELD_LIMITS } from "@seatwise/shared";
 
 // TS-11 (Day-Of / Emergency Mode, FR-8.1/8.2/8.3/8.4): a phone-friendly view for the day of the
 // wedding — find a guest fast, mark a no-show or walk-in, re-seat or swap without digging through
@@ -363,6 +365,7 @@ export function DayOfTab({
           Find a guest
         </label>
         <input
+          maxLength={FIELD_LIMITS.search}
           id="dayof-guest-search"
           className="min-h-11 w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-3 text-base"
           placeholder="Search by name or party..."
@@ -450,6 +453,7 @@ export function DayOfTab({
               First name
             </label>
             <input
+              maxLength={FIELD_LIMITS.personName}
               id="walkin-first-name"
               className="min-h-11 flex-1 rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-3 text-base"
               placeholder="First name"
@@ -461,6 +465,7 @@ export function DayOfTab({
               Last name
             </label>
             <input
+              maxLength={FIELD_LIMITS.personName}
               id="walkin-last-name"
               className="min-h-11 flex-1 rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-3 text-base"
               placeholder="Last name"

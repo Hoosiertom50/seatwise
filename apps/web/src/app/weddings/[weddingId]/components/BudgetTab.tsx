@@ -13,6 +13,8 @@ import type {
   VendorSuggestionDTO,
 } from "@seatwise/shared";
 import { useUnsavedChanges } from "@/lib/unsaved-changes";
+// TS-193: the same limits the server checks (packages/shared/src/field-limits.ts).
+import { FIELD_LIMITS, CONTACT_PHONE_HTML_PATTERN, CONTACT_PHONE_MESSAGE } from "@seatwise/shared";
 
 // TS-20 (FR-15.1/FR-15.2): a per-wedding vendor list plus the wedding's overall budget figure and
 // a running total/remaining against it. Money is always handled here in whole dollars for
@@ -415,6 +417,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
                 Budget ($)
               </label>
               <input
+                maxLength={FIELD_LIMITS.money}
                 id="budget-total"
                 // TS-175: a text box, not a number box -- a number box reports "1,500" as empty.
                 type="text"
@@ -475,6 +478,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
                 Vendor name
               </label>
               <input
+                maxLength={FIELD_LIMITS.vendorName}
                 id="vendor-name"
                 className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
                 value={name}
@@ -534,6 +538,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
               </select>
               {category === "OTHER" && (
                 <input
+                  maxLength={FIELD_LIMITS.vendorCategoryOther}
                   aria-label="Category label"
                   placeholder="e.g. Officiant"
                   className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
@@ -548,6 +553,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
                 Contact name (optional)
               </label>
               <input
+                maxLength={FIELD_LIMITS.vendorContactName}
                 id="vendor-contact-name"
                 className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
                 value={contactName}
@@ -559,6 +565,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
                 Cost ($, optional)
               </label>
               <input
+                maxLength={FIELD_LIMITS.money}
                 id="vendor-cost"
                 type="text"
                 inputMode="decimal"
@@ -572,6 +579,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
                 Contact email (optional)
               </label>
               <input
+                maxLength={FIELD_LIMITS.email}
                 id="vendor-contact-email"
                 type="email"
                 className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
@@ -584,6 +592,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
                 Contact phone (optional)
               </label>
               <input
+                maxLength={FIELD_LIMITS.vendorContactPhone} type="tel" inputMode="tel" autoComplete="tel" pattern={CONTACT_PHONE_HTML_PATTERN} title={CONTACT_PHONE_MESSAGE}
                 id="vendor-contact-phone"
                 className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
                 value={contactPhone}
@@ -607,6 +616,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
                 Contract details / notes (optional)
               </label>
               <textarea
+                maxLength={FIELD_LIMITS.vendorContractNotes}
                 id="vendor-notes"
                 rows={2}
                 placeholder="e.g. 50% deposit due 30 days before, final due day-of"
@@ -639,6 +649,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
                 <div className="flex flex-col gap-2">
                   <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                     <input
+                      maxLength={FIELD_LIMITS.vendorName}
                       aria-label="Edit vendor name"
                       className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm"
                       value={editVendor.name ?? ""}
@@ -658,6 +669,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
                     </select>
                     {editVendor.category === "OTHER" && (
                       <input
+                        maxLength={FIELD_LIMITS.vendorCategoryOther}
                         aria-label="Edit category label"
                         className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm"
                         value={editVendor.categoryOther ?? ""}
@@ -665,6 +677,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
                       />
                     )}
                     <input
+                      maxLength={FIELD_LIMITS.vendorContactName}
                       aria-label="Edit contact name"
                       placeholder="Contact name"
                       className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm"
@@ -672,6 +685,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
                       onChange={(e) => setEditVendor({ ...editVendor, contactName: e.target.value })}
                     />
                     <input
+                      maxLength={FIELD_LIMITS.email} inputMode="email"
                       aria-label="Edit contact email"
                       placeholder="Contact email"
                       className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm"
@@ -679,6 +693,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
                       onChange={(e) => setEditVendor({ ...editVendor, contactEmail: e.target.value })}
                     />
                     <input
+                      maxLength={FIELD_LIMITS.vendorContactPhone} type="tel" inputMode="tel" autoComplete="tel" pattern={CONTACT_PHONE_HTML_PATTERN} title={CONTACT_PHONE_MESSAGE}
                       aria-label="Edit contact phone"
                       placeholder="Contact phone"
                       className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm"
@@ -693,6 +708,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
                       onChange={(e) => setEditVendor({ ...editVendor, arrivalTime: e.target.value || null })}
                     />
                     <input
+                      maxLength={FIELD_LIMITS.money}
                       aria-label="Edit cost"
                       type="text"
                       inputMode="decimal"
@@ -703,6 +719,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
                     />
                   </div>
                   <textarea
+                    maxLength={FIELD_LIMITS.vendorContractNotes}
                     aria-label="Edit contract notes"
                     rows={2}
                     className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm"

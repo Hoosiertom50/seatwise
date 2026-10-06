@@ -6,6 +6,8 @@ import { useRouter } from "next/navigation";
 import { api, ApiError } from "@/lib/api-client";
 import { ConfirmDeleteButton } from "@/components/ConfirmDeleteButton";
 import { SUPPORT_EMAIL, SUPPORT_MAILTO, SUPPORT_PROMISE } from "@/lib/support";
+// TS-193: the same limits the server checks (packages/shared/src/field-limits.ts).
+import { FIELD_LIMITS } from "@seatwise/shared";
 
 // TS-105: the signed-in planner's account page -- who they're signed in as, and deleting the
 // account. Deleting needs the password, and is refused while they still own any wedding (Tom's
@@ -119,6 +121,7 @@ export default function AccountPage() {
           Your password
         </label>
         <input
+          maxLength={FIELD_LIMITS.password}
           id="delete-password"
           type="password"
           autoComplete="current-password"

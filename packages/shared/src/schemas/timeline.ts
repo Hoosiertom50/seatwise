@@ -1,6 +1,7 @@
 import { z } from "zod";
 // TS-180: free text refuses hidden control characters (see ../safe-text).
 import { safeText } from "../safe-text";
+import { FIELD_LIMITS } from "../field-limits";
 import { expectedRevisionField } from "./common";
 
 // TS-18 (Day-Of Timeline / Run-of-Show, FR-13.1/FR-13.2): a per-wedding chronological schedule of
@@ -15,7 +16,7 @@ const timeLabel = z
 
 export const createTimelineEntrySchema = z.object({
   time: timeLabel,
-  description: safeText(300, { required: "A short description is required" }),
+  description: safeText(FIELD_LIMITS.timelineDescription, { required: "A short description is required" }),
 });
 export type CreateTimelineEntryInput = z.infer<typeof createTimelineEntrySchema>;
 
