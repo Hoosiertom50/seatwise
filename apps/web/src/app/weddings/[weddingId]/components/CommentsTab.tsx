@@ -7,6 +7,7 @@ import type { CommentDTO, GuestDTO, SeatingTableDTO, TimelineEntryDTO } from "@s
 import { useUnsavedChanges } from "@/lib/unsaved-changes";
 // TS-193: the same limits the server checks (packages/shared/src/field-limits.ts).
 import { FIELD_LIMITS, timelineTimeLabel } from "@seatwise/shared";
+import { focusIfLost } from "@/lib/focus-if-lost";
 
 // TS-13 (Collaboration & Notifications, FR-10.3): comments attached to a guest or table. A
 // dedicated tab (rather than inline per-row) keeps this tractable — pick a target, see its
@@ -133,12 +134,8 @@ export function CommentsTab({
       setReplyBodies((cur) => ({ ...cur, [parentCommentId]: "" }));
       setReplyingTo(null);
       // TS-212: the reply box closes -- focus goes back to the thread's Reply button (it used to
-      // drop to the page; Cancel already did this).
-      setTimeout(() => {
-        const active = document.activeElement;
-        if (!active || active === document.body || !active.isConnected)
-          document.getElementById(`reply-open-${parentCommentId}`)?.focus();
-      }, 0);
+      // drop to the page; Cancel already did this). Checked again after the redraw (lib/focus-if-lost).
+      focusIfLost(`reply-open-${parentCommentId}`);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't post that reply.");
     } finally {
