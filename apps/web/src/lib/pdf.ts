@@ -20,23 +20,48 @@ export interface ExportGuestRow {
   plusOneNames?: string | null;
 }
 
+// TS-205: text widths at size 1, measured once per font and piece of text. Measuring lays the
+// whole text out again each time, and the place cards and lookup list used to measure the same name
+// dozens of times over (every split point, every size, every step of a search) -- 200 place cards
+// for names made of many short words took about 25 seconds. A width grows in step with the size,
+// so one measurement at size 1 serves every size. Kept per font, so it goes away with its PDF.
+const unitWidths = new WeakMap<PDFFont, Map<string, number>>();
+function unitWidth(font: PDFFont, text: string): number {
+  let cache = unitWidths.get(font);
+  if (!cache) unitWidths.set(font, (cache = new Map()));
+  let width = cache.get(text);
+  if (width === undefined) {
+    width = font.widthOfTextAtSize(text, 1);
+    cache.set(text, width);
+  }
+  return width;
+}
+const widthAt = (font: PDFFont, text: string, size: number) => unitWidth(font, text) * size;
+
 /**
  * TS-180: `text` cut short with an ellipsis so it fits `maxWidth` at `size` -- long names and table
  * names used to run off the page, into the table column, or over a place card's cut line.
+ * TS-205: the cut is found from each character's width (measured once) added up, then checked
+ * against the real width of the result -- a handful of measurements instead of a full one per step
+ * of a search.
  */
 export function fitText(font: PDFFont, text: string, size: number, maxWidth: number): string {
-  if (font.widthOfTextAtSize(text, size) <= maxWidth) return text;
+  if (widthAt(font, text, size) <= maxWidth) return text;
   const ellipsis = "…";
   const chars = [...text];
-  let low = 0;
-  let high = chars.length;
-  // The longest start of the text that fits with the ellipsis after it.
-  while (low < high) {
-    const mid = Math.ceil((low + high) / 2);
-    if (font.widthOfTextAtSize(chars.slice(0, mid).join("").trimEnd() + ellipsis, size) <= maxWidth) low = mid;
-    else high = mid - 1;
+  const cut = (n: number) => chars.slice(0, n).join("").trimEnd() + ellipsis;
+  const fits = (n: number) => widthAt(font, cut(n), size) <= maxWidth;
+  // Estimate: the most characters whose widths, plus the ellipsis, add up to no more than maxWidth.
+  let room = maxWidth / size - unitWidth(font, ellipsis);
+  let n = 0;
+  while (n < chars.length && room - unitWidth(font, chars[n]) >= 0) {
+    room -= unitWidth(font, chars[n]);
+    n++;
   }
-  return chars.slice(0, low).join("").trimEnd() + ellipsis;
+  // Then settle it on the real width (letters drawn together can differ slightly from the sum).
+  while (n > 0 && !fits(n)) n--;
+  while (n < chars.length && fits(n + 1)) n++;
+  return cut(n);
 }
 
 interface Fonts {
@@ -220,16 +245,29 @@ export async function buildLookupListPdf(
  * that still doesn't fit at 8pt is drawn at 8pt.
  */
 export function fitCardName(font: PDFFont, name: string, maxWidth: number): { lines: string[]; size: number } {
-  const widest = (lines: string[], size: number) => Math.max(...lines.map((l) => font.widthOfTextAtSize(l, size)));
+  // TS-205: each line is measured once (at size 1, see unitWidth) and scaled for each size; the
+  // best place to split is found from each word's width, measured once, added up. Before, every
+  // possible split was laid out in full -- quadratic in the number of words.
+  const widest = (lines: string[], size: number) => Math.max(...lines.map((l) => widthAt(font, l, size)));
   const options: string[][] = [[name]];
   const words = name.split(" ");
   if (words.length > 1) {
-    let best: string[] | null = null;
+    const space = unitWidth(font, " ");
+    const wordWidths = words.map((w) => unitWidth(font, w));
+    const total = wordWidths.reduce((sum, w) => sum + w, 0) + space * (words.length - 1);
+    let bestAt = 1;
+    let bestWidest = Infinity;
+    let left = -space;
     for (let i = 1; i < words.length; i++) {
-      const pair = [words.slice(0, i).join(" "), words.slice(i).join(" ")];
-      if (!best || widest(pair, 18) < widest(best, 18)) best = pair;
+      left += space + wordWidths[i - 1];
+      const right = total - left - space;
+      const pairWidest = Math.max(left, right);
+      if (pairWidest < bestWidest) {
+        bestWidest = pairWidest;
+        bestAt = i;
+      }
     }
-    options.push(best!);
+    options.push([words.slice(0, bestAt).join(" "), words.slice(bestAt).join(" ")]);
   }
   for (let size = 18; size >= 8; size--) {
     for (const lines of options) if (widest(lines, size) <= maxWidth) return { lines, size };
