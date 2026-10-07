@@ -26,7 +26,22 @@ export type VendorCategory = z.infer<typeof vendorCategoryEnum>;
 // FR-15.1: money is always whole cents (an integer), never a float or a decimal string -- see the
 // Vendor model comment in schema.prisma for why. Optional/nullable: a vendor can be recorded
 // before its cost is finalized.
-const costCentsField = z.number().int().min(0).max(100_000_000).optional().nullable();
+// TS-214: the limits in plain dollars -- these messages reach the planner, who never sees cents
+// ("Number must be less than or equal to 100000000" said nothing useful).
+export const MAX_VENDOR_COST_CENTS = 100_000_000;
+export const VENDOR_COST_TOO_HIGH_MESSAGE = "A vendor's cost can be at most $1,000,000.00.";
+export const MAX_BUDGET_CENTS = 1_000_000_000;
+export const BUDGET_TOO_HIGH_MESSAGE = "The budget can be at most $10,000,000.00.";
+export const MONEY_NEGATIVE_MESSAGE = "Enter an amount of $0.00 or more.";
+const MONEY_CENTS_MESSAGE = "Enter dollars and cents, like 1250.00.";
+
+const costCentsField = z
+  .number({ invalid_type_error: MONEY_CENTS_MESSAGE })
+  .int(MONEY_CENTS_MESSAGE)
+  .min(0, MONEY_NEGATIVE_MESSAGE)
+  .max(MAX_VENDOR_COST_CENTS, VENDOR_COST_TOO_HIGH_MESSAGE)
+  .optional()
+  .nullable();
 
 // Same pairing rule as the Purpose table criterion: the free-text label only means anything
 // alongside category === "OTHER", and OTHER without a label would show nothing useful in a vendor
@@ -96,7 +111,13 @@ export type UpdateVendorInput = z.infer<typeof updateVendorSchema>;
 // clearing it means no budget has been set, matching budgetCents' own "optional" framing in
 // FR-15.2 rather than requiring a wedding to have one before vendors can be tracked at all.
 export const setBudgetSchema = z.object({
-  budgetCents: z.number().int().min(0).max(1_000_000_000).nullable(),
+  // TS-214: plain dollar messages (see MAX_BUDGET_CENTS).
+  budgetCents: z
+    .number({ invalid_type_error: MONEY_CENTS_MESSAGE })
+    .int(MONEY_CENTS_MESSAGE)
+    .min(0, MONEY_NEGATIVE_MESSAGE)
+    .max(MAX_BUDGET_CENTS, BUDGET_TOO_HIGH_MESSAGE)
+    .nullable(),
   // TS-92: the budgetRevision the client last saw -- a stale save is refused (409) rather than
   // overwriting a collaborator's newer budget figure.
   expectedRevision: expectedRevisionField,
@@ -158,7 +179,7 @@ export interface VendorViewDTO {
     arrivalTime: string | null;
   };
   otherVendors: { name: string; category: VendorCategory; categoryOther: string | null; arrivalTime: string | null }[];
-  timeline: { time: string; description: string }[];
+  timeline: { time: string; nextDay: boolean; description: string }[];
 }
 
 // TS-97: GET /api/v1/vendor-suggestions -- a vendor from another wedding the planner owns. Only

@@ -43,6 +43,9 @@
 // `sourceWeddingId IS NULL`: a template legitimately orphaned by a real planner deleting its source
 // wedding is a supported product state, not test residue, and must never be swept.
 //
+// TS-215: so are the notification-breaking triggers and functions a killed run can leave behind
+// (named pw_fail_notify_<test account id>, matched on that exact shape -- see sweepNotificationTriggers).
+//
 // TS-192: rate-limit counters the run left behind are cleared too -- only rows whose key holds a
 // made-up test network address (198.18.x.x / 198.19.x.x, from uniqueTestAddress), a test account's
 // email (@example.invalid) or a test account's id. Those can only have come from this suite, and
@@ -65,8 +68,69 @@ interface SweepRow {
   name: string;
 }
 
+/** TS-215: exactly the names breakNotificationsFor (testDatabase.ts) gives its trigger and function. */
+export const TEST_TRIGGER_NAME = /^pw_fail_notify_[0-9a-f]{32}$/;
+
+/**
+ * TS-215: drops the triggers and functions testDatabase.ts's breakNotificationsFor makes. The test
+ * removes them in its own `finally`, but a run killed part-way never gets there, and every later
+ * notification for that account then failed in the local database. Only names matching
+ * TEST_TRIGGER_NAME exactly (a test account's id), so nothing else can be touched. Logged, never
+ * fails the run.
+ */
+async function sweepNotificationTriggers(pool: Pool, dryRun: boolean): Promise<void> {
+  try {
+    const { rows: triggers } = await pool.query<{ name: string }>(
+      `SELECT t.tgname AS name FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid
+       WHERE c.relname = 'notifications' AND NOT t.tgisinternal AND t.tgname LIKE 'pw\\_fail\\_notify\\_%'`,
+    );
+    const { rows: functions } = await pool.query<{ name: string }>(
+      `SELECT p.proname AS name FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+       WHERE n.nspname = current_schema() AND p.proname LIKE 'pw\\_fail\\_notify\\_%'`,
+    );
+    const triggerNames = triggers.map((t) => t.name).filter((n) => TEST_TRIGGER_NAME.test(n));
+    const functionNames = functions.map((f) => f.name).filter((n) => TEST_TRIGGER_NAME.test(n));
+    if (triggerNames.length === 0 && functionNames.length === 0) return;
+    if (dryRun) {
+      console.log(`[teardown-sweep] DRY RUN -- ${triggerNames.length} test trigger(s) and ${functionNames.length} test function(s) would be dropped.`);
+      return;
+    }
+    for (const name of triggerNames) await pool.query(`DROP TRIGGER IF EXISTS ${name} ON "notifications"`);
+    for (const name of functionNames) await pool.query(`DROP FUNCTION IF EXISTS ${name}()`);
+    console.log(`[teardown-sweep] Dropped ${triggerNames.length} test trigger(s) and ${functionNames.length} test function(s).`);
+  } catch (err) {
+    console.warn(`[teardown-sweep] Test trigger sweep failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+/** TS-215: projects that never touch the database (no app, no browser). */
+const DATABASE_FREE_PROJECTS = new Set(["framework-unit", "unit"]);
+
+/**
+ * TS-215: the projects named on the command line (`--project=x` or `--project x`), or null when
+ * none were (every project runs). Playwright runs this teardown for any run, whatever projects it
+ * selects -- so a quick unit-test run used to sweep away every test account while a browser run in
+ * another terminal was still using them.
+ */
+export function selectedProjects(argv: readonly string[]): string[] | null {
+  const names: string[] = [];
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg.startsWith("--project=")) names.push(arg.slice("--project=".length));
+    else if (arg === "--project" && i + 1 < argv.length) names.push(argv[++i]);
+  }
+  return names.length > 0 ? names : null;
+}
+
+/** TS-215: true when only database-free projects were selected -- then there's nothing to sweep. */
+export function onlyDatabaseFreeProjects(argv: readonly string[]): boolean {
+  const names = selectedProjects(argv);
+  return names !== null && names.every((n) => DATABASE_FREE_PROJECTS.has(n));
+}
+
 export default async function globalTeardown(): Promise<void> {
   const dryRun = process.env.PW_TEARDOWN_SWEEP === DRY_RUN_VALUE;
+  if (onlyDatabaseFreeProjects(process.argv)) return;
 
   let pool: Pool | undefined;
   try {
@@ -91,6 +155,10 @@ export default async function globalTeardown(): Promise<void> {
     }
 
     pool = new Pool({ connectionString });
+
+    // TS-215: notification-breaking triggers (testDatabase.ts's breakNotificationsFor) left by a run
+    // killed before the test's own `finally` put things back.
+    await sweepNotificationTriggers(pool, dryRun);
 
     // Guard 1: marker match only. This predicate is the whole safety model -- it is the single
     // place that decides a row may be deleted, and it can only ever match names ids.ts produced.

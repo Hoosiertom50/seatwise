@@ -26,12 +26,12 @@ test("expectedRevision accepts the largest int4 and refuses one more, everywhere
 });
 
 test("wedding dates must fall between 1900 and 2200", () => {
-  assert.equal(updateWeddingSchema.safeParse({ eventDate: "2027-06-15" }).success, true);
-  assert.equal(updateWeddingSchema.safeParse({ eventDate: "1900-01-01" }).success, true);
-  assert.equal(updateWeddingSchema.safeParse({ eventDate: "2200-12-31" }).success, true);
-  assert.equal(updateWeddingSchema.safeParse({ eventDate: null }).success, true);
-  assert.equal(updateWeddingSchema.safeParse({ eventDate: "0000-01-01" }).success, false);
-  assert.equal(updateWeddingSchema.safeParse({ eventDate: "1899-12-31" }).success, false);
-  assert.equal(updateWeddingSchema.safeParse({ rsvpCutoffDate: "2201-01-01" }).success, false);
-  assert.equal(updateWeddingSchema.safeParse({ rsvpCutoffDate: "9999-12-31" }).success, false);
+  assert.equal(updateWeddingSchema.safeParse({ expectedRevision: 0, eventDate: "2027-06-15" }).success, true);
+  assert.equal(updateWeddingSchema.safeParse({ expectedRevision: 0, eventDate: "1900-01-01" }).success, true);
+  assert.equal(updateWeddingSchema.safeParse({ expectedRevision: 0, eventDate: "2200-12-31" }).success, true);
+  assert.equal(updateWeddingSchema.safeParse({ expectedRevision: 0, eventDate: null }).success, true);
+  assert.equal(updateWeddingSchema.safeParse({ expectedRevision: 0, eventDate: "0000-01-01" }).success, false);
+  assert.equal(updateWeddingSchema.safeParse({ expectedRevision: 0, eventDate: "1899-12-31" }).success, false);
+  assert.equal(updateWeddingSchema.safeParse({ expectedRevision: 0, rsvpCutoffDate: "2201-01-01" }).success, false);
+  assert.equal(updateWeddingSchema.safeParse({ expectedRevision: 0, rsvpCutoffDate: "9999-12-31" }).success, false);
 });

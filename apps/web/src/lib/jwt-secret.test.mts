@@ -42,3 +42,59 @@ test("TS-192: in production, the published development encryption key is refused
   const { DEV_ONLY_ENCRYPTION_KEY } = await import("../../../../packages/shared/src/placeholder-secrets");
   assert.match(jwtSecretProblem(DEV_ONLY_ENCRYPTION_KEY, "production") ?? "", /placeholder/);
 });
+
+// TS-204: a placeholder pasted with its quotes, as a whole .env line, with invisible characters,
+// or with something added to it, is still a placeholder.
+const ZERO_WIDTH_SPACE = String.fromCharCode(0x200b);
+const BYTE_ORDER_MARK = String.fromCharCode(0xfeff);
+const NO_BREAK_SPACE = String.fromCharCode(0x00a0);
+
+test("TS-204: placeholder variants are refused in production", () => {
+  const variants = [
+    `"replace-with-a-long-random-secret"`,
+    `'replace-with-a-long-random-secret'`,
+    "JWT_SECRET=replace-with-a-long-random-secret",
+    `JWT_SECRET="replace-with-a-long-random-secret"`,
+    `export JWT_SECRET='replace-with-a-long-random-secret'`,
+    `${ZERO_WIDTH_SPACE}replace-with-a-long-random-secret${BYTE_ORDER_MARK}`,
+    `replace${ZERO_WIDTH_SPACE}-with-a-long-random-secret`,
+    `${NO_BREAK_SPACE}"replace-with-a-long-random-secret"${NO_BREAK_SPACE}`,
+    "REPLACE_WITH_A_LONG_RANDOM_SECRET",
+    "replace-with-a-long-random-secret-please-2026",
+    "my-replace-with-a-long-random-secret",
+    `"a long random string"`,
+    "changeme-changeme-changeme-changeme-1",
+    `"dev-only-encryption-key-change-in-production-9d2f7a1c"`,
+  ];
+  for (const v of variants) {
+    assert.match(jwtSecretProblem(v, "production") ?? "", /placeholder/, `expected ${JSON.stringify(v)} to be refused as a placeholder`);
+  }
+});
+
+test("TS-204: a quoted value is measured without its quotes", () => {
+  assert.match(jwtSecretProblem(`"${"x".repeat(30)}"`, "production") ?? "", /shorter than 32/);
+});
+
+test("TS-204: random values are not mistaken for placeholders", () => {
+  for (let i = 0; i < 200; i++) {
+    assert.equal(jwtSecretProblem(randomBytes(32).toString("hex"), "production"), null);
+    assert.equal(jwtSecretProblem(randomBytes(32).toString("base64"), "production"), null);
+  }
+});
+
+test("TS-204: JWT_SECRET may not be the same as ENCRYPTION_KEY in production", () => {
+  const other = randomBytes(32).toString("hex");
+  assert.match(jwtSecretProblem(GOOD, "production", GOOD) ?? "", /same as ENCRYPTION_KEY/);
+  assert.match(jwtSecretProblem(GOOD, "production", ` "${GOOD}" `) ?? "", /same as ENCRYPTION_KEY/);
+  assert.equal(jwtSecretProblem(GOOD, "production", other), null);
+  assert.equal(jwtSecretProblem(GOOD, "production", undefined), null);
+  assert.equal(jwtSecretProblem(GOOD, "development", GOOD), null);
+});
+
+// Copilot review on PR #102: keys are case-sensitive -- an upper- and lower-case version of the same
+// characters are two different keys, so they aren't refused as "the same".
+test("JWT_SECRET and ENCRYPTION_KEY that differ only in letter case are different keys", () => {
+  const mixed = "Ab3dEf9hIjK2mNoPqR5tUvWxYz7aBcDeFgH1jKlMnOp";
+  assert.equal(jwtSecretProblem(mixed, "production", mixed.toLowerCase()), null);
+  assert.match(jwtSecretProblem(mixed, "production", `'${mixed}'`) ?? "", /same as ENCRYPTION_KEY/);
+});

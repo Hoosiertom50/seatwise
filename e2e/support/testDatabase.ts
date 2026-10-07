@@ -82,6 +82,28 @@ export async function inviteToken(inviteId: string): Promise<string> {
   return token;
 }
 
+/**
+ * TS-203: whether a test invite's email went out (the app records when). Accepting one that did
+ * confirms the account's address; `setInviteEmailed(id, false)` makes it like an invite whose email
+ * failed, whose link the owner copied and sent some other way.
+ */
+export async function inviteWasEmailed(inviteId: string): Promise<boolean> {
+  const { rows } = await testPool().query<{ emailed: boolean }>(
+    `SELECT "emailedAt" IS NOT NULL AS emailed FROM "wedding_invites" WHERE id = $1 AND email LIKE $2`,
+    [inviteId, TEST_EMAIL_PATTERN],
+  );
+  if (!rows[0]) throw new Error(`testDatabase: no test invite ${inviteId}.`);
+  return rows[0].emailed;
+}
+
+export async function setInviteEmailed(inviteId: string, emailed: boolean): Promise<void> {
+  const { rowCount } = await testPool().query(
+    `UPDATE "wedding_invites" SET "emailedAt" = CASE WHEN $3 THEN now() ELSE NULL END WHERE id = $1 AND email LIKE $2`,
+    [inviteId, TEST_EMAIL_PATTERN, emailed],
+  );
+  if (!rowCount) throw new Error(`testDatabase: no test invite ${inviteId}.`);
+}
+
 /** TS-160: what an invite row stores in place of its token. */
 export async function storedInviteToken(inviteId: string): Promise<string> {
   const { rows } = await testPool().query<{ token: string }>(
@@ -335,6 +357,10 @@ async function waitForSessionsBlockedBy(pid: number, count: number, what: string
 export interface HeldWeddingLock {
   /** Resolves once `count` of the app's own database sessions are waiting on this lock. */
   waitForWaiters(count: number): Promise<void>;
+  /** TS-204: marks one of the wedding's plan versions Approved while the lock is still held (an
+   * approval also takes the wedding's lock now, so it can't land from the app meanwhile), then lets
+   * the waiting requests carry on. */
+  approvePlanAndRelease(planVersionId: string): Promise<void>;
   /** Lets the waiting requests carry on. */
   release(): Promise<void>;
 }
@@ -363,16 +389,29 @@ export async function holdWeddingLock(weddingId: string): Promise<HeldWeddingLoc
   }
   const { rows: me } = await client.query<{ pid: number }>(`SELECT pg_backend_pid() AS pid`);
   const pid = me[0].pid;
+  let open = true;
+  const finish = async (sql: "COMMIT" | "ROLLBACK") => {
+    if (!open) return;
+    open = false;
+    try {
+      await client.query(sql);
+    } finally {
+      await client.end();
+    }
+  };
   return {
     async waitForWaiters(count: number) {
       await waitForSessionsBlockedBy(pid, count, "the wedding lock");
     },
+    async approvePlanAndRelease(planVersionId: string) {
+      await client.query(
+        `UPDATE "plan_versions" SET status = 'APPROVED', "approvedAt" = now(), revision = revision + 1 WHERE id = $1 AND "weddingId" = $2`,
+        [planVersionId, weddingId],
+      );
+      await finish("COMMIT");
+    },
     async release() {
-      try {
-        await client.query("ROLLBACK");
-      } finally {
-        await client.end();
-      }
+      await finish("ROLLBACK");
     },
   };
 }
@@ -480,24 +519,25 @@ export interface HeldHandOff {
 
 /**
  * TS-187: pauses a hand-off of a test wedding half-way -- after it has made the collaborator the
- * owner, before it's saved. A hand-off's last step adds the old owner back as an Edit collaborator;
- * this holds an unsaved collaborator row for that same person on that wedding, so that step waits
- * for it (the database allows one row per person per wedding). release() drops the row unsaved and
- * the hand-off finishes as normal. Test weddings and accounts only.
+ * owner, before it's saved. A hand-off's last step adds the old owner back as an Edit collaborator,
+ * which makes the database check the old owner's account is there (a share lock on its row); this
+ * holds that account row locked, so that step waits. release() lets it go and the hand-off finishes
+ * as normal. Test weddings and accounts only.
+ * TS-204: it used to hold an unsaved collaborator row for the old owner instead -- but adding that
+ * row share-locks the wedding, and a hand-off now locks the wedding FOR UPDATE first, so it waited
+ * at its very start rather than half-way.
  */
 export async function holdOwnershipHandOff(weddingId: string, ownerEmail: string): Promise<HeldHandOff> {
   const { Client } = await import("pg");
-  const { randomUUID } = await import("node:crypto");
   testPool(); // the same production refusal as every other helper here
   const client = new Client({ connectionString: resolveDatabaseUrl() });
   await client.connect();
   await client.query("BEGIN");
   const { rowCount } = await client.query(
-    `INSERT INTO "wedding_collaborators" (id, "weddingId", "userId", role, "permissionLevel")
-     SELECT $1, w.id, u.id, 'COLLABORATOR'::"CollaboratorRole", 'VIEW'::"CollaboratorPermission"
-     FROM "weddings" w JOIN "users" u ON u.id = w."ownerId"
-     WHERE w.id = $2 AND u.email = $3 AND u.email LIKE $4`,
-    [randomUUID(), weddingId, ownerEmail, TEST_EMAIL_PATTERN],
+    `SELECT u.id FROM "users" u JOIN "weddings" w ON w."ownerId" = u.id
+     WHERE w.id = $1 AND u.email = $2 AND u.email LIKE $3
+     FOR UPDATE OF u`,
+    [weddingId, ownerEmail, TEST_EMAIL_PATTERN],
   );
   if (!rowCount) {
     await client.query("ROLLBACK");
@@ -674,12 +714,8 @@ export async function holdDeletion(kind: "wedding" | "guest" | "account", idOrEm
  */
 export async function useUpAccountEmailAllowance(address: string, limit: number, remaining: number): Promise<void> {
   if (!/^198\.(18|19)\.\d+\.\d+$/.test(address)) throw new Error(`testDatabase: ${address} isn't a test address.`);
-  const day = 86_400_000;
-  await testPool().query(
-    `INSERT INTO "rate_limit_counters" (key, "windowStart", count) VALUES ($1, $2::timestamp, $3)
-     ON CONFLICT (key, "windowStart") DO UPDATE SET count = $3`,
-    [`account-email:addr:day:${address}`, utc(new Date(Math.floor(Date.now() / day) * day)), limit - remaining],
-  );
+  // TS-203: a rolling 24-hour count, like every daily limit now (see setCounter).
+  await setCounter(`account-email:addr:day:${address}`, 86_400, limit - remaining);
 }
 
 /**
@@ -709,6 +745,26 @@ function currentWindowStart(windowSeconds: number): Date {
   return new Date(Math.floor(Date.now() / ms) * ms);
 }
 
+/** TS-215: how close to a window's end a preset waits for the next window instead. */
+export const WINDOW_END_MARGIN_MS = 15_000;
+
+/**
+ * TS-215: how long to wait before presetting a counter so the test's own requests land in the same
+ * window -- 0 normally; within WINDOW_END_MARGIN_MS of the window's end (a daily counter at 00:00
+ * UTC, 8 pm Eastern), until just after the next window starts. Pure, so it's unit-tested.
+ */
+export function waitBeforePresetMs(windowSeconds: number, nowMs: number): number {
+  const ms = windowSeconds * 1000;
+  const left = ms - (nowMs % ms);
+  return left <= WINDOW_END_MARGIN_MS ? left + 250 : 0;
+}
+
+/** TS-215: waits, if needed, so a counter preset now is still the current window when the test uses it. */
+async function settleIntoWindow(windowSeconds: number): Promise<void> {
+  const wait = waitBeforePresetMs(windowSeconds, Date.now());
+  if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
+}
+
 /**
  * TS-194: the app stores rate-limit windows as UTC (the column has no time zone), so the helpers
  * do too -- as text, whose "Z" the column ignores. A JavaScript date would be stored in this
@@ -721,27 +777,45 @@ function utc(date: Date): string {
 /** TS-177: how many emails a test account has counted against one of its limits in the current window. */
 export async function accountEmailCount(email: string, counter: AccountEmailCounter): Promise<number> {
   const { prefix, windowSeconds } = ACCOUNT_EMAIL_COUNTERS[counter];
-  const { rows } = await testPool().query<{ count: number }>(
-    `SELECT count FROM "rate_limit_counters" WHERE key = $1 AND "windowStart" = $2::timestamp`,
-    [`${prefix}${await testAccountId(email)}`, utc(currentWindowStart(windowSeconds))],
-  );
-  return rows[0]?.count ?? 0;
+  return readCounter(`${prefix}${await testAccountId(email)}`, windowSeconds);
 }
 
 /** TS-177: sets a test account's count against one of its email limits, so a test can reach a limit
  * without sending a hundred emails. */
 export async function setAccountEmailCount(email: string, counter: AccountEmailCounter, count: number): Promise<void> {
   const { prefix, windowSeconds } = ACCOUNT_EMAIL_COUNTERS[counter];
-  await testPool().query(
-    `INSERT INTO "rate_limit_counters" (key, "windowStart", count) VALUES ($1, $2::timestamp, $3)
-     ON CONFLICT (key, "windowStart") DO UPDATE SET count = $3`,
-    [`${prefix}${await testAccountId(email)}`, utc(currentWindowStart(windowSeconds)), count],
-  );
+  await setCounter(`${prefix}${await testAccountId(email)}`, windowSeconds, count);
 }
+
+/**
+ * TS-203: limits of a day or more now roll over the last 24 hours (packages/db/src/queries/rate-limit.ts):
+ * the app keeps them in hourly windows and counts the current hour plus the 24 before it. A test
+ * that sets such a count replaces every window still counted with one in the current hour; reading
+ * it adds up the same windows the app does.
+ */
+const HOUR_MS = 3_600_000;
+const rollsDaily = (windowSeconds: number) => windowSeconds >= 86_400;
 
 /** TS-178: sets one counter's value in its current window. Every caller below checks first that the
  * key belongs to a test address or test account. */
 async function setCounter(key: string, windowSeconds: number, count: number, window: "current" | "previous" = "current"): Promise<void> {
+  // TS-215: a preset made just before the window ends would be in the next window by the time the
+  // test's request arrives -- wait for the new window first. TS-203: not for a rolling limit, whose
+  // next hour still counts this one.
+  if (!rollsDaily(windowSeconds)) await settleIntoWindow(windowSeconds);
+  if (rollsDaily(windowSeconds)) {
+    const hour = currentWindowStart(HOUR_MS / 1000);
+    await testPool().query(`DELETE FROM "rate_limit_counters" WHERE key = $1 AND "windowStart" >= $2::timestamp`, [
+      key,
+      utc(new Date(hour.getTime() - windowSeconds * 1000 - HOUR_MS)),
+    ]);
+    await testPool().query(`INSERT INTO "rate_limit_counters" (key, "windowStart", count) VALUES ($1, $2::timestamp, $3)`, [
+      key,
+      utc(hour),
+      count,
+    ]);
+    return;
+  }
   const start = currentWindowStart(windowSeconds);
   // TS-184: "previous" is the window just before the current one, which shorter limits still count.
   if (window === "previous") start.setTime(start.getTime() - windowSeconds * 1000);
@@ -753,6 +827,16 @@ async function setCounter(key: string, windowSeconds: number, count: number, win
 }
 
 async function readCounter(key: string, windowSeconds: number): Promise<number> {
+  if (rollsDaily(windowSeconds)) {
+    // TS-203: the current hour and every hour that started in the 24 hours before it.
+    const hour = currentWindowStart(HOUR_MS / 1000);
+    const { rows } = await testPool().query<{ n: number }>(
+      `SELECT COALESCE(SUM(count), 0)::int AS n FROM "rate_limit_counters"
+        WHERE key = $1 AND "windowStart" >= $2::timestamp AND "windowStart" <= $3::timestamp`,
+      [key, utc(new Date(hour.getTime() - windowSeconds * 1000)), utc(hour)],
+    );
+    return rows[0].n;
+  }
   const { rows } = await testPool().query<{ count: number }>(
     `SELECT count FROM "rate_limit_counters" WHERE key = $1 AND "windowStart" = $2::timestamp`,
     [key, utc(currentWindowStart(windowSeconds))],

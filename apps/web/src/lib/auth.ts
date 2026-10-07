@@ -1,7 +1,7 @@
 import { SignJWT, jwtVerify } from "jose";
 import type { NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
-import { isPlaceholderSecret } from "@seatwise/shared";
+import { isPlaceholderSecret, normalizeSecretForCheck, sameSecret } from "@seatwise/shared";
 import { appBaseUrl } from "./app-url";
 
 const JWT_SECRET = process.env.JWT_SECRET;
@@ -18,13 +18,22 @@ const MIN_SECRET_LENGTH = 32;
  * short or placeholder secret is refused. Outside production only a missing one is, so local
  * development keeps working with the README's example value.
  */
-export function jwtSecretProblem(secret: string | undefined, nodeEnv: string | undefined): string | null {
+export function jwtSecretProblem(
+  secret: string | undefined,
+  nodeEnv: string | undefined,
+  encryptionKey?: string | undefined
+): string | null {
   if (!secret) return "JWT_SECRET environment variable is not set";
   if (nodeEnv !== "production") return null;
   if (isPlaceholderSecret(secret)) {
     return "JWT_SECRET is still a placeholder value -- set it to a long random value (e.g. openssl rand -hex 32).";
   }
-  if (secret.length < MIN_SECRET_LENGTH) {
+  // TS-204: one value for both would mean anyone who learns either can do what both protect.
+  if (sameSecret(secret, encryptionKey)) {
+    return "JWT_SECRET is the same as ENCRYPTION_KEY -- give each its own long random value (e.g. openssl rand -hex 32).";
+  }
+  // TS-204: measured without surrounding quotes or invisible characters a paste can add.
+  if (normalizeSecretForCheck(secret).length < MIN_SECRET_LENGTH) {
     return `JWT_SECRET is shorter than ${MIN_SECRET_LENGTH} characters -- set it to a long random value (e.g. openssl rand -hex 32).`;
   }
   return null;
@@ -34,7 +43,7 @@ function getSecretKey() {
   // TS-172 only logged a short secret; TS-179 refuses it (and a placeholder) in production, the same
   // way ENCRYPTION_KEY is refused (packages/db/src/crypto.ts). Checked on use, not at import, so
   // `next build` doesn't need the secret.
-  const problem = jwtSecretProblem(JWT_SECRET, process.env.NODE_ENV);
+  const problem = jwtSecretProblem(JWT_SECRET, process.env.NODE_ENV, process.env.ENCRYPTION_KEY);
   if (problem) throw new Error(problem);
   return new TextEncoder().encode(JWT_SECRET);
 }
@@ -88,12 +97,20 @@ export interface TokenPayload {
   // version is older than the account's current one has been ended (password reset, log out).
   // Absent on tokens issued before TS-155 -- treated as 0.
   sessionVersion?: number;
+  // TS-204: this session's own id (claim "sid"), so "Log out" can end just this one (see
+  // revokeSession in packages/db). A new one is made at sign-in; renewal (proxy.ts) keeps it.
+  // Absent on tokens issued before TS-204.
+  sessionId?: string;
 }
 
-export interface VerifiedToken extends TokenPayload {
+export interface VerifiedToken extends Omit<TokenPayload, "sessionId"> {
   issuedAt: number;
   authTime: number;
   sessionVersion: number;
+  /** TS-204: null on a token issued before sessions had their own id. */
+  sessionId: string | null;
+  /** TS-204: when the token expires (seconds since epoch). */
+  expiresAt: number;
 }
 
 // TS-94: a token is valid for 30 days from when it was *issued*, and an active session keeps being
@@ -112,7 +129,12 @@ export async function verifyPassword(password: string, hash: string): Promise<bo
 
 export async function signToken(payload: TokenPayload): Promise<string> {
   const now = Math.floor(Date.now() / 1000);
-  return new SignJWT({ email: payload.email, authTime: payload.authTime ?? now, sv: payload.sessionVersion ?? 0 })
+  return new SignJWT({
+    email: payload.email,
+    authTime: payload.authTime ?? now,
+    sv: payload.sessionVersion ?? 0,
+    sid: payload.sessionId ?? crypto.randomUUID(),
+  })
     .setProtectedHeader({ alg: "HS256" })
     .setSubject(payload.sub)
     .setIssuedAt(now)
@@ -128,7 +150,9 @@ export async function verifyToken(token: string): Promise<VerifiedToken | null> 
     const issuedAt = typeof payload.iat === "number" ? payload.iat : 0;
     const authTime = typeof payload.authTime === "number" ? payload.authTime : issuedAt;
     const sessionVersion = typeof payload.sv === "number" ? payload.sv : 0;
-    return { sub: payload.sub, email: payload.email, issuedAt, authTime, sessionVersion };
+    const sessionId = typeof payload.sid === "string" && payload.sid.length > 0 ? payload.sid : null;
+    const expiresAt = typeof payload.exp === "number" ? payload.exp : issuedAt + AUTH_TOKEN_TTL_SECONDS;
+    return { sub: payload.sub, email: payload.email, issuedAt, authTime, sessionVersion, sessionId, expiresAt };
   } catch {
     return null;
   }

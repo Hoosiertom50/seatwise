@@ -7,6 +7,7 @@
  * confirmed directly against the component's source, so nothing here needs a raw data-testid.
  */
 
+import type { Locator } from "@playwright/test";
 import { BasePage } from "./BasePage.js";
 
 export class DayOfTabPage extends BasePage {
@@ -23,7 +24,8 @@ export class DayOfTabPage extends BasePage {
   }
 
   private attendanceButton(guestName: string) {
-    return this.guestRow(guestName).getByRole("button", { name: /^mark (not attending|attending)$/i });
+    // TS-212: the button's name ends with the guest's name ("Mark not attending: Jane Smith").
+    return this.guestRow(guestName).getByRole("button", { name: /^mark (not attending|attending)\b/i });
   }
 
   private seatAtSelect(guestName: string) {
@@ -185,6 +187,11 @@ export class DayOfTabPage extends BasePage {
     return this.page.getByText(/^No guests match/);
   }
 
+  /** TS-208: what a wedding with no guests says (it read 'No guests match “”.'). */
+  noGuestsYetMessage() {
+    return this.page.getByText("No guests yet.", { exact: true });
+  }
+
   /** TS-118: the Swap panel -- only offered once a plan has at least two seated guests. */
   swapPanel() {
     return this.page.getByText("Swap two guests' tables", { exact: true });
@@ -220,21 +227,54 @@ export class DayOfTabPage extends BasePage {
     // state -- "Mark not attending" means the guest is currently attending, and vice versa.
     const guestCurrentlyAttending = /not attending/i.test((await button.textContent()) ?? "");
     await button.click();
-    const newLabel = guestCurrentlyAttending ? /^mark attending$/i : /^mark not attending$/i;
+    const newLabel = guestCurrentlyAttending ? /^mark attending\b/i : /^mark not attending\b/i;
     await this.guestRow(guestName).getByRole("button", { name: newLabel }).waitFor();
   }
 
+  /** TS-208: picks "<label> (<n> free)" in a list whose options carry free-seat counts. */
+  private async pickTable(select: Locator, tableLabel: string, what: string): Promise<void> {
+    const options = await select.locator("option").allTextContents();
+    const option = options.find((o) => o.startsWith(`${tableLabel} (`));
+    if (!option) throw new Error(`DayOfTabPage.${what}: ${tableLabel} isn't offered (have: ${options.join(" | ")})`);
+    await select.selectOption({ label: option });
+  }
+
   async seatGuestAt(guestName: string, tableLabel: string): Promise<void> {
-    await this.seatAtSelect(guestName).selectOption({ label: tableLabel });
+    // TS-208: the list now offers only tables the guest fits at, each as "<label> (<n> free)".
+    await this.pickTable(this.seatAtSelect(guestName), tableLabel, "seatGuestAt");
     // TS-199: choosing only picks the table; the Seat button seats them.
     await this.seatButton(guestName).click();
   }
 
-  async addWalkIn(firstName: string, lastName: string, tableLabel?: string): Promise<void> {
+  /** TS-202: the walk-in's party size box (1 unless changed). */
+  walkInPartySizeInput() {
+    return this.page.getByLabel("Party size", { exact: true });
+  }
+
+  /** TS-208: the table labels offered in an unseated guest's "Seat at…" list. */
+  async seatAtChoices(guestName: string): Promise<string[]> {
+    const options = await this.seatAtSelect(guestName).locator("option:not([disabled])").allTextContents();
+    return options.map((o) => o.replace(/ \(\d+ free\)$/, ""));
+  }
+
+  /** TS-208: the table labels offered in the walk-in form's "Seat at…" list. */
+  async walkInChoices(): Promise<string[]> {
+    const options = await this.walkInTableSelect().locator("option").allTextContents();
+    return options.slice(1).map((o) => o.replace(/ \(\d+ free\)$/, ""));
+  }
+
+  /** TS-208: a guest's "Mark (not) attending" button -- where focus goes when their list is off. */
+  attendanceButtonOf(guestName: string) {
+    return this.attendanceButton(guestName);
+  }
+
+  async addWalkIn(firstName: string, lastName: string, tableLabel?: string, partySize?: number): Promise<void> {
     await this.walkInFirstNameInput().fill(firstName);
     await this.walkInLastNameInput().fill(lastName);
+    if (partySize !== undefined) await this.walkInPartySizeInput().fill(String(partySize));
     if (tableLabel) {
-      await this.walkInTableSelect().selectOption({ label: tableLabel });
+      // TS-208: offered as "<label> (<n> free)", like the other lists.
+      await this.pickTable(this.walkInTableSelect(), tableLabel, "addWalkIn");
     }
     await this.addWalkInButton().click();
     await this.page.getByRole("button", { name: "Add walk-in", exact: true }).waitFor();

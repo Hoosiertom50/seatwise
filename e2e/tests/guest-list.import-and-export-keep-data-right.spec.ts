@@ -15,6 +15,7 @@
 import { expect, defineQualityTest, test } from "../fixtures/index.js";
 import { uniquePersonName, uniqueTitle, uniqueToken } from "../data/ids.js";
 import { CollaboratorsTabPage } from "../pages/CollaboratorsTabPage.js";
+import { patchWedding } from "../data/api.js";
 
 type GuestState = {
   id: string;
@@ -125,7 +126,7 @@ defineQualityTest(
   async ({ managedWedding, weddingData, page, context }, testInfo) => {
     const w = managedWedding.id;
     const collaboratorsTabPage = new CollaboratorsTabPage(page);
-    const patch = (data: Record<string, string>) => context.request.patch(`/api/v1/weddings/${w}`, { data });
+    const patch = (data: Record<string, string>) => patchWedding(context.request, w, { data });
     const saved = async () => {
       const { wedding } = (await (await context.request.get(`/api/v1/weddings/${w}`)).json()) as {
         wedding: { sideLabel1: string; sideLabel2: string };

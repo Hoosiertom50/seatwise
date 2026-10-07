@@ -105,15 +105,21 @@ export class CollaboratorsTabPage extends BasePage {
   emailNotificationsCheckbox() {
     return this.page.getByRole("checkbox", { name: /^Also send email notifications for this wedding/ });
   }
+  /** TS-213: your own "Email me about this wedding" switch -- in the owner's settings, or on a collaborator's own row. */
+  myEmailsCheckbox() {
+    return this.page.getByRole("checkbox", { name: "Email me about this wedding", exact: true });
+  }
   /** Replaces a settings field's value and leaves the field, which is what saves it. (Blur rather
    * than Tab: in a date input, Tab only moves between its month/day/year parts.) */
   async setAndLeave(field: ReturnType<CollaboratorsTabPage["weddingNameInput"]>, value: string): Promise<void> {
     await field.fill(value);
     await field.blur();
   }
-  /** The tab's error line, matched by its text. */
+  /** The tab's error line, matched by its text. TS-214: within the tab -- the header's save status
+   * can show the same words. */
   message(text: string | RegExp) {
-    return typeof text === "string" ? this.page.getByText(text, { exact: true }) : this.page.getByText(text);
+    const tab = this.page.getByRole("tabpanel", { name: "Collaborators" });
+    return typeof text === "string" ? tab.getByText(text, { exact: true }) : tab.getByText(text);
   }
 
   /** TS-105: hands the wedding to `personName`, answering "Yes"; the page reloads afterwards. */
@@ -145,6 +151,34 @@ export class CollaboratorsTabPage extends BasePage {
     await this.page.getByRole("button", { name: "Leave this wedding", exact: true }).click();
     await this.page.getByRole("button", { name: "Yes, leave", exact: true }).click();
     await this.page.waitForURL((url) => url.pathname === "/dashboard");
+  }
+
+  // TS-214: the date-and-venue boxes, and a save whose answer is returned (a 409 when another tab
+  // changed the settings first).
+  weddingDateInput() {
+    return this.page.getByLabel("Wedding date", { exact: true });
+  }
+  venueInput() {
+    return this.page.getByLabel("Venue", { exact: true });
+  }
+  async submitDateAndVenue(date: string): Promise<number> {
+    await this.weddingDateInput().fill(date);
+    const [response] = await Promise.all([
+      this.page.waitForResponse((r) => r.request().method() === "PATCH" && /\/api\/v1\/weddings\/[^/]+$/.test(new URL(r.url()).pathname)),
+      this.page.getByRole("button", { name: "Save date and venue", exact: true }).click(),
+    ]);
+    return response.status();
+  }
+
+  /** TS-214: the "Save anyway?" question shown for an RSVP cutoff before today or after the wedding. */
+  rsvpCutoffQuestion() {
+    return this.page.getByRole("alertdialog").filter({ hasText: /RSVP cutoff/ });
+  }
+  async saveCutoffAnyway(): Promise<void> {
+    await this.rsvpCutoffQuestion().getByRole("button", { name: "Save anyway", exact: true }).click();
+  }
+  async changeCutoff(): Promise<void> {
+    await this.rsvpCutoffQuestion().getByRole("button", { name: "Change it", exact: true }).click();
   }
 
   /** TS-154: sets the wedding's date and venue in the owner settings and waits for the save. */

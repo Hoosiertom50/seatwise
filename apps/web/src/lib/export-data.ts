@@ -20,6 +20,43 @@ export interface ExportData {
   // then first name) — this is what "alphabetical" means everywhere else in Seatwise.
   sortedRows: ExportGuestRow[];
   tables: { label: string; guestNames: string[] }[];
+  // TS-211: attending guests with no seat in this plan (added, or back to Attending, since it was
+  // made) -- the PDFs list them under "Not seated" rather than quietly leaving them out. Same order
+  // as sortedRows.
+  unseated: { guestName: string; plusOneNames: string | null }[];
+  // TS-211: when the PDF was made, as printed on it (MM-DD-YYYY, 12-hour, in the viewer's time zone).
+  generatedAt: string;
+}
+
+/**
+ * TS-211: "Generated 10-07-2026 3:45 PM EDT" -- the moment, in `timeZone` when it's a real IANA time
+ * zone (the browser sends its own), otherwise UTC (said so).
+ */
+export function formatGeneratedAt(moment: Date, timeZone?: string | null): string {
+  let zone = "UTC";
+  if (timeZone) {
+    try {
+      new Intl.DateTimeFormat("en-US", { timeZone });
+      zone = timeZone;
+    } catch {
+      // Not a time zone -- UTC it is.
+    }
+  }
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: zone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+      timeZoneName: "short",
+    })
+      .formatToParts(moment)
+      .map((p) => [p.type, p.value])
+  );
+  return `Generated ${parts.month}-${parts.day}-${parts.year} ${parts.hour}:${parts.minute} ${parts.dayPeriod} ${parts.timeZoneName}`;
 }
 
 // FR-9.1/9.2/9.3 all read "Given an approved plan..." — exports are gated on Approved so nobody
@@ -29,7 +66,9 @@ export interface ExportData {
 export async function loadExportData(
   weddingId: string,
   planVersionId: string,
-  userId: string
+  userId: string,
+  /** TS-211: the viewer's time zone, for the generated date and time printed on the PDF. */
+  timeZone?: string | null
 ): Promise<ExportData> {
   // Exporting is a read — any View-level collaborator can download an already-Approved plan,
   // not just the owner.
@@ -83,5 +122,20 @@ export async function loadExportData(
   }
   const tables = [...byTable.values()].sort((a, b) => compareTableLabels(a.label, b.label));
 
-  return { weddingName: wedding.name, planVersion, sortedRows, tables };
+  // TS-211: an approved plan can lose completeness later (a guest added, or one who declined coming
+  // back) -- those attending guests have no seat, and used to be left off every PDF without a word.
+  const seatedIds = new Set(planVersion.assignments.map((a) => a.guestId));
+  const unseated = guests
+    .filter((g) => g.dayOfAttendance === "ATTENDING" && !seatedIds.has(g.id))
+    .sort(compareGuestNames)
+    .map((g) => ({ guestName: `${g.firstName} ${g.lastName}`, plusOneNames: plusOnesToPrint(g) }));
+
+  return {
+    weddingName: wedding.name,
+    planVersion,
+    sortedRows,
+    tables,
+    unseated,
+    generatedAt: formatGeneratedAt(new Date(), timeZone),
+  };
 }

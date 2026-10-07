@@ -35,7 +35,7 @@
  * every entry is a place a keyboard user is sent somewhere unexpected.
  */
 
-import type { ElementHandle, Locator, Page } from "@playwright/test";
+import { test, type ElementHandle, type Locator, type Page } from "@playwright/test";
 
 export interface TabStop {
   /** 0-based position in the walk. */
@@ -116,13 +116,56 @@ export function tabOrderProblems(stops: readonly TabStop[], options: TabOrderOpt
  *   - "left-region": Tab moved focus out of the region being walked;
  *   - "came-round": Tab came back to the first control of the walk;
  *   - "left-page": Tab moved focus off the page (to the browser), or round to the page's start;
- *   - "trapped": Tab came back to a control in the middle of the walk, not the first one;
+ *   - "trapped": Tab came back to a control in the middle of the walk, not the first one --
+ *     TS-215: including after focus fell to the page (that used to count as "left-page");
+ *   - "stuck": TS-215: Tab kept focus on one control (the last one, usually) because the page
+ *     stopped it moving -- a keyboard trap. It used to count as "left-page";
  *   - "lost-focus": focus fell to the page itself part-way through, and the next Tab went on to a
  *     control not yet seen (a control removed from under the focus, say);
  *   - "max-stops": the walk gave up after `maxStops` stops;
  *   - "nothing-focusable": there was no control to start from.
  */
-export type TabWalkEnd = "left-region" | "came-round" | "left-page" | "trapped" | "lost-focus" | "max-stops" | "nothing-focusable";
+export type TabWalkEnd =
+  | "left-region"
+  | "came-round"
+  | "left-page"
+  | "trapped"
+  | "stuck"
+  | "lost-focus"
+  | "max-stops"
+  | "nothing-focusable";
+
+/**
+ * TS-215: how a walk ends when focus has fallen to the page itself and the next Tab (past any
+ * invisible skip link) lands on `nextKey` (null: still nowhere). Going nowhere, or round to the
+ * walk's first control, is leaving the page; any other control already seen is a trap -- it used
+ * to count as leaving the page, so a trap there passed as a clean end.
+ */
+export function endAfterFocusFell(nextKey: string | null, seen: ReadonlySet<string>, firstKey: string): TabWalkEnd {
+  if (nextKey === null || nextKey === firstKey) return "left-page";
+  return seen.has(nextKey) ? "trapped" : "lost-focus";
+}
+
+/**
+ * TS-215: how a walk ends when Tab keeps reporting the same control. Firefox does that once focus
+ * has gone to its own toolbar (the page never hears about it). A page holding focus on purpose
+ * does hear: it cancels the Tab key, or pulls focus straight back -- `trapSignals` counts those
+ * (see installTrapWatch). Seen, it's a trap; not seen, focus left the page.
+ */
+export function endWhenTabStaysPut(trapSignals: number): TabWalkEnd {
+  return trapSignals > 0 ? "stuck" : "left-page";
+}
+
+/**
+ * TS-215: whether a walk with problems is worth trying again. Only a count that can still be
+ * settling (controls arriving or switching on a moment later) is; a trap or focus falling to the
+ * page is a real problem the first time it happens -- trying again and reporting only the last
+ * walk could hide one that happens one time in three.
+ */
+export function walkWorthRetrying(walk: Pick<TabWalk, "end">, walkProblems: readonly string[]): boolean {
+  if (walkProblems.length === 0) return false;
+  return !(["trapped", "stuck", "lost-focus"] as TabWalkEnd[]).includes(walk.end);
+}
 
 /** TS-200: everything one walk found (see walkTabOrderDetailed). */
 export interface TabWalk {
@@ -160,6 +203,10 @@ export function tabWalkProblems(walk: TabWalk, allow: readonly TabCountException
   if (walk.end === "max-stops") problems.push(`the walk gave up after ${walk.maxStops} stops without leaving the page -- raise maxStops or walk a smaller region`);
   if (walk.end === "lost-focus") problems.push(`focus fell to the page itself after stop ${walk.stops.length}, and Tab then went on to a control not yet seen`);
   if (walk.end === "trapped") problems.push(`Tab came back to a control in the middle of the walk (after stop ${walk.stops.length}) instead of moving on`);
+  if (walk.end === "stuck") {
+    const last = walk.stops[walk.stops.length - 1];
+    problems.push(`Tab stayed on ${last ? last.description : "a control"} (stop ${walk.stops.length}) -- the page kept focus there instead of letting it move on (a keyboard trap)`);
+  }
   if (walk.end === "nothing-focusable") problems.push("there was no control to start the walk from");
   const unreached = walk.unreached.filter((d) => !excused(d));
   const uncounted = walk.uncounted.filter((d) => !excused(d));
@@ -171,6 +218,51 @@ export function tabWalkProblems(walk: TabWalk, allow: readonly TabCountException
     problems.push(`Tab made ${visibleStops} visible stops, but there are ${expected} visible controls`);
   }
   return problems;
+}
+
+/**
+ * TS-215: listens for the two ways a page holds focus on a control -- cancelling the Tab key, or
+ * moving focus straight back to the control it just left -- and counts them, so a walk can tell a
+ * trap from Tab leaving the page (see endWhenTabStaysPut). Set up once per page; the count is reset.
+ */
+async function installTrapWatch(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    type Watch = { signals: number; lastLeft: EventTarget | null };
+    const w = window as unknown as { __tabTrapWatch?: Watch };
+    if (w.__tabTrapWatch) {
+      w.__tabTrapWatch.signals = 0;
+      return;
+    }
+    const watch: Watch = { signals: 0, lastLeft: null };
+    w.__tabTrapWatch = watch;
+    window.addEventListener(
+      "keydown",
+      (e) => {
+        // Checked once every listener has run, so a cancel by any of them counts.
+        if (e.key === "Tab") setTimeout(() => e.defaultPrevented && watch.signals++, 0);
+      },
+      true,
+    );
+    document.addEventListener("focusout", (e) => (watch.lastLeft = e.target), true);
+    document.addEventListener(
+      "focusin",
+      (e) => {
+        if (watch.lastLeft && e.target === watch.lastLeft) watch.signals++;
+        watch.lastLeft = null;
+      },
+      true,
+    );
+  });
+}
+
+/** TS-215: the trap signals counted on the page so far, less `mark`. */
+async function trapSignalsSince(page: Page, mark: number): Promise<number> {
+  const total = await page.evaluate(async () => {
+    // Lets the check queued by the last Tab's keydown (a setTimeout) run first.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    return (window as unknown as { __tabTrapWatch?: { signals: number } }).__tabTrapWatch?.signals ?? 0;
+  });
+  return total - mark;
 }
 
 /** Describes and measures whatever has focus right now (null when nothing on the page does). */
@@ -301,6 +393,10 @@ export async function walkTabOrderDetailed(page: Page, options: WalkOptions = {}
     let firstKey = "";
     let previousKey = "";
     let sameInARow = 0;
+    // TS-215: how many times the page had held focus (see installTrapWatch) when the current
+    // control was reached -- only signals after it count against it.
+    await installTrapWatch(page);
+    let trapMark = 0;
     for (let i = 0; i < maxStops; i++) {
       if (i > 0) await page.keyboard.press("Tab");
       let stop = await focusedStop(page, i);
@@ -313,19 +409,22 @@ export async function walkTabOrderDetailed(page: Page, options: WalkOptions = {}
           stop = await focusedStop(page, i);
           if (!stop || stop.width > 0 || stop.height > 0) break;
         }
-        end = !stop || seen.has(stop.key) ? "left-page" : "lost-focus";
+        // TS-215: round to the first control is leaving the page; back to any other one is a trap.
+        end = endAfterFocusFell(stop ? stop.key : null, seen, firstKey);
         break;
       }
       // A date or time box keeps focus while Tab moves through its parts (month, day, year, AM/PM),
       // so the same control again straight after itself is still that one stop, not a loop. More
-      // than that in a row means Tab has left the page: Firefox keeps reporting the last control as
-      // focused once focus has gone to the browser's own toolbar.
+      // than that in a row means Tab has left the page (Firefox keeps reporting the last control
+      // as focused once focus has gone to the browser's own toolbar) -- TS-215: unless the page
+      // itself held focus there (cancelled the Tab key, or pulled focus back), which is a trap.
       if (stop.key === previousKey) {
         if (++sameInARow <= 4) continue;
-        end = "left-page";
+        end = endWhenTabStaysPut(await trapSignalsSince(page, trapMark));
         break;
       }
       sameInARow = 0;
+      trapMark = await trapSignalsSince(page, 0);
       if (seen.has(stop.key)) {
         end = stop.key === firstKey ? "came-round" : "trapped";
         break;
@@ -357,6 +456,15 @@ export async function walkTabOrderDetailed(page: Page, options: WalkOptions = {}
   };
 }
 
+/**
+ * TS-212: Safari's own setting -- on macOS its Tab key moves only between typing boxes and lists by
+ * default, and skips buttons, checkboxes and links (Option+Tab reaches them). Checks that Tab lands
+ * on a button or checkbox don't apply there. CI runs WebKit on Linux, where Tab reaches every control.
+ */
+export function safariTabSkipsButtons(projectName: string): boolean {
+  return projectName === "webkit" && process.platform === "darwin";
+}
+
 /** The stops of a walk (see walkTabOrderDetailed). */
 export async function walkTabOrder(page: Page, options: WalkOptions = {}): Promise<TabStop[]> {
   return (await walkTabOrderDetailed(page, options)).stops;
@@ -373,12 +481,26 @@ export async function checkTabOrder(
   // TS-200: a tab still drawing its data can be walked before its controls are in place (they
   // arrive, or switch on, a moment later). A real problem shows on every walk; one that only shows
   // on a page that had not settled does not -- so the walk is tried up to three times, a moment apart.
+  // TS-215: but never after a trap or focus falling to the page (walkWorthRetrying) -- those are
+  // reported from the first walk. And every retry is written on the test's own annotations, with
+  // what the earlier walk found, so a walk that only passed on a second try is visible in the
+  // report instead of reading as a clean pass.
   let walk = await walkTabOrderDetailed(page, options);
   let walkProblems = tabWalkProblems(walk, options.allowCount);
-  for (let attempt = 1; attempt < 3 && walkProblems.length > 0; attempt++) {
+  for (let attempt = 1; attempt < 3 && walkWorthRetrying(walk, walkProblems); attempt++) {
+    annotateRetry(`walk ${attempt} of ${page.url()} found: ${walkProblems.join("; ")} -- walking again`);
     await page.waitForTimeout(750);
     walk = await walkTabOrderDetailed(page, options);
     walkProblems = tabWalkProblems(walk, options.allowCount);
   }
   return { stops: walk.stops, problems: tabOrderProblems(walk.stops, options), walk, walkProblems };
+}
+
+/** TS-215: notes a tab-order retry on the running test (no-op outside a test). */
+function annotateRetry(description: string): void {
+  try {
+    test.info().annotations.push({ type: "tab-order-retry", description });
+  } catch {
+    // Called outside a running test (a script) -- nothing to annotate.
+  }
 }

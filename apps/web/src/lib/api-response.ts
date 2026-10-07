@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import type { ZodError } from "zod";
-import { AccessChangedError, PlanSourceChangedError, isWeddingDeletedError } from "@seatwise/db";
+import { AccessChangedError, PlanSourceChangedError, WeddingCapError, isWeddingDeletedError } from "@seatwise/db";
 import { BODY_TOO_LARGE_MESSAGE, declaresBodyTooLarge, isNonJsonBody, readBodyTextWithin } from "./json-body";
 
 export function errorResponse(
@@ -66,7 +66,36 @@ export function concurrentChangeResponse(err: unknown) {
       409
     );
   }
-  return null;
+  // TS-209: the database was too busy -- see databaseBusyResponse.
+  return databaseBusyResponse(err);
+}
+
+export const DATABASE_BUSY_MESSAGE = "Seatwise was too busy to finish — nothing was saved. Try again in a minute.";
+export const DATABASE_BUSY_RETRY_AFTER_SECONDS = 60;
+
+/** TS-209: whether the error is the database running out of time or connections (see below). */
+export function isDatabaseBusyError(err: unknown): boolean {
+  const code = (err as { code?: string } | null)?.code;
+  // 57014: a statement hit the time limit. 25P02: a statement in a transaction that had already
+  // failed (it follows one of these). 25P03: the transaction sat idle too long and was ended.
+  if (code === "57014" || code === "25P02" || code === "25P03") return true;
+  // No free connection within CONNECTION_TIMEOUT_MS (packages/db pool.ts) -- the driver's own
+  // errors, which carry no code.
+  const message = err instanceof Error ? err.message : "";
+  return /timeout exceeded when trying to connect|Connection terminated due to connection timeout/i.test(message);
+}
+
+/**
+ * TS-209: a statement time-out, an aborted transaction or no free database connection -- answered
+ * 503 with Retry-After and a message that says nothing was saved, rather than a bare "Something
+ * went wrong". Only for a request whose changes were rolled back: a route whose change already
+ * committed answers success with a warning instead (see SAVED_BUT_NOT_RECHECKED). Null otherwise.
+ */
+export function databaseBusyResponse(err: unknown) {
+  if (!isDatabaseBusyError(err)) return null;
+  const res = errorResponse(DATABASE_BUSY_MESSAGE, 503);
+  res.headers.set("Retry-After", String(DATABASE_BUSY_RETRY_AFTER_SECONDS));
+  return res;
 }
 
 export const WEDDING_DELETED_MESSAGE = "This wedding was deleted — nothing was saved.";
@@ -75,6 +104,13 @@ export const WEDDING_DELETED_MESSAGE = "This wedding was deleted — nothing was
 // while the wedding was being deleted: the delete wins, and the database refuses the new row
 // (23503 on its wedding) -- answered 404 "This wedding was deleted", not a server error. Returns
 // null for anything else.
+// TS-204: also the person's access dropping while the change waited (403, nothing saved) -- every
+// change now re-reads it under its lock, so every route's error handling has to say so.
+// TS-205: and a change that would take the wedding past one of its caps (422, with the plain
+// message, e.g. "A wedding can have up to 300 tables...").
 export function weddingDeletedResponse(err: unknown) {
-  return isWeddingDeletedError(err) ? errorResponse(WEDDING_DELETED_MESSAGE, 404) : null;
+  if (isWeddingDeletedError(err)) return errorResponse(WEDDING_DELETED_MESSAGE, 404);
+  if (err instanceof AccessChangedError) return errorResponse(err.message, 403);
+  if (err instanceof WeddingCapError) return errorResponse(err.message, 422);
+  return null;
 }

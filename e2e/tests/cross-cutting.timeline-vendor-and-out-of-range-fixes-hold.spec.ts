@@ -12,6 +12,7 @@
 import { expect, defineQualityTest, test } from "../fixtures/index.js";
 import { uniquePersonName, uniqueTitle } from "../data/ids.js";
 import { holdTimelineEntry, plantTimelineTie } from "../support/testDatabase.js";
+import { patchWedding } from "../data/api.js";
 
 defineQualityTest(
   {
@@ -98,11 +99,11 @@ defineQualityTest(
       expect(entryRes.status()).toBe(422);
 
       for (const eventDate of ["0000-01-01", "9999-12-31"]) {
-        const res = await context.request.patch(`/api/v1/weddings/${w}`, { data: { eventDate } });
+        const res = await patchWedding(context.request, w, { data: { eventDate } });
         expect(res.status(), eventDate).toBe(422);
         expect(((await res.json()) as { fieldErrors: Record<string, unknown> }).fieldErrors.eventDate, eventDate).toBeTruthy();
       }
-      const cutoff = await context.request.patch(`/api/v1/weddings/${w}`, { data: { rsvpCutoffDate: "0000-01-01" } });
+      const cutoff = await patchWedding(context.request, w, { data: { rsvpCutoffDate: "0000-01-01" } });
       expect(cutoff.status()).toBe(422);
     });
   },

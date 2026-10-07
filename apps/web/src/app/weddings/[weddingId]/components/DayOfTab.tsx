@@ -3,8 +3,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError, apiErrorMessage } from "@/lib/api-client";
 import { useSerialTasks } from "@/lib/serial-tasks";
+// TS-214: the server's own guest order (last name, first name, then id).
+import { compareGuestNames } from "@/lib/guest-name-order";
 import { useUnsavedChanges } from "@/lib/unsaved-changes";
 import { PickThenActControl } from "@/components/PickThenActControl";
+import { tableChoicesFor, seatResultMessage } from "@/lib/day-of-choices";
 import type {
   GuestDTO,
   PlanVersionDTO,
@@ -19,11 +22,6 @@ import { FIELD_LIMITS } from "@seatwise/shared";
 const NEWER_PLAN_MESSAGE = "A newer plan was made — you're now looking at it.";
 // TS-197: a change sent to the plan that was just replaced -- nothing was saved.
 const SUPERSEDED_CHANGE_MESSAGE = "That wasn't saved — a newer plan was made. Check it and try again.";
-
-// TS-197: "A", "A and B", "A, B and C".
-function nameList(names: string[]): string {
-  return names.length <= 1 ? (names[0] ?? "") : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
-}
 
 // TS-11 (Day-Of / Emergency Mode, FR-8.1/8.2/8.3/8.4): a phone-friendly view for the day of the
 // wedding — find a guest fast, mark a no-show or walk-in, re-seat or swap without digging through
@@ -46,17 +44,36 @@ export function DayOfTab({
   const [detail, setDetail] = useState<PlanVersionDetailDTO | null>(null);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
-  const [error, setErrorText] = useState<string | null>(null);
-  // TS-175: the guest a message is about, when it's about one -- shown (and announced) in their row.
-  const [errorGuestId, setErrorGuestId] = useState<string | null>(null);
-  const setError = useCallback((message: string | null) => {
-    setErrorText(message);
-    setErrorGuestId(null);
-  }, []);
+  const [error, setError] = useState<string | null>(null);
+  // TS-175: a message about one guest is shown (and announced) in their row.
+  // TS-208: kept per guest -- one guest's refusal used to be wiped the moment a change queued for
+  // another guest started, so a refused move looked done. Each is cleared when that guest's next
+  // change is asked for (at the click, not when the queued change runs).
+  const [rowErrors, setRowErrors] = useState<Readonly<Record<string, string>>>({});
   const setRowError = useCallback((guestId: string, message: string) => {
-    setErrorText(message);
-    setErrorGuestId(guestId);
+    setRowErrors((cur) => ({ ...cur, [guestId]: message }));
   }, []);
+  const clearRowError = useCallback((guestId: string) => {
+    setRowErrors((cur) => {
+      if (!(guestId in cur)) return cur;
+      const next = { ...cur };
+      delete next[guestId];
+      return next;
+    });
+  }, []);
+  // TS-208: a message about a guest who has since gone from the list (deleted elsewhere) goes with
+  // them -- it used to stay at the top of the tab for good.
+  useEffect(() => {
+    const listed = new Set(guests.map((g) => g.id));
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- TS-208: follows the guest list as it changes.
+    setRowErrors((cur) => {
+      const gone = Object.keys(cur).filter((id) => !listed.has(id));
+      if (gone.length === 0) return cur;
+      const next = { ...cur };
+      for (const id of gone) delete next[id];
+      return next;
+    });
+  }, [guests]);
   const [notice, setNotice] = useState<string | null>(null);
   // TS-170: every guest with a change queued or on its way (one value used to stand for all).
   const [busyIds, setBusyIds] = useState<ReadonlySet<string>>(new Set());
@@ -71,6 +88,8 @@ export function DayOfTab({
   const [walkInFirst, setWalkInFirst] = useState("");
   const [walkInLast, setWalkInLast] = useState("");
   const [walkInTableId, setWalkInTableId] = useState("");
+  // TS-202: a walk-in can be more than one person (it was always a party of 1). Kept as typed.
+  const [walkInPartySize, setWalkInPartySize] = useState("1");
   const [addingWalkIn, setAddingWalkIn] = useState(false);
   // TS-199: shown in the walk-in form itself, next to the names.
   const [walkInNameError, setWalkInNameError] = useState<string | null>(null);
@@ -182,6 +201,20 @@ export function DayOfTab({
     let cancelled = false;
     const interval = setInterval(async () => {
       try {
+        // TS-207: the tables and seating rules too, every tick -- a capacity raised, a table added
+        // or removed (removing an empty one doesn't touch the plan), or a new rule on the laptop
+        // used to show here only after switching plans, so lists offered tables the server then
+        // refused, or none at all. (The guest list is kept fresh by the wedding page.)
+        void Promise.all([
+          api.get<{ tables: SeatingTableDTO[] }>(`/api/v1/weddings/${weddingId}/tables`),
+          api.get<{ relationships: RelationshipDTO[] }>(`/api/v1/weddings/${weddingId}/relationships`),
+        ])
+          .then(([{ tables: tableList }, { relationships: rules }]) => {
+            if (cancelled) return;
+            setTables(tableList);
+            setRelationships(rules);
+          })
+          .catch(() => {});
         if (!openPlanId) {
           await switchToCurrentPlan(null, () => cancelled);
           return;
@@ -212,24 +245,24 @@ export function DayOfTab({
     if (detail) for (const a of detail.assignments) map.set(a.guestId, a.tableLabel);
     return map;
   }, [detail]);
-  // TS-191: which table each seated guest is at, for the "Move to…" list.
-  const tableIdByGuestId = useMemo(() => {
-    const map = new Map<string, string>();
-    if (detail) for (const a of detail.assignments) map.set(a.guestId, a.tableId);
-    return map;
-  }, [detail]);
-
   const filteredGuests = useMemo(() => {
     const q = search.trim().toLowerCase();
-    const sorted = [...guests].sort((a, b) => a.lastName.localeCompare(b.lastName));
+    const sorted = [...guests].sort(compareGuestNames);
     if (!q) return sorted;
     return sorted.filter((g) =>
       `${g.firstName} ${g.lastName} ${g.partyName ?? ""}`.toLowerCase().includes(q)
     );
   }, [guests, search]);
 
-  const errorGuest = errorGuestId ? guests.find((g) => g.id === errorGuestId) : undefined;
-  const errorGuestName = errorGuest ? `${errorGuest.firstName} ${errorGuest.lastName}` : null;
+  // TS-182: messages about guests the search is hiding are shown at the top, with their names,
+  // instead of nowhere. (TS-208: a guest who has gone takes their message with them -- see above.)
+  const shownIds = new Set(filteredGuests.map((g) => g.id));
+  const hiddenRowErrors = Object.entries(rowErrors)
+    .filter(([id]) => !shownIds.has(id))
+    .map(([id, message]) => {
+      const g = guests.find((x) => x.id === id);
+      return { id, text: g ? `${g.firstName} ${g.lastName}: ${message}` : message };
+    });
 
   const occupancy = useMemo(() => {
     const counts = new Map<string, number>();
@@ -242,63 +275,18 @@ export function DayOfTab({
     return tables.map((t) => ({ table: t, seated: counts.get(t.id) ?? 0 }));
   }, [detail, tables, guests]);
 
-  // TS-197: each attending guest's must-sit-together partners (directly), for working out the
-  // whole group a move takes along -- guests who aren't attending don't count, as on the server.
-  const mustSitPartners = useMemo(() => {
-    const attending = new Set(guests.filter((g) => g.dayOfAttendance === "ATTENDING").map((g) => g.id));
-    const map = new Map<string, string[]>();
-    for (const r of relationships) {
-      if (r.type !== "MUST_SIT_TOGETHER" || !attending.has(r.guestAId) || !attending.has(r.guestBId)) continue;
-      map.set(r.guestAId, [...(map.get(r.guestAId) ?? []), r.guestBId]);
-      map.set(r.guestBId, [...(map.get(r.guestBId) ?? []), r.guestAId]);
-    }
-    return map;
-  }, [guests, relationships]);
-
-  // TS-197: the tables a seated guest can be moved to -- the ones the server would accept for their
-  // whole must-sit-together group: enough free seats for everyone (headcount, not counting the
-  // group's own seats), accessible if anyone in the group needs it, and not a Restricted table
-  // unless everyone is on its list (a guest on a Restricted table's list can only go there).
-  // Before, only the one guest's party size was checked, so a table could be offered and refused.
-  function moveChoicesFor(guest: GuestDTO): { table: SeatingTableDTO; free: number }[] {
-    const fromTableId = tableIdByGuestId.get(guest.id);
-    if (!fromTableId) return [];
-    const byId = new Map(guests.map((g) => [g.id, g]));
-    const groupIds = new Set([guest.id]);
-    const queue = [guest.id];
-    while (queue.length > 0) {
-      for (const partner of mustSitPartners.get(queue.pop()!) ?? []) {
-        if (!groupIds.has(partner)) {
-          groupIds.add(partner);
-          queue.push(partner);
-        }
-      }
-    }
-    const group = [...groupIds].map((id) => byId.get(id)).filter((g): g is GuestDTO => g !== undefined);
-    const needed = group.reduce((sum, g) => sum + g.headcount, 0);
-    const needsAccessible = group.some((g) => g.requiresAccessibleTable);
-    const requiredAt = new Set(
-      group.flatMap((g) => tables.filter((t) => t.isRestricted && t.requiredGuestIds.includes(g.id)).map((t) => t.id))
-    );
-    return occupancy
-      .map(({ table, seated }) => {
-        // The group's own seats at this table don't count against it -- they'd just stay.
-        const groupHere = group
-          .filter((g) => tableIdByGuestId.get(g.id) === table.id)
-          .reduce((sum, g) => sum + g.headcount, 0);
-        return { table, free: table.capacity - seated, room: table.capacity - (seated - groupHere) };
-      })
-      .filter(
-        ({ table, room }) =>
-          table.id !== fromTableId &&
-          !group.every((g) => tableIdByGuestId.get(g.id) === table.id) &&
-          room >= needed &&
-          (!needsAccessible || table.isAccessible) &&
-          (!table.isRestricted || group.every((g) => table.requiredGuestIds.includes(g.id))) &&
-          [...requiredAt].every((id) => id === table.id)
-      )
-      .map(({ table, free }) => ({ table, free }));
-  }
+  // TS-197: the tables a guest can be moved to (or, TS-208, seated at -- and a walk-in, with null):
+  // the ones the server would accept for their whole must-sit-together group -- room for everyone,
+  // accessible if needed, Restricted lists respected and (TS-208) nobody there they must not sit
+  // with. See day-of-choices.ts. "Seat at…" and the walk-in list used to offer every table.
+  const choiceContext = useMemo(
+    () => ({ guests, tables, assignments: detail?.assignments ?? [], relationships }),
+    [guests, tables, detail, relationships]
+  );
+  const choicesFor = (guestId: string | null) => tableChoicesFor(guestId, choiceContext);
+  // TS-202 / TS-208: only tables with room for the walk-in's whole party.
+  const walkInSeats = Number(walkInPartySize) >= 1 ? Number(walkInPartySize) : 1;
+  const walkInChoices = useMemo(() => tableChoicesFor(null, choiceContext, walkInSeats), [choiceContext, walkInSeats]);
 
   const attendingSeatedGuests = useMemo(() => {
     if (!detail) return [];
@@ -307,7 +295,16 @@ export function DayOfTab({
       .sort((a, b) => a.name.localeCompare(b.name));
   }, [detail]);
 
+  // TS-208: the messages from before are cleared here, at the click -- not when the queued change
+  // runs, which used to wipe the refusal of the change queued just ahead of it.
+  function clearMessagesFor(guestId: string) {
+    setError(null);
+    setNotice(null);
+    clearRowError(guestId);
+  }
+
   function onToggleAttendance(guest: GuestDTO) {
+    clearMessagesFor(guest.id);
     markBusy(guest.id, true);
     return queuePlanChange(() => toggleAttendance(guest));
   }
@@ -317,10 +314,9 @@ export function DayOfTab({
     // so a second click queued behind the first toggles back, as the planner expects.
     const guest = guestsRef.current.find((g) => g.id === clicked.id) ?? clicked;
     const nextAttendance = guest.dayOfAttendance === "ATTENDING" ? "NOT_ATTENDING" : "ATTENDING";
-    setError(null);
-    setNotice(null);
+    const hadSeat = (detailRef.current?.assignments ?? []).some((a) => a.guestId === guest.id);
     try {
-      const res = await api.post<{ planVersion: PlanVersionDetailDTO | null; guest: GuestDTO | null }>(
+      const res = await api.post<{ planVersion: PlanVersionDetailDTO | null; guest: GuestDTO | null; unchanged?: boolean }>(
         `/api/v1/weddings/${weddingId}/guests/${guest.id}/attendance`,
         { attendance: nextAttendance }
       );
@@ -330,11 +326,22 @@ export function DayOfTab({
       guestsRef.current = guestsRef.current.map((g) => (g.id === guest.id ? saved(g) : g));
       setGuests((cur) => cur.map((g) => (g.id === guest.id ? saved(g) : g)));
       if (res.planVersion) applyDetail(res.planVersion);
+      const name = `${guest.firstName} ${guest.lastName}`;
+      // TS-207: they already had that attendance (changed on another screen, or by their own RSVP
+      // link) -- nothing was changed here, and the screen says so instead of claiming it did.
+      if (res.unchanged) {
+        setNotice(
+          nextAttendance === "NOT_ATTENDING"
+            ? `${name} was already marked not attending (changed elsewhere).`
+            : `${name} was already marked attending (changed elsewhere).`
+        );
+        return;
+      }
       setNotice(
         nextAttendance === "NOT_ATTENDING"
           ? // TS-177: only say a seat was freed when they had one.
-            `${guest.firstName} ${guest.lastName} marked not attending${tableLabelByGuestId.has(guest.id) ? " — their seat is now free" : ""}.`
-          : `${guest.firstName} ${guest.lastName} marked attending again${detail ? " — seat them below" : " — they'll need a seat once there's a plan"}.`
+            `${name} marked not attending${hadSeat ? " — their seat is now free" : ""}.`
+          : `${name} marked attending again${detailRef.current ? " — seat them below" : " — they'll need a seat once there's a plan"}.`
       );
     } catch (err) {
       setRowError(guest.id, apiErrorMessage(err, [], "Couldn't update attendance."));
@@ -357,33 +364,33 @@ export function DayOfTab({
   // checks room and the seating rules).
   function onSeatGuest(guestId: string, tableId: string, moving = false) {
     if (!detail || !tableId) return;
+    clearMessagesFor(guestId);
     markBusy(guestId, true);
-    return queuePlanChange(() => seatGuest(guestId, tableId, moving));
+    // TS-208: the plan on screen at the click -- a queued change isn't quietly made on a newer plan
+    // that opened while it waited (the Seating plan tab already refused that).
+    const planId = detail.id;
+    return queuePlanChange(() => seatGuest(guestId, tableId, moving, planId));
   }
 
-  async function seatGuest(guestId: string, tableId: string, moving = false) {
+  async function seatGuest(guestId: string, tableId: string, moving: boolean, planId: string) {
     const current = detailRef.current;
-    if (!current) return;
-    setError(null);
-    setNotice(null);
+    if (!current || current.id !== planId) {
+      setRowError(guestId, SUPERSEDED_CHANGE_MESSAGE);
+      markBusy(guestId, false);
+      return;
+    }
     try {
       const res = await api.post<{ planVersion: PlanVersionDetailDTO; warnings: string[] }>(
         `/api/v1/weddings/${weddingId}/plan-versions/${current.id}/assignments`,
         { guestId, tableId, expectedRevision: current.revision }
       );
       applyDetail(res.planVersion);
-      if (moving) {
-        // TS-197: everyone who went to that table -- a must-sit-together group moves together, and
-        // the notice used to name only the guest whose row was used.
-        const table = res.planVersion.assignments.find((a) => a.guestId === guestId)?.tableLabel;
-        const wasAt = new Map(current.assignments.map((a) => [a.guestId, a.tableId]));
-        const movedNames = res.planVersion.assignments
-          .filter((a) => a.tableId === tableId && wasAt.get(a.guestId) !== tableId)
-          .sort((a, b) => (a.guestId === guestId ? -1 : b.guestId === guestId ? 1 : a.guestName.localeCompare(b.guestName)))
-          .map((a) => a.guestName);
-        const moved = table && movedNames.length > 0 ? `Moved ${nameList(movedNames)} to ${table}.` : "Moved.";
-        setNotice(res.warnings.length > 0 ? `${moved} ${res.warnings.join(" ")}` : moved);
-      } else if (res.warnings.length > 0) setNotice(res.warnings.join(" "));
+      // TS-197: everyone who went to that table -- a must-sit-together group moves together, and
+      // the notice used to name only the guest whose row was used.
+      // TS-208: said for "Seat" too (it said nothing, even when a partner was moved along):
+      // "Seated A at T2." or "Moved A and B to T2.".
+      const said = seatResultMessage(guestId, tableId, current.assignments, res.planVersion.assignments) ?? (moving ? "Moved." : "Seated.");
+      setNotice(res.warnings.length > 0 ? `${said} ${res.warnings.join(" ")}` : said);
     } catch (err) {
       const fresh = conflictPlanVersion(err);
       // TS-197: a newer plan replaced this one -- Day-of is now showing it; the change wasn't made.
@@ -414,13 +421,22 @@ export function DayOfTab({
       setWalkInNameError(!walkInFirst.trim() ? "Enter the walk-in's first name." : "Enter the walk-in's last name.");
       return;
     }
+    // TS-202: an empty box means just the one person.
+    const partySize = walkInPartySize.trim() === "" ? 1 : Number(walkInPartySize);
+    if (!Number.isInteger(partySize) || partySize < 1 || partySize > 20) {
+      setWalkInNameError("Party size must be a whole number from 1 to 20.");
+      return;
+    }
     setWalkInNameError(null);
     setError(null);
     setNotice(null);
     setAddingWalkIn(true);
-    const tableId = walkInTableId;
+    // TS-208: only a table still offered counts (it may have filled up, or gone, since it was picked).
+    const tableId = walkInChoices.some((c) => c.table.id === walkInTableId) ? walkInTableId : "";
     const firstName = walkInFirst;
     const lastName = walkInLast;
+    // TS-208: the plan on screen now -- they aren't seated on a newer plan that opens meanwhile.
+    const planId = detail?.id ?? null;
     // TS-151: once the guest exists, a failure is only about seating them -- the form clears and
     // says so, so pressing Add again can't create the same walk-in twice.
     // (Kept in an object: it's set inside the queued task below.)
@@ -433,14 +449,16 @@ export function DayOfTab({
         const { guest } = await api.post<{ guest: GuestDTO }>(`/api/v1/weddings/${weddingId}/guests`, {
           firstName,
           lastName,
-          headcount: 1,
+          headcount: partySize,
           dayOfAttendance: "ATTENDING",
         });
         progress.added = guest;
-        guestsRef.current = [...guestsRef.current, guest];
-        setGuests((cur) => [...cur, guest]);
+        // TS-214: put in its place in the list (it used to go on the end until a reload).
+        guestsRef.current = [...guestsRef.current, guest].sort(compareGuestNames);
+        setGuests((cur) => [...cur, guest].sort(compareGuestNames));
         setWalkInFirst("");
         setWalkInLast("");
+        setWalkInPartySize("1");
         if (!detailRef.current) return null;
         // TS-189: adding a guest moves the plan on a revision (they're a new unseated guest) -- take
         // the plan as it is now, so seating them (or a later "Seat at…") isn't refused as out of date.
@@ -450,6 +468,7 @@ export function DayOfTab({
           return null;
         }
         const current = await refreshAfterGuestAdded();
+        if (current.id !== planId) throw new Error(SUPERSEDED_CHANGE_MESSAGE);
         return api.post<{ planVersion: PlanVersionDetailDTO; warnings: string[] }>(
           `/api/v1/weddings/${weddingId}/plan-versions/${current.id}/assignments`,
           { guestId: guest.id, tableId, expectedRevision: current.revision }
@@ -473,7 +492,12 @@ export function DayOfTab({
       if (added) {
         setWalkInTableId("");
         setNotice(`Added walk-in ${added.firstName} ${added.lastName} — not yet seated.`);
-        setError(apiErrorMessage(err, [], "Couldn't seat them") + " Seat them from the guest list below.");
+        // TS-208: a newer plan opened before they could be seated -- said as such.
+        const why =
+          err instanceof Error && err.message === SUPERSEDED_CHANGE_MESSAGE
+            ? "They weren't seated — a newer plan was made."
+            : apiErrorMessage(err, [], "Couldn't seat them.");
+        setError(`${why} Seat them from the guest list below.`);
       } else {
         setError(apiErrorMessage(err, ["firstName", "lastName"], "Couldn't add that walk-in."));
       }
@@ -487,9 +511,12 @@ export function DayOfTab({
     setError(null);
     setNotice(null);
     setSwapping(true);
+    // TS-208: the plan on screen at the click (see onSeatGuest).
+    const planId = detail.id;
     try {
       const res = await queuePlanChange(() => {
         const current = detailRef.current!;
+        if (current.id !== planId) throw new Error(SUPERSEDED_CHANGE_MESSAGE);
         return api.post<{ planVersion: PlanVersionDetailDTO; warnings: string[] }>(
           `/api/v1/weddings/${weddingId}/plan-versions/${current.id}/assignments/swap`,
           { guestAId: swapAId, guestBId: swapBId, expectedRevision: current.revision }
@@ -502,7 +529,7 @@ export function DayOfTab({
     } catch (err) {
       const fresh = conflictPlanVersion(err);
       // TS-197: a newer plan replaced this one -- Day-of is now showing it; nothing was swapped.
-      if (fresh && takeFreshPlan(fresh)) {
+      if ((fresh && takeFreshPlan(fresh)) || (err instanceof Error && err.message === SUPERSEDED_CHANGE_MESSAGE)) {
         setSwapAId("");
         setSwapBId("");
         setError(SUPERSEDED_CHANGE_MESSAGE);
@@ -533,18 +560,16 @@ export function DayOfTab({
           swaps are turned off. You can still search and see where everyone&apos;s seated.
         </p>
       )}
-      {error && !errorGuestId && (
+      {error && (
         <p role="alert" className="text-sm text-red-600 dark:text-red-400">
           {error}
         </p>
       )}
-      {/* TS-182: a message about a guest the search is hiding (or who has gone) is shown up here,
-          with their name, instead of nowhere. */}
-      {error && errorGuestId && !filteredGuests.some((g) => g.id === errorGuestId) && (
-        <p role="alert" className="text-sm text-red-600 dark:text-red-400">
-          {errorGuestName ? `${errorGuestName}: ${error}` : error}
+      {hiddenRowErrors.map((e) => (
+        <p key={e.id} role="alert" className="text-sm text-red-600 dark:text-red-400">
+          {e.text}
         </p>
-      )}
+      ))}
       {notice && (
         <p role="status" className="rounded-lg border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-950 p-3 text-sm text-blue-800 dark:text-blue-300">
           {notice}
@@ -560,8 +585,10 @@ export function DayOfTab({
 
       {tables.length > 0 && (
         <div>
-          <p className="mb-2 text-sm font-medium">Table occupancy</p>
-          <div className="flex gap-2 overflow-x-auto pb-1">
+          <p id="dayof-occupancy-heading" className="mb-2 text-sm font-medium">Table occupancy</p>
+          {/* TS-212: the strip scrolls sideways on a phone, which makes it a Tab stop in Chrome 130+
+              and Firefox -- a named region, so it says what it is (and scrolls with the arrow keys). */}
+          <div role="region" aria-labelledby="dayof-occupancy-heading" tabIndex={0} className="flex gap-2 overflow-x-auto pb-1">
             {occupancy.map(({ table, seated }) => (
               <div
                 key={table.id}
@@ -591,13 +618,23 @@ export function DayOfTab({
         />
       </div>
 
+      {/* TS-208: said outside the list (it was a paragraph inside it), and a wedding with no guests
+          says so -- it read 'No guests match “”.'. */}
+      {filteredGuests.length === 0 && (
+        <p className="text-sm text-neutral-500 dark:text-neutral-400">
+          {guests.length === 0 ? "No guests yet." : <>No guests match &ldquo;{search}&rdquo;.</>}
+        </p>
+      )}
       <ul className="flex flex-col gap-2">
         {filteredGuests.map((g) => {
           const seatedAt = tableLabelByGuestId.get(g.id);
           const notAttending = g.dayOfAttendance === "NOT_ATTENDING";
           // TS-191: the other tables with enough free seats for this guest's party.
           // TS-197: ...and for their whole must-sit-together group, by every rule the server checks.
-          const moveChoices = seatedAt ? moveChoicesFor(g) : [];
+          // TS-208: for "Seat at…" too (it offered every table).
+          const choices = !notAttending && detail ? choicesFor(g.id) : [];
+          const choiceOptions = choices.map(({ table, free }) => ({ value: table.id, label: `${table.label} (${free} free)` }));
+          const rowError = rowErrors[g.id];
           return (
             <li
               key={g.id}
@@ -627,10 +664,12 @@ export function DayOfTab({
                     <PickThenActControl
                       id={`dayof-move-${g.id}`}
                       label={`Seat ${g.firstName} ${g.lastName} at a table`}
-                      placeholder="Seat at..."
+                      placeholder={choices.length === 0 ? "No table has room" : "Seat at..."}
                       busy={busyIds.has(g.id)}
                       busyLabel="Seating..."
-                      options={tables.map((t) => ({ value: t.id, label: t.label }))}
+                      disabled={choices.length === 0}
+                      options={choiceOptions}
+                      fallbackFocusId={`dayof-attendance-${g.id}`}
                       actLabel="Seat"
                       actAriaLabel={`Seat ${g.firstName} ${g.lastName}`}
                       selectClassName="min-h-11 max-w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-2 text-sm disabled:opacity-50"
@@ -643,14 +682,14 @@ export function DayOfTab({
                     <PickThenActControl
                       id={`dayof-move-${g.id}`}
                       label={`Move ${g.firstName} ${g.lastName} to another table`}
-                      placeholder={moveChoices.length === 0 ? "No other table has room" : "Move to..."}
+                      placeholder={choices.length === 0 ? "No other table has room" : "Move to..."}
                       busy={busyIds.has(g.id)}
                       busyLabel="Moving..."
-                      disabled={moveChoices.length === 0}
-                      options={moveChoices.map(({ table, free }) => ({
-                        value: table.id,
-                        label: `${table.label} (${free} free)`,
-                      }))}
+                      disabled={choices.length === 0}
+                      options={choiceOptions}
+                      // TS-208: when every table is full the list is off and can't take focus back
+                      // after the move -- it goes to the guest's attendance button instead.
+                      fallbackFocusId={`dayof-attendance-${g.id}`}
                       actLabel="Move"
                       actAriaLabel={`Move ${g.firstName} ${g.lastName}`}
                       selectClassName="min-h-11 max-w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-2 text-sm disabled:opacity-50"
@@ -658,8 +697,11 @@ export function DayOfTab({
                     />
                   )}
                   <button
+                    id={`dayof-attendance-${g.id}`}
                     onClick={() => onToggleAttendance(g)}
                     disabled={busyIds.has(g.id)}
+                    // TS-212: names the guest -- a screen reader's button list read "Mark not attending" over and over.
+                    aria-label={`${notAttending ? "Mark attending" : "Mark not attending"}: ${g.firstName} ${g.lastName}`}
                     className={`min-h-11 rounded-md border px-3 py-2 text-sm font-medium disabled:opacity-50 ${
                       notAttending
                         ? "border-neutral-300 dark:border-neutral-600 hover:bg-neutral-50 dark:hover:bg-neutral-800"
@@ -670,17 +712,14 @@ export function DayOfTab({
                   </button>
                 </div>
               )}
-              {error && errorGuestId === g.id && (
+              {rowError && (
                 <p role="alert" className="basis-full text-sm text-red-600 dark:text-red-400">
-                  {error}
+                  {rowError}
                 </p>
               )}
             </li>
           );
         })}
-        {filteredGuests.length === 0 && (
-          <p className="text-sm text-neutral-500 dark:text-neutral-400">No guests match &ldquo;{search}&rdquo;.</p>
-        )}
       </ul>
 
       {canEdit && (
@@ -712,6 +751,20 @@ export function DayOfTab({
               onChange={(e) => setWalkInLast(e.target.value)}
               required
             />
+            {/* TS-202: how many are in the walk-in's party (1 unless changed). Digits only. */}
+            <label htmlFor="walkin-party-size" className="self-center text-sm text-neutral-600 dark:text-neutral-300">
+              Party size
+            </label>
+            <input
+              id="walkin-party-size"
+              type="number"
+              inputMode="numeric"
+              min={1}
+              max={20}
+              className="min-h-11 w-24 rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-3 text-base"
+              value={walkInPartySize}
+              onChange={(e) => setWalkInPartySize(e.target.value.replace(/\D/g, "").slice(0, 2))}
+            />
           </div>
           {walkInNameError && (
             <p role="alert" className="text-sm text-red-600 dark:text-red-400">
@@ -722,13 +775,16 @@ export function DayOfTab({
             <select
               aria-label="Seat the walk-in at a table"
               className="min-h-11 rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
-              value={walkInTableId}
+              // TS-208: a pick that's no longer offered (the table filled up or went) counts as none.
+              value={walkInChoices.some((c) => c.table.id === walkInTableId) ? walkInTableId : ""}
               onChange={(e) => setWalkInTableId(e.target.value)}
             >
               <option value="">Seat at... (optional — can seat later)</option>
-              {tables.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.label}
+              {/* TS-208: only tables a walk-in can be seated at (a free seat, not Restricted), with
+                  their free seats -- it offered every table, full ones included. */}
+              {walkInChoices.map(({ table, free }) => (
+                <option key={table.id} value={table.id}>
+                  {table.label} ({free} free)
                 </option>
               ))}
             </select>

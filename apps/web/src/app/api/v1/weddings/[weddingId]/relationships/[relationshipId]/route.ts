@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { deleteRelationshipForWedding, resyncGuestsSeats } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
-import { errorResponse } from "@/lib/api-response";
+import { errorResponse, weddingDeletedResponse } from "@/lib/api-response";
 import { requireAccess } from "@/lib/access";
 import { SAVED_BUT_NOT_RECHECKED } from "@/lib/post-save";
 
@@ -15,7 +15,15 @@ export async function DELETE(req: NextRequest, { params }: Params) {
   const access = await requireAccess(weddingId, user.id, "EDIT");
   if ("error" in access) return access.error;
 
-  const deleted = await deleteRelationshipForWedding(relationshipId, weddingId);
+  let deleted: Awaited<ReturnType<typeof deleteRelationshipForWedding>>;
+  try {
+    deleted = await deleteRelationshipForWedding(relationshipId, weddingId, access.actor);
+  } catch (err) {
+    // TS-204: access dropped while it waited (403), or the wedding was deleted (404) -- nothing saved.
+    const refused = weddingDeletedResponse(err);
+    if (refused) return refused;
+    throw err;
+  }
   if (!deleted) return errorResponse("Rule not found", 404);
 
   // TS-150: anyone flagged only because of this rule is cleared.

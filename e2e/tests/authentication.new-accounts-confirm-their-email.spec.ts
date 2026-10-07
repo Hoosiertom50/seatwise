@@ -15,6 +15,7 @@ import {
   inviteToken,
   plantEmailVerificationToken,
   plantPasswordResetToken,
+  setInviteEmailed,
   testAccountEmailConfirmed,
 } from "../support/testDatabase.js";
 
@@ -23,7 +24,7 @@ defineQualityTest(
     id: "authentication.new-accounts-confirm-their-email.limits-until-confirmed-then-unlocked",
     title: "a new account can't send invites or RSVP emails, or accept an invite, until it confirms its email; the link (or a password reset) confirms it",
     objective:
-      "Confirms that a freshly signed-up account reports emailVerified false and sees the reminder banner; that its invite is refused (403) and adding a guest with an email doesn't email them; that accepting an invite to its address is refused with EMAIL_NOT_VERIFIED; that Resend link works then is limited; that the emailed link's page confirms the address after a click, after which the banner is gone, invites send and the invite can be accepted; that a used link is refused; and that a password reset confirms an unconfirmed address.",
+      "Confirms that a freshly signed-up account reports emailVerified false and sees the reminder banner; that its invite is refused (403) and adding a guest with an email doesn't email them; that accepting an invite to its address whose email didn't go out (TS-203: the owner copied the link) is refused with EMAIL_NOT_VERIFIED; that Resend link works then is limited; that the emailed link's page confirms the address after a click, after which the banner is gone, invites send and the invite can be accepted; that a used link is refused; and that a password reset confirms an unconfirmed address.",
     expectedOutcome:
       "emailVerified false and the banner visible. Invite 403 with 'Confirm your email address first'. Guest add returns rsvpEmail.confirmEmailFirst true and emailed false. Accept 403 with status EMAIL_NOT_VERIFIED. Resend 200 twice, then 429 (TS-194: the sign-up email and two resends a day). After confirming: 'your email address is confirmed', emailVerified true, no banner, invite 201, accept 200. Re-using the link shows an error. After a password reset, the second account is confirmed.",
     requirementIds: ["REQ-ACCOUNT-WEDDING-MANAGEMENT"],
@@ -63,13 +64,16 @@ defineQualityTest(
         expect(body.rsvpEmail).toMatchObject({ emailed: false, confirmEmailFirst: true });
       });
 
-      // An invite to the unconfirmed address, from a confirmed owner.
+      // An invite to the unconfirmed address, from a confirmed owner. TS-203: one whose email didn't
+      // go out (the owner copied its link) -- accepting an emailed one confirms the address (see
+      // cross-cutting.email-budgets-and-member-email-settings).
       const owned = await weddingData.createWedding(uniqueTitle(testInfo.workerIndex, "Invites Unconfirmed"));
       const sent = await weddingData.createInvite(owned.id, fresh.email, "VIEW");
       expect(sent.status).toBe(201);
+      await setInviteEmailed(sent.body.invite!.id, false);
       const token = await inviteToken(sent.body.invite!.id);
 
-      await test.step("Until confirmed: an invite to this address can't be accepted", async () => {
+      await test.step("Until confirmed: an invite to this address whose link was copied can't be accepted", async () => {
         const accept = await req.post(`/api/v1/invites/${token}/accept`, { data: {} });
         expect(accept.status()).toBe(403);
         expect(((await accept.json()) as { status: string }).status).toBe("EMAIL_NOT_VERIFIED");

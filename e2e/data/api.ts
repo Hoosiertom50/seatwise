@@ -8,7 +8,21 @@
  * its own.
  */
 
-import type { APIRequestContext } from "@playwright/test";
+import type { APIRequestContext, APIResponse } from "@playwright/test";
+
+/**
+ * TS-214: saves wedding settings (PATCH .../weddings/:weddingId) the way the app does -- with the
+ * settingsRevision the change is based on, read first. A save without it is refused (Copilot review).
+ */
+export async function patchWedding(
+  request: APIRequestContext,
+  weddingId: string,
+  options: { data: Record<string, unknown> },
+): Promise<APIResponse> {
+  const current = await request.get(`/api/v1/weddings/${weddingId}`);
+  const revision = current.ok() ? ((await current.json()) as { wedding: { settingsRevision?: number } }).wedding.settingsRevision : undefined;
+  return request.patch(`/api/v1/weddings/${weddingId}`, { data: { expectedRevision: revision ?? 0, ...options.data } });
+}
 
 export class UnsupportedCleanupError extends Error {
   constructor(message: string) {
@@ -209,6 +223,8 @@ export interface PlanVersionDetail {
   revision: number;
   assignments: PlanVersionAssignment[];
   unassignedGuestIds: string[];
+  // TS-207: the unassigned guests' names.
+  unassignedGuests?: { id: string; name: string }[];
   // TS-197: seats held by attending guests, and attending guests without one.
   assignedGuestCount: number;
   unassignedGuestCount: number;
@@ -326,6 +342,8 @@ export interface TimelineEntryDetail {
   id: string;
   weddingId: string;
   time: string;
+  // TS-214: after midnight -- listed after the wedding day's own entries.
+  nextDay: boolean;
   description: string;
   sortOrder: number;
   createdAt: string;
@@ -628,7 +646,7 @@ export class WeddingDataSetup {
       sideLabel2?: string;
     },
   ): Promise<void> {
-    const res = await this.request.patch(`/api/v1/weddings/${weddingId}`, { data: input });
+    const res = await patchWedding(this.request, weddingId, { data: input });
     await assertOk(res, `updateWedding(${weddingId}, ${JSON.stringify(input)})`);
   }
 
@@ -774,7 +792,8 @@ export class WeddingDataSetup {
    * cases, not a setup failure. */
   async createTimelineEntry(
     weddingId: string,
-    input: { time: string; description: string },
+    // TS-214: nextDay -- "After midnight (next day)".
+    input: { time: string; description: string; nextDay?: boolean },
   ): Promise<{ status: number; body: { entry?: TimelineEntryDetail; error?: string } }> {
     const res = await this.request.post(`/api/v1/weddings/${weddingId}/timeline-entries`, { data: input });
     return { status: res.status(), body: await res.json() };

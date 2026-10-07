@@ -19,6 +19,7 @@ import { expect, defineQualityTest, test } from "../fixtures/index.js";
 import { GuestRsvpPage } from "../pages/GuestRsvpPage.js";
 import { getEnv } from "../support/env.js";
 import { uniquePersonName } from "../data/ids.js";
+import { patchWedding } from "../data/api.js";
 
 defineQualityTest(
   {
@@ -57,7 +58,7 @@ defineQualityTest(
 
       await test.step("Arrange: a guest whose wedding's RSVP cutoff has already passed", async () => {
         const guest = await weddingData.createGuest(managedWedding.id, uniquePersonName(testInfo.workerIndex));
-        const patchRes = await context.request.patch(`/api/v1/weddings/${managedWedding.id}`, {
+        const patchRes = await patchWedding(context.request, managedWedding.id, {
           data: { rsvpCutoffDate: closedCutoffDate },
         });
         expect(patchRes.status()).toBe(200);

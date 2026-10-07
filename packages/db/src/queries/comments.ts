@@ -1,6 +1,8 @@
 import { randomUUID } from "crypto";
 import { pool } from "../pool";
 import { notifyWeddingCollaborators } from "./notifications";
+import { inWeddingChange, type ActorAccess } from "./wedding-lock";
+import { shortenWithEllipsis, timelineTimeLabel } from "@seatwise/shared";
 
 export class CommentError extends Error {
   constructor(
@@ -60,15 +62,6 @@ export async function listCommentsForWedding(weddingId: string): Promise<Comment
   return rows;
 }
 
-// TS-180: "16:30" as "4:30 PM" -- the same as the web app's formatClockTime (lib/display-format).
-function clockTime12(hhmm: string): string {
-  const [h, m] = hhmm.split(":").map(Number);
-  if (!Number.isInteger(h) || !Number.isInteger(m)) return hhmm;
-  const period = h < 12 ? "AM" : "PM";
-  const h12 = h % 12 === 0 ? 12 : h % 12;
-  return `${h12}:${String(m).padStart(2, "0")} ${period}`;
-}
-
 // TS-195: the CommentError for a comment the database refused because its guest, table, timeline
 // entry or thread was removed a moment before it was saved (23503 on that column), or null for
 // anything else -- a wedding deleted meanwhile is left to the route ("This wedding was deleted").
@@ -88,7 +81,9 @@ function commentTargetGoneError(err: unknown): CommentError | null {
 export async function createComment(
   weddingId: string,
   authorUserId: string,
-  input: CreateCommentInput
+  input: CreateCommentInput,
+  /** TS-204: the access the request was let in with -- read again as the comment is saved. */
+  actor?: ActorAccess
 ): Promise<CommentRow> {
   let targetLabel: string;
   let guestId: string | null = null;
@@ -157,22 +152,32 @@ export async function createComment(
     if (!input.timelineEntryId)
       throw new CommentError("timelineEntryId is required for a timeline comment.", "INVALID_TARGET");
     const { rows } = await pool.query(
-      `SELECT time, description FROM "timeline_entries" WHERE id = $1 AND "weddingId" = $2`,
+      `SELECT time, "nextDay", description FROM "timeline_entries" WHERE id = $1 AND "weddingId" = $2`,
       [input.timelineEntryId, weddingId]
     );
     const entry = rows[0];
     if (!entry) throw new CommentError("Timeline entry not found.", "NOT_FOUND");
     timelineEntryId = input.timelineEntryId;
     // TS-180: the time as the app shows it (4:30 PM), not the stored 24-hour "16:30".
-    targetLabel = `Timeline: ${clockTime12(entry.time)} ${entry.description}`;
+    // TS-214: with "(next day)" for an entry after midnight.
+    targetLabel = `Timeline: ${timelineTimeLabel(entry.time, entry.nextDay)} ${entry.description}`;
   }
 
   const id = randomUUID();
+  let created: CommentRow;
   try {
-    await pool.query(
-      `INSERT INTO "comments" (id, "weddingId", "targetType", "guestId", "tableId", "timelineEntryId", "targetLabel", body, "authorUserId", "parentCommentId")
-       VALUES ($1, $2, $3::"CommentTargetType", $4, $5, $6, $7, $8, $9, $10)`,
-      [
+    // TS-204: saved with the person's access read again in the same transaction (see inWeddingChange).
+    // TS-209: the saved comment comes back from the insert itself -- it used to be read again at the
+    // end, and a failure there answered an error for a comment that was saved.
+    const { rows: inserted } = await inWeddingChange(weddingId, actor, (client) =>
+      client.query<CommentRow>(
+        `INSERT INTO "comments" (id, "weddingId", "targetType", "guestId", "tableId", "timelineEntryId", "targetLabel", body, "authorUserId", "parentCommentId")
+       VALUES ($1, $2, $3::"CommentTargetType", $4, $5, $6, $7, $8, $9, $10)
+       RETURNING id, "weddingId", "targetType", "guestId", "tableId", "timelineEntryId", "targetLabel",
+         false AS "targetRemoved", body, "authorUserId",
+         COALESCE((SELECT name FROM "users" WHERE id = $9), 'Former member') AS "authorName", "parentCommentId",
+         "resolvedAt", "resolvedByUserId", NULL::text AS "resolvedByName", "createdAt"`,
+        [
         id,
         weddingId,
         input.targetType,
@@ -183,8 +188,10 @@ export async function createComment(
         input.body,
         authorUserId,
         input.parentCommentId ?? null,
-      ]
+        ]
+      )
     );
+    created = inserted[0];
   } catch (err) {
     // TS-195: what the comment is about was removed between the check above and saving it -- the
     // database refused the comment (nothing saved). Said in words, not a server error.
@@ -202,7 +209,8 @@ export async function createComment(
         weddingId,
         authorUserId,
         "COMMENT_REPLY",
-        `New reply on "${targetLabel}": ${input.body.slice(0, 120)}`,
+        // TS-214: cut between whole characters, with "…" -- slice could split an emoji in half.
+        `New reply on "${targetLabel}": ${shortenWithEllipsis(input.body, 120)}`,
         // TS-168: the email doesn't carry the comment itself (text anyone with Comment access typed,
         // arriving as if from Seatwise) -- it points to the app, where the reply is shown.
         { emailMessage: `There's a new reply on "${targetLabel}" — open Seatwise to read it.` }
@@ -210,10 +218,26 @@ export async function createComment(
     } catch (err) {
       console.error("Saved, but notifying the wedding's members failed:", err);
     }
+  } else {
+    // TS-213 (Tom's decision): a new comment thread notifies everyone else too (in the app, and by
+    // email unless they've turned emails off) -- before, only replies did, so a question asked in a
+    // new thread could go unseen.
+    try {
+      await notifyWeddingCollaborators(
+        weddingId,
+        authorUserId,
+        "COMMENT_ADDED",
+        // TS-214: cut between whole characters, with "…", as replies are.
+        `New comment on "${targetLabel}": ${shortenWithEllipsis(input.body, 120)}`,
+        // TS-168: as for replies, the email points to the app rather than carrying the comment.
+        { emailMessage: `There's a new comment on "${targetLabel}" — open Seatwise to read it.` }
+      );
+    } catch (err) {
+      console.error("Saved, but notifying the wedding's members failed:", err);
+    }
   }
 
-  const { rows } = await pool.query(`${SELECT_COMMENT} WHERE c.id = $1`, [id]);
-  return rows[0];
+  return created;
 }
 
 // FR-10.3: only the original commenter or someone with Edit access may resolve a thread. Returns
@@ -223,7 +247,9 @@ export async function resolveComment(
   weddingId: string,
   commentId: string,
   requesterId: string,
-  requesterCanEdit: boolean
+  requesterCanEdit: boolean,
+  /** TS-204: the access the request was let in with -- read again as the thread is resolved. */
+  actor?: ActorAccess
 ): Promise<CommentRow> {
   const { rows } = await pool.query(
     `SELECT "authorUserId" FROM "comments" WHERE id = $1 AND "weddingId" = $2`,
@@ -234,11 +260,15 @@ export async function resolveComment(
   if (comment.authorUserId !== requesterId && !requesterCanEdit) {
     throw new CommentError("Only the original commenter or an editor can resolve this comment.", "FORBIDDEN");
   }
-  await pool.query(
-    `UPDATE "comments" SET "resolvedAt" = now(), "resolvedByUserId" = $1 WHERE id = $2`,
-    [requesterId, commentId]
-  );
-
-  const { rows: updatedRows } = await pool.query(`${SELECT_COMMENT} WHERE c.id = $1`, [commentId]);
-  return updatedRows[0];
+  // TS-204: resolving someone else's comment relies on Edit access, so that is what's read again
+  // (the route's actor carries only its minimum, Comment).
+  const recheckAs: ActorAccess | undefined =
+    actor && comment.authorUserId !== requesterId ? { ...actor, accessLevel: actor.accessLevel === "OWNER" ? "OWNER" : "EDIT" } : actor;
+  // TS-209: the resolved comment is read back inside the change, before it commits -- read after
+  // it, a failure answered an error for a comment that was resolved.
+  return inWeddingChange(weddingId, recheckAs, async (client) => {
+    await client.query(`UPDATE "comments" SET "resolvedAt" = now(), "resolvedByUserId" = $1 WHERE id = $2`, [requesterId, commentId]);
+    const { rows: updatedRows } = await client.query<CommentRow>(`${SELECT_COMMENT} WHERE c.id = $1`, [commentId]);
+    return updatedRows[0];
+  });
 }

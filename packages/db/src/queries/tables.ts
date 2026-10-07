@@ -12,7 +12,8 @@ import {
   HISTORY_CREATED_AT,
   type NewlyFlaggedSeat,
 } from "./seat-checks";
-import { lockWeddingRow } from "./wedding-lock";
+import { inWeddingChange, lockWeddingRow, recheckActorAccess, type ActorAccess } from "./wedding-lock";
+import { assertWeddingHasRoom } from "./wedding-caps";
 
 export interface SeatingTableRow {
   id: string;
@@ -98,17 +99,32 @@ function gridPosition(index: number): { x: number; y: number } {
   return { x: 40 + col * 264, y: 40 + row * 240 };
 }
 
+// TS-204: in one transaction under the wedding's lock, with the person's access read again;
+// TS-205: and refused past the wedding's table cap (see wedding-caps.ts).
 export async function createSeatingTable(
   weddingId: string,
-  input: CreateSeatingTableData
+  input: CreateSeatingTableData,
+  actor?: ActorAccess
 ): Promise<SeatingTableRow> {
+  return inWeddingChange(
+    weddingId,
+    actor,
+    async (client) => {
+      await assertWeddingHasRoom(client, weddingId, "tables", 1);
+      return insertSeatingTable(client, weddingId, input);
+    },
+    { lockWedding: true }
+  );
+}
+
+async function insertSeatingTable(client: PoolClient, weddingId: string, input: CreateSeatingTableData): Promise<SeatingTableRow> {
   const id = randomUUID();
-  const { rows: countRows } = await pool.query(
+  const { rows: countRows } = await client.query(
     `SELECT COUNT(*)::int AS count FROM "seating_tables" WHERE "weddingId" = $1`,
     [weddingId]
   );
   const { x, y } = gridPosition(countRows[0].count);
-  const { rows } = await pool.query(
+  const { rows } = await client.query(
     `INSERT INTO "seating_tables"
        (id, "weddingId", label, capacity, "isRestricted", "isAccessible", "isLocked", purpose,
         "purposeCriterionType", "purposeCriterionValue", "singleSideOnly", shape, "positionX", "positionY", "updatedAt")
@@ -140,7 +156,9 @@ export async function createSeatingTable(
 // repeated quick-create (or one run after tables were added or deleted) never repeats a label.
 export async function quickCreateSeatingTables(
   weddingId: string,
-  input: { count: number; capacity: number; shape: string; labelPrefix: string }
+  input: { count: number; capacity: number; shape: string; labelPrefix: string },
+  /** TS-204: the access the request was let in with -- read again under the wedding's lock. */
+  actor?: ActorAccess
 ): Promise<SeatingTableRow[]> {
   const client = await pool.connect();
   try {
@@ -150,6 +168,11 @@ export async function quickCreateSeatingTables(
     // saved. Before, both read the same labels and both made "Table 5". Also stops here, as "this
     // wedding was deleted", if it was.
     await lockWeddingRow(client, weddingId);
+    // TS-204: the person's access read again under the locks above -- lowered or removed while
+    // this waited: refused, nothing saved.
+    if (actor) await recheckActorAccess(client, weddingId, actor);
+    // TS-205: the wedding's table cap, under the same lock.
+    await assertWeddingHasRoom(client, weddingId, "tables", input.count);
     const { rows: existingRows } = await client.query<{ label: string }>(
       `SELECT label FROM "seating_tables" WHERE "weddingId" = $1`,
       [weddingId]
@@ -406,7 +429,9 @@ export async function updateSeatingTableForWedding(
   input: Partial<CreateSeatingTableData>,
   expectedRevision?: number,
   /** The required-guest list this same edit saves, if it saves one. */
-  requiredGuestIds?: string[]
+  requiredGuestIds?: string[],
+  /** TS-204: the access the edit was let in with -- read again under its first lock. */
+  actor?: ActorAccess
 ): Promise<{ newlyFlagged: NewlyFlaggedSeat[] } | null> {
   const fields: string[] = [];
   const values: unknown[] = [];
@@ -479,6 +504,9 @@ export async function updateSeatingTableForWedding(
       planVersionId = await lockCurrentPlan(client, weddingId);
       await lockRestrictedLists(client, weddingId);
     }
+    // TS-204: the person's access read again under the locks above -- lowered or removed while
+    // this waited: refused, nothing saved.
+    if (actor) await recheckActorAccess(client, weddingId, actor);
     const { rows } = await client.query<{
       revision: number;
       label: string;
@@ -622,7 +650,9 @@ export async function removeSeatingTable(
   actorUserId: string,
   confirmed: boolean,
   /** TS-195: how many seated guests the person confirmed removing (omitted: any number). */
-  confirmedSeatedCount?: number
+  confirmedSeatedCount?: number,
+  /** TS-204: the access the removal was let in with -- read again under its first locks. */
+  actor?: ActorAccess
 ): Promise<RemoveTableResult> {
   const client = await pool.connect();
   try {
@@ -631,6 +661,9 @@ export async function removeSeatingTable(
     // lists in between -- a Restricted table's list goes with it.
     const currentPlanId = await lockCurrentPlan(client, weddingId);
     await lockRestrictedLists(client, weddingId);
+    // TS-204: the person's access read again under the locks above -- lowered or removed while
+    // this waited: refused, nothing saved.
+    if (actor) await recheckActorAccess(client, weddingId, actor);
     // TS-187: a full FOR UPDATE here (not NO KEY UPDATE, as elsewhere) because the table is deleted:
     // a seat being saved at it at the same moment waits, then finds it gone (a 409), rather than
     // the delete waiting on it while it waits on this plan's lock.
@@ -712,8 +745,10 @@ export async function removeSeatingTable(
 export async function setRequiredGuestsForTable(
   tableId: string,
   weddingId: string,
-  guestIds: string[]
-): Promise<{ table: SeatingTableRow; newlyFlagged: NewlyFlaggedSeat[] }> {
+  guestIds: string[],
+  /** TS-204: the access the change was let in with -- read again under its first locks. */
+  actor?: ActorAccess
+): Promise<{ table: SeatingTableRow | null; newlyFlagged: NewlyFlaggedSeat[] }> {
   const client = await pool.connect();
   let newlyFlagged: NewlyFlaggedSeat[] = [];
   try {
@@ -722,6 +757,9 @@ export async function setRequiredGuestsForTable(
     // lists in between, as a new seating rule takes them.
     const planVersionId = await lockCurrentPlan(client, weddingId);
     await lockRestrictedLists(client, weddingId);
+    // TS-204: the person's access read again under the locks above -- lowered or removed while
+    // this waited: refused, nothing saved.
+    if (actor) await recheckActorAccess(client, weddingId, actor);
 
     const { rows: tableRows } = await client.query<TableAfterEdit>(
       // TS-187: NO KEY UPDATE -- see resyncSeatsAtTable in seat-checks.ts.
@@ -757,9 +795,15 @@ export async function setRequiredGuestsForTable(
     client.release();
   }
 
-  const updated = await getSeatingTableForWedding(tableId, weddingId);
-  if (!updated) throw new RestrictedTableError("Table not found after update.");
-  return { table: updated, newlyFlagged };
+  // TS-209: the list is saved -- reading the table back can't turn that into an error (it answered
+  // "Table not found after update", or a server error, for a change that was saved). Null when it
+  // couldn't be read; the caller says the change is saved.
+  try {
+    return { table: await getSeatingTableForWedding(tableId, weddingId), newlyFlagged };
+  } catch (err) {
+    console.error("Required-guest list saved, but reading the table back failed:", err);
+    return { table: null, newlyFlagged };
+  }
 }
 
 // FR-4.6 / TS-120: after a table edit that can make its current seating invalid -- accessible

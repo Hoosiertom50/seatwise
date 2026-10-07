@@ -30,10 +30,14 @@ export async function transferWeddingOwnership(
   const client = await pool.connect();
   try {
     await beginTransaction(client);
-    // TS-187: NO KEY UPDATE, like every other wedding lock (TS-185) -- a full FOR UPDATE here also
-    // held up every change elsewhere in the wedding that Postgres checks the wedding exists for.
+    // TS-187: every other wedding lock is NO KEY UPDATE (TS-185), so it doesn't hold up changes that
+    // Postgres checks the wedding exists for. TS-204 (Copilot review): the hand-off alone takes FOR
+    // UPDATE -- a change made at the same moment reads who owns the wedding with FOR KEY SHARE (see
+    // recheckActorAccess), and has to wait for this one to finish, so it sees the new owner rather
+    // than letting the old owner through as "the owner" after the hand-off. A hand-off is rare and
+    // quick, and it takes nothing else first, so the short wait can't turn into a deadlock.
     const { rows: weddingRows } = await client.query(
-      `SELECT "ownerId" FROM "weddings" WHERE id = $1 FOR NO KEY UPDATE`,
+      `SELECT "ownerId" FROM "weddings" WHERE id = $1 FOR UPDATE`,
       [weddingId]
     );
     if (!weddingRows[0] || weddingRows[0].ownerId !== currentOwnerId) {
@@ -56,25 +60,30 @@ export async function transferWeddingOwnership(
       throw new OwnershipTransferError("That person's account was just deleted — pick someone else to hand this wedding to.");
     }
     const { rows: collabRows } = await client.query(
-      `SELECT wc."userId", u.name FROM "wedding_collaborators" wc JOIN "users" u ON u.id = wc."userId"
+      `SELECT wc."userId", u.name, wc."emailNotificationsEnabled" FROM "wedding_collaborators" wc JOIN "users" u ON u.id = wc."userId"
        WHERE wc.id = $1 AND wc."weddingId" = $2 FOR UPDATE OF wc`,
       [collaboratorId, weddingId]
     );
-    const target = collabRows[0] as { userId: string; name: string } | undefined;
+    const target = collabRows[0] as { userId: string; name: string; emailNotificationsEnabled: boolean } | undefined;
     // Their access was removed (or given to someone else's row) while this waited -- checked again.
     if (!target || target.userId !== who[0].userId) {
       throw new OwnershipTransferError("Pick someone who already has access to this wedding.");
     }
 
     await client.query(`DELETE FROM "wedding_collaborators" WHERE id = $1`, [collaboratorId]);
-    await client.query(`UPDATE "weddings" SET "ownerId" = $1, "updatedAt" = now() WHERE id = $2`, [
-      target.userId,
-      weddingId,
-    ]);
+    // TS-213: each person's own "Email me about this wedding" switch goes with them -- the new
+    // owner's from their access row to the wedding, the old owner's from the wedding to their new
+    // access row.
+    const { rows: previous } = await client.query<{ ownerEmails: boolean }>(
+      `UPDATE "weddings" w SET "ownerId" = $1, "updatedAt" = now(), "ownerEmailNotificationsEnabled" = $3
+         FROM (SELECT "ownerEmailNotificationsEnabled" AS "ownerEmails" FROM "weddings" WHERE id = $2) old
+       WHERE w.id = $2 RETURNING old."ownerEmails"`,
+      [target.userId, weddingId, target.emailNotificationsEnabled]
+    );
     await client.query(
-      `INSERT INTO "wedding_collaborators" (id, "weddingId", "userId", role, "permissionLevel", "invitedByUserId")
-       VALUES ($1, $2, $3, 'COLLABORATOR', 'EDIT', $4)`,
-      [randomUUID(), weddingId, currentOwnerId, target.userId]
+      `INSERT INTO "wedding_collaborators" (id, "weddingId", "userId", role, "permissionLevel", "invitedByUserId", "emailNotificationsEnabled")
+       VALUES ($1, $2, $3, 'COLLABORATOR', 'EDIT', $4, $5)`,
+      [randomUUID(), weddingId, currentOwnerId, target.userId, previous[0]?.ownerEmails ?? true]
     );
     await client.query("COMMIT");
     return { newOwnerUserId: target.userId, newOwnerName: target.name };

@@ -40,7 +40,9 @@ test("a request with no answer gives up after the time limit", async () => {
 });
 
 // TS-175: a delete whose first try got no answer, retried and told "not found", did happen.
-test("a retried delete that finds nothing counts as deleted; a first-try 404 is still an error", async () => {
+// TS-209: so does a first try told the item itself is gone (someone else deleted it a moment
+// earlier) -- but not a 404 about the wedding, which is a real answer.
+test("a delete that finds the item already gone counts as deleted; a 404 about the wedding is still an error", async () => {
   const { api, ApiError } = await import("./api-client");
   const realFetch = globalThis.fetch;
   try {
@@ -54,7 +56,15 @@ test("a retried delete that finds nothing counts as deleted; a first-try 404 is 
     assert.equal(calls, 2);
 
     globalThis.fetch = (async () => new Response(JSON.stringify({ error: "Guest not found" }), { status: 404 })) as typeof fetch;
-    await assert.rejects(api.delete("/api/v1/weddings/w1/guests/g1"), (err) => err instanceof ApiError && err.status === 404);
+    assert.deepEqual(await api.delete("/api/v1/weddings/w1/guests/g1"), {});
+
+    for (const error of ["Wedding not found", "This wedding was deleted — nothing was saved."]) {
+      globalThis.fetch = (async () => new Response(JSON.stringify({ error }), { status: 404 })) as typeof fetch;
+      await assert.rejects(api.delete("/api/v1/weddings/w1/guests/g1"), (err) => err instanceof ApiError && err.status === 404);
+    }
+    // Other methods are unchanged: a 404 on an edit is still an error.
+    globalThis.fetch = (async () => new Response(JSON.stringify({ error: "Guest not found" }), { status: 404 })) as typeof fetch;
+    await assert.rejects(api.patch("/api/v1/weddings/w1/guests/g1", { notes: "x" }), (err) => err instanceof ApiError && err.status === 404);
   } finally {
     globalThis.fetch = realFetch;
   }
@@ -66,14 +76,34 @@ test("a retried account deletion told 'not signed in' counts as deleted; a first
   const realFetch = globalThis.fetch;
   try {
     let calls = 0;
-    globalThis.fetch = (async () => {
+    // TS-204: "who is signed in?" says the account is gone (ACCOUNT_GONE) -- it was deleted.
+    globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
       calls++;
       if (calls === 1) throw new Error("connection dropped");
+      if (init?.method === "GET") return new Response(JSON.stringify({ error: "x", code: "ACCOUNT_GONE" }), { status: 401 });
       return new Response(JSON.stringify({ error: "Not authenticated" }), { status: 401 });
     }) as typeof fetch;
     assert.deepEqual(await api.delete("/api/v1/auth/me", { password: "x" }), {});
     // TS-199: the third call is the check that nobody is signed in any more.
     assert.equal(calls, 3);
+
+    // TS-204: signed out for another reason (logged out in another tab, a password reset) -- the
+    // account may well still exist, so it's not called deleted: the person is told to sign in to check.
+    for (const code of ["SESSION_ENDED", "NO_SESSION", undefined]) {
+      calls = 0;
+      globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+        calls++;
+        if (calls === 1) throw new Error("connection dropped");
+        if (init?.method === "GET") return new Response(JSON.stringify({ error: "x", code }), { status: 401 });
+        return new Response(JSON.stringify({ error: "Not authenticated" }), { status: 401 });
+      }) as typeof fetch;
+      await assert.rejects(
+        api.delete("/api/v1/auth/me", { password: "x" }),
+        (err) => err instanceof ApiError && err.status === 401 && /Sign in to check/.test(err.message),
+        String(code)
+      );
+      assert.equal(calls, 3);
+    }
 
     // TS-199: still signed in when checked (e.g. the retry's 401 was a wrong password) -- not deleted.
     calls = 0;
@@ -206,4 +236,62 @@ test("generate and import commit get the long timeout; everything else the usual
   assert.equal(requestTimeoutFor("POST", "/api/v1/weddings/w1/guests/import/preview"), REQUEST_TIMEOUT_MS);
   assert.equal(requestTimeoutFor("GET", "/api/v1/weddings/w1/plan-versions"), REQUEST_TIMEOUT_MS);
   assert.ok(LONG_REQUEST_TIMEOUT_MS >= 120_000);
+});
+
+// TS-214: a wedding settings save (owner's Settings) whose first try landed and whose retry was
+// refused with the latest settings is a success -- it used to say "changed elsewhere, not saved".
+test("a retried wedding settings save whose first try landed counts as saved", async () => {
+  const { api, resolveRetriedPatchConflict } = await import("./api-client");
+  const fresh = {
+    id: "w1",
+    name: "Lee & Kim",
+    eventDate: "2027-06-12",
+    venueName: null,
+    note: "Line one\nLine two",
+    sideLabel1: "Lee",
+    sideLabel2: "Kim",
+    rsvpCutoffDate: "2027-05-01",
+    settingsRevision: 7,
+  };
+  const body = (o: object) => JSON.stringify(o);
+  const conflict = { error: "This wedding's settings changed since you opened them", wedding: fresh };
+  // Each field the settings send, alone or together (date and venue go together), with any revision.
+  for (const sent of [
+    { name: "Lee & Kim" },
+    { sideLabel1: "Lee" },
+    { sideLabel2: "Kim" },
+    { note: "Line one\r\nLine two" },
+    { rsvpCutoffDate: "2027-05-01" },
+    { eventDate: "2027-06-12", venueName: null },
+    { eventDate: "2027-06-12", venueName: "" },
+  ]) {
+    assert.deepEqual(
+      resolveRetriedPatchConflict("/api/v1/weddings/w1", body({ ...sent, expectedRevision: 3 }), conflict),
+      { wedding: fresh },
+      JSON.stringify(sent)
+    );
+  }
+  // A value the latest settings don't have is a real conflict.
+  assert.equal(resolveRetriedPatchConflict("/api/v1/weddings/w1", body({ note: null, expectedRevision: 3 }), conflict), null);
+  assert.equal(
+    resolveRetriedPatchConflict("/api/v1/weddings/w1", body({ rsvpCutoffDate: null, expectedRevision: 3 }), conflict),
+    null
+  );
+  assert.equal(resolveRetriedPatchConflict("/api/v1/weddings/w1", body({ expectedRevision: 3 }), conflict), null);
+
+  // End to end through api.patch: the retry's 409 comes back as the saved wedding.
+  const realFetch = globalThis.fetch;
+  try {
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls++;
+      if (calls === 1) throw new Error("connection dropped");
+      return new Response(JSON.stringify(conflict), { status: 409 });
+    }) as typeof fetch;
+    const result = await api.patch<{ wedding: typeof fresh }>("/api/v1/weddings/w1", { name: "Lee & Kim", expectedRevision: 6 });
+    assert.equal(calls, 2);
+    assert.deepEqual(result.wedding, fresh);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
 });

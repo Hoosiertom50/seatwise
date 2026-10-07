@@ -153,8 +153,12 @@ else deploys:
 **Environment variables** (Netlify → Project configuration → Environment variables; never in the
 repo): `DATABASE_URL` (Neon's **pooled** `-pooler` string), `JWT_SECRET`, `ENCRYPTION_KEY`,
 `APP_URL` (`https://seatwise-app.netlify.app`), and the email settings `SMTP_USER`/`SMTP_PASSWORD`
-(see Email delivery). A production build refuses a `JWT_SECRET` shorter than 32 characters or
-left at a placeholder such as the one in `.env.example` (TS-179). The three secrets are marked *Contains secret
+(see Email delivery). The running app refuses a `JWT_SECRET` shorter than 32 characters,
+left at a placeholder such as the one in `.env.example` (TS-179), or the same as `ENCRYPTION_KEY`
+(TS-204) -- but only when it first uses it,
+**not at build time** (TS-215). A wrong `JWT_SECRET`, `ENCRYPTION_KEY` or `APP_URL` builds and
+deploys without a word (spending the deploy's credits), and then every sign-in or link fails --
+so check them before publishing (step 1 of the publish steps below). The three secrets are marked *Contains secret
 values* and are **not** available in local development. The two keys were generated with
 `openssl rand -hex 32` and are kept in the owner's password manager.
 
@@ -175,10 +179,26 @@ read -rs NEON_URL && DATABASE_URL="$NEON_URL" pnpm --filter @seatwise/db exec pr
 **Publish steps when a release includes a migration** (TS-183). The new code and the new schema
 should be live together, so the gap between them is as short as possible:
 
-1. Merge the PRs to `main` and make sure CI is green.
+1. Merge the PRs to `main` and make sure CI is green. **Check the live settings** (TS-215) in
+   Netlify → Project configuration → Environment variables, since nothing checks them at build
+   time:
+   - `JWT_SECRET` and `ENCRYPTION_KEY` are each **64 characters** (what `openssl rand -hex 32`
+     makes) and **different from each other** (*Reveal* shows them; don't copy them anywhere).
+   - `APP_URL` is exactly `https://seatwise-app.netlify.app` (no trailing `/`).
+   - `EMAIL_TRANSPORT` is **not set** -- it's for local runs and CI, where emails are only printed
+     and counted as sent; on the live site nobody would get an email.
 2. **Migrate**: run the `prisma migrate deploy` command above against production.
+
+   **If it reports a failed migration** (TS-215), stop: **don't publish** -- the new code expects
+   the new schema. Either restore the database from Neon's history to just before the migrate
+   (Neon keeps 6 hours: Branches → Restore, see Backups below) and try again once the problem is
+   fixed, or, once you know exactly how far the migration got and have finished or undone its
+   changes by hand, mark it with `prisma migrate resolve --applied <name>` or
+   `--rolled-back <name>` (same `read -rs NEON_URL && DATABASE_URL="$NEON_URL" pnpm --filter
+   @seatwise/db exec prisma migrate resolve …` form as above) and run `migrate deploy` again.
 3. **Publish immediately**: merge `main` into `release` (the PR), and wait for Netlify's deploy to
-   finish.
+   finish. Then **sign in on the live site straight away** -- a wrong secret or `APP_URL` shows up
+   here, on the first sign-in or link, not in the deploy.
 4. **Then re-run the safe data steps** against production. Each is a dry run first — read what it
    says, then repeat with `--confirm`. Both are safe to run more than once and only run against
    production with `--target-production`, asking for the secrets without showing them:
@@ -203,6 +223,10 @@ should be live together, so the gap between them is as short as possible:
    Every other script in `packages/db/prisma` (seed, cleanup, fill) refuses to run against anything
    but a local database, whatever it's passed.
 5. Check the live site by hand (sign in, open a wedding, its seating plan).
+
+   TS-215: when a release brings in the rolling 24-hour limits (TS-203), the counts already made
+   that day carry over -- the limits keep their names, and today's count is still inside the last 24
+   hours -- so nothing resets on publish. Nothing to do.
 
    TS-187: someone who signed up in the gap between steps 2 and 3 got their "confirm your email"
    link from the old code. If it doesn't work for them, they can use **Resend link** on the

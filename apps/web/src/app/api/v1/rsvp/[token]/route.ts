@@ -8,7 +8,7 @@ import {
   RsvpSubmissionError,
   notifyWeddingCollaborators,
 } from "@seatwise/db";
-import { errorResponse, zodErrorResponse } from "@/lib/api-response";
+import { errorResponse, zodErrorResponse, readJson } from "@/lib/api-response";
 import { clientAddress, rateLimitOr429, RSVP_LIMITS, RSVP_LINK_TOO_MANY_SUBMITS } from "@/lib/rate-limit";
 
 type Params = { params: Promise<{ token: string }> };
@@ -78,7 +78,10 @@ export async function POST(req: NextRequest, { params }: Params) {
     ));
   if (limited) return limited;
 
-  const body = await req.json().catch(() => null);
+  // TS-204: readJson refuses a non-JSON or oversized body (413), even one sent without a Content-Length.
+  const json = await readJson(req);
+  if (!json.ok) return json.response;
+  const body = json.body;
   const parsed = submitGuestRsvpSchema.safeParse(body);
   if (!parsed.success) return zodErrorResponse(parsed.error);
 

@@ -81,7 +81,12 @@ export class WeddingGuestsPage extends BasePage {
    * still collapsed (a no-op once open). */
   async openMoreDetails(): Promise<void> {
     const toggle = this.page.getByRole("button", { name: /^\+ More details/ });
-    if (await toggle.count()) await toggle.click();
+    if (await toggle.count()) {
+      await toggle.click();
+      // TS-191: opening it moves focus to its first box a moment later -- waited for, so whatever the
+      // test does next (a Tab-order walk, say) starts after that and isn't overtaken by it.
+      await expect(this.page.getByLabel("Party / household", { exact: true })).toBeFocused();
+    }
   }
 
   /** TS-112: whether the optional fields are currently showing. */
@@ -274,13 +279,19 @@ export class WeddingGuestsPage extends BasePage {
     return new GuestRow(li);
   }
 
-  /** TS-177: the guest list's heading, "Guests (N invitations · N people)". */
+  /** TS-177: the guest list's heading, "Guests (N invitations · N people invited · N attending)" (TS-214). */
   guestListHeading() {
     return this.page.getByRole("heading", { name: /^Guests \(/ });
   }
 
-  /** TS-170: the "Export guest list (CSV)" link. */
+  /** TS-170: the "Export guest list (CSV)" control. TS-211: a button now -- it fetches the file
+   * and says inline when it can't. */
   exportCsvLink() {
-    return this.page.getByRole("link", { name: "Export guest list (CSV)", exact: true });
+    return this.page.getByRole("button", { name: "Export guest list (CSV)", exact: true });
+  }
+
+  /** TS-211: a failed CSV export's message, shown next to the button. */
+  exportCsvError(text: string | RegExp) {
+    return this.page.getByRole("alert").filter({ hasText: text });
   }
 }

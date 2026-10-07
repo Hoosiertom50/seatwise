@@ -1,12 +1,13 @@
 "use client";
 
-import { formatClockTime, formatDateTime } from "@/lib/display-format";
+import { formatDateTime } from "@/lib/display-format";
 import { useEffect, useMemo, useState, useRef } from "react";
 import { api, ApiError } from "@/lib/api-client";
 import type { CommentDTO, GuestDTO, SeatingTableDTO, TimelineEntryDTO } from "@seatwise/shared";
 import { useUnsavedChanges } from "@/lib/unsaved-changes";
 // TS-193: the same limits the server checks (packages/shared/src/field-limits.ts).
-import { FIELD_LIMITS } from "@seatwise/shared";
+import { FIELD_LIMITS, timelineTimeLabel } from "@seatwise/shared";
+import { focusIfLost } from "@/lib/focus-if-lost";
 
 // TS-13 (Collaboration & Notifications, FR-10.3): comments attached to a guest or table. A
 // dedicated tab (rather than inline per-row) keeps this tractable — pick a target, see its
@@ -132,6 +133,9 @@ export function CommentsTab({
       setComments((cur) => [...cur, comment]);
       setReplyBodies((cur) => ({ ...cur, [parentCommentId]: "" }));
       setReplyingTo(null);
+      // TS-212: the reply box closes -- focus goes back to the thread's Reply button (it used to
+      // drop to the page; Cancel already did this). Checked again after the redraw (lib/focus-if-lost).
+      focusIfLost(`reply-open-${parentCommentId}`);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't post that reply.");
     } finally {
@@ -237,7 +241,8 @@ export function CommentsTab({
                 {targetType === "TIMELINE_ENTRY" &&
                   timelineEntries.map((e) => (
                     <option key={e.id} value={e.id}>
-                      {formatClockTime(e.time)} — {e.description}
+                      {/* TS-214: "(next day)" for an entry after midnight. */}
+                      {timelineTimeLabel(e.time, e.nextDay)} — {e.description}
                     </option>
                   ))}
               </select>
@@ -301,6 +306,8 @@ export function CommentsTab({
                       <button
                         onClick={() => onResolve(root.id)}
                         disabled={resolving.has(root.id)}
+                        // TS-212: says which comment -- a screen reader's button list read "Resolve, Resolve…".
+                        aria-label={`${resolving.has(root.id) ? "Resolving" : "Resolve"} ${root.authorName}'s comment on ${root.targetLabel}`}
                         className="shrink-0 rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-xs hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50"
                       >
                         {resolving.has(root.id) ? "Resolving…" : "Resolve"}
@@ -385,6 +392,7 @@ export function CommentsTab({
                       <button
                         id={`reply-open-${root.id}`}
                         onClick={() => setReplyingTo(root.id)}
+                        aria-label={`Reply to ${root.authorName}'s comment on ${root.targetLabel}`}
                         className="text-sm text-neutral-500 dark:text-neutral-400 hover:underline"
                       >
                         Reply

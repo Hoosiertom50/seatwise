@@ -10,9 +10,9 @@ const FORBIDDEN_CONTROL = /[\u0000-\u0008\u000B-\u001F\u007F-\u009F‪-‮⁦-�
 
 export const CONTROL_CHARACTER_MESSAGE = "Can't contain hidden control characters — retype it or paste it as plain text";
 
-// TS-198: free text can't hold the "couldn't read this character" mark (U+FFFD) either -- it
-// means letters were already lost (a file or a copy in the wrong encoding), and saving it keeps
-// the loss.
+// TS-198: the "couldn't read this character" mark (U+FFFD) means letters were already lost (a file
+// in the wrong encoding). TS-214: it's refused in guest-import cells (guest-import-row.ts), where
+// that happens -- safeText itself doesn't refuse it, so a typed or pasted value can still hold one.
 
 // TS-190: a single-line field (a name, a label) can't hold a line break.
 export const LINE_BREAK_MESSAGE = "Can't contain line breaks — keep it on one line";

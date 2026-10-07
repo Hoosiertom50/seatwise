@@ -1,3 +1,5 @@
+import type { PoolClient } from "pg";
+import { beginTransaction, pool } from "../pool";
 import type { Queryable } from "./seat-checks";
 import type { AccessLevel, CollaboratorRole } from "./collaborators";
 
@@ -58,13 +60,24 @@ const RANK: Record<Exclude<AccessLevel, null>, number> = { VIEW: 1, COMMENT: 2, 
  * for this change to finish; changing their level takes the wedding's lock, which Generate,
  * Restore and imports already hold. Before, the route checked access once, before a change that
  * could wait seconds for its locks -- someone removed in that moment still had it saved.
+ *
+ * TS-204: now called by every change, right after its first lock (the wedding row where it takes
+ * one). The collaborator row is share-locked FOR SHARE (it was FOR KEY SHARE, which a level or role
+ * change -- an ordinary UPDATE -- did not wait for), so a level change, a role change and a removal
+ * all wait for this change to finish, whether or not it holds the wedding lock. Call it after the
+ * wedding lock, never before: the access changes take the wedding lock first, then this row.
  */
 export async function recheckActorAccess(q: Queryable, weddingId: string, actor: ActorAccess): Promise<void> {
-  const { rows: wedding } = await q.query(`SELECT "ownerId" FROM "weddings" WHERE id = $1`, [weddingId]);
+  // TS-204 (Copilot review): FOR KEY SHARE -- it doesn't wait for the ordinary wedding lock (NO KEY
+  // UPDATE) or hold anyone up, but it does wait for a hand-off (which alone takes FOR UPDATE, see
+  // transferWeddingOwnership). Before, a plain read could still see the old owner while a hand-off was
+  // being saved, and the old owner's change went through as the owner's -- even if the new owner then
+  // removed them straight away.
+  const { rows: wedding } = await q.query(`SELECT "ownerId" FROM "weddings" WHERE id = $1 FOR KEY SHARE`, [weddingId]);
   if (!wedding[0]) throw new WeddingDeletedError();
   if (wedding[0].ownerId === actor.userId) return; // the owner has every level
   const { rows } = await q.query(
-    `SELECT "permissionLevel", role FROM "wedding_collaborators" WHERE "weddingId" = $1 AND "userId" = $2 FOR KEY SHARE`,
+    `SELECT "permissionLevel", role FROM "wedding_collaborators" WHERE "weddingId" = $1 AND "userId" = $2 FOR SHARE`,
     [weddingId, actor.userId]
   );
   const now = rows[0] as { permissionLevel: Exclude<AccessLevel, null | "OWNER">; role: CollaboratorRole } | undefined;
@@ -73,4 +86,34 @@ export async function recheckActorAccess(q: Queryable, weddingId: string, actor:
     RANK[now.permissionLevel] < RANK[actor.accessLevel] ||
     (actor.accessLevel !== "OWNER" && actor.role === "COUPLE" && now.role !== "COUPLE");
   if (dropped) throw new AccessChangedError();
+}
+
+/**
+ * TS-204: runs a change in one transaction with the person's access read again inside it -- for
+ * the changes that used to be a single statement with no transaction (adding a guest, table,
+ * timeline entry, vendor or comment; setting the budget; making a link...). With `lockWedding`,
+ * the wedding's lock is taken first (a change that counts against a per-wedding cap, see
+ * wedding-caps.ts), then the access is read again; otherwise the re-check is the first lock.
+ * Without an actor (internal use, tests) it's just the transaction.
+ */
+export async function inWeddingChange<T>(
+  weddingId: string,
+  actor: ActorAccess | undefined,
+  fn: (client: PoolClient) => Promise<T>,
+  { lockWedding = false }: { lockWedding?: boolean } = {}
+): Promise<T> {
+  const client = await pool.connect();
+  try {
+    await beginTransaction(client);
+    if (lockWedding) await lockWeddingRow(client, weddingId);
+    if (actor) await recheckActorAccess(client, weddingId, actor);
+    const result = await fn(client);
+    await client.query("COMMIT");
+    return result;
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
 }

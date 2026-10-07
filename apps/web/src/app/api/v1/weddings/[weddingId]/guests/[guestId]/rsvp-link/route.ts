@@ -3,7 +3,7 @@ import { rsvpLinkActionSchema, type RsvpLinkDTO } from "@seatwise/shared";
 import { getGuestForWedding } from "@seatwise/db";
 import { sendGuestRsvpLink } from "@/lib/rsvp-email";
 import { getAuthUser } from "@/lib/session";
-import { errorResponse, zodErrorResponse } from "@/lib/api-response";
+import { errorResponse, zodErrorResponse, readJson, weddingDeletedResponse } from "@/lib/api-response";
 import { requireAccess } from "@/lib/access";
 
 type Params = { params: Promise<{ weddingId: string; guestId: string }> };
@@ -20,7 +20,10 @@ export async function POST(req: NextRequest, { params }: Params) {
   const access = await requireAccess(weddingId, user.id, "EDIT");
   if ("error" in access) return access.error;
 
-  const body = await req.json().catch(() => ({}));
+  // TS-204: readJson refuses a non-JSON or oversized body (413), even one sent without a Content-Length.
+  const json = await readJson(req);
+  if (!json.ok) return json.response;
+  const body = json.body ?? {};
   const parsed = rsvpLinkActionSchema.safeParse(body);
   if (!parsed.success) return zodErrorResponse(parsed.error);
 
@@ -28,7 +31,16 @@ export async function POST(req: NextRequest, { params }: Params) {
   if (!guest) return errorResponse("Guest not found", 404);
 
   // TS-143: the same helper sends the automatic email when a guest is added with an address.
-  const sent = await sendGuestRsvpLink(guest, access.wedding, user, { regenerate: parsed.data.regenerate });
+  let sent: Awaited<ReturnType<typeof sendGuestRsvpLink>>;
+  try {
+    // TS-204: the link is made with the person's access read again in the same transaction.
+    sent = await sendGuestRsvpLink(guest, access.wedding, user, { regenerate: parsed.data.regenerate, actor: access.actor });
+  } catch (err) {
+    // TS-204: access dropped while it waited (403), or the wedding was deleted (404) -- nothing saved.
+    const refused = weddingDeletedResponse(err);
+    if (refused) return refused;
+    throw err;
+  }
   if (!sent) return errorResponse("Guest not found", 404);
   const link: RsvpLinkDTO = sent;
   return NextResponse.json({ rsvp: link });

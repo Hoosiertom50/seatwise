@@ -7,10 +7,26 @@ import { beginTransaction, pool } from "../pool";
 // window, weighted by how much of it still falls inside the last `windowSeconds`. Before, the
 // count started again from zero on the quarter hour, so tries made just before and just after it
 // got twice the limit (and 100 wrong passwords spread across 2:15 never locked the account).
-// Daily limits stay calendar days (UTC), because their messages say "today" and "tomorrow".
-// TS-194: except the site-wide email counts, which roll over the last 24 hours (hitRollingCount).
+// TS-194: the site-wide email counts roll over the last 24 hours (hitRollingCount).
+// TS-203: and so does every other limit of a day or more. They used to be calendar days (UTC), so
+// a burst just before and just after midnight UTC (8 pm Eastern) got twice the day's limit inside a
+// couple of hours -- an account's email allowance, the owner's pool for guests' answers, a network
+// address's account emails. A daily limit is now kept in hourly windows and counts everything in
+// the current hour plus the 24 hours before it (see rollingTotal), under the same keys as before --
+// so calendar-day counts already stored (whose window starts at midnight, an hour boundary) keep
+// counting until they age out, instead of every count starting again from zero on deploy.
 function slides(windowSeconds: number): boolean {
   return windowSeconds < 86_400;
+}
+
+/** TS-203: whether a limit of `windowSeconds` rolls (a day or more) rather than sliding. */
+function rolls(windowSeconds: number): boolean {
+  return !slides(windowSeconds);
+}
+
+/** TS-203: how long each stored window is -- an hour for a rolling limit, otherwise the limit's own window. */
+function bucketMsFor(windowSeconds: number): number {
+  return rolls(windowSeconds) ? ROLLING_BUCKET_SECONDS * 1000 : windowSeconds * 1000;
 }
 
 function windowStartFor(nowMs: number, windowMs: number): Date {
@@ -101,8 +117,71 @@ export interface RateLimitResult {
 
 function retryAfter(current: number, previous: number, limit: number, windowSeconds: number, windowStart: Date, nowMs: number): number {
   const elapsedSeconds = (nowMs - windowStart.getTime()) / 1000;
-  if (!slides(windowSeconds)) return Math.max(1, Math.ceil(windowSeconds - elapsedSeconds));
   return slidingRetryAfterSeconds({ current, previous, limit, windowSeconds, elapsedSeconds });
+}
+
+/**
+ * TS-203: how long until one more try fits under a rolling limit, in whole seconds (at least 1).
+ * `windows` are the stored hourly windows (the current one included, without the try being asked
+ * about). A window stops counting once the current window starts more than `spanSeconds` after
+ * it, so the answer is the first moment -- now, or when one of the windows drops out -- at which
+ * everything still counted is below `limit`. Pure, so it can be unit-tested.
+ */
+export function rollingRetryAfterSeconds({
+  windows,
+  limit,
+  nowMs,
+  spanSeconds = ROLLING_SPAN_SECONDS,
+  bucketSeconds = ROLLING_BUCKET_SECONDS,
+}: {
+  windows: { startMs: number; count: number }[];
+  limit: number;
+  nowMs: number;
+  spanSeconds?: number;
+  bucketSeconds?: number;
+}): number {
+  const bucketMs = bucketSeconds * 1000;
+  const spanMs = spanSeconds * 1000;
+  const countedAt = (t: number) => {
+    const oldest = Math.floor(t / bucketMs) * bucketMs - spanMs;
+    return windows.filter((w) => w.startMs >= oldest).reduce((sum, w) => sum + Number(w.count), 0);
+  };
+  // Each window drops out when the window after the one `spanSeconds` later begins.
+  const moments = [nowMs, ...windows.map((w) => w.startMs + spanMs + bucketMs)].filter((t) => t >= nowMs).sort((a, b) => a - b);
+  for (const t of moments) {
+    if (countedAt(t) <= limit - 1) return Math.max(1, Math.ceil((t - nowMs) / 1000 - 1e-9));
+  }
+  return Math.ceil((spanMs + bucketMs) / 1000);
+}
+
+/** TS-203: the stored windows of a rolling limit still inside its span (the current one included). */
+async function rollingWindows(key: string, currentStart: Date, spanSeconds: number): Promise<{ startMs: number; count: number }[]> {
+  const { rows } = await pool.query<{ startMs: number; count: number }>(
+    `SELECT (EXTRACT(EPOCH FROM "windowStart") * 1000)::float8 AS "startMs", count FROM "rate_limit_counters"
+      WHERE key = $1 AND "windowStart" >= $2::timestamp AND "windowStart" <= $3::timestamp`,
+    [key, utc(new Date(currentStart.getTime() - spanSeconds * 1000)), utc(currentStart)]
+  );
+  return rows.map((r) => ({ startMs: Number(r.startMs), count: Number(r.count) }));
+}
+
+/**
+ * TS-203: counts one hit in the current hourly window of a rolling limit. Returns the rolling total
+ * (this hit included), and every window as it stands without this hit (for rollingRetryAfterSeconds).
+ */
+async function hitRolling(key: string, spanSeconds: number, nowMs: number) {
+  const windowStart = windowStartFor(nowMs, ROLLING_BUCKET_SECONDS * 1000);
+  const { rows } = await pool.query<{ count: number }>(
+    `INSERT INTO "rate_limit_counters" (key, "windowStart", count) VALUES ($1, $2::timestamp, 1)
+     ON CONFLICT (key, "windowStart") DO UPDATE SET count = "rate_limit_counters".count + 1
+     RETURNING count`,
+    [key, utc(windowStart)]
+  );
+  pruneOldCounters();
+  const current = Number(rows[0].count);
+  const earlier = (await rollingWindows(key, windowStart, spanSeconds)).filter((w) => w.startMs !== windowStart.getTime());
+  const total = rollingTotal(current, earlier, windowStart.getTime(), spanSeconds);
+  const without = [...earlier, { startMs: windowStart.getTime(), count: current - 1 }];
+  return { windowStart, total, without };
 }
 
 // Counts one hit against `key` in the current window of `windowSeconds`, and says whether it's
@@ -111,6 +190,15 @@ function retryAfter(current: number, previous: number, limit: number, windowSeco
 // returned windowStart), so refused tries don't stretch a lockout.
 export async function hitRateLimit(key: string, limit: number, windowSeconds: number): Promise<RateLimitResult> {
   const nowMs = Date.now();
+  // TS-203: a day or more rolls (see rolls()).
+  if (rolls(windowSeconds)) {
+    const { windowStart, total, without } = await hitRolling(key, windowSeconds, nowMs);
+    return {
+      allowed: total <= limit,
+      retryAfterSeconds: rollingRetryAfterSeconds({ windows: without, limit, nowMs, spanSeconds: windowSeconds }),
+      windowStart,
+    };
+  }
   const windowMs = windowSeconds * 1000;
   const windowStart = windowStartFor(nowMs, windowMs);
 
@@ -123,7 +211,7 @@ export async function hitRateLimit(key: string, limit: number, windowSeconds: nu
 
   pruneOldCounters();
 
-  const previous = slides(windowSeconds) ? await previousWindowCount(key, windowStart, windowMs) : 0;
+  const previous = await previousWindowCount(key, windowStart, windowMs);
   const counted = rows[0].count + carriedOver(previous, windowStart, windowMs, nowMs);
   return {
     allowed: counted <= limit,
@@ -145,7 +233,12 @@ function pruneOldCounters(): void {
 // TS-163: counts one hit against `key` in the current window and returns the new count -- for a
 // limit with more than one threshold (the daily email ceiling, with headroom for password resets).
 // TS-186: and the window it was counted in, for undoRateLimitHit.
+// TS-203: a day or more rolls, like hitRateLimit (the count is then the rolling total).
 export async function hitRateLimitCount(key: string, windowSeconds: number): Promise<{ count: number; windowStart: Date }> {
+  if (rolls(windowSeconds)) {
+    const { windowStart, total } = await hitRolling(key, windowSeconds, Date.now());
+    return { count: total, windowStart };
+  }
   const windowStart = windowStartFor(Date.now(), windowSeconds * 1000);
   const { rows } = await pool.query<{ count: number }>(
     `INSERT INTO "rate_limit_counters" (key, "windowStart", count) VALUES ($1, $2::timestamp, 1)
@@ -161,6 +254,18 @@ export async function hitRateLimitCount(key: string, windowSeconds: number): Pro
 // count only goes up if it fails.
 export async function peekRateLimit(key: string, limit: number, windowSeconds: number): Promise<RateLimitResult> {
   const nowMs = Date.now();
+  if (rolls(windowSeconds)) {
+    // TS-203: a day or more rolls (see rolls()).
+    const windowStart = windowStartFor(nowMs, ROLLING_BUCKET_SECONDS * 1000);
+    const windows = await rollingWindows(key, windowStart, windowSeconds);
+    const current = windows.find((w) => w.startMs === windowStart.getTime())?.count ?? 0;
+    const earlier = windows.filter((w) => w.startMs !== windowStart.getTime());
+    return {
+      allowed: rollingTotal(current, earlier, windowStart.getTime(), windowSeconds) < limit,
+      retryAfterSeconds: rollingRetryAfterSeconds({ windows, limit, nowMs, spanSeconds: windowSeconds }),
+      windowStart,
+    };
+  }
   const windowMs = windowSeconds * 1000;
   const windowStart = windowStartFor(nowMs, windowMs);
   const { rows } = await pool.query<{ count: number }>(
@@ -168,7 +273,7 @@ export async function peekRateLimit(key: string, limit: number, windowSeconds: n
     [key, utc(windowStart)]
   );
   const current = rows[0]?.count ?? 0;
-  const previous = slides(windowSeconds) ? await previousWindowCount(key, windowStart, windowMs) : 0;
+  const previous = await previousWindowCount(key, windowStart, windowMs);
   return {
     allowed: current + carriedOver(previous, windowStart, windowMs, nowMs) < limit,
     retryAfterSeconds: retryAfter(current, previous, limit, windowSeconds, windowStart, nowMs),
@@ -183,7 +288,8 @@ export async function peekRateLimit(key: string, limit: number, windowSeconds: n
 // hit counted just before a window ended was "taken back" from the next window instead. Without
 // it, the current window is used (as before).
 export async function undoRateLimitHit(key: string, windowSeconds: number, windowStart?: Date): Promise<void> {
-  const start = windowStart ?? windowStartFor(Date.now(), windowSeconds * 1000);
+  // TS-203: for a rolling limit, "the current window" is the current hour.
+  const start = windowStart ?? windowStartFor(Date.now(), bucketMsFor(windowSeconds));
   await pool.query(
     `UPDATE "rate_limit_counters" SET count = GREATEST(count - 1, 0) WHERE key = $1 AND "windowStart" = $2::timestamp`,
     [key, utc(start)]
@@ -277,18 +383,7 @@ export function rollingTotal(
  * ROLLING_BUCKET_SECONDS) to take exactly this hit back.
  */
 export async function hitRollingCount(key: string): Promise<{ count: number; windowStart: Date }> {
-  const windowStart = windowStartFor(Date.now(), ROLLING_BUCKET_SECONDS * 1000);
-  const { rows } = await pool.query<{ count: number }>(
-    `INSERT INTO "rate_limit_counters" (key, "windowStart", count) VALUES ($1, $2::timestamp, 1)
-     ON CONFLICT (key, "windowStart") DO UPDATE SET count = "rate_limit_counters".count + 1
-     RETURNING count`,
-    [key, utc(windowStart)]
-  );
-  pruneOldCounters();
-  const { rows: earlier } = await pool.query<{ startMs: number; count: number }>(
-    `SELECT (EXTRACT(EPOCH FROM "windowStart") * 1000)::float8 AS "startMs", count FROM "rate_limit_counters"
-      WHERE key = $1 AND "windowStart" >= $2::timestamp AND "windowStart" < $3::timestamp`,
-    [key, utc(new Date(windowStart.getTime() - ROLLING_SPAN_SECONDS * 1000)), utc(windowStart)]
-  );
-  return { count: rollingTotal(rows[0].count, earlier, windowStart.getTime()), windowStart };
+  // TS-203: the same as every other rolling limit now (see hitRolling).
+  const { windowStart, total } = await hitRolling(key, ROLLING_SPAN_SECONDS, Date.now());
+  return { count: total, windowStart };
 }

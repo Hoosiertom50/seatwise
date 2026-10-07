@@ -28,6 +28,7 @@ import { expect, defineQualityTest, test } from "../fixtures/index.js";
 import { TablesTabPage } from "../pages/TablesTabPage.js";
 import { DashboardPage } from "../pages/DashboardPage.js";
 import { uniqueTitle, uniquePersonName } from "../data/ids.js";
+import { patchWedding } from "../data/api.js";
 
 defineQualityTest(
   {
@@ -51,7 +52,7 @@ defineQualityTest(
     const context = page.context();
 
     await test.step("Arrange: set the source wedding's Side-Mixing to a non-default value", async () => {
-      const res = await context.request.patch(`/api/v1/weddings/${managedWedding.id}`, {
+      const res = await patchWedding(context.request, managedWedding.id, {
         data: { sideMixing: "KEEP_SEPARATE" },
       });
       expect(res.status()).toBe(200);

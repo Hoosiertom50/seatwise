@@ -20,23 +20,48 @@ export interface ExportGuestRow {
   plusOneNames?: string | null;
 }
 
+// TS-205: text widths at size 1, measured once per font and piece of text. Measuring lays the
+// whole text out again each time, and the place cards and lookup list used to measure the same name
+// dozens of times over (every split point, every size, every step of a search) -- 200 place cards
+// for names made of many short words took about 25 seconds. A width grows in step with the size,
+// so one measurement at size 1 serves every size. Kept per font, so it goes away with its PDF.
+const unitWidths = new WeakMap<PDFFont, Map<string, number>>();
+function unitWidth(font: PDFFont, text: string): number {
+  let cache = unitWidths.get(font);
+  if (!cache) unitWidths.set(font, (cache = new Map()));
+  let width = cache.get(text);
+  if (width === undefined) {
+    width = font.widthOfTextAtSize(text, 1);
+    cache.set(text, width);
+  }
+  return width;
+}
+const widthAt = (font: PDFFont, text: string, size: number) => unitWidth(font, text) * size;
+
 /**
  * TS-180: `text` cut short with an ellipsis so it fits `maxWidth` at `size` -- long names and table
  * names used to run off the page, into the table column, or over a place card's cut line.
+ * TS-205: the cut is found from each character's width (measured once) added up, then checked
+ * against the real width of the result -- a handful of measurements instead of a full one per step
+ * of a search.
  */
 export function fitText(font: PDFFont, text: string, size: number, maxWidth: number): string {
-  if (font.widthOfTextAtSize(text, size) <= maxWidth) return text;
+  if (widthAt(font, text, size) <= maxWidth) return text;
   const ellipsis = "…";
   const chars = [...text];
-  let low = 0;
-  let high = chars.length;
-  // The longest start of the text that fits with the ellipsis after it.
-  while (low < high) {
-    const mid = Math.ceil((low + high) / 2);
-    if (font.widthOfTextAtSize(chars.slice(0, mid).join("").trimEnd() + ellipsis, size) <= maxWidth) low = mid;
-    else high = mid - 1;
+  const cut = (n: number) => chars.slice(0, n).join("").trimEnd() + ellipsis;
+  const fits = (n: number) => widthAt(font, cut(n), size) <= maxWidth;
+  // Estimate: the most characters whose widths, plus the ellipsis, add up to no more than maxWidth.
+  let room = maxWidth / size - unitWidth(font, ellipsis);
+  let n = 0;
+  while (n < chars.length && room - unitWidth(font, chars[n]) >= 0) {
+    room -= unitWidth(font, chars[n]);
+    n++;
   }
-  return chars.slice(0, low).join("").trimEnd() + ellipsis;
+  // Then settle it on the real width (letters drawn together can differ slightly from the sum).
+  while (n > 0 && !fits(n)) n--;
+  while (n < chars.length && fits(n + 1)) n++;
+  return cut(n);
 }
 
 interface Fonts {
@@ -100,9 +125,67 @@ function safeRow(fonts: Fonts, row: ExportGuestRow): ExportGuestRow {
   };
 }
 
-function drawHeader(page: PDFPage, fonts: Fonts, title: string, weddingName: string) {
+/** TS-211: what every export PDF also prints -- when it was made, and who isn't seated. */
+export interface PdfExtras {
+  /** e.g. "Generated 10-07-2026 3:45 PM EDT" (see formatGeneratedAt in export-data.ts). */
+  generatedAt?: string;
+  /** Attending guests with no seat in the plan. */
+  unseated?: { guestName: string; plusOneNames?: string | null }[];
+}
+
+// TS-211: the generated date and time, small and grey at the top right of a page.
+function drawGeneratedAt(page: PDFPage, fonts: Fonts, generatedAt: string | undefined, y = PAGE_HEIGHT - MARGIN): number {
+  if (!generatedAt) return 0;
+  const text = fonts.text(generatedAt);
+  const width = fonts.regular.widthOfTextAtSize(text, 9);
+  page.drawText(text, { x: PAGE_WIDTH - MARGIN - width, y, size: 9, font: fonts.regular, color: rgb(0.4, 0.4, 0.4) });
+  return width + 12;
+}
+
+export const NOT_SEATED_HEADING = "Not seated";
+const NOT_SEATED_NOTE = "Coming, but not at a table in this plan yet:";
+
+/**
+ * TS-211: the "Not seated" section -- every attending guest with no seat, so the door list and chart
+ * never leave out someone who is coming. Starts a new page when there's no room for the heading.
+ * Returns the page and height it ended on.
+ */
+function drawNotSeated(
+  doc: PDFDocument,
+  page: PDFPage,
+  y: number,
+  fonts: Fonts,
+  unseated: PdfExtras["unseated"]
+): { page: PDFPage; y: number } {
+  if (!unseated || unseated.length === 0) return { page, y };
+  const lineHeight = 16;
+  if (y < MARGIN + 60) {
+    page = doc.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
+    y = PAGE_HEIGHT - MARGIN;
+  }
+  y -= 6;
+  page.drawText(`${NOT_SEATED_HEADING} (${unseated.length})`, { x: MARGIN, y, size: 13, font: fonts.bold, color: rgb(0.6, 0.1, 0.1) });
+  y -= 18;
+  page.drawText(NOT_SEATED_NOTE, { x: MARGIN, y, size: 10, font: fonts.regular, color: rgb(0.4, 0.4, 0.4) });
+  y -= lineHeight;
+  for (const g of unseated) {
+    if (y < MARGIN) {
+      page = doc.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
+      y = PAGE_HEIGHT - MARGIN;
+    }
+    const name = fonts.text(g.guestName);
+    const text = g.plusOneNames ? `•  ${name}  + ${fonts.text(g.plusOneNames)}` : `•  ${name}`;
+    page.drawText(fitText(fonts.regular, text, 11, PAGE_WIDTH - MARGIN * 2 - 14), { x: MARGIN + 14, y, size: 11, font: fonts.regular });
+    y -= lineHeight;
+  }
+  return { page, y };
+}
+
+function drawHeader(page: PDFPage, fonts: Fonts, title: string, weddingName: string, generatedAt?: string) {
+  // TS-211: the generated date and time on the same line, at the right.
+  const stampWidth = drawGeneratedAt(page, fonts, generatedAt);
   // TS-180: a long wedding name is cut short rather than running off the page.
-  page.drawText(fitText(fonts.regular, weddingName, 11, PAGE_WIDTH - MARGIN * 2), {
+  page.drawText(fitText(fonts.regular, weddingName, 11, PAGE_WIDTH - MARGIN * 2 - stampWidth), {
     x: MARGIN,
     y: PAGE_HEIGHT - MARGIN,
     size: 11,
@@ -120,14 +203,15 @@ function drawHeader(page: PDFPage, fonts: Fonts, title: string, weddingName: str
 // FR-9.1: the full chart, table by table, guest names under each.
 export async function buildSeatingChartPdf(
   weddingName: string,
-  tables: { label: string; guestNames: string[] }[]
+  tables: { label: string; guestNames: string[] }[],
+  extras: PdfExtras = {}
 ): Promise<Uint8Array> {
   const { doc, fonts } = await newDoc();
   // TS-152: only text the PDF font can draw (see pdf-text.ts).
   weddingName = fonts.text(weddingName);
   tables = tables.map((t) => ({ label: fonts.text(t.label), guestNames: t.guestNames.map(fonts.text) }));
   let page = doc.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
-  drawHeader(page, fonts, "Seating Chart", weddingName);
+  drawHeader(page, fonts, "Seating Chart", weddingName, extras.generatedAt);
   let y = PAGE_HEIGHT - MARGIN - 56;
   const lineHeight = 16;
   const tableHeaderGap = 22;
@@ -167,6 +251,8 @@ export async function buildSeatingChartPdf(
     }
     y -= 10;
   }
+  // TS-211
+  drawNotSeated(doc, page, y, fonts, extras.unseated);
 
   return doc.save();
 }
@@ -175,13 +261,14 @@ export async function buildSeatingChartPdf(
 // door/registration duty.
 export async function buildLookupListPdf(
   weddingName: string,
-  rows: ExportGuestRow[]
+  rows: ExportGuestRow[],
+  extras: PdfExtras = {}
 ): Promise<Uint8Array> {
   const { doc, fonts } = await newDoc();
   weddingName = fonts.text(weddingName);
   rows = rows.map((r) => safeRow(fonts, r));
   let page = doc.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
-  drawHeader(page, fonts, "Guest Lookup List", weddingName);
+  drawHeader(page, fonts, "Guest Lookup List", weddingName, extras.generatedAt);
   let y = PAGE_HEIGHT - MARGIN - 56;
   const lineHeight = 18;
 
@@ -210,6 +297,8 @@ export async function buildLookupListPdf(
     });
     y -= lineHeight;
   }
+  // TS-211: so whoever is on the door finds a guest who is coming but has no table yet.
+  drawNotSeated(doc, page, y - 8, fonts, extras.unseated);
 
   return doc.save();
 }
@@ -220,16 +309,29 @@ export async function buildLookupListPdf(
  * that still doesn't fit at 8pt is drawn at 8pt.
  */
 export function fitCardName(font: PDFFont, name: string, maxWidth: number): { lines: string[]; size: number } {
-  const widest = (lines: string[], size: number) => Math.max(...lines.map((l) => font.widthOfTextAtSize(l, size)));
+  // TS-205: each line is measured once (at size 1, see unitWidth) and scaled for each size; the
+  // best place to split is found from each word's width, measured once, added up. Before, every
+  // possible split was laid out in full -- quadratic in the number of words.
+  const widest = (lines: string[], size: number) => Math.max(...lines.map((l) => widthAt(font, l, size)));
   const options: string[][] = [[name]];
   const words = name.split(" ");
   if (words.length > 1) {
-    let best: string[] | null = null;
+    const space = unitWidth(font, " ");
+    const wordWidths = words.map((w) => unitWidth(font, w));
+    const total = wordWidths.reduce((sum, w) => sum + w, 0) + space * (words.length - 1);
+    let bestAt = 1;
+    let bestWidest = Infinity;
+    let left = -space;
     for (let i = 1; i < words.length; i++) {
-      const pair = [words.slice(0, i).join(" "), words.slice(i).join(" ")];
-      if (!best || widest(pair, 18) < widest(best, 18)) best = pair;
+      left += space + wordWidths[i - 1];
+      const right = total - left - space;
+      const pairWidest = Math.max(left, right);
+      if (pairWidest < bestWidest) {
+        bestWidest = pairWidest;
+        bestAt = i;
+      }
     }
-    options.push(best!);
+    options.push([words.slice(0, bestAt).join(" "), words.slice(bestAt).join(" ")]);
   }
   for (let size = 18; size >= 8; size--) {
     for (const lines of options) if (widest(lines, size) <= maxWidth) return { lines, size };
@@ -239,7 +341,7 @@ export function fitCardName(font: PDFFont, name: string, maxWidth: number): { li
 
 // FR-9.3: one print-ready place/escort card per guest — name and table, cut lines, several to a
 // page. Sized generously (roughly 3.6in x 2.3in) for readability over cramming the max per page.
-export async function buildPlaceCardsPdf(rows: ExportGuestRow[]): Promise<Uint8Array> {
+export async function buildPlaceCardsPdf(rows: ExportGuestRow[], extras: PdfExtras = {}): Promise<Uint8Array> {
   const { doc, fonts } = await newDoc();
   rows = rows.map((r) => safeRow(fonts, r));
   const cols = 2;
@@ -299,9 +401,18 @@ export async function buildPlaceCardsPdf(rows: ExportGuestRow[]): Promise<Uint8A
     indexOnPage++;
   }
 
-  if (rows.length === 0) {
+  if (rows.length === 0 && !extras.unseated?.length) {
     doc.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
   }
+  // TS-211: guests with no seat get no card -- listed on a last page instead, so nobody is missed.
+  if (extras.unseated?.length) {
+    const last = doc.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
+    last.drawText(fonts.text("Place cards — guests without a card"), { x: MARGIN, y: PAGE_HEIGHT - MARGIN - 20, size: 18, font: fonts.bold });
+    drawNotSeated(doc, last, PAGE_HEIGHT - MARGIN - 44, fonts, extras.unseated);
+  }
+  // TS-211: the generated date and time on every page (cards have no header to carry it).
+  // Just above the first row of cards.
+  for (const p of doc.getPages()) drawGeneratedAt(p, fonts, extras.generatedAt, PAGE_HEIGHT - MARGIN + 8);
 
   return doc.save();
 }

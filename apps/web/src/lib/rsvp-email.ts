@@ -1,11 +1,13 @@
 import {
   claimCooldown,
   emailDelivered,
+  emailMayHaveGone,
   ensureGuestRsvpToken,
   hashLinkToken,
   regenerateGuestRsvpToken,
   releaseCooldown,
   sendEmailNotification,
+  type ActorAccess,
 } from "@seatwise/db";
 import { isRsvpCutoffPast, type RsvpEmailOutcomeDTO } from "@seatwise/shared";
 import { releaseEmailSend, reserveEmailSend, RSVP_RESEND_COOLDOWN_SECONDS, rsvpLinkCooldownKey } from "./rate-limit";
@@ -23,13 +25,16 @@ export async function sendGuestRsvpLink(
   guest: { id: string; firstName: string; email: string | null },
   wedding: { id: string; name: string; rsvpCutoffDate: string | null },
   sender: { id: string; emailVerifiedAt: Date | null },
-  { regenerate = false }: { regenerate?: boolean } = {}
+  // TS-204: `actor` -- the access the "RSVP link" request was let in with, read again as the link
+  // is made (a removed collaborator's request that was waiting doesn't get a link, or an email).
+  { regenerate = false, actor }: { regenerate?: boolean; actor?: ActorAccess } = {}
 ): Promise<{
   url: string;
   emailed: boolean;
   emailFailed: boolean;
   emailLimited?: boolean;
-  // TS-177: it was the account's daily allowance that was used up -- more can go out tomorrow.
+  // TS-177: it was the account's daily allowance that was used up. TS-203: (rolling) -- more can go
+  // out as the last 24 hours' emails age out, not "tomorrow".
   emailLimitedToday?: boolean;
   confirmEmailFirst?: boolean;
   recentlyEmailed?: boolean;
@@ -40,8 +45,8 @@ export async function sendGuestRsvpLink(
   // link is changed (see ./app-url).
   const appUrl = appBaseUrl();
   const token = regenerate
-    ? await regenerateGuestRsvpToken(guest.id, wedding.id)
-    : await ensureGuestRsvpToken(guest.id, wedding.id);
+    ? await regenerateGuestRsvpToken(guest.id, wedding.id, actor)
+    : await ensureGuestRsvpToken(guest.id, wedding.id, actor);
   if (!token) return null;
 
   const url = `${appUrl}/rsvp/${token}`;
@@ -67,7 +72,15 @@ export async function sendGuestRsvpLink(
 
   // TS-177: a refused reservation has already given back its own counts (see reserveEmailSend);
   // only the hourly cooldown needs giving back here.
-  const reservation = await reserveEmailSend("rsvpEmails", sender.id);
+  // TS-203: and if counting fails outright (the database unreachable), the cooldown is given back
+  // too -- before, it stayed, and the link couldn't be emailed again for an hour.
+  let reservation: Awaited<ReturnType<typeof reserveEmailSend>>;
+  try {
+    reservation = await reserveEmailSend("rsvpEmails", sender.id);
+  } catch (err) {
+    await notSent().catch(() => {});
+    throw err;
+  }
   if (!reservation.allowed) {
     await notSent();
     return {
@@ -85,15 +98,21 @@ export async function sendGuestRsvpLink(
     url,
     rsvpCutoffDate: wedding.rsvpCutoffDate,
   });
-  const result = await sendEmailNotification(guest.email, subject, text);
+  // TS-203: charged to the planner's account (its share of Seatwise's email, and of what one address may receive).
+  const result = await sendEmailNotification(guest.email, subject, text, { account: sender.id });
   const emailed = emailDelivered(result);
-  if (!emailed) {
+  // TS-203: "uncertain" -- the mail server went quiet after it may have taken the email -- keeps
+  // its counts and the hour's cooldown (it may well have arrived), though the planner is told it
+  // may not have, with the link to send themselves.
+  if (!emailMayHaveGone(result)) {
     await notSent();
     // TS-171 / TS-178: nothing went out -- whatever the reason (this address's share used up, the
     // day's limit, a failed send) -- so it doesn't use up the planner's allowance either.
     await releaseEmailSend("rsvpEmails", sender.id, reservation);
   }
   if (result === "recipient-limited") return { url, emailed: false, emailFailed: true, recipientLimited: true };
+  // TS-203: the account's share of Seatwise's email is used up for now -- more in the next 24 hours.
+  if (result === "account-limited") return { url, emailed: false, emailFailed: true, emailLimited: true, emailLimitedToday: true };
   return { url, emailed, emailFailed: !emailed };
 }
 

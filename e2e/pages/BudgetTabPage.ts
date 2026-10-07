@@ -238,12 +238,20 @@ export class BudgetTabPage extends BasePage {
   newLinkButton(vendorName: string) {
     return this.page.getByRole("button", { name: `New link for ${vendorName}`, exact: true });
   }
+  /** TS-214: the "Make a new link…?" question New link opens, scoped to the vendor's row. */
+  newLinkQuestion(vendorName: string): ConfirmDelete {
+    return new ConfirmDelete(this.vendorRow(vendorName));
+  }
   /** Clicks Share link (or New link) and returns the link the row then shows. */
   async getShareLink(vendorName: string, fresh = false): Promise<string> {
     const button = fresh ? this.newLinkButton(vendorName) : this.shareLinkButton(vendorName);
     const [response] = await Promise.all([
       this.page.waitForResponse((r) => r.request().method() === "POST" && /\/share-link$/.test(new URL(r.url()).pathname)),
-      button.click(),
+      (async () => {
+        await button.click();
+        // TS-214: New link asks first ("Yes, make a new link").
+        if (fresh) await new ConfirmDelete(this.vendorRow(vendorName)).confirm();
+      })(),
     ]);
     // TS-176: the link comes from the server's answer, and the row is waited on until it shows
     // that link -- reading the row straight after the answer sometimes caught the old link before
@@ -290,7 +298,8 @@ export class BudgetTabPage extends BasePage {
   /** The contract-notes line -- only rendered at all when the vendor has notes on file (the third
    * `<p>` in document order within the row, after the name/badge line and the contact line). */
   vendorNotesText(nameContains: string) {
-    return this.vendorRow(nameContains).locator("p").nth(2);
+    // TS-212: the row's always-present share-link status line isn't one of its text lines.
+    return this.vendorRow(nameContains).locator("p:not([role=status])").nth(2);
   }
 
   /** The row's own cost text -- "No cost set" or a formatted dollar amount. */
@@ -311,23 +320,36 @@ export class BudgetTabPage extends BasePage {
   }
 
   // Not row-scoped, deliberately: once Edit is clicked, BudgetTab.tsx replaces that row's own
-  // display with these inputs (matched by aria-label, since none has a visible <label>) -- exactly
-  // one row can be in edit mode at a time (a single `editingId` in component state), so a
-  // page-wide lookup is unambiguous, same reasoning as TimelineTabPage's edit* locators.
+  // display with these inputs -- exactly one row can be in edit mode at a time (a single
+  // `editingId` in component state), so a page-wide lookup is unambiguous, same reasoning as
+  // TimelineTabPage's edit* locators. TS-212: the boxes now have visible labels ("Vendor name",
+  // "Cost ($)"...) that repeat the Add form's, so they're found by their ids
+  // (vendor-<id>-edit-<field>) rather than by label.
+  private editField(field: string) {
+    return this.page.locator(`[id^="vendor-"][id$="-edit-${field}"]`);
+  }
   private editNameInput() {
-    return this.page.getByLabel("Edit vendor name", { exact: true });
+    return this.editField("name");
   }
   private editCategorySelect() {
-    return this.page.getByLabel("Edit category", { exact: true });
+    return this.editField("category");
   }
   private editCategoryOtherInput() {
-    return this.page.getByLabel("Edit category label", { exact: true });
+    return this.editField("category-label");
   }
   private editCostInput() {
-    return this.page.getByLabel("Edit cost", { exact: true });
+    return this.editField("cost");
   }
   private editContractNotesInput() {
-    return this.page.getByLabel("Edit contract notes", { exact: true });
+    return this.editField("notes");
+  }
+  /** TS-212: the open edit box's visible label for a field (e.g. "Cost ($)"), as a screen reader reads it. */
+  editFieldByVisibleLabel(label: string) {
+    return this.page.locator("li").getByLabel(label, { exact: true });
+  }
+  /** TS-212: a vendor's Edit button (named "Edit <vendor>"). */
+  editButtonLocator(nameContains: string) {
+    return this.editButton(nameContains);
   }
   private saveEditButton() {
     return this.page.getByRole("button", { name: "Save", exact: true });

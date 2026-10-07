@@ -1,8 +1,8 @@
 import { z } from "zod";
 // TS-180: free text refuses hidden control characters (see ../safe-text).
 import { safeText } from "../safe-text";
-import { FIELD_LIMITS } from "../field-limits";
-import { calendarDateField, lengthFirst } from "./common";
+import { FIELD_LIMITS, cutToLimit } from "../field-limits";
+import { calendarDateField, expectedRevisionField, lengthFirst } from "./common";
 import {
   WEDDING_NAME_PATTERN,
   WEDDING_NAME_MESSAGE,
@@ -33,7 +33,25 @@ export const weddingNameField = lengthFirst(
 /** TS-168: the default name for a copy -- within the length limit and the allowed characters. */
 export function copiedWeddingName(original: string): string {
   const suffix = " - copy";
-  return `${original.trim().slice(0, FIELD_LIMITS.weddingName - suffix.length).trim()}${suffix}`;
+  // TS-214: cut between whole characters -- slice could split a character in half, and the copy
+  // was then named with a broken character that the name rules refuse on the next save.
+  return `${cutToLimit(original.trim(), FIELD_LIMITS.weddingName - suffix.length).trim()}${suffix}`;
+}
+
+/**
+ * TS-214: a reason to ask before saving this RSVP cutoff, or null when it looks right. A cutoff
+ * before today closes every guest's RSVP link (and stops RSVP emails) at once; one after the
+ * wedding is almost always a slip in the year. Dates are "YYYY-MM-DD" (they compare as text).
+ */
+export function rsvpCutoffWarning(cutoff: string, today: string, eventDate: string | null): string | null {
+  if (!cutoff) return null;
+  if (cutoff < today) {
+    return "That RSVP cutoff is before today — every guest's RSVP link closes as soon as it's saved, and RSVP emails stop going out.";
+  }
+  if (eventDate && cutoff > eventDate) {
+    return "That RSVP cutoff is after the wedding date — guests could still answer after the day itself.";
+  }
+  return null;
 }
 
 // FR-3.4: how much generation weights table composition toward mixing the two sides. Always a
@@ -106,7 +124,13 @@ export type CreateWeddingInput = z.infer<typeof createWeddingSchema>;
 
 // TS-190: one side name can be saved on its own -- the route also checks it against the other,
 // stored one (see sideLabelsClash).
-export const updateWeddingSchema = weddingBaseSchema.partial().superRefine(checkSideLabels);
+// TS-214: expectedRevision is the settingsRevision the change is based on -- a save made from an
+// older copy is refused (409, with the latest settings) instead of putting back another tab's change.
+// Required (Copilot review): a save without it used to skip the check altogether.
+export const updateWeddingSchema = weddingBaseSchema
+  .partial()
+  .extend({ expectedRevision: expectedRevisionField.unwrap() })
+  .superRefine(checkSideLabels);
 export type UpdateWeddingInput = z.infer<typeof updateWeddingSchema>;
 
 export interface WeddingDTO {
@@ -120,6 +144,10 @@ export interface WeddingDTO {
   guestCount: number;
   // TS-177: everyone the guests bring (the sum of headcounts) -- guestCount counts invitations.
   peopleCount: number;
+  // TS-214: the people coming (headcounts of guests marked Attending), as the Tables tab counts them.
+  attendingCount: number;
+  // TS-214: send back as expectedRevision when saving a setting.
+  settingsRevision: number;
   // FR-10.2: per-wedding opt-out for the email side of notifications (the in-app notification
   // itself always fires regardless).
   emailNotificationsEnabled: boolean;

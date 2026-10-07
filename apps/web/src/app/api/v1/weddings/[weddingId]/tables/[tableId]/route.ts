@@ -9,8 +9,9 @@ import {
   type NewlyFlaggedSeat,
 } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
-import { errorResponse, zodErrorResponse, concurrentChangeResponse } from "@/lib/api-response";
+import { errorResponse, zodErrorResponse, concurrentChangeResponse, readJson } from "@/lib/api-response";
 import { requireAccess } from "@/lib/access";
+import { SAVED_BUT_NOT_REFRESHED, afterSave } from "@/lib/post-save";
 
 type Params = { params: Promise<{ weddingId: string; tableId: string }> };
 
@@ -22,7 +23,10 @@ export async function PATCH(req: NextRequest, { params }: Params) {
   const access = await requireAccess(weddingId, user.id, "EDIT");
   if ("error" in access) return access.error;
 
-  const body = await req.json().catch(() => null);
+  // TS-204: readJson refuses a non-JSON or oversized body (413), even one sent without a Content-Length.
+  const json = await readJson(req);
+  if (!json.ok) return json.response;
+  const body = json.body;
   const parsed = updateTableSchema.safeParse(body);
   if (!parsed.success) return zodErrorResponse(parsed.error);
 
@@ -33,7 +37,7 @@ export async function PATCH(req: NextRequest, { params }: Params) {
   // with fewer seats than its required guests need.
   let newlyFlagged: NewlyFlaggedSeat[];
   try {
-    const result = await updateSeatingTableForWedding(tableId, weddingId, data, expectedRevision, requiredGuestIds);
+    const result = await updateSeatingTableForWedding(tableId, weddingId, data, expectedRevision, requiredGuestIds, access.actor);
     if (!result) return errorResponse("Table not found", 404);
     newlyFlagged = result.newlyFlagged;
   } catch (err) {
@@ -70,7 +74,8 @@ export async function PATCH(req: NextRequest, { params }: Params) {
           : `${name} can no longer sit where they are under the seating rules — flagged as Needs Reassignment.`;
   });
 
-  const table = await getSeatingTableForWedding(tableId, weddingId);
+  // TS-209: the change is saved -- reading the table back can't turn it into an error.
+  const table = await afterSave("reading the table back", () => getSeatingTableForWedding(tableId, weddingId), warnings, SAVED_BUT_NOT_REFRESHED, null);
   return NextResponse.json({ ok: true, table, warnings });
 }
 
@@ -91,7 +96,7 @@ export async function DELETE(req: NextRequest, { params }: Params) {
   const confirmedSeatedCount = seatedParam !== null && /^\d{1,6}$/.test(seatedParam) ? Number(seatedParam) : undefined;
   let result: Awaited<ReturnType<typeof removeSeatingTable>>;
   try {
-    result = await removeSeatingTable(tableId, weddingId, user.id, confirmed, confirmedSeatedCount);
+    result = await removeSeatingTable(tableId, weddingId, user.id, confirmed, confirmedSeatedCount, access.actor);
   } catch (err) {
     // TS-187: lost a race with another change (nothing saved) -- 409, not a server error.
     const conflict = concurrentChangeResponse(err);

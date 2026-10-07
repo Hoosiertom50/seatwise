@@ -2,8 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { setRequiredGuestsSchema } from "@seatwise/shared";
 import { setRequiredGuestsForTable, RestrictedTableError } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
-import { errorResponse, zodErrorResponse, concurrentChangeResponse } from "@/lib/api-response";
+import { errorResponse, zodErrorResponse, concurrentChangeResponse, readJson } from "@/lib/api-response";
 import { requireAccess } from "@/lib/access";
+import { SAVED_BUT_NOT_REFRESHED } from "@/lib/post-save";
 
 type Params = { params: Promise<{ weddingId: string; tableId: string }> };
 
@@ -18,7 +19,10 @@ export async function PUT(req: NextRequest, { params }: Params) {
   const access = await requireAccess(weddingId, user.id, "EDIT");
   if ("error" in access) return access.error;
 
-  const body = await req.json().catch(() => null);
+  // TS-204: readJson refuses a non-JSON or oversized body (413), even one sent without a Content-Length.
+  const json = await readJson(req);
+  if (!json.ok) return json.response;
+  const body = json.body;
   const parsed = setRequiredGuestsSchema.safeParse(body);
   if (!parsed.success) return zodErrorResponse(parsed.error);
 
@@ -26,13 +30,15 @@ export async function PUT(req: NextRequest, { params }: Params) {
     // TS-120: someone already seated here who's no longer on the list is flagged, never unseated.
     // TS-173: so is someone put on the list while seated at another table (re-checked in the same
     // transaction as the save).
-    const { table, newlyFlagged } = await setRequiredGuestsForTable(tableId, weddingId, parsed.data.guestIds);
+    const { table, newlyFlagged } = await setRequiredGuestsForTable(tableId, weddingId, parsed.data.guestIds, access.actor);
     // TS-177: "this table" only for a guest actually seated at this one.
     const warnings = newlyFlagged.map(({ name, reason, tableId: flaggedAt }) =>
       reason === "restricted" && flaggedAt === tableId
         ? `${name} isn't on this table's required list any more — flagged as Needs Reassignment.`
         : `${name} can no longer sit where they are — flagged as Needs Reassignment.`
     );
+    // TS-209: saved, but the table couldn't be read back.
+    if (!table) warnings.push(SAVED_BUT_NOT_REFRESHED);
     return NextResponse.json({ table, warnings });
   } catch (err) {
     if (err instanceof RestrictedTableError) {

@@ -294,7 +294,8 @@ export class PlanTabPage extends BasePage {
     await this.guestChip(guestId).focus();
     await this.page.keyboard.press("Enter");
     await expect(this.guestChip(guestId)).toHaveAttribute("aria-pressed", "true");
-    const table = this.tableBox(tableId);
+    // TS-212: the table itself isn't a button any more -- its "Move <guest> to <table>" button is.
+    const table = this.tableBox(tableId).getByRole("button", { name: /^Move .+ to / });
     const tableIsEarlier = await this.page.evaluate(
       ([g, t]) => {
         const chip = document.querySelector(`[data-guest-id="${g}"]`)!;
@@ -387,6 +388,11 @@ export class PlanTabPage extends BasePage {
   }
   restorePreview(versionNumber: number) {
     return this.page.getByText(new RegExp(`^Restoring version ${versionNumber} will create a new version`));
+  }
+  /** TS-208: the restore preview's note that confirming will save a comparison draft (the current
+   * plan is approved and this person can't replace it). */
+  restoreWillBeDraftNote() {
+    return this.page.getByTestId("restore-will-be-draft");
   }
   async confirmRestore(): Promise<void> {
     await this.page.getByRole("button", { name: "Confirm restore", exact: true }).click();
@@ -495,8 +501,24 @@ export class PlanTabPage extends BasePage {
     return this.saveAsDraftCheckbox();
   }
 
-  /** TS-179: the approved plan's PDF export links (shown only on the current, approved version). */
+  /** TS-179: the approved plan's PDF export buttons (shown only on the current, approved version).
+   * TS-211: buttons now -- each fetches its PDF and says inline when it can't. */
   exportLinks() {
-    return this.page.getByRole("link", { name: /\(PDF\)$/ });
+    return this.page.getByRole("button", { name: /\(PDF\)$/ });
+  }
+
+  /** TS-211: one PDF export button, by its label (e.g. "Seating chart (PDF)"). */
+  exportButton(label: string) {
+    return this.page.getByRole("button", { name: label, exact: true });
+  }
+
+  /** TS-211: the warning next to Export while attending guests aren't seated. */
+  exportUnseatedWarning() {
+    return this.page.getByTestId("export-unseated-warning");
+  }
+
+  /** TS-211: a failed export's message, shown next to the export buttons. */
+  exportError(text: string | RegExp) {
+    return this.page.getByRole("alert").filter({ hasText: text });
   }
 }

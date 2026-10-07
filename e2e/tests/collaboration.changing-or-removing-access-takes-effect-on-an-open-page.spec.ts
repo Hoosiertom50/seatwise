@@ -26,7 +26,7 @@ defineQualityTest(
     objective:
       "Confirms the owner's Collaborators-tab controls work end to end: lowering an Edit collaborator to View shows 'changed to View' on their open page within FR-1.6's five seconds and their edits are then refused; changing their role to Couple persists; and Remove shows 'has been removed' on their open page, redirects them to the dashboard, and leaves the wedding unreachable for them.",
     expectedOutcome:
-      "After the level change the collaborator's page shows 'Your access to this wedding was changed to View.' and 'Your access: View', and their guest edit returns 403. The role select persists as Couple after a reload. After Remove their page shows 'Your access to this wedding has been removed.', lands on /dashboard, and GET of the wedding returns 404.",
+      "After the level change the collaborator's page shows 'Your access to this wedding was changed to View.' and 'Your access: View', and their guest edit returns 403. The role select persists as Couple after a reload. After Remove their page shows 'This wedding is no longer available (it may have been deleted, or your access was removed).', lands on /dashboard, and GET of the wedding returns 404.",
     requirementIds: ["REQ-COLLABORATION-NOTIFICATIONS", "REQ-ACCOUNT-WEDDING-MANAGEMENT"],
     tags: ["@mutating", "@feature:collaboration", "@risk:critical", "@suite:regression"],
   },

@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { AUTH_COOKIE_NAME, setAuthCookie, signToken, verifyToken } from "@/lib/auth";
-import { RENEWED_TOKEN_HEADER, shouldRenew } from "@/lib/session-renewal";
+import { RENEWED_TOKEN_HEADER, sessionIdFor, shouldRenew } from "@/lib/session-renewal";
 import { BODY_TOO_LARGE_MESSAGE, declaresBodyTooLarge, isNonJsonBody } from "@/lib/json-body";
 
 // TS-94: sliding session renewal. Runs ahead of every /api/v1 request; when the caller's token is
@@ -31,6 +31,14 @@ export async function proxy(req: NextRequest) {
     email: claims.email,
     authTime: claims.authTime,
     sessionVersion: claims.sessionVersion,
+    // TS-204: the same session, so "Log out" on this device still ends the renewed token. This
+    // doesn't look up whether the session was ended (no database here, so the proxy stays cheap
+    // and can run wherever the host puts it) -- instead an ended session stays on the ended list
+    // until any token renewal could issue has expired (revokedSessionKeepUntil), and every route's
+    // getAuthSession refuses it for that whole time.
+    // A token from before session ids keeps one worked out from its sign-in (sessionIdFor), not a
+    // new random one per renewal.
+    sessionId: await sessionIdFor(claims),
   });
   const response = NextResponse.next();
   if (bearer) response.headers.set(RENEWED_TOKEN_HEADER, renewed);

@@ -155,11 +155,37 @@ export async function revokeInvite(weddingId: string, inviteId: string, actorUse
 
 export interface InviteLookupRow extends WeddingInviteRow {
   weddingName: string;
+  /** TS-203: when its email went out to the invited address (null: never -- the owner copied the link). */
+  emailedAt: Date | null;
+}
+
+/**
+ * TS-203: whether accepting this invite confirms the account's email address -- an account that
+ * hasn't confirmed it yet, accepting an invite emailed (not copied) to that same address. Pure, so
+ * it can be unit-tested; acceptInvite checks the same again as it saves.
+ */
+export function inviteAcceptConfirmsEmail({
+  accountEmail,
+  accountConfirmed,
+  inviteEmail,
+  inviteEmailedAt,
+}: {
+  accountEmail: string;
+  accountConfirmed: boolean;
+  inviteEmail: string;
+  inviteEmailedAt: Date | null;
+}): boolean {
+  return !accountConfirmed && inviteEmailedAt !== null && accountEmail.trim().toLowerCase() === inviteEmail.trim().toLowerCase();
+}
+
+/** TS-203: records that the invite's email went out (see acceptInvite's `confirmEmail`). */
+export async function markInviteEmailed(inviteId: string): Promise<void> {
+  await pool.query(`UPDATE "wedding_invites" SET "emailedAt" = now() WHERE id = $1`, [inviteId]);
 }
 
 export async function getInviteByToken(token: string): Promise<InviteLookupRow | null> {
   const { rows } = await pool.query(
-    `SELECT ${inviteColumns("wi")}, w.name AS "weddingName"
+    `SELECT ${inviteColumns("wi")}, wi."emailedAt", w.name AS "weddingName"
      FROM "wedding_invites" wi
      JOIN "weddings" w ON w.id = wi."weddingId"
      WHERE wi.token = $1`,
@@ -177,17 +203,28 @@ export async function getInviteByToken(token: string): Promise<InviteLookupRow |
 // succeeds while the invite is still pending and unexpired -- so an invite revoked a moment
 // earlier can't still grant access. Someone who already has access keeps exactly the access they
 // have (an old invite never changes it).
+//
+// TS-203: with `confirmEmail`, accepting also confirms the account's email address -- but only for
+// an invite whose email really went out (emailedAt), sent to the account's own address. The link
+// reached only that inbox, so having it is proof of owning the address (the same reasoning as a
+// password reset, TS-164). One the owner copied and sent another way proves nothing, and doesn't.
+// Invited teammates then don't need a separate confirmation email, whose share of the day anyone
+// can use up by signing up.
 export async function acceptInvite(
   token: string,
-  acceptingUserId: string
-): Promise<{ weddingId: string } | { error: InviteStatus | "NOT_FOUND" | "ALREADY_COLLABORATOR" }> {
+  acceptingUserId: string,
+  { confirmEmail = false }: { confirmEmail?: boolean } = {}
+): Promise<
+  | { weddingId: string; emailConfirmed: boolean }
+  | { error: InviteStatus | "NOT_FOUND" | "ALREADY_COLLABORATOR" | "EMAIL_NOT_VERIFIED" }
+> {
   const client = await pool.connect();
   try {
     await beginTransaction(client);
     const { rows } = await client.query(
       `UPDATE "wedding_invites" SET status = 'ACCEPTED', "acceptedAt" = now()
        WHERE token = $1 AND status = 'PENDING' AND "expiresAt" > ${UTC_NOW}
-       RETURNING "weddingId", role, "permissionLevel", "invitedByUserId"`,
+       RETURNING "weddingId", role, "permissionLevel", "invitedByUserId", email, "emailedAt"`,
       [hashLinkToken(token)]
     );
     const claimed = rows[0];
@@ -206,8 +243,23 @@ export async function acceptInvite(
       await client.query("ROLLBACK").catch(() => {});
       return { error: "ALREADY_COLLABORATOR" };
     }
+    let emailConfirmed = false;
+    if (confirmEmail) {
+      // Checked here, in the same transaction, against the invite as it was claimed.
+      const { rowCount: confirmed } = await client.query(
+        `UPDATE "users" SET "emailVerifiedAt" = COALESCE("emailVerifiedAt", now())
+          WHERE id = $1 AND lower(email) = lower($2) AND $3::timestamp IS NOT NULL`,
+        [acceptingUserId, claimed.email, claimed.emailedAt]
+      );
+      if (!confirmed) {
+        // An unconfirmed account can't accept an invite that doesn't confirm it (TS-164).
+        await client.query("ROLLBACK").catch(() => {});
+        return { error: "EMAIL_NOT_VERIFIED" };
+      }
+      emailConfirmed = true;
+    }
     await client.query("COMMIT");
-    return { weddingId: claimed.weddingId };
+    return { weddingId: claimed.weddingId, emailConfirmed };
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});
     throw err;

@@ -7,7 +7,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   decodeCsvBytes,
-  CsvEncodingError,
+  decodeCsvFile,
+  findMacRomanCell,
+  looksLikeMacRoman,
   MAC_ENCODING_MESSAGE,
 } from "../../../../packages/shared/src/text-decode";
 import { parseCsv, toCsv } from "../../../../packages/shared/src/csv";
@@ -41,8 +43,9 @@ test("a UTF-16 file with a byte-order mark reads correctly, little- and big-endi
   assert.deepEqual(parseCsv(decodeCsvBytes(be.buffer.slice(0) as ArrayBuffer)).headers, ["First name", "Last name"]);
 });
 
-test("a file in the older Mac encoding is refused with the 'save it as CSV UTF-8' message", () => {
+test("a file in the older Mac encoding is found in its imported cells", () => {
   // Mac Roman: é is the byte 8E and ü is 9F -- read as windows-1252 they'd be "RenŽe" and "MŸller".
+  // TS-210: decoding no longer refuses the file -- the check runs on the cells the import uses.
   const macRoman = new Uint8Array([
     ...Buffer.from("First name,Last name\r\nRen", "ascii"),
     0x8e,
@@ -50,11 +53,13 @@ test("a file in the older Mac encoding is refused with the 'save it as CSV UTF-8
     0x9f,
     ...Buffer.from("ller\r\n", "ascii"),
   ]);
-  assert.throws(() => decodeCsvBytes(macRoman), (err: unknown) => err instanceof CsvEncodingError && (err as Error).message === MAC_ENCODING_MESSAGE);
+  const { text, encoding } = decodeCsvFile(macRoman);
+  assert.equal(encoding, "windows-1252");
+  const { rows } = parseCsv(text);
+  assert.deepEqual(findMacRomanCell(rows, [0, 1], [0, 1]), { rowNumber: 1, column: 0 });
   assert.match(MAC_ENCODING_MESSAGE, /CSV UTF-8/);
-  // "José" (é at the end of the word) and "Muñoz" (ñ is 96) too.
-  assert.throws(() => decodeCsvBytes(new Uint8Array([...Buffer.from("Jos", "ascii"), 0x8e, 0x0d, 0x0a])), CsvEncodingError);
-  assert.throws(() => decodeCsvBytes(new Uint8Array([...Buffer.from("Mu", "ascii"), 0x96, ...Buffer.from("oz", "ascii")])), CsvEncodingError);
+  // "José" (é at the end of the word).
+  assert.equal(looksLikeMacRoman("JosŽ"), true);
 });
 
 test("real windows-1252 text is still read, not mistaken for the Mac encoding", () => {

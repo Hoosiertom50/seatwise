@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { copiedWeddingName, duplicateWeddingSchema } from "@seatwise/shared";
 import { duplicateWeddingLayout, getWeddingById } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
-import { errorResponse, zodErrorResponse } from "@/lib/api-response";
+import { errorResponse, zodErrorResponse, readJson } from "@/lib/api-response";
 import { requireAccess } from "@/lib/access";
 import { countOr429, TOO_MANY_WEDDINGS_TODAY, WEDDING_CREATE_LIMITS, weddingCreateKey } from "@/lib/rate-limit";
 
@@ -19,7 +19,10 @@ export async function POST(req: NextRequest, { params }: Params) {
   const access = await requireAccess(weddingId, user.id, "OWNER");
   if ("error" in access) return access.error;
 
-  const body = await req.json().catch(() => ({}));
+  // TS-204: readJson refuses a non-JSON or oversized body (413), even one sent without a Content-Length.
+  const json = await readJson(req);
+  if (!json.ok) return json.response;
+  const body = json.body ?? {};
   const parsed = duplicateWeddingSchema.safeParse(body ?? {});
   if (!parsed.success) return zodErrorResponse(parsed.error);
 

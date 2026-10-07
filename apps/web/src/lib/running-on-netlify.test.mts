@@ -41,7 +41,8 @@ test("the app's address and the direct add agree with it", () => {
     assert.equal(directCollaboratorAddAllowed({ ...env, NODE_ENV: "development" }), false, JSON.stringify(env));
   }
   assert.equal(appBaseUrl({ NODE_ENV: "development", NETLIFY_DEV: "true", NETLIFY: "true" }), "http://localhost:3000");
-  assert.equal(directCollaboratorAddAllowed({ NODE_ENV: "development", NETLIFY_DEV: "true", NETLIFY: "true" }), true);
+  // TS-204: the direct add uses the stricter check -- `netlify dev` switches it off too.
+  assert.equal(directCollaboratorAddAllowed({ NODE_ENV: "development", NETLIFY_DEV: "true", NETLIFY: "true" }), false);
 });
 
 test("on Netlify, an email that would only be printed is refused as failed, with a clear error", async () => {
