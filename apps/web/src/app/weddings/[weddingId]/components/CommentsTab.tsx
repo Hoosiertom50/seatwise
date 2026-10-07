@@ -8,6 +8,7 @@ import { useUnsavedChanges } from "@/lib/unsaved-changes";
 // TS-193: the same limits the server checks (packages/shared/src/field-limits.ts).
 import { FIELD_LIMITS, timelineTimeLabel } from "@seatwise/shared";
 import { focusIfLost } from "@/lib/focus-if-lost";
+import { mayApplyCommentsPoll } from "@/lib/comments-poll";
 
 // TS-13 (Collaboration & Notifications, FR-10.3): comments attached to a guest or table. A
 // dedicated tab (rather than inline per-row) keeps this tractable — pick a target, see its
@@ -94,7 +95,15 @@ export function CommentsTab({
       const changesBefore = localChanges.current;
       try {
         const c = await api.get<{ comments: CommentDTO[] }>(`/api/v1/weddings/${weddingId}/comments`);
-        if (!cancelled && changesBefore === localChanges.current && !busyRef.current) setComments(c.comments);
+        // TS-228: a draft started while this was on its way also holds it back (see mayApplyCommentsPoll).
+        const apply = mayApplyCommentsPoll({
+          cancelled,
+          changesBefore,
+          changesNow: localChanges.current,
+          busy: busyRef.current,
+          hasDraft: hasDraftRef.current,
+        });
+        if (apply) setComments(c.comments);
       } catch {
         // Best effort -- the next tick tries again.
       } finally {

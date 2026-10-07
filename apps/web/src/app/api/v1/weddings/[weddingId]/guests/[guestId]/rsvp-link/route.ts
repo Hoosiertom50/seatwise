@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { rsvpLinkActionSchema, type RsvpLinkDTO } from "@seatwise/shared";
-import { ensureGuestRsvpToken, getGuestForWedding } from "@seatwise/db";
+import { ensureGuestRsvpToken, getGuestForWedding, readGuestRsvpToken } from "@seatwise/db";
 import { sendGuestRsvpLink } from "@/lib/rsvp-email";
 import { rsvpLinkAfterFailure } from "@/lib/after-commit-answers";
 import { appBaseUrl } from "@/lib/app-url";
@@ -40,7 +40,8 @@ export async function POST(req: NextRequest, { params }: Params) {
   let previousToken: string | null = null;
   if (regenerate) {
     try {
-      previousToken = await readToken();
+      // TS-228: read only -- for a guest with no link yet this used to make one, replaced a moment later.
+      previousToken = await readGuestRsvpToken(guest.id, weddingId);
     } catch (err) {
       const refused = weddingDeletedResponse(err);
       if (refused) return refused;

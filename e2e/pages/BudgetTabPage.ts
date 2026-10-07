@@ -450,4 +450,9 @@ export class BudgetTabPage extends BasePage {
   allRemoveButtons() {
     return this.page.getByRole("button", { name: /^Remove / });
   }
+
+  /** TS-235: a vendor row's Edit button, to check whether it can be pressed yet. */
+  vendorEditButton(nameContains: string) {
+    return this.editButton(nameContains);
+  }
 }

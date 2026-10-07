@@ -242,4 +242,19 @@ export class WeddingDetailPage extends BasePage {
   backToDashboardLink() {
     return this.page.getByRole("link", { name: /Back to dashboard/ }).first();
   }
+
+  /** TS-235: the always-present live region (role=status) the access-changed notice appears in. */
+  accessNoticeRegion() {
+    return this.page.getByTestId("access-notice-region");
+  }
+
+  /** TS-235: the "no longer available" message as an alert, on the page shown when access goes. */
+  accessRemovedAlert() {
+    return this.page.getByRole("alert").filter({ hasText: "This wedding is no longer available" });
+  }
+
+  /** TS-235: that page's "Go now" link (focus moves to it). */
+  goNowLink() {
+    return this.page.getByRole("link", { name: "Go now", exact: true });
+  }
 }
