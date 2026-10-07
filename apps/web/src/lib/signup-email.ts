@@ -46,11 +46,15 @@ export async function sendFirstConfirmationEmail(req: { headers: Headers }, user
     );
   };
   try {
-    await Promise.all(
+    // TS-227: every count settles before anything is decided, so a count that lands after another
+    // one failed is still known -- and given back below -- rather than left behind.
+    const settled = await Promise.allSettled(
       emailCounters.map(async ({ key, limit, windowSeconds }, i) => {
         hits[i] = await hitCounter(key, limit, windowSeconds);
       })
     );
+    const failed = settled.find((r): r is PromiseRejectedResult => r.status === "rejected");
+    if (failed) throw failed.reason;
     const mayEmail = hits.every((h) => h?.allowed);
     // TS-178: the email also has to fit in the confirmations' own share of the day's email (see
     // sendEmail's `confirmation`); past it, the same happens -- account made, no email.

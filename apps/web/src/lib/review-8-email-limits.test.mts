@@ -348,3 +348,86 @@ test("TS-220: a confirmation that goes out keeps its counts", async () => {
   assert.equal(await sendFirstConfirmationEmail(ipv4("203.0.113.7"), { id: "u1", email: "new@example.invalid" }), true);
   assert.deepEqual(given, []);
 });
+
+// --- TS-227: counts already taken are given back when a later one refuses or fails ---
+
+test("TS-227: when the /48 refuses, the /64 count already taken is given back", async () => {
+  const { networkRateLimitOr429, setNetworkCountForTests } = await import("./rate-limit");
+  const given: string[] = [];
+  setNetworkCountForTests(async (key) => ({
+    limited: key.includes("net48:") ? NextResponseLike429() : null,
+    giveBack: async () => {
+      given.push(key);
+    },
+  }));
+  try {
+    const limited = await networkRateLimitOr429(rsvpNetworkCounters(ipv6("2001:db8:7:42::9")));
+    assert.equal(limited?.status, 429);
+    assert.deepEqual(given, ["rsvp:addr:2001:db8:7:42::/64"], "the /64's count goes back; the /48 gave back its own");
+  } finally {
+    setNetworkCountForTests();
+  }
+});
+
+test("TS-227: when a later counter fails, the counts already taken are given back and the error still surfaces", async () => {
+  const { networkRateLimitOr429, setNetworkCountForTests } = await import("./rate-limit");
+  const given: string[] = [];
+  setNetworkCountForTests(async (key) => {
+    if (key.includes("net48:")) throw new Error("database busy");
+    return {
+      limited: null,
+      giveBack: async () => {
+        given.push(key);
+      },
+    };
+  });
+  try {
+    await assert.rejects(networkRateLimitOr429(rsvpNetworkCounters(ipv6("2001:db8:7:42::9"))), /database busy/);
+    assert.deepEqual(given, ["rsvp:addr:2001:db8:7:42::/64"]);
+  } finally {
+    setNetworkCountForTests();
+  }
+});
+
+test("TS-227: when nothing refuses, no count is given back", async () => {
+  const { networkRateLimitOr429, setNetworkCountForTests } = await import("./rate-limit");
+  const given: string[] = [];
+  setNetworkCountForTests(async (key) => ({
+    limited: null,
+    giveBack: async () => {
+      given.push(key);
+    },
+  }));
+  try {
+    assert.equal(await networkRateLimitOr429(rsvpNetworkCounters(ipv6("2001:db8:7:42::9"))), null);
+    assert.deepEqual(given, []);
+  } finally {
+    setNetworkCountForTests();
+  }
+});
+
+test("TS-227: a sign-up count that lands after another one failed is still given back", async () => {
+  const given: string[] = [];
+  setSignupEmailForTests({
+    hit: async (key) => {
+      // The /64 is slow and succeeds; the /48 fails at once.
+      if (key.includes("net48")) throw new Error("database busy");
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      return { allowed: true, windowStart: WINDOW };
+    },
+    undo: async (key) => {
+      given.push(key);
+    },
+    send: async () => {
+      throw new Error("should not be reached");
+    },
+  });
+  const sent = await quietly(() => sendFirstConfirmationEmail(ipv6("2001:db8:7:42::9"), { id: "u1", email: "new@example.invalid" }));
+  assert.equal(sent, false);
+  assert.deepEqual(given, ["account-email:addr:day:2001:db8:7:42::/64"]);
+});
+
+/** A minimal stand-in for a 429 response (only its status is read). */
+function NextResponseLike429() {
+  return { status: 429 } as unknown as import("next/server").NextResponse;
+}

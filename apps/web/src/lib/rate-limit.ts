@@ -83,11 +83,36 @@ export function vendorLinkNetworkCounters(req: { headers: Headers }): NetworkCou
   return perNetworkCounters(req, (network) => `vendor-link:addr:${network}`, VENDOR_LINK_LIMITS.perAddress, VENDOR_LINK_LIMITS.perWiderNetwork);
 }
 
-/** TS-219: rateLimitOr429 for each of `counters` in turn; the first refusal is the answer. */
+// Tests only: a stand-in for countOr429 (see setNetworkCountForTests).
+let countNetwork: typeof countOr429 = (key, limits, message) => countOr429(key, limits, message);
+
+/** Tests only: replace the counter networkRateLimitOr429 uses (pass nothing to restore it). */
+export function setNetworkCountForTests(count?: typeof countOr429): void {
+  countNetwork = count ?? ((key, limits, message) => countOr429(key, limits, message));
+}
+
+/**
+ * TS-219: rateLimitOr429 for each of `counters` in turn; the first refusal is the answer.
+ * TS-227: a refusal (or a failure) by a later counter gives back the counts the earlier ones
+ * already took -- otherwise someone retrying while their /48 was full used up their own /64 too,
+ * and stayed blocked after the /48 had room again.
+ */
 export async function networkRateLimitOr429(counters: NetworkCounter[], message?: LimitMessage): Promise<NextResponse | null> {
+  const taken: (() => Promise<void>)[] = [];
+  const giveBackTaken = () => Promise.all(taken.map((giveBack) => giveBack().catch(() => {})));
   for (const { key, limit, windowSeconds } of counters) {
-    const limited = await rateLimitOr429(key, { limit, windowSeconds }, message);
-    if (limited) return limited;
+    let counted;
+    try {
+      counted = await countNetwork(key, { limit, windowSeconds }, message);
+    } catch (err) {
+      await giveBackTaken();
+      throw err;
+    }
+    if (counted.limited) {
+      await giveBackTaken();
+      return counted.limited;
+    }
+    taken.push(counted.giveBack);
   }
   return null;
 }
