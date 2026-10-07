@@ -15,6 +15,19 @@ import {
 import { inWeddingChange, lockWeddingRow, recheckActorAccess, type ActorAccess } from "./wedding-lock";
 import { assertWeddingHasRoom } from "./wedding-caps";
 
+// TS-224: lockCurrentPlan, and when the wedding has no current plan yet, the wedding's lock and
+// then lockCurrentPlan again. A first Generate holds the wedding lock while it saves the new plan
+// but there is no plan row yet for a table change to wait on -- before, a table removed, edited or
+// given a required-guest list in that moment carried on as if there were still no plan (a removal
+// counted 0 seated guests and left the new plan "complete" with guests silently unseated). Nothing
+// is held when lockCurrentPlan finds no plan, so taking the wedding lock now keeps the lock order.
+async function lockCurrentPlanOrWedding(client: PoolClient, weddingId: string): Promise<string | null> {
+  const planId = await lockCurrentPlan(client, weddingId);
+  if (planId) return planId;
+  await lockWeddingRow(client, weddingId);
+  return lockCurrentPlan(client, weddingId);
+}
+
 export interface SeatingTableRow {
   id: string;
   weddingId: string;
@@ -501,7 +514,7 @@ export async function updateSeatingTableForWedding(
     // table.
     let planVersionId: string | null = null;
     if (seatingChange) {
-      planVersionId = await lockCurrentPlan(client, weddingId);
+      planVersionId = await lockCurrentPlanOrWedding(client, weddingId); // TS-224
       await lockRestrictedLists(client, weddingId);
     }
     // TS-204: the person's access read again under the locks above -- lowered or removed while
@@ -659,7 +672,7 @@ export async function removeSeatingTable(
     await beginTransaction(client);
     // TS-173: the current plan's row first, then the table (see lockCurrentPlan). TS-181: and the
     // lists in between -- a Restricted table's list goes with it.
-    const currentPlanId = await lockCurrentPlan(client, weddingId);
+    const currentPlanId = await lockCurrentPlanOrWedding(client, weddingId); // TS-224
     await lockRestrictedLists(client, weddingId);
     // TS-204: the person's access read again under the locks above -- lowered or removed while
     // this waited: refused, nothing saved.
@@ -755,7 +768,7 @@ export async function setRequiredGuestsForTable(
     await beginTransaction(client);
     // TS-173: the current plan's row first, then the table (see lockCurrentPlan). TS-181: and the
     // lists in between, as a new seating rule takes them.
-    const planVersionId = await lockCurrentPlan(client, weddingId);
+    const planVersionId = await lockCurrentPlanOrWedding(client, weddingId); // TS-224
     await lockRestrictedLists(client, weddingId);
     // TS-204: the person's access read again under the locks above -- lowered or removed while
     // this waited: refused, nothing saved.
@@ -820,7 +833,7 @@ export async function resyncTableSeating(
   try {
     await beginTransaction(client);
     // TS-173: the current plan's row first, then the table (see lockCurrentPlan).
-    const planVersionId = await lockCurrentPlan(client, weddingId);
+    const planVersionId = await lockCurrentPlanOrWedding(client, weddingId); // TS-224
     if (!planVersionId) {
       await client.query("COMMIT");
       return { newlyFlagged: [] };
