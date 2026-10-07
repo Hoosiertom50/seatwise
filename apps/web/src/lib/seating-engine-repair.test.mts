@@ -42,7 +42,8 @@ const tableOf = (result: ReturnType<typeof generateSeatingPlan>, guestId: string
   result.assignments.find((a) => a.guestId === guestId)?.tableId ?? null;
 
 test("the accessible-table penalty is gone, and the weighting version says so", () => {
-  assert.equal(RULE_WEIGHT_CONFIG_VERSION, 4);
+  // TS-201: version 5 (the engine's choices changed again; see seating-engine-ts201.test.mts).
+  assert.equal(RULE_WEIGHT_CONFIG_VERSION, 5);
   assert.equal("accessibleTableMisusePenalty" in RULE_WEIGHT_CONFIG, false);
 });
 
@@ -195,7 +196,7 @@ function mulberry32(seed: number) {
   };
 }
 
-test("2,000 random weddings: hard rules always hold, and the repair never seats fewer people", () => {
+test("2,000 random weddings: hard rules always hold, and the repair never leaves more accessible-needing people (nor, otherwise, more people) unseated", () => {
   const rnd = mulberry32(196);
   const ri = (n: number) => Math.floor(rnd() * n);
   const pick = <T,>(a: readonly T[]) => a[ri(a.length)];
@@ -249,11 +250,17 @@ test("2,000 random weddings: hard rules always hold, and the repair never seats 
     if (result.errors.length > 0) continue;
     assert.deepEqual(generateSeatingPlan(guests, rels, tables, mix), result, `not deterministic: ${input}`);
     const plain = generateSeatingPlan(guests, rels, tables, mix, { repair: false });
-    // The engine keeps the plan that leaves the fewest PEOPLE unseated (party sizes), so that is
-    // what the repair must never make worse.
+    // TS-201: the engine keeps the plan that leaves the fewest people who need an accessible table
+    // unseated, then the fewest PEOPLE (party sizes), so the repair must never make the first
+    // worse, nor the second worse unless the first got better.
     const people = (ids: string[]) => ids.reduce((n, id) => n + (guests.find((g) => g.id === id)?.headcount ?? 0), 0);
+    const accessiblePeople = (ids: string[]) =>
+      people(ids.filter((id) => guests.find((g) => g.id === id)?.requiresAccessibleTable));
+    const accResult = accessiblePeople(result.unassignedGuestIds);
+    const accPlain = accessiblePeople(plain.unassignedGuestIds);
+    assert.ok(accResult <= accPlain, `left more people who need an accessible table unseated: ${input}`);
     assert.ok(
-      people(result.unassignedGuestIds) <= people(plain.unassignedGuestIds),
+      accResult < accPlain || people(result.unassignedGuestIds) <= people(plain.unassignedGuestIds),
       `repair seated fewer people: ${input}`
     );
     if (people(result.unassignedGuestIds) < people(plain.unassignedGuestIds)) repairedMore++;
@@ -289,7 +296,8 @@ test("2,000 random weddings: hard rules always hold, and the repair never seats 
         if (!!a !== !!b) {
           const missing = byId.get(a ? r.guestBId : r.guestAId)!;
           assert.ok(
-            result.warnings.some((w) => w.includes(missing.name) && /Unlock it or move them together/.test(w)),
+            // TS-201: "Unlock it or ..." or, when they have their own locked seat, 'Unlock "L" or ...'.
+            result.warnings.some((w) => w.includes(missing.name) && /or move them together\./.test(w)),
             `must-sit pair half seated outside the locked-table case: ${input}`
           );
         }
