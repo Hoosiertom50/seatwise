@@ -230,9 +230,15 @@ export class DayOfTabPage extends BasePage {
     await this.seatButton(guestName).click();
   }
 
-  async addWalkIn(firstName: string, lastName: string, tableLabel?: string): Promise<void> {
+  /** TS-202: the walk-in's party size box (1 unless changed). */
+  walkInPartySizeInput() {
+    return this.page.getByLabel("Party size", { exact: true });
+  }
+
+  async addWalkIn(firstName: string, lastName: string, tableLabel?: string, partySize?: number): Promise<void> {
     await this.walkInFirstNameInput().fill(firstName);
     await this.walkInLastNameInput().fill(lastName);
+    if (partySize !== undefined) await this.walkInPartySizeInput().fill(String(partySize));
     if (tableLabel) {
       await this.walkInTableSelect().selectOption({ label: tableLabel });
     }

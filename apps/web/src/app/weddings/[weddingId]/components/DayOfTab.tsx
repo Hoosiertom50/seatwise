@@ -71,6 +71,8 @@ export function DayOfTab({
   const [walkInFirst, setWalkInFirst] = useState("");
   const [walkInLast, setWalkInLast] = useState("");
   const [walkInTableId, setWalkInTableId] = useState("");
+  // TS-202: a walk-in can be more than one person (it was always a party of 1). Kept as typed.
+  const [walkInPartySize, setWalkInPartySize] = useState("1");
   const [addingWalkIn, setAddingWalkIn] = useState(false);
   // TS-199: shown in the walk-in form itself, next to the names.
   const [walkInNameError, setWalkInNameError] = useState<string | null>(null);
@@ -414,6 +416,12 @@ export function DayOfTab({
       setWalkInNameError(!walkInFirst.trim() ? "Enter the walk-in's first name." : "Enter the walk-in's last name.");
       return;
     }
+    // TS-202: an empty box means just the one person.
+    const partySize = walkInPartySize.trim() === "" ? 1 : Number(walkInPartySize);
+    if (!Number.isInteger(partySize) || partySize < 1 || partySize > 20) {
+      setWalkInNameError("Party size must be a whole number from 1 to 20.");
+      return;
+    }
     setWalkInNameError(null);
     setError(null);
     setNotice(null);
@@ -433,7 +441,7 @@ export function DayOfTab({
         const { guest } = await api.post<{ guest: GuestDTO }>(`/api/v1/weddings/${weddingId}/guests`, {
           firstName,
           lastName,
-          headcount: 1,
+          headcount: partySize,
           dayOfAttendance: "ATTENDING",
         });
         progress.added = guest;
@@ -441,6 +449,7 @@ export function DayOfTab({
         setGuests((cur) => [...cur, guest]);
         setWalkInFirst("");
         setWalkInLast("");
+        setWalkInPartySize("1");
         if (!detailRef.current) return null;
         // TS-189: adding a guest moves the plan on a revision (they're a new unseated guest) -- take
         // the plan as it is now, so seating them (or a later "Seat at…") isn't refused as out of date.
@@ -711,6 +720,20 @@ export function DayOfTab({
               value={walkInLast}
               onChange={(e) => setWalkInLast(e.target.value)}
               required
+            />
+            {/* TS-202: how many are in the walk-in's party (1 unless changed). Digits only. */}
+            <label htmlFor="walkin-party-size" className="self-center text-sm text-neutral-600 dark:text-neutral-300">
+              Party size
+            </label>
+            <input
+              id="walkin-party-size"
+              type="number"
+              inputMode="numeric"
+              min={1}
+              max={20}
+              className="min-h-11 w-24 rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-3 text-base"
+              value={walkInPartySize}
+              onChange={(e) => setWalkInPartySize(e.target.value.replace(/\D/g, "").slice(0, 2))}
             />
           </div>
           {walkInNameError && (

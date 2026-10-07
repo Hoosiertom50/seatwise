@@ -219,5 +219,35 @@ export function parseGuestImportRow(
     else if (checkFreeText("Plus-ones", plusOneNames, 500, errors)) data.plusOneNames = plusOneNames.replace(/\r\n/g, "\n");
   }
 
-  return { errors, data, keptAsIs };
+  // TS-202: a row that leaves the guest a party of one leaves them no plus-ones (the preview shows
+  // what the import will really do). Names taken as they were are then not kept after all.
+  const cleared = withoutPlusOnesForPartyOfOne(data, current);
+  if (cleared !== data) {
+    const kept = keptAsIs.indexOf("plusOneNames");
+    if (kept !== -1) keptAsIs.splice(kept, 1);
+  }
+  return { errors, data: cleared, keptAsIs };
+}
+
+/**
+ * TS-202: an import row that leaves its guest a party of one (a new guest with no headcount or a
+ * headcount of 1, or a row that lowers it to 1) leaves them no plus-ones -- the file's "Plus-ones"
+ * cell, or the names they had, are cleared. `current` is the guest the row updates, as they are. A
+ * row that changes neither the party size nor the plus-ones leaves an older guest's names alone, so
+ * re-importing an untouched export still changes nothing.
+ */
+export function withoutPlusOnesForPartyOfOne<T extends { headcount?: number; plusOneNames?: string | null }>(
+  p: T,
+  current?: { headcount: number; plusOneNames: string | null }
+): T {
+  if (current) {
+    const changesHeadcount = p.headcount !== undefined && p.headcount !== current.headcount;
+    const changesPlusOnes = "plusOneNames" in p && !sameImportText(p.plusOneNames, current.plusOneNames);
+    if (!changesHeadcount && !changesPlusOnes) return p;
+  }
+  const headcount = p.headcount ?? current?.headcount ?? 1;
+  if (headcount > 1) return p;
+  const plusOnes = "plusOneNames" in p ? p.plusOneNames : current?.plusOneNames;
+  if (!plusOnes) return p;
+  return { ...p, plusOneNames: null };
 }
