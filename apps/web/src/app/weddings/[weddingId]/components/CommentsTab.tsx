@@ -2,7 +2,7 @@
 
 import { formatDateTime } from "@/lib/display-format";
 import { useEffect, useMemo, useState, useRef } from "react";
-import { api, ApiError } from "@/lib/api-client";
+import { api, ApiError, apiErrorMessage } from "@/lib/api-client";
 import type { CommentDTO, GuestDTO, SeatingTableDTO, TimelineEntryDTO } from "@seatwise/shared";
 import { useUnsavedChanges } from "@/lib/unsaved-changes";
 // TS-193: the same limits the server checks (packages/shared/src/field-limits.ts).
@@ -48,7 +48,8 @@ export function CommentsTab({
   // TS-191: only the reply box that's open counts. A draft left in a closed one is kept (it's back
   // when Reply is opened again) but can't be seen, and asking about it puzzled people.
   const openReplyDraft = replyingTo ? (replyBodies[replyingTo] ?? "") : "";
-  useUnsavedChanges("comments", canComment && !!(body.trim() || openReplyDraft.trim()));
+  const hasDraft = canComment && !!(body.trim() || openReplyDraft.trim());
+  useUnsavedChanges("comments", hasDraft);
   // Checked synchronously: a second click can land before React re-renders with postingReply set.
   const postingReplyNow = useRef(false);
   // TS-191: comments whose Resolve is on its way, so a second press doesn't send it again.
@@ -68,6 +69,42 @@ export function CommentsTab({
       })
       .catch(() => setError("Couldn't load comments."))
       .finally(() => setLoading(false));
+  }, [weddingId]);
+
+  // TS-221: new threads, replies and resolves from other people show while this tab is open -- the
+  // comments are fetched again every 4 seconds (the page's own poll interval). Before, they loaded
+  // once, so the bell announced a comment this tab never showed until it was opened again. Paused
+  // while a comment or reply is being written (nothing moves under the person typing) and while a
+  // post or resolve of this tab's own is on its way. An answer that started before one of this
+  // tab's own changes landed is dropped -- it could put back the list from before that change.
+  const hasDraftRef = useRef(hasDraft);
+  const busyRef = useRef(false);
+  const busy = posting || postingReply !== null || resolving.size > 0;
+  useEffect(() => {
+    hasDraftRef.current = hasDraft;
+    busyRef.current = busy;
+  }, [hasDraft, busy]);
+  const localChanges = useRef(0);
+  useEffect(() => {
+    let cancelled = false;
+    let inFlight = false;
+    const interval = setInterval(async () => {
+      if (inFlight || hasDraftRef.current || busyRef.current) return;
+      inFlight = true;
+      const changesBefore = localChanges.current;
+      try {
+        const c = await api.get<{ comments: CommentDTO[] }>(`/api/v1/weddings/${weddingId}/comments`);
+        if (!cancelled && changesBefore === localChanges.current && !busyRef.current) setComments(c.comments);
+      } catch {
+        // Best effort -- the next tick tries again.
+      } finally {
+        inFlight = false;
+      }
+    }, 4000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
   }, [weddingId]);
 
   // Top-level comments (no parent), each with its replies attached, newest top-level first.
@@ -92,6 +129,11 @@ export function CommentsTab({
       setError("Pick who or what this comment is about.");
       return;
     }
+    // TS-223: a comment of only spaces said "Validation failed" -- now said plainly, before sending.
+    if (!body.trim()) {
+      setError("Write something first.");
+      return;
+    }
     setPosting(true);
     try {
       const { comment } = await api.post<{ comment: CommentDTO }>(
@@ -104,11 +146,13 @@ export function CommentsTab({
           body,
         }
       );
+      localChanges.current++;
       setComments((cur) => [comment, ...cur]);
       setBody("");
       setTargetId("");
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Couldn't post that comment.");
+      // TS-223: the field's own reason (e.g. the text is empty), not the bare "Validation failed".
+      setError(apiErrorMessage(err, ["body"], "Couldn't post that comment."));
     } finally {
       setPosting(false);
     }
@@ -130,6 +174,7 @@ export function CommentsTab({
         `/api/v1/weddings/${weddingId}/comments`,
         { targetType, guestId, tableId, timelineEntryId, body: text, parentCommentId }
       );
+      localChanges.current++;
       setComments((cur) => [...cur, comment]);
       setReplyBodies((cur) => ({ ...cur, [parentCommentId]: "" }));
       setReplyingTo(null);
@@ -137,7 +182,7 @@ export function CommentsTab({
       // drop to the page; Cancel already did this). Checked again after the redraw (lib/focus-if-lost).
       focusIfLost(`reply-open-${parentCommentId}`);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Couldn't post that reply.");
+      setError(apiErrorMessage(err, ["body"], "Couldn't post that reply."));
     } finally {
       postingReplyNow.current = false;
       setPostingReply(null);
@@ -169,13 +214,16 @@ export function CommentsTab({
 
   async function resolveComment(commentId: string) {
     const before = comments.find((c) => c.id === commentId);
+    localChanges.current++;
     setComments((cur) => cur.map((c) => (c.id === commentId ? { ...c, resolvedAt: new Date().toISOString() } : c)));
     try {
       const { comment } = await api.post<{ comment: CommentDTO }>(
         `/api/v1/weddings/${weddingId}/comments/${commentId}/resolve`
       );
+      localChanges.current++;
       setComments((cur) => cur.map((c) => (c.id === commentId ? comment : c)));
     } catch (err) {
+      localChanges.current++;
       if (before) setComments((cur) => cur.map((c) => (c.id === commentId ? before : c)));
       setError(err instanceof ApiError ? err.message : "Couldn't resolve that comment.");
     }

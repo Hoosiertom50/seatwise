@@ -242,6 +242,8 @@ export interface PlanVersionAssignmentRow {
   tableId: string;
   tableLabel: string;
   needsReassignment: boolean;
+  /** TS-221: set (true) on an older version's seat held by a guest since marked not attending. */
+  notAttending?: true;
 }
 
 export interface PlanVersionDetail extends PlanVersionRow {
@@ -893,6 +895,11 @@ export async function getPlanVersionDetail(
   const isComplete = version.isCurrent
     ? version.isComplete
     : unassignedGuestIds.length === 0 && !assignments.some((a) => a.needsReassignment && attendingIds.has(a.guestId));
+
+  // TS-221: an older version can still hold seats of guests who have since declined -- they are
+  // marked, so its list says so instead of showing them seated (the counts above leave them out,
+  // and a restore doesn't bring them back). The current plan never seats a not-attending guest.
+  for (const a of assignments) if (!attendingIds.has(a.guestId)) a.notAttending = true;
 
   return {
     ...version,

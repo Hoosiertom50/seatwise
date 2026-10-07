@@ -57,6 +57,24 @@ export class CommentsTabPage extends BasePage {
     await this.page.getByRole("button", { name: "Post comment", exact: true }).waitFor();
   }
 
+  /** TS-223: fills the form and presses Post comment without waiting for a save (it may be refused before sending). */
+  async submitComment(targetType: CommentTargetType, targetLabel: string, body: string): Promise<void> {
+    await this.targetTypeSelect().selectOption(targetType);
+    await this.targetSelect(targetType).selectOption({ label: targetLabel });
+    await this.commentTextArea().fill(body);
+    await this.postCommentButton().click();
+  }
+
+  /** TS-223: an error message on the tab (role=alert) holding `text`. */
+  errorMessage(text: string | RegExp) {
+    return this.page.getByRole("alert").filter({ hasText: text });
+  }
+
+  /** TS-221: the comment box, to start (or clear) a draft. */
+  async typeDraft(text: string): Promise<void> {
+    await this.commentTextArea().fill(text);
+  }
+
   /** The `<li>` for one top-level comment thread, located by its own posted body text. */
   threadByBody(body: string) {
     return this.page.locator("li").filter({ hasText: body });

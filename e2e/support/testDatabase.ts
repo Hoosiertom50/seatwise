@@ -1006,3 +1006,19 @@ export async function plantOldGuestText(
   );
   if (!rowCount) throw new Error(`testDatabase: no guest ${guestId} on a test wedding.`);
 }
+
+/**
+ * TS-221: removes a test wedding's plan version the way pruning does once a wedding has many
+ * versions (wedding-caps.ts pruneOldPlanVersions) -- only one that is neither current nor approved
+ * -- so a test can check what a screen does when the version it has open disappears, without making
+ * fifty versions first. Test weddings only.
+ */
+export async function removePlanVersionAsPruningWould(planVersionId: string): Promise<void> {
+  const { rowCount } = await testPool().query(
+    `DELETE FROM "plan_versions" pv USING "weddings" w, "users" u
+     WHERE pv.id = $1 AND w.id = pv."weddingId" AND u.id = w."ownerId" AND u.email LIKE $2
+       AND NOT pv."isCurrent" AND pv.status <> 'APPROVED'`,
+    [planVersionId, TEST_EMAIL_PATTERN],
+  );
+  if (!rowCount) throw new Error(`testDatabase: no removable test plan version ${planVersionId}.`);
+}

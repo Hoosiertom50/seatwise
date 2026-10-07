@@ -239,7 +239,9 @@ export function TablesTab({
   // reusable template -- see save-as-template's own route comment for why EDIT access is enough.
   const [templateName, setTemplateName] = useState("");
   const [savingTemplate, setSavingTemplate] = useState(false);
-  const [savedTemplate, setSavedTemplate] = useState<SeatingTemplateDTO | null>(null);
+  // TS-216: what "Save as template" says once it's saved -- the server may have saved it but not
+  // been able to read it back (template: null), and then it says so instead of naming the tables.
+  const [savedTemplateNotice, setSavedTemplateNotice] = useState<string | null>(null);
   // TS-159: tell the page this tab has input that leaving it would lose.
   // TS-182: only while the forms are there (they're hidden without Edit access).
   useUnsavedChanges("tables", canEdit && !!(label.trim() || purpose.trim() || templateName.trim() || (editingId && editDirty)));
@@ -349,11 +351,16 @@ export function TablesTab({
     setError(null);
     setQcCreating(true);
     try {
-      const { tables: created } = await api.post<{ tables: SeatingTableDTO[] }>(
+      const res = await api.post<{ tables: SeatingTableDTO[] | null; warnings?: string[] }>(
         `/api/v1/weddings/${weddingId}/tables/quick-create`,
         { count: Number(qcCount), capacity: Number(qcCapacity), shape: qcShape, labelPrefix: qcPrefix }
       );
-      setTables((cur) => [...cur, ...created].sort((a, b) => compareTableLabels(a.label, b.label)));
+      // TS-216: the server's notes are shown, and when the new tables didn't come back the list is
+      // fetched again rather than left as it was (it looked as if nothing had been added).
+      setTableWarnings(res.warnings ?? []);
+      const created = res.tables;
+      if (created) setTables((cur) => [...cur, ...created].sort((a, b) => compareTableLabels(a.label, b.label)));
+      else void refetchTables();
     } catch (err) {
       setError(apiErrorMessage(err, [], "Couldn't create those tables."));
     } finally {
@@ -367,14 +374,19 @@ export function TablesTab({
   async function onSaveAsTemplate(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
-    setSavedTemplate(null);
+    setSavedTemplateNotice(null);
     setSavingTemplate(true);
     try {
-      const { template } = await api.post<{ template: SeatingTemplateDTO }>(
+      // TS-216: template is null when it was saved but couldn't be read back just then.
+      const { template } = await api.post<{ template: SeatingTemplateDTO | null; warnings?: string[] }>(
         `/api/v1/weddings/${weddingId}/save-as-template`,
         { name: templateName }
       );
-      setSavedTemplate(template);
+      setSavedTemplateNotice(
+        template
+          ? `Saved “${template.name}” (${template.tableCount} table${template.tableCount === 1 ? "" : "s"}) — pick it when creating a new wedding from your dashboard.`
+          : `Saved “${templateName.trim()}” — refresh the page to see it.`
+      );
       setTemplateName("");
       // TS-182: "Add tables from a template" shows the new one straight away.
       if (myTemplates !== null || templatesFailed) void loadMyTemplates(true);
@@ -382,6 +394,17 @@ export function TablesTab({
       setError(apiErrorMessage(err, [], "Couldn't save that template."));
     } finally {
       setSavingTemplate(false);
+    }
+  }
+
+  // TS-216: the table list fetched again after a change whose answer didn't include it. Best
+  // effort -- the server's note already says to refresh if this fails too.
+  async function refetchTables() {
+    try {
+      const { tables: fresh } = await api.get<{ tables: SeatingTableDTO[] }>(`/api/v1/weddings/${weddingId}/tables`);
+      setTables(fresh);
+    } catch {
+      // The warning shown says to refresh the page.
     }
   }
 
@@ -405,12 +428,16 @@ export function TablesTab({
     setAppliedMessage(null);
     setApplyingTemplate(true);
     try {
-      const res = await api.post<{ addedCount: number; tables: SeatingTableDTO[] | null }>(
+      const res = await api.post<{ addedCount: number; tables: SeatingTableDTO[] | null; warnings?: string[] }>(
         `/api/v1/weddings/${weddingId}/apply-template`,
         { templateId: applyTemplateId }
       );
       // TS-209: null when the tables were added but the list couldn't be read back just then.
+      // TS-216: then the server's note is shown and the list fetched again -- before, the old list
+      // stayed on screen under "Added 4 tables".
+      setTableWarnings(res.warnings ?? []);
       if (res.tables) setTables(res.tables);
+      else void refetchTables();
       const name = myTemplates?.find((t) => t.id === applyTemplateId)?.name ?? "the template";
       setAppliedMessage(
         `Added ${res.addedCount} table${res.addedCount === 1 ? "" : "s"} from “${name}”. Tables already here weren't changed.`
@@ -833,13 +860,10 @@ export function TablesTab({
             {savingTemplate ? "Saving..." : "Save as template"}
           </button>
         </form>
-        {savedTemplate && (
-          <p role="status" className="mt-2 text-sm text-green-700 dark:text-green-400">
-            Saved &ldquo;{savedTemplate.name}&rdquo; ({savedTemplate.tableCount} table
-            {savedTemplate.tableCount === 1 ? "" : "s"}) — pick it when creating a new wedding from
-            your dashboard.
-          </p>
-        )}
+        {/* TS-216: always there, only its text changes (TS-212), so the result is announced. */}
+        <p role="status" className="mt-2 text-sm text-green-700 empty:hidden dark:text-green-400">
+          {savedTemplateNotice ?? ""}
+        </p>
       </details>
 
       {/* TS-91: the other half of reusable layouts -- until now a template could only be picked
@@ -898,7 +922,8 @@ export function TablesTab({
             </button>
           </form>
         )}
-        {appliedMessage && <p role="status" className="mt-2 text-sm text-green-700 dark:text-green-400">{appliedMessage}</p>}
+        {/* TS-216: always there, only its text changes (TS-212). */}
+        <p role="status" className="mt-2 text-sm text-green-700 empty:hidden dark:text-green-400">{appliedMessage ?? ""}</p>
       </details>
         </>
       )}

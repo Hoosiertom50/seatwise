@@ -8,7 +8,7 @@ import { useUnsavedChanges } from "@/lib/unsaved-changes";
 import { inReadingOrder } from "@/lib/reading-order";
 import { PickThenActControl } from "@/components/PickThenActControl";
 import { PLAN_CHANGED_EVENT } from "./GettingStarted";
-import { undoPlanFor, type UndoPlan } from "@/lib/plan-undo";
+import { undoPlanFor, mustSitGroup, undoWouldSplitGroup, UNDO_SPLITS_GROUP_MESSAGE, type UndoPlan } from "@/lib/plan-undo";
 import { PlanExportButtons } from "./PlanExportButtons";
 import { SAVED_AS_DRAFT_BECAUSE_APPROVED, MADE_CURRENT_BECAUSE_NO_CURRENT_PLAN } from "@/lib/plan-approval-text";
 
@@ -18,6 +18,40 @@ const VERSION_CLOSED_MESSAGE = "That version isn't open any more — nothing was
 const VERSION_CHANGING_MESSAGE = "Wait for the new plan to finish — nothing was moved.";
 // TS-197: shown when the page switches to a plan someone (or another tab) made since this one opened.
 const NEWER_PLAN_MESSAGE = "A newer plan was made — you're now looking at it.";
+// TS-221: shown when the version that was open has been removed (older versions are cleared out
+// automatically once a wedding has many) and the page has opened the current plan instead.
+const VERSION_REMOVED_MESSAGE = "The version you had open was removed — you're now looking at the current plan.";
+
+// TS-221: the server's answer for a plan version that no longer exists (a restore says "Source").
+function isVersionGone(err: unknown): boolean {
+  return err instanceof ApiError && err.status === 404 && /^(Source plan|Plan) version not found\.?$/.test(err.message);
+}
+
+// TS-221: a table this version seats guests at that isn't in the tab's table list (added on another
+// screen since the list was fetched) -- drawn from what the plan says about it, so its guests show
+// (they used to be under no table at all). Seats unknown until the list catches up.
+function unlistedTable(id: string, label: string, weddingId: string, index: number, belowY: number): SeatingTableDTO {
+  return {
+    id,
+    weddingId,
+    label,
+    capacity: 0,
+    isRestricted: false,
+    isAccessible: false,
+    isLocked: false,
+    purpose: null,
+    purposeCriterionType: null,
+    purposeCriterionValue: null,
+    singleSideOnly: false,
+    shape: "ROUND",
+    positionX: 40 + index * (PLAN_BOX_WIDTH + 24),
+    positionY: belowY,
+    requiredGuestIds: [],
+    createdAt: "",
+    updatedAt: "",
+    revision: 0,
+  };
+}
 import { RULE_WEIGHT_CONFIG, compareTableLabels } from "@seatwise/shared";
 import type {
   GuestDTO,
@@ -26,6 +60,7 @@ import type {
   PlanVersionDetailDTO,
   PlanVersionScoreReportDTO,
   PlanVersionStatusValue,
+  RelationshipDTO,
   RestorePreviewDTO,
   SeatingTableDTO,
 } from "@seatwise/shared";
@@ -107,6 +142,23 @@ export function PlanTab({
   const [versions, setVersions] = useState<PlanVersionDTO[]>([]);
   const [detail, setDetail] = useState<PlanVersionDetailDTO | null>(null);
   const [tables, setTables] = useState<SeatingTableDTO[]>([]);
+  // TS-221: the table list is fetched again on a 4-second tick and after anything that can bring
+  // new tables into view (Generate, Restore, a newer plan) -- it used to load once, so a table added
+  // on another screen never appeared (with its guests) and one removed elsewhere was still offered.
+  // Numbered, so an older answer never replaces a newer one.
+  const tablesRequest = useRef(0);
+  async function refreshTables() {
+    const request = ++tablesRequest.current;
+    try {
+      const res = await api.get<{ tables: SeatingTableDTO[] }>(`/api/v1/weddings/${weddingId}/tables`);
+      if (request !== tablesRequest.current) return;
+      setTables((cur) => (JSON.stringify(cur) === JSON.stringify(res.tables) ? cur : res.tables));
+    } catch {
+      // Best effort -- the next tick tries again.
+    }
+  }
+  // TS-221: what the last move, undo or redo did, for screen readers (moves weren't announced).
+  const [moveAnnouncement, setMoveAnnouncement] = useState("");
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
   // FR-5.6: the planner's upfront choice for the *next* generation run -- true (the default)
@@ -262,6 +314,35 @@ export function PlanTab({
     // What was shown for the old version (warnings, a restore preview, a score report) is about it.
     clearVersionMessages();
     setSupersededNotice(NEWER_PLAN_MESSAGE);
+    void refreshTables();
+  }
+
+  // TS-221: the open version (`goneId`) no longer exists -- removed as one of the oldest versions
+  // once a new one was made. Every action on it said "Plan version not found" and the 4-second check
+  // stayed quiet; now the current plan opens, with a note saying why.
+  async function openCurrentAfterVersionGone(goneId: string, isCancelled: () => boolean = () => false) {
+    const list = await api.get<{ planVersions: PlanVersionDTO[] }>(`/api/v1/weddings/${weddingId}/plan-versions`);
+    if (isCancelled() || detailRef.current?.id !== goneId) return;
+    const current = list.planVersions.find((v) => v.isCurrent) ?? list.planVersions[0];
+    const opened = current
+      ? (await api.get<{ planVersion: PlanVersionDetailDTO }>(`/api/v1/weddings/${weddingId}/plan-versions/${current.id}`)).planVersion
+      : null;
+    if (isCancelled() || detailRef.current?.id !== goneId) return;
+    setVersions(list.planVersions);
+    detailRef.current = opened;
+    setDetail(opened);
+    clearVersionMessages();
+    setError(null);
+    setSupersededNotice(VERSION_REMOVED_MESSAGE);
+    void refreshTables();
+  }
+
+  // TS-221: an action's answer said the open version is gone -- open the current plan instead.
+  // True when it did (the caller then shows nothing else).
+  function handledVersionGone(err: unknown, versionId: string | undefined): boolean {
+    if (!versionId || !isVersionGone(err)) return false;
+    openCurrentAfterVersionGone(versionId).catch(() => setError(REFRESH_FAILED_MESSAGE));
+    return true;
   }
 
   // TS-197: everything shown about the version that was open -- cleared when another one opens.
@@ -294,6 +375,7 @@ export function PlanTab({
     if (openId && fresh.id !== openId) {
       clearVersionMessages();
       setSupersededNotice(NEWER_PLAN_MESSAGE);
+      void refreshTables();
       api
         .get<{ planVersions: PlanVersionDTO[] }>(`/api/v1/weddings/${weddingId}/plan-versions`)
         .then((list) => setVersions(list.planVersions))
@@ -314,6 +396,13 @@ export function PlanTab({
       .catch(() => setError("Couldn't load seating plans."))
       .finally(() => setLoading(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [weddingId]);
+
+  // TS-221: the table list, every 4 seconds while this tab is open (see refreshTables).
+  useEffect(() => {
+    const interval = setInterval(() => void refreshTables(), 4000);
+    return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- TS-221: refreshTables only uses setters and refs.
   }, [weddingId]);
 
   // FR-7.7: "a saved change made by one user becomes visible to the others within five seconds
@@ -354,7 +443,13 @@ export function PlanTab({
         setVersions((vs) =>
           vs.map((v) => (v.id === res.planVersion.id && v.revision < res.planVersion.revision ? res.planVersion : v))
         );
-      } catch {
+      } catch (err) {
+        // TS-221: the version on screen was removed (it had just stopped being current, and was
+        // among the oldest) -- the current plan opens, as it would for a newer plan.
+        if (!cancelled && isVersionGone(err)) {
+          await openCurrentAfterVersionGone(planVersionId, () => cancelled).catch(() => {});
+          return;
+        }
         // Best-effort background sync -- a transient failure here isn't worth surfacing as an
         // error; the next tick tries again.
       }
@@ -405,6 +500,8 @@ export function PlanTab({
       } catch {
         setError(REFRESH_FAILED_MESSAGE);
       }
+      // TS-221: the new plan may seat guests at tables added since this tab loaded.
+      void refreshTables();
       setScoreReport(res.scoreReport ?? null);
       // TS-197: what the engine said about this plan, from the Generate answer itself (the reload
       // above reads the saved version, which doesn't keep them). With someone left unseated, the
@@ -449,6 +546,15 @@ export function PlanTab({
       setDetail(d.planVersion);
     } catch (err) {
       if (request !== selectRequest.current) return;
+      // TS-221: removed since the list was loaded -- the list is reloaded so it's no longer offered.
+      if (isVersionGone(err)) {
+        setError("That version was removed (older versions are cleared out automatically).");
+        api
+          .get<{ planVersions: PlanVersionDTO[] }>(`/api/v1/weddings/${weddingId}/plan-versions`)
+          .then((list) => setVersions(list.planVersions))
+          .catch(() => {});
+        return;
+      }
       setError(err instanceof ApiError ? err.message : "Couldn't open that version.");
     }
   }
@@ -487,6 +593,8 @@ export function PlanTab({
       setVersions((vs) => vs.map((v) => (v.id === res.planVersion.id ? res.planVersion : v)));
       // TS-208: added to (they're cleared at the click), so a quick second move keeps the first's.
       setMoveWarnings((w) => [...w, ...res.warnings]);
+      // TS-221: said aloud too (the region is always on the page; see moveAnnouncement).
+      setMoveAnnouncement(`Moved ${guestName(guestId)} to ${tableLabel(tableId)}.`);
       // TS-197 / TS-208: what undo puts back -- worked out from every seat the move changed (see
       // plan-undo.ts). Seating a guest whose must-sit partner was already there undoes only the
       // guest (it used to unseat the partner too), and a move that only brought a partner over is
@@ -511,6 +619,8 @@ export function PlanTab({
       // TS-197: or a newer plan replaced this one -- the page switches to it.
       const fresh = conflictPlanVersion(err);
       if (fresh) takeFreshPlan(fresh);
+      // TS-221: the version was removed -- the current plan opens instead.
+      if (handledVersionGone(err, current.id)) return { error: VERSION_REMOVED_MESSAGE };
       const message = err instanceof ApiError ? err.message : "Couldn't move that guest.";
       setError(message);
       return { error: message };
@@ -569,6 +679,20 @@ export function PlanTab({
           );
           return;
         }
+        // TS-221: the server moves the guest's whole must-sit-together group. If that group wasn't
+        // all at the undo table before the move (it was split), undoing would put someone at a
+        // table they were never at -- refused, and the entry dropped (it can never be undone).
+        if (kind === "undo" && target !== null) {
+          const { relationships } = await api.get<{ relationships: RelationshipDTO[] }>(
+            `/api/v1/weddings/${weddingId}/relationships`
+          );
+          const notAttending = new Set(guests.filter((g) => g.dayOfAttendance === "NOT_ATTENDING").map((g) => g.id));
+          if (undoWouldSplitGroup(entry, mustSitGroup(entry.guestId, relationships, notAttending))) {
+            dropEntry();
+            setError(UNDO_SPLITS_GROUP_MESSAGE);
+            return;
+          }
+        }
         const res = await api.post<{ planVersion: PlanVersionDetailDTO; warnings: string[] }>(
           `/api/v1/weddings/${weddingId}/plan-versions/${current.id}/assignments`,
           {
@@ -587,10 +711,13 @@ export function PlanTab({
         dropEntry();
         if (kind === "undo") setRedoStack((r) => [...r, entry]);
         else setUndoStack((u) => [...u, entry]);
+        // TS-221: announced, like a move.
+        setMoveAnnouncement(`${kind === "undo" ? "Undone" : "Redone"}: ${entry.description}.`);
       });
     } catch (err) {
       const fresh = conflictPlanVersion(err);
       if (fresh) takeFreshPlan(fresh);
+      if (handledVersionGone(err, entry.versionId)) return;
       setError(err instanceof ApiError ? err.message : `Couldn't ${kind} that move.`);
     } finally {
       setUndoRedoBusy(false);
@@ -627,6 +754,7 @@ export function PlanTab({
       // TS-208: a refusal because a newer plan replaced this one carries that plan -- it opens, with
       // the newer-plan notice (the check was by id, so it was ignored and the page got stuck).
       if (fresh && detailRef.current?.id === requestedOn) takeFreshPlan(fresh);
+      if (handledVersionGone(err, requestedOn)) return;
       setError(err instanceof ApiError ? err.message : "Couldn't update the plan's status.");
     } finally {
       setStatusUpdating(false);
@@ -644,6 +772,7 @@ export function PlanTab({
       setRestorePreview(res.preview);
       setRestoreWillBeDraft(res.willSaveAsDraft === true);
     } catch (err) {
+      if (handledVersionGone(err, detailRef.current?.id)) return;
       setError(err instanceof ApiError ? err.message : "Couldn't preview that restore.");
     } finally {
       setPreviewingRestore(false);
@@ -673,10 +802,13 @@ export function PlanTab({
       } catch {
         setError(REFRESH_FAILED_MESSAGE);
       }
+      // TS-221: as after Generate.
+      void refreshTables();
       // TS-197: under their own heading (they were shown as if a move had made them).
       setRestoreWarnings(res.warnings);
       if (res.savedAsDraftBecauseApproved) setDraftNotice(SAVED_AS_DRAFT_BECAUSE_APPROVED);
     } catch (err) {
+      if (handledVersionGone(err, detailRef.current?.id)) return;
       setError(err instanceof ApiError ? err.message : "Couldn't restore that version.");
     } finally {
       setRestoring(false);
@@ -723,6 +855,10 @@ export function PlanTab({
       // TS-208: and when it has just been replaced as the current plan, the current one opens (see
       // takeFreshPlan).
       if (fresh && fresh.id === detailRef.current?.id) takeFreshPlan(fresh);
+      if (handledVersionGone(err, detailRef.current?.id)) {
+        setLabelVersionId(null);
+        return;
+      }
       // TS-182: the "isn't open any more" message is shown as it is (it was replaced by the
       // general one, since it isn't an ApiError).
       setError(
@@ -764,6 +900,13 @@ export function PlanTab({
   const needsReassignmentGuests: { guestId: string; guestName: string; tableId: string; tableLabel: string }[] = [];
   if (detail) {
     for (const a of detail.assignments) {
+      // TS-221: an older version's seat held by a guest who has since declined -- shown at the table,
+      // marked (it used to look like an ordinary seat, while the counts left it out).
+      if (a.notAttending) {
+        if (!grouped.has(a.tableId)) grouped.set(a.tableId, { tableLabel: a.tableLabel, guests: [] });
+        grouped.get(a.tableId)!.guests.push({ guestId: a.guestId, guestName: `${a.guestName} (not attending now)` });
+        continue;
+      }
       if (a.needsReassignment) {
         needsReassignmentGuests.push({ guestId: a.guestId, guestName: a.guestName, tableId: a.tableId, tableLabel: a.tableLabel });
         continue;
@@ -777,9 +920,22 @@ export function PlanTab({
   const headcountByGuest = new Map(guests.map((g) => [g.id, g.headcount]));
   const seatsTakenByTable = new Map<string, number>();
   for (const a of detail?.assignments ?? []) {
+    if (a.notAttending) continue; // TS-221: not holding a seat any more
     seatsTakenByTable.set(a.tableId, (seatsTakenByTable.get(a.tableId) ?? 0) + (headcountByGuest.get(a.guestId) ?? 1));
   }
   const canEditThisVersion = canEdit && Boolean(detail?.isCurrent);
+  // TS-221: every table the plan seats someone at is drawn, even one not in the table list yet
+  // (added elsewhere a moment ago -- the list catches up within 4 seconds). Its guests used to show
+  // under no table at all. Placed below the others on the floor plan.
+  const listedTableIds = new Set(tables.map((t) => t.id));
+  const unlistedTables: SeatingTableDTO[] = [];
+  const belowY = Math.max(40, ...tables.map((t) => (t.positionY ?? 40) + PLAN_BOX_HEIGHT + 24));
+  for (const a of detail?.assignments ?? []) {
+    if (listedTableIds.has(a.tableId) || unlistedTables.some((t) => t.id === a.tableId)) continue;
+    unlistedTables.push(unlistedTable(a.tableId, a.tableLabel, weddingId, unlistedTables.length, belowY));
+  }
+  const unlistedTableIds = new Set(unlistedTables.map((t) => t.id));
+  const planTables = unlistedTables.length > 0 ? [...tables, ...unlistedTables] : tables;
 
   return (
     <div>
@@ -842,30 +998,39 @@ export function PlanTab({
         </div>
       )}
       {error && <p role="alert" className="mb-4 text-sm text-red-600 dark:text-red-400">{error}</p>}
-      {draftNotice && (
-        <p
-          role="status"
-          data-testid="plan-saved-as-draft-notice"
-          className="mb-4 rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950 p-3 text-sm text-amber-800 dark:text-amber-300"
-        >
-          {draftNotice}
-        </p>
-      )}
-      {supersededNotice && (
-        <p
-          role="status"
-          className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-950 p-3 text-sm text-blue-800 dark:text-blue-300"
-        >
-          <span>{supersededNotice}</span>
-          <button
-            type="button"
-            onClick={() => setSupersededNotice(null)}
-            className="shrink-0 underline hover:no-underline"
+      {/* TS-221: these live regions are always on the page and only their contents change (the
+          TS-212 pattern) -- a status inserted already holding its text may not be announced. */}
+      <div role="status">
+        {draftNotice && (
+          <p
+            data-testid="plan-saved-as-draft-notice"
+            className="mb-4 rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950 p-3 text-sm text-amber-800 dark:text-amber-300"
           >
-            Dismiss
-          </button>
-        </p>
-      )}
+            {draftNotice}
+          </p>
+        )}
+      </div>
+      <div role="status">
+        {supersededNotice && (
+          <p
+            data-testid="plan-superseded-notice"
+            className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-950 p-3 text-sm text-blue-800 dark:text-blue-300"
+          >
+            <span>{supersededNotice}</span>
+            <button
+              type="button"
+              onClick={() => setSupersededNotice(null)}
+              className="shrink-0 underline hover:no-underline"
+            >
+              Dismiss
+            </button>
+          </p>
+        )}
+      </div>
+      {/* TS-221: what the last move, undo or redo did, for screen readers. */}
+      <p role="status" className="sr-only" data-testid="plan-move-announcement">
+        {moveAnnouncement}
+      </p>
 
       {/* FR-5.3: shown once, right after the generation run that produced it -- not persisted, so
           reloading or switching versions clears it, same as the moveWarnings/conflicts above. */}
@@ -1389,7 +1554,7 @@ export function PlanTab({
                         busy={movingIds.has(id)}
                         busyLabel="Seating..."
                         disabled={versionChanging}
-                        options={tables.map((t) => ({ value: t.id, label: t.label }))}
+                        options={planTables.map((t) => ({ value: t.id, label: t.label }))}
                         actLabel="Seat"
                         actAriaLabel={`Seat ${guestName(id)}`}
                         onAct={(tableId) => onMoveGuest(id, tableId)}
@@ -1425,7 +1590,7 @@ export function PlanTab({
                         busy={movingIds.has(g.guestId)}
                         busyLabel="Moving..."
                         disabled={versionChanging}
-                        options={tables
+                        options={planTables
                           .filter((t) => t.id !== g.tableId)
                           .map((t) => ({ value: t.id, label: t.label }))}
                         actLabel="Move"
@@ -1461,7 +1626,7 @@ export function PlanTab({
 
           {planView === "floorplan" ? (
             <PlanFloorPlan
-              tables={tables}
+              tables={planTables}
               grouped={grouped}
               unassignedGuestIds={detail.unassignedGuestIds}
               needsReassignmentGuests={needsReassignmentGuests}
@@ -1486,7 +1651,7 @@ export function PlanTab({
                   empty table used to be missing from this list entirely, and nothing showed how
                   many seats were free. (A table this version seats someone at but that no longer
                   exists can't happen: removing a table removes its seats.) */}
-              {[...tables]
+              {[...planTables]
                 .sort((a, b) => compareTableLabels(a.label, b.label))
                 .map((table) => {
                   const tableId = table.id;
@@ -1504,9 +1669,14 @@ export function PlanTab({
                       )}
                     </span>
                     <span
-                      className={`text-sm ${taken > table.capacity ? "font-medium text-red-600 dark:text-red-400" : "text-neutral-500 dark:text-neutral-400"}`}
+                      className={`text-sm ${taken > table.capacity && !unlistedTableIds.has(tableId) ? "font-medium text-red-600 dark:text-red-400" : "text-neutral-500 dark:text-neutral-400"}`}
                     >
-                      {taken === 0 ? `Empty — ${table.capacity} seats free` : `${taken}/${table.capacity} seated`}
+                      {/* TS-221: a table not in the list yet -- its seats aren't known here. */}
+                      {unlistedTableIds.has(tableId)
+                        ? `${taken} seated`
+                        : taken === 0
+                          ? `Empty — ${table.capacity} seats free`
+                          : `${taken}/${table.capacity} seated`}
                     </span>
                   </p>
                   <ul className="flex flex-col gap-1.5">
@@ -1522,7 +1692,7 @@ export function PlanTab({
                             busy={movingIds.has(g.guestId)}
                             busyLabel="Moving..."
                             disabled={versionChanging}
-                            options={tables
+                            options={planTables
                               .filter((table) => table.id !== tableId)
                               .map((table) => ({ value: table.id, label: table.label }))}
                             actLabel="Move"
