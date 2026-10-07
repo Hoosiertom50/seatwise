@@ -169,7 +169,7 @@ export async function PATCH(req: NextRequest, { params }: Params) {
           "emailing the RSVP link",
           async () => {
             const regenerate = correctedEmail || (firstEmail && (await guestHasRsvpLink(guestId, weddingId)));
-            return sendGuestRsvpLink(guest, access.wedding, user, { regenerate });
+            return sendGuestRsvpLink(guest, access.wedding, user, { regenerate, actor: access.actor });
           },
           warnings,
           null,
