@@ -115,9 +115,11 @@ export class CollaboratorsTabPage extends BasePage {
     await field.fill(value);
     await field.blur();
   }
-  /** The tab's error line, matched by its text. */
+  /** The tab's error line, matched by its text. TS-214: within the tab -- the header's save status
+   * can show the same words. */
   message(text: string | RegExp) {
-    return typeof text === "string" ? this.page.getByText(text, { exact: true }) : this.page.getByText(text);
+    const tab = this.page.getByRole("tabpanel", { name: "Collaborators" });
+    return typeof text === "string" ? tab.getByText(text, { exact: true }) : tab.getByText(text);
   }
 
   /** TS-105: hands the wedding to `personName`, answering "Yes"; the page reloads afterwards. */

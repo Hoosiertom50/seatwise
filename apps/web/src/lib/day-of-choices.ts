@@ -63,8 +63,8 @@ export function mustSitGroup(guestId: string, ctx: Pick<ChoiceContext, "guests" 
 
 /**
  * The tables a guest can be moved to (when seated) or seated at (when not), each with its free
- * seats -- or, with `guestId` null, the tables a new walk-in (one person, on no list and in no
- * rule) can be seated at. A table is offered only when the server would accept it for the guest's
+ * seats -- or, with `guestId` null, the tables a new walk-in (`walkInPartySize` people, on no list
+ * and in no rule) can be seated at. A table is offered only when the server would accept it for the guest's
  * whole must-sit-together group:
  * - enough free seats for everyone in the group (by party size; the group's own seats there count
  *   as free, since they'd just stay);
@@ -74,15 +74,20 @@ export function mustSitGroup(guestId: string, ctx: Pick<ChoiceContext, "guests" 
  * - TS-208: nobody already seated there has a "must not sit together" rule with anyone in the group.
  * The guest's own table, and a table the whole group is already at, aren't offered.
  */
-export function tableChoicesFor<T extends ChoiceTable>(guestId: string | null, ctx: ChoiceContext<T>): { table: T; free: number }[] {
+export function tableChoicesFor<T extends ChoiceTable>(
+  guestId: string | null,
+  ctx: ChoiceContext<T>,
+  walkInPartySize = 1
+): { table: T; free: number }[] {
   const byId = new Map(ctx.guests.map((g) => [g.id, g]));
   const tableOf = new Map(ctx.assignments.map((a) => [a.guestId, a.tableId]));
   const groupIds = guestId ? mustSitGroup(guestId, ctx) : [];
   const group = groupIds.map((id) => byId.get(id)).filter((g): g is ChoiceGuest => g !== undefined);
   if (guestId && group.length === 0) return [];
   const inGroup = new Set(groupIds);
-  // A walk-in is one person who needs nothing special.
-  const needed = guestId ? group.reduce((sum, g) => sum + g.headcount, 0) : 1;
+  // A walk-in needs nothing special -- just a seat for each person in their party (TS-202 added the
+  // party size; tables without room for all of them aren't offered).
+  const needed = guestId ? group.reduce((sum, g) => sum + g.headcount, 0) : Math.max(1, walkInPartySize);
   const needsAccessible = group.some((g) => g.requiresAccessibleTable);
   const requiredAt = new Set(
     group.flatMap((g) => ctx.tables.filter((t) => t.isRestricted && t.requiredGuestIds.includes(g.id)).map((t) => t.id))

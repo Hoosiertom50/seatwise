@@ -298,7 +298,8 @@ export class BudgetTabPage extends BasePage {
   /** The contract-notes line -- only rendered at all when the vendor has notes on file (the third
    * `<p>` in document order within the row, after the name/badge line and the contact line). */
   vendorNotesText(nameContains: string) {
-    return this.vendorRow(nameContains).locator("p").nth(2);
+    // TS-212: the row's always-present share-link status line isn't one of its text lines.
+    return this.vendorRow(nameContains).locator("p:not([role=status])").nth(2);
   }
 
   /** The row's own cost text -- "No cost set" or a formatted dollar amount. */

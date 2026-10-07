@@ -294,7 +294,8 @@ export class PlanTabPage extends BasePage {
     await this.guestChip(guestId).focus();
     await this.page.keyboard.press("Enter");
     await expect(this.guestChip(guestId)).toHaveAttribute("aria-pressed", "true");
-    const table = this.tableBox(tableId);
+    // TS-212: the table itself isn't a button any more -- its "Move <guest> to <table>" button is.
+    const table = this.tableBox(tableId).getByRole("button", { name: /^Move .+ to / });
     const tableIsEarlier = await this.page.evaluate(
       ([g, t]) => {
         const chip = document.querySelector(`[data-guest-id="${g}"]`)!;

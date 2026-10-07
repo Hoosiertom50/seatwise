@@ -138,8 +138,8 @@ defineQualityTest(
       const comments = new CommentsTabPage(page);
       await comments.goto(w);
       const thread = comments.threadByBody("Named thread").first();
-      await expect(thread.getByRole("button", { name: new RegExp(`^Resolve .+'s comment on ${fullName}$`) })).toBeVisible();
-      await expect(thread.getByRole("button", { name: new RegExp(`^Reply to .+'s comment on ${fullName}$`) })).toBeVisible();
+      await expect(thread.getByRole("button", { name: new RegExp(`^Resolve .+'s comment on (Guest: )?${fullName}$`) })).toBeVisible();
+      await expect(thread.getByRole("button", { name: new RegExp(`^Reply to .+'s comment on (Guest: )?${fullName}$`) })).toBeVisible();
     });
   },
 );

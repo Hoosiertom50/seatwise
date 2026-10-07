@@ -357,6 +357,10 @@ async function waitForSessionsBlockedBy(pid: number, count: number, what: string
 export interface HeldWeddingLock {
   /** Resolves once `count` of the app's own database sessions are waiting on this lock. */
   waitForWaiters(count: number): Promise<void>;
+  /** TS-204: marks one of the wedding's plan versions Approved while the lock is still held (an
+   * approval also takes the wedding's lock now, so it can't land from the app meanwhile), then lets
+   * the waiting requests carry on. */
+  approvePlanAndRelease(planVersionId: string): Promise<void>;
   /** Lets the waiting requests carry on. */
   release(): Promise<void>;
 }
@@ -385,16 +389,29 @@ export async function holdWeddingLock(weddingId: string): Promise<HeldWeddingLoc
   }
   const { rows: me } = await client.query<{ pid: number }>(`SELECT pg_backend_pid() AS pid`);
   const pid = me[0].pid;
+  let open = true;
+  const finish = async (sql: "COMMIT" | "ROLLBACK") => {
+    if (!open) return;
+    open = false;
+    try {
+      await client.query(sql);
+    } finally {
+      await client.end();
+    }
+  };
   return {
     async waitForWaiters(count: number) {
       await waitForSessionsBlockedBy(pid, count, "the wedding lock");
     },
+    async approvePlanAndRelease(planVersionId: string) {
+      await client.query(
+        `UPDATE "plan_versions" SET status = 'APPROVED', "approvedAt" = now(), revision = revision + 1 WHERE id = $1 AND "weddingId" = $2`,
+        [planVersionId, weddingId],
+      );
+      await finish("COMMIT");
+    },
     async release() {
-      try {
-        await client.query("ROLLBACK");
-      } finally {
-        await client.end();
-      }
+      await finish("ROLLBACK");
     },
   };
 }

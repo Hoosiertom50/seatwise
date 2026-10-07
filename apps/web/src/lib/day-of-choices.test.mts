@@ -103,6 +103,17 @@ test("a walk-in is offered every table with a free seat that isn't Restricted", 
   assert.deepEqual(labels(tableChoicesFor(null, ctx)), ["Open (5 free)"]);
 });
 
+test("a walk-in party is offered only tables with a seat for each of them (TS-202 party size)", () => {
+  const ctx: ChoiceContext = {
+    guests: [guest("x", { headcount: 3 })],
+    tables: [table("Small", 5), table("Big", 8)],
+    assignments: [{ guestId: "x", tableId: "Small" }],
+    relationships: [],
+  };
+  assert.deepEqual(labels(tableChoicesFor(null, ctx, 2)), ["Small (2 free)", "Big (8 free)"]);
+  assert.deepEqual(labels(tableChoicesFor(null, ctx, 3)), ["Big (8 free)"]);
+});
+
 test("must-sit groups count attending guests only", () => {
   const ctx = {
     guests: [guest("a"), guest("b", { dayOfAttendance: "NOT_ATTENDING" }), guest("c")],

@@ -208,8 +208,15 @@ defineQualityTest(
       expect(res.status()).toBe(200);
       expect(res.headers()["content-type"]).toBe("application/pdf");
       expect((await res.body()).subarray(0, 5).toString("latin1")).toBe("%PDF-");
-      const [tab] = await Promise.all([page.waitForEvent("popup"), plan.exportButton("Guest lookup list (PDF)").click()]);
-      await expect.poll(() => tab.url(), { timeout: 10_000 }).toMatch(/^blob:/);
+      // A headless browser has no PDF viewer: the tab may stay blank and the file download
+      // instead -- so the check is that the file was fetched and nothing went wrong on the page.
+      const [tab, fetched] = await Promise.all([
+        page.waitForEvent("popup"),
+        page.waitForResponse((r) => r.url().includes("/export/lookup") && r.request().method() === "GET"),
+        plan.exportButton("Guest lookup list (PDF)").click(),
+      ]);
+      expect(fetched.status()).toBe(200);
+      await expect(plan.exportError(/./)).toHaveCount(0);
       await tab.close();
     });
 

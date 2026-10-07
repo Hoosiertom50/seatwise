@@ -271,7 +271,9 @@ export function DayOfTab({
     [guests, tables, detail, relationships]
   );
   const choicesFor = (guestId: string | null) => tableChoicesFor(guestId, choiceContext);
-  const walkInChoices = useMemo(() => tableChoicesFor(null, choiceContext), [choiceContext]);
+  // TS-202 / TS-208: only tables with room for the walk-in's whole party.
+  const walkInSeats = Number(walkInPartySize) >= 1 ? Number(walkInPartySize) : 1;
+  const walkInChoices = useMemo(() => tableChoicesFor(null, choiceContext, walkInSeats), [choiceContext, walkInSeats]);
 
   const attendingSeatedGuests = useMemo(() => {
     if (!detail) return [];

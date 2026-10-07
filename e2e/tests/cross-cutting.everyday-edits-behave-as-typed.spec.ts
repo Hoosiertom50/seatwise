@@ -91,13 +91,24 @@ defineQualityTest(
     });
 
     await test.step("A walk-in whose table is full is added once, and the form clears", async () => {
+      await weddingData.generatePlanVersion(w);
       const table = await weddingData.createTable(w, { label: "Head Table", capacity: 1 });
       expect(table.id).toBeTruthy();
-      await weddingData.generatePlanVersion(w);
       const dayOf = new DayOfTabPage(page);
       await dayOf.goto(w);
-      await dayOf.addWalkIn("Sam", "Walkin", "Head Table");
-      await expect(dayOf.errorText()).toBeVisible();
+      // TS-208: a full table isn't offered for a walk-in any more, so the table filling up between
+      // picking it and the seat being saved is played by the server refusing the seat.
+      await page.route(/\/plan-versions\/[^/]+\/assignments$/, (route) =>
+        route.request().method() === "POST"
+          ? route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ error: '"Head Table" is full now.' }) })
+          : route.continue(),
+      );
+      try {
+        await dayOf.addWalkIn("Sam", "Walkin", "Head Table");
+        await expect(dayOf.errorText()).toBeVisible();
+      } finally {
+        await page.unroute(/\/plan-versions\/[^/]+\/assignments$/);
+      }
       expect(await dayOf.walkInFirstNameValue()).toBe("");
       const { guests } = (await (await context.request.get(`/api/v1/weddings/${w}/guests`)).json()) as {
         guests: { firstName: string; lastName: string }[];

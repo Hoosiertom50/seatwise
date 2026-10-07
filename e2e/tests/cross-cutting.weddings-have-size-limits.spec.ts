@@ -37,6 +37,7 @@ defineQualityTest(
     await test.step("The 301st table is refused, from Quick create and from the API, in plain words", async () => {
       const tables = new TablesTabPage(page);
       await tables.goto(w);
+      await tables.openTablesTab();
       await tables.quickCreateTables(1, 8);
       await expect(tables.message(TABLE_CAP_MESSAGE).first()).toBeVisible();
       const res = await context.request.post(`/api/v1/weddings/${w}/tables`, { data: { label: "One too many", capacity: 8 } });

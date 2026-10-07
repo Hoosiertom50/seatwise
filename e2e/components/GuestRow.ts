@@ -138,9 +138,13 @@ export class GuestRow {
     await list.focus();
     const before = await list.inputValue();
     for (let i = 0; i < times; i++) await list.press("ArrowDown");
-    // A headless browser on macOS doesn't change a closed list with the arrows at all; the key press
-    // has still marked the change as the keyboard's, so the next value is chosen the way the arrow
-    // would have (the list then waits for Enter, as with a real arrow change).
+    // A headless browser on macOS doesn't change a closed list with the arrows at all (a real Mac
+    // opens the pop-up instead, so the list treats the arrows as "pop-up opened" -- TS-212). The next
+    // value is then chosen after a key that changes a closed list in place (Page Down), so the list
+    // takes it as an in-place keyboard change and waits for Enter, as an arrow change on Linux does.
+    if ((await list.inputValue()) === before) {
+      await list.press("PageDown");
+    }
     if ((await list.inputValue()) === before) {
       const values = await list.locator("option").evaluateAll((os) => os.map((o) => (o as HTMLOptionElement).value));
       const next = values[(values.indexOf(before) + 1) % values.length];

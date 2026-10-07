@@ -108,7 +108,9 @@ defineQualityTest(
         try {
           generating = editor.context.request.post(api("plan-versions/generate"));
           await lock.waitForWaiters(1);
-          await approve(ownerGen.id);
+          // TS-204: an approval takes the wedding's lock too now, so it's made here, under the held
+          // lock, as one landing just before the Generate would be.
+          await lock.approvePlanAndRelease(ownerGen.id);
         } finally {
           await lock.release();
         }

@@ -23,8 +23,7 @@ import { LoginPage } from "../pages/LoginPage.js";
 import { WeddingDetailPage } from "../pages/WeddingDetailPage.js";
 import { uniqueToken } from "../data/ids.js";
 import { TEST_ACCOUNT_EMAIL_DOMAIN } from "../support/auth.js";
-import { confirmTestAccountEmail, inviteToken, plantEmailVerificationToken } from "../support/testDatabase.js";
-import { VerifyEmailPage } from "../pages/VerifyEmailPage.js";
+import { confirmTestAccountEmail, inviteToken } from "../support/testDatabase.js";
 
 defineQualityTest(
   {
@@ -75,15 +74,8 @@ defineQualityTest(
         // Generated for this test only, never logged or attached.
         await new SignupPage(inviteePage).signUp("Playwright Invitee", newPersonEmail, randomBytes(16).toString("base64url"));
         await expect(invitePage.acceptButton()).toBeVisible();
-        // TS-164: a brand-new account confirms its email (the link emailed at sign-up) first.
-        await invitePage.acceptButton().click();
-        await expect(invitePage.acceptError()).toContainText("Confirm your email address to accept this invite");
-        const verify = new VerifyEmailPage(inviteePage);
-        await expect(verify.reminderBanner()).toBeVisible();
-        await verify.goto(await plantEmailVerificationToken(newPersonEmail));
-        await verify.confirmButton().click();
-        await expect(verify.confirmedMessage()).toBeVisible();
-        await invitePage.goto(token);
+        // TS-164 / TS-203: a brand-new account is unconfirmed, but this invite was emailed to its
+        // address -- the link only reached that inbox -- so accepting it confirms the address too.
         await invitePage.accept();
         await inviteePage.waitForURL(`**/weddings/${managedWedding.id}`);
         await expect(new WeddingDetailPage(inviteePage).yourAccessBadge()).toHaveText("Your access: Comment");
