@@ -18,6 +18,7 @@ import { useUnsavedChanges } from "@/lib/unsaved-changes";
 import { useSerialTasks } from "@/lib/serial-tasks";
 import { OPEN_EDIT_MESSAGE } from "@/lib/display-format";
 import { inReadingOrder } from "@/lib/reading-order";
+import { sameSeats, seatedHeadcountByTable, type SeatForCount } from "@/lib/table-counts";
 // TS-193: the same limits the server checks (packages/shared/src/field-limits.ts).
 import { FIELD_LIMITS } from "@seatwise/shared";
 
@@ -257,34 +258,59 @@ export function TablesTab({
 
   // FR-4.5: capacity overview needs the current plan version's assignments, purely to display --
   // never used for anything that affects seating logic.
-  const [assignedHeadcountByTable, setAssignedHeadcountByTable] = useState<Record<string, number>>({});
+  // TS-235: the current plan's seats are kept, and the counts worked out from them and the live
+  // guest list at each render (they used to be worked out once, on load, and went stale).
+  const [currentSeats, setCurrentSeats] = useState<SeatForCount[]>([]);
+  const currentPlanId = useRef<string | null>(null);
+  const seatsRequest = useRef(0);
+  const seatsLanded = useRef(0);
+
+  // TS-235: the current plan's seats. The plan already known is read directly; when it's no longer
+  // current (or can't be read), the list is read again to find the one that is.
+  async function fetchCurrentSeats(): Promise<{ planId: string | null; seats: SeatForCount[] }> {
+    const known = currentPlanId.current;
+    let plan: PlanVersionDetailDTO | null = null;
+    if (known) {
+      plan = await api
+        .get<{ planVersion: PlanVersionDetailDTO }>(`/api/v1/weddings/${weddingId}/plan-versions/${known}`)
+        .then((r) => (r.planVersion.isCurrent ? r.planVersion : null))
+        .catch(() => null);
+    }
+    if (!plan) {
+      const versionsRes = await api.get<{ planVersions: PlanVersionDTO[] }>(`/api/v1/weddings/${weddingId}/plan-versions`);
+      // FR-5.6 (TS-8): a Comparison Draft can have a higher versionNumber than Current without
+      // replacing it, so the first (newest) row here isn't reliably Current anymore -- the
+      // capacity overview must reflect Current's assignments specifically, by isCurrent.
+      const currentId = versionsRes.planVersions.find((v) => v.isCurrent)?.id ?? versionsRes.planVersions[0]?.id;
+      if (currentId) {
+        plan = (await api.get<{ planVersion: PlanVersionDetailDTO }>(`/api/v1/weddings/${weddingId}/plan-versions/${currentId}`))
+          .planVersion;
+      }
+    }
+    return {
+      planId: plan?.id ?? null,
+      seats: (plan?.assignments ?? []).map((a) => ({ guestId: a.guestId, tableId: a.tableId, notAttending: a.notAttending })),
+    };
+  }
+
+  function takeSeats(request: number, fresh: { planId: string | null; seats: SeatForCount[] }) {
+    // An older request that came back after a newer one landed is ignored.
+    if (request < seatsLanded.current) return;
+    seatsLanded.current = request;
+    currentPlanId.current = fresh.planId;
+    setCurrentSeats((cur) => (sameSeats(cur, fresh.seats) ? cur : fresh.seats));
+  }
 
   useEffect(() => {
     (async () => {
       try {
-        const [tablesRes, versionsRes] = await Promise.all([
+        const request = ++seatsRequest.current;
+        const [tablesRes, seats] = await Promise.all([
           api.get<{ tables: SeatingTableDTO[] }>(`/api/v1/weddings/${weddingId}/tables`),
-          api.get<{ planVersions: PlanVersionDTO[] }>(`/api/v1/weddings/${weddingId}/plan-versions`),
+          fetchCurrentSeats(),
         ]);
         setTables(tablesRes.tables);
-        // FR-5.6 (TS-8): a Comparison Draft can have a higher versionNumber than Current without
-        // replacing it, so the first (newest) row here isn't reliably Current anymore -- the
-        // capacity overview must reflect Current's assignments specifically, by isCurrent.
-        const currentId =
-          versionsRes.planVersions.find((v) => v.isCurrent)?.id ?? versionsRes.planVersions[0]?.id;
-        if (currentId) {
-          const detail = await api.get<{ planVersion: PlanVersionDetailDTO }>(
-            `/api/v1/weddings/${weddingId}/plan-versions/${currentId}`
-          );
-          const byGuestId = new Map(guests.map((g) => [g.id, g]));
-          const counts: Record<string, number> = {};
-          for (const a of detail.planVersion.assignments) {
-            const guest = byGuestId.get(a.guestId);
-            if (!guest) continue;
-            counts[a.tableId] = (counts[a.tableId] ?? 0) + guest.headcount;
-          }
-          setAssignedHeadcountByTable(counts);
-        }
+        takeSeats(request, seats);
       } catch {
         setError("Couldn't load tables.");
       } finally {
@@ -293,6 +319,27 @@ export function TablesTab({
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [weddingId]);
+
+  // TS-235: the current plan's seats every 4 seconds while this tab is open (as the Plan tab does
+  // for its tables), so a plan generated, a guest moved or a seat freed elsewhere shows here.
+  useEffect(() => {
+    const interval = setInterval(async () => {
+      const request = ++seatsRequest.current;
+      try {
+        takeSeats(request, await fetchCurrentSeats());
+      } catch {
+        // Best effort -- the next tick tries again.
+      }
+    }, 4000);
+    return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- TS-235: the helpers only use setters and refs.
+  }, [weddingId]);
+
+  const assignedHeadcountByTable = seatedHeadcountByTable(
+    currentSeats,
+    guests,
+    tables.map((t) => t.id)
+  );
 
   async function onAdd(e: React.FormEvent) {
     e.preventDefault();
@@ -461,6 +508,8 @@ export function TablesTab({
       await api.delete(`/api/v1/weddings/${weddingId}/tables/${id}${query}`);
       setConfirmRemoval(null);
       setTables((current) => current.filter((t) => t.id !== id));
+      // TS-235: its seats go at once -- "Assigned" used to keep counting the guests seated there.
+      setCurrentSeats((cur) => cur.filter((s) => s.tableId !== id));
       // TS-191: a removed table's open edit goes with it -- it used to keep counting as unsaved,
       // with no form left on screen to save or cancel. (The form also reports "not changed" as it
       // closes; see TableEditForm.)

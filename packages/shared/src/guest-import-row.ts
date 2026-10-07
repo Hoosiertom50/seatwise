@@ -16,6 +16,7 @@ import { parseGuestSide, parseGuestSideCode, sideMismatchMessage, guestSideLabel
 import { hasForbiddenControlCharacter, CONTROL_CHARACTER_MESSAGE, LINE_BREAK_MESSAGE } from "./safe-text";
 import { hasUnreadableCharacters, unreadableCellMessage } from "./text-decode";
 import { sameImportText, type GuestImportCurrentValues } from "./guest-import-compare";
+import { headerIndexMap } from "./csv";
 
 // A field that's nullable on the guest record (partyName, notes) needs a way to say "clear this
 // value" that's distinct from "this cell is blank, leave the existing value alone" (FR-2.4a) --
@@ -74,7 +75,7 @@ export type GuestImportKeptField = "firstName" | "lastName" | "partyName" | "not
  */
 export function parseGuestImportRow(
   cells: string[],
-  headers: string[],
+  headers: readonly string[] | ReadonlyMap<string, number>,
   mapping: GuestImportMapping,
   sideLabels: { sideLabel1: string; sideLabel2: string },
   current?: GuestImportCurrentValues
@@ -84,11 +85,14 @@ export function parseGuestImportRow(
   const data: GuestImportRowPreview = {};
   const keptAsIs: GuestImportKeptField[] = [];
 
+  // TS-233: the import passes headerIndexMap(headers), built once for the whole file -- indexOf on
+  // every lookup was slow on a very wide header row. (A plain list still works, for one row.)
+  const columnOf = headers instanceof Map ? headers : headerIndexMap(headers as readonly string[]);
   function rawCellFor(field: keyof GuestImportMapping): string | undefined {
     const header = mapping[field];
     if (!header) return undefined;
-    const idx = headers.indexOf(header);
-    if (idx === -1) return undefined;
+    const idx = columnOf.get(header);
+    if (idx === undefined) return undefined;
     return cells[idx];
   }
   function cellFor(field: keyof GuestImportMapping): string | undefined {

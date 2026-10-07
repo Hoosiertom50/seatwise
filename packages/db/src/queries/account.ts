@@ -71,6 +71,14 @@ export async function transferWeddingOwnership(
     }
 
     await client.query(`DELETE FROM "wedding_collaborators" WHERE id = $1`, [collaboratorId]);
+    // TS-234: any invite still pending for the new owner's address is revoked -- accepted later, it
+    // would have made them owner and collaborator at once (acceptInvite now refuses that too).
+    await client.query(
+      `UPDATE "wedding_invites" SET status = 'REVOKED'
+       WHERE "weddingId" = $1 AND status = 'PENDING'
+         AND lower(email) = (SELECT lower(email) FROM "users" WHERE id = $2)`,
+      [weddingId, target.userId]
+    );
     // TS-213: each person's own "Email me about this wedding" switch goes with them -- the new
     // owner's from their access row to the wedding, the old owner's from the wedding to their new
     // access row.

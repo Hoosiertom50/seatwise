@@ -125,6 +125,18 @@ export async function expireInvite(inviteId: string): Promise<void> {
 }
 
 /**
+ * TS-234: puts a revoked test invite back to pending -- the state a hand-off used to leave behind
+ * (the new owner's own invite still live), so a test can check that accepting it is refused.
+ */
+export async function reopenInvite(inviteId: string): Promise<void> {
+  const { rowCount } = await testPool().query(
+    `UPDATE "wedding_invites" SET status = 'PENDING' WHERE id = $1 AND email LIKE $2 AND status = 'REVOKED'`,
+    [inviteId, TEST_EMAIL_PATTERN],
+  );
+  if (!rowCount) throw new Error(`testDatabase: no revoked test invite ${inviteId}.`);
+}
+
+/**
  * TS-142: plants a password-reset token for a *test* account (reserved domain only) and returns the
  * raw token -- the same thing the emailed link carries. The app only stores a SHA-256 hash, so the
  * test hashes it the same way. \`expired\` makes it an hour stale.
@@ -1024,6 +1036,24 @@ export async function removePlanVersionAsPruningWould(planVersionId: string): Pr
 }
 
 /**
+ * TS-235: gives a test wedding `count` older approved plan versions (not current, no seats),
+ * numbered below its existing ones -- as many Generate-then-Approve rounds would leave behind --
+ * so a test can check pruning without making fifty plans first. Test weddings only.
+ */
+export async function addOldApprovedPlanVersions(weddingId: string, count: number): Promise<void> {
+  const { rowCount } = await testPool().query(
+    `INSERT INTO "plan_versions" (id, "weddingId", "versionNumber", status, "isComplete", "approvedAt", "isCurrent")
+     SELECT 'zz-approved-' || md5(random()::text || n::text), w.id,
+            LEAST((SELECT MIN("versionNumber") FROM "plan_versions" WHERE "weddingId" = w.id), 1) - n,
+            'APPROVED', true, now(), false
+     FROM "weddings" w JOIN "users" u ON u.id = w."ownerId", generate_series(1, $2::int) AS n
+     WHERE w.id = $1 AND u.email LIKE $3`,
+    [weddingId, count, TEST_EMAIL_PATTERN],
+  );
+  if (rowCount !== count) throw new Error(`testDatabase: no test wedding ${weddingId}.`);
+}
+
+/**
  * TS-219: the per-/48 counts an IPv6 source is also held to (apps/web/src/lib/rate-limit.ts) --
  * sign-ups per hour (SIGNUP_LIMITS.perWiderNetworkHour), wrong passwords
  * (LOGIN_LIMITS.failuresPerWiderNetwork) and RSVP-link requests (RSVP_LIMITS.perWiderNetwork) --
@@ -1058,10 +1088,14 @@ export async function unlistedEmailsToAddressToday(email: string): Promise<numbe
   return readCounter(`email:to:unlisted:day:${requireTestEmail(email)}`, 86_400);
 }
 
-/** TS-219: makes a test guest look added, and last changed, `hours` ago. Test weddings only. */
+/**
+ * TS-219: makes a test guest look added, and last changed, `hours` ago. Test weddings only.
+ * TS-232: their email address too ("emailChangedAt", what "listed for over a day" goes by).
+ */
 export async function backdateGuest(guestId: string, hours: number): Promise<void> {
   const { rowCount } = await testPool().query(
-    `UPDATE "guests" g SET "createdAt" = now() - make_interval(hours => $2), "updatedAt" = now() - make_interval(hours => $2)
+    `UPDATE "guests" g SET "createdAt" = now() - make_interval(hours => $2), "updatedAt" = now() - make_interval(hours => $2),
+            "emailChangedAt" = now() - make_interval(hours => $2)
      FROM "weddings" w JOIN "users" u ON u.id = w."ownerId"
      WHERE g.id = $1 AND w.id = g."weddingId" AND u.email LIKE $3`,
     [guestId, hours, TEST_EMAIL_PATTERN],

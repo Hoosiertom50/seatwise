@@ -179,6 +179,11 @@ export const LOCKED_OUT_RESETS_RESERVED = 15;
 // account alone was held to 20, but a dozen of them (cheap to make) could still use all 240 between
 // them, and then nobody's invites or RSVP links went out.
 export const NEW_ACCOUNTS_SHARE_OF_EVERYDAY = 0.25;
+// TS-232: emails guests' answers set off (RSVP notifications, see sendEmail's `forGuestsOf`), from
+// every wedding together, may use at most this share of the everyday allowance. They aren't charged
+// to anyone's own share, and each owner has a pool of 60 for them -- so two week-old accounts could
+// use all 240 between them (2 x (60 + 60)). Now that takes about four, as the account share intends.
+export const GUEST_ANSWERS_SHARE_OF_EVERYDAY = 0.2;
 
 export function dailyEmailLimits(env: EmailEnv = process.env): {
   everyday: number;
@@ -189,6 +194,7 @@ export function dailyEmailLimits(env: EmailEnv = process.env): {
   plannerFloor: number;
   lockedOutResets: number;
   newAccounts: number;
+  guestAnswers: number;
 } {
   const configured = Number(env.EMAIL_DAILY_LIMIT);
   const asked = Number.isInteger(configured) && configured > 0 ? configured : EVERYDAY_EMAILS_PER_24_HOURS;
@@ -203,6 +209,7 @@ export function dailyEmailLimits(env: EmailEnv = process.env): {
     plannerFloor: Math.floor(everyday * PLANNER_EMAIL_FLOOR_SHARE_OF_EVERYDAY),
     lockedOutResets: Math.min(LOCKED_OUT_RESETS_RESERVED, RESET_EMAILS_PER_24_HOURS - 1),
     newAccounts: Math.max(1, Math.floor(everyday * NEW_ACCOUNTS_SHARE_OF_EVERYDAY)),
+    guestAnswers: Math.max(1, Math.floor(everyday * GUEST_ANSWERS_SHARE_OF_EVERYDAY)),
   };
 }
 
@@ -257,6 +264,13 @@ let newAccountsCounter: DailyCounter = realNewAccountsCounter;
 /** Tests only: replace the first-week accounts' combined counter (pass nothing to restore it). */
 export function setNewAccountsCounterForTests(fake?: DailyCounter): void {
   newAccountsCounter = fake ?? realNewAccountsCounter;
+}
+// TS-232: guests' answers' site-wide share (GUEST_ANSWERS_SHARE_OF_EVERYDAY) -- real sends only.
+const realGuestAnswersCounter = rollingCounterFor("email:global:24h:guest-answers");
+let guestAnswersCounter: DailyCounter = realGuestAnswersCounter;
+/** Tests only: replace the guests' answers' site-wide counter (pass nothing to restore it). */
+export function setGuestAnswersCounterForTests(fake?: DailyCounter): void {
+  guestAnswersCounter = fake ?? realGuestAnswersCounter;
 }
 // TS-219: whether an account is in its first week (see accountDailyEmailLimit).
 const realAccountIsNew = async (accountId: string) => (await accountDailyEmailLimit(accountId)).newAccount;
@@ -386,7 +400,9 @@ let unlistedSendersCounter: (to: string) => DailyCounter = realUnlistedSendersCo
 
 /**
  * TS-219: whether a wedding this account owns or helps plan has had this address for over a day,
- * unchanged -- on a guest nobody has edited since, or on a pending invite made before then. Anyone
+ * unchanged -- on a guest whose address hasn't changed since, or on a pending invite made before then.
+ * TS-232: by when the guest's address last changed ("emailChangedAt"), not when the row did -- an
+ * edit to anything else, or the guest's own RSVP, used to make the guest look newly listed. Anyone
  * can add any address to a wedding of their own and email it straight away, so a listing made just
  * now proves nothing; one that has stood for a day means an attack had to be planned well ahead.
  */
@@ -399,7 +415,7 @@ export async function senderListsRecipient(accountId: string, to: string): Promi
      SELECT EXISTS (
               SELECT 1 FROM "guests" g
                WHERE g."weddingId" IN (SELECT id FROM mine) AND lower(trim(g.email)) = lower(trim($2))
-                 AND g."updatedAt" < now() - make_interval(secs => $3)
+                 AND COALESCE(g."emailChangedAt", g."createdAt") < now() - make_interval(secs => $3)
             )
          OR EXISTS (
               SELECT 1 FROM "wedding_invites" i
@@ -631,6 +647,10 @@ export async function sendEmail(
           console.warn(`[email] not sent to ${shown}: the account's share of ${limits.accountShare} emails in the last 24 hours has been used.`);
           return "account-limited";
         }
+      }
+      // TS-232: an email a guest's answer set off -- the site-wide share for those.
+      if (forGuestsOf && !account && !(await fits(guestAnswersCounter, limits.guestAnswers, "share for emails guests' answers set off"))) {
+        return "limited";
       }
       // TS-219: and for an account in its first week (whether it sent this or its guests set it
       // off), the first-week accounts' combined share -- refused as Seatwise's limit.

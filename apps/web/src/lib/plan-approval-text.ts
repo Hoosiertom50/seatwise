@@ -7,3 +7,8 @@ export const SAVED_AS_DRAFT_BECAUSE_APPROVED =
 // the new version was made current instead (a draft beside nothing can't be approved or exported).
 export const MADE_CURRENT_BECAUSE_NO_CURRENT_PLAN =
   "There was no current plan yet, so this version was made the current plan rather than a comparison draft.";
+
+// TS-231: asked before a Generate, and said in the restore preview, when the current plan is
+// approved and this person may replace it -- it used to be replaced with no warning.
+export const REPLACES_APPROVED_PLAN =
+  "This replaces the approved plan. The new version becomes the current plan as a Draft, PDF exports wait until it's approved again, and everyone on the wedding is told.";

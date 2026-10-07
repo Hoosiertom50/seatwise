@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { ConfirmDeleteButton } from "@/components/ConfirmDeleteButton";
 import { CommitSelect } from "@/components/CommitSelect";
 import { api, ApiError, apiErrorMessage, isItemGoneError } from "@/lib/api-client";
+import { leaveCountsAsDone } from "@/lib/leave-wedding";
 import type {
   CollaboratorDTO,
   CollaboratorPermission,
@@ -1228,6 +1229,11 @@ export function CollaboratorsTab({
                           await api.delete(`/api/v1/weddings/${weddingId}/collaborators/${c.id}`);
                           router.push("/dashboard");
                         } catch (err) {
+                          // TS-235: a 404 means they're already off it (e.g. a retry after a lost answer).
+                          if (leaveCountsAsDone(err)) {
+                            router.push("/dashboard");
+                            return;
+                          }
                           setError(err instanceof ApiError ? err.message : "Couldn't leave this wedding.");
                         }
                       }}

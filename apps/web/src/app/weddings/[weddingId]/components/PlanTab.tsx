@@ -8,9 +8,9 @@ import { useUnsavedChanges } from "@/lib/unsaved-changes";
 import { inReadingOrder } from "@/lib/reading-order";
 import { PickThenActControl } from "@/components/PickThenActControl";
 import { PLAN_CHANGED_EVENT } from "./GettingStarted";
-import { undoPlanFor, mustSitGroup, undoWouldSplitGroup, UNDO_SPLITS_GROUP_MESSAGE, type UndoPlan } from "@/lib/plan-undo";
+import { undoPlanFor, mustSitGroup, undoWouldSplitGroup, undoSeatsBeforeFor, UNDO_SPLITS_GROUP_MESSAGE, type UndoPlan } from "@/lib/plan-undo";
 import { PlanExportButtons } from "./PlanExportButtons";
-import { SAVED_AS_DRAFT_BECAUSE_APPROVED, MADE_CURRENT_BECAUSE_NO_CURRENT_PLAN } from "@/lib/plan-approval-text";
+import { SAVED_AS_DRAFT_BECAUSE_APPROVED, MADE_CURRENT_BECAUSE_NO_CURRENT_PLAN, REPLACES_APPROVED_PLAN } from "@/lib/plan-approval-text";
 
 // TS-182: a change queued for one version, but another version is open by the time it runs.
 const VERSION_CLOSED_MESSAGE = "That version isn't open any more — nothing was saved.";
@@ -165,6 +165,12 @@ export function PlanTab({
   // makes it the new Current version, replacing whichever was Current before; false saves it
   // alongside as a non-replacing Comparison Draft instead.
   const [saveAsDraft, setSaveAsDraft] = useState(false);
+  // TS-231: Generate is asking "This replaces the approved plan" before it runs.
+  const [confirmReplaceApproved, setConfirmReplaceApproved] = useState(false);
+  const replaceApprovedConfirmRef = useRef<HTMLButtonElement | null>(null);
+  useEffect(() => {
+    if (confirmReplaceApproved) replaceApprovedConfirmRef.current?.focus();
+  }, [confirmReplaceApproved]);
   // FR-5.3: the just-generated plan's soft-preference report -- shown only right after this
   // generation run, same lifecycle as moveWarnings below (not persisted for a later reload).
   const [scoreReport, setScoreReport] = useState<PlanVersionScoreReportDTO | null>(null);
@@ -203,6 +209,8 @@ export function PlanTab({
   // TS-208: the restore will be saved as a comparison draft (the current plan is approved and this
   // person can't replace it) -- the preview says so before they confirm, not after.
   const [restoreWillBeDraft, setRestoreWillBeDraft] = useState(false);
+  // TS-231: confirming the restore replaces the approved current plan (this person may) -- said so.
+  const [restoreReplacesApproved, setRestoreReplacesApproved] = useState(false);
   const [previewingRestore, setPreviewingRestore] = useState(false);
   const [restoring, setRestoring] = useState(false);
   // TS-175: the version whose nickname is being typed. Switching to another version closes the box
@@ -471,7 +479,16 @@ export function PlanTab({
     generating,
   ]);
 
-  async function onGenerate() {
+  async function onGenerate(confirmedReplaceApproved = false) {
+    // TS-231: the new version would replace an approved current plan (the draft box is unticked,
+    // and this person may replace it) -- asked first. The server decides again as it saves.
+    const replacesApproved =
+      canApprove && versions.length > 0 && !saveAsDraft && versions.some((v) => v.isCurrent && v.status === "APPROVED");
+    if (replacesApproved && !confirmedReplaceApproved) {
+      setConfirmReplaceApproved(true);
+      return;
+    }
+    setConfirmReplaceApproved(false);
     setError(null);
     setDraftNotice(null);
     setSupersededNotice(null);
@@ -682,16 +699,21 @@ export function PlanTab({
         // TS-221: the server moves the guest's whole must-sit-together group. If that group wasn't
         // all at the undo table before the move (it was split), undoing would put someone at a
         // table they were never at -- refused, and the entry dropped (it can never be undone).
+        // TS-228: the server checks the group again under the plan's lock (a rule added during this
+        // round trip), from the seats sent as undoSeatsBefore -- this check just answers sooner.
+        let undoSeatsBefore: Record<string, string> | undefined;
         if (kind === "undo" && target !== null) {
           const { relationships } = await api.get<{ relationships: RelationshipDTO[] }>(
             `/api/v1/weddings/${weddingId}/relationships`
           );
           const notAttending = new Set(guests.filter((g) => g.dayOfAttendance === "NOT_ATTENDING").map((g) => g.id));
-          if (undoWouldSplitGroup(entry, mustSitGroup(entry.guestId, relationships, notAttending))) {
+          const group = mustSitGroup(entry.guestId, relationships, notAttending);
+          if (undoWouldSplitGroup(entry, group)) {
             dropEntry();
             setError(UNDO_SPLITS_GROUP_MESSAGE);
             return;
           }
+          undoSeatsBefore = undoSeatsBeforeFor(entry, group);
         }
         const res = await api.post<{ planVersion: PlanVersionDetailDTO; warnings: string[] }>(
           `/api/v1/weddings/${weddingId}/plan-versions/${current.id}/assignments`,
@@ -702,6 +724,7 @@ export function PlanTab({
             // TS-208: undoing a seat takes away only the seats that move gave (a must-sit partner
             // who was already at that table keeps theirs).
             ...(target === null && entry.undoOnlyGuestIds ? { onlyGuestIds: entry.undoOnlyGuestIds } : {}),
+            ...(undoSeatsBefore ? { undoSeatsBefore } : {}),
           }
         );
         detailRef.current = res.planVersion;
@@ -718,6 +741,9 @@ export function PlanTab({
       const fresh = conflictPlanVersion(err);
       if (fresh) takeFreshPlan(fresh);
       if (handledVersionGone(err, entry.versionId)) return;
+      // TS-228: the server found the group split (checked under the plan's lock) -- this undo can
+      // never be done, so the entry goes, as when the screen finds it first.
+      if (err instanceof ApiError && err.message === UNDO_SPLITS_GROUP_MESSAGE) dropEntry();
       setError(err instanceof ApiError ? err.message : `Couldn't ${kind} that move.`);
     } finally {
       setUndoRedoBusy(false);
@@ -766,11 +792,12 @@ export function PlanTab({
     setError(null);
     setPreviewingRestore(true);
     try {
-      const res = await api.get<{ preview: RestorePreviewDTO; willSaveAsDraft?: boolean }>(
+      const res = await api.get<{ preview: RestorePreviewDTO; willSaveAsDraft?: boolean; willReplaceApproved?: boolean }>(
         `/api/v1/weddings/${weddingId}/plan-versions/${detail.id}/restore-preview`
       );
       setRestorePreview(res.preview);
       setRestoreWillBeDraft(res.willSaveAsDraft === true);
+      setRestoreReplacesApproved(res.willReplaceApproved === true);
     } catch (err) {
       if (handledVersionGone(err, detailRef.current?.id)) return;
       setError(err instanceof ApiError ? err.message : "Couldn't preview that restore.");
@@ -952,7 +979,7 @@ export function PlanTab({
         {canEdit && (
           <div className="flex min-w-0 max-w-full flex-col items-end gap-2">
             <button
-              onClick={onGenerate}
+              onClick={() => void onGenerate()}
               disabled={generating || planChangesPending}
               className="min-h-11 rounded-md bg-neutral-900 dark:bg-neutral-100 px-4 py-2 text-sm font-medium text-white dark:text-neutral-900 hover:bg-neutral-700 dark:hover:bg-neutral-300 disabled:opacity-50"
             >
@@ -967,11 +994,44 @@ export function PlanTab({
                 <input
                   type="checkbox"
                   checked={saveAsDraft}
-                  onChange={(e) => setSaveAsDraft(e.target.checked)}
+                  onChange={(e) => {
+                    setSaveAsDraft(e.target.checked);
+                    // TS-231: a draft doesn't replace anything -- nothing left to confirm.
+                    if (e.target.checked) setConfirmReplaceApproved(false);
+                  }}
                   disabled={generating}
                 />
                 Save as comparison draft (don&apos;t replace the current version)
               </label>
+            )}
+            {/* TS-231: asked before Generate replaces an approved plan (it used to happen silently). */}
+            {confirmReplaceApproved && (
+              <div
+                role="alertdialog"
+                aria-labelledby="replace-approved-text"
+                data-testid="generate-replaces-approved"
+                className="max-w-md rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950 p-3 text-sm text-amber-800 dark:text-amber-300"
+              >
+                <p id="replace-approved-text" className="mb-2">{REPLACES_APPROVED_PLAN}</p>
+                <div className="flex flex-wrap justify-end gap-2">
+                  <button
+                    ref={replaceApprovedConfirmRef}
+                    type="button"
+                    onClick={() => void onGenerate(true)}
+                    disabled={generating || planChangesPending}
+                    className="min-h-11 rounded-md bg-neutral-900 dark:bg-neutral-100 px-3 py-1.5 text-sm font-medium text-white dark:text-neutral-900 hover:bg-neutral-700 dark:hover:bg-neutral-300 disabled:opacity-50"
+                  >
+                    Replace the approved plan
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setConfirmReplaceApproved(false)}
+                    className="min-h-11 rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
             )}
           </div>
         )}
@@ -1187,6 +1247,16 @@ export function PlanTab({
                     moved, {comparison.summary.addedCount} added, {comparison.summary.removedCount} removed,{" "}
                     {comparison.summary.unchangedCount} unchanged
                   </p>
+                  {/* TS-235: guests marked not attending now are listed but not counted above. */}
+                  {(() => {
+                    const notAttendingCount = comparison.guests.filter((g) => g.notAttending).length;
+                    return notAttendingCount > 0 ? (
+                      <p data-testid="comparison-not-attending-note" className="mb-2 text-sm text-neutral-500 dark:text-neutral-400">
+                        {notAttendingCount === 1 ? "1 guest is" : `${notAttendingCount} guests are`} not attending now — listed
+                        below, but not counted.
+                      </p>
+                    ) : null;
+                  })()}
                   {/* TS-212: scrolls by keyboard too, as a named region (it was an unnamed Tab stop). */}
                   <div
                     role="region"
@@ -1206,7 +1276,8 @@ export function PlanTab({
                       <tbody>
                         {comparison.guests.map((g) => (
                           <tr key={g.guestId} className="border-t border-neutral-100 dark:border-neutral-800">
-                            <td className="px-3 py-1.5">{g.guestName}</td>
+                            {/* TS-235: as the version lists say it (TS-221). */}
+                            <td className="px-3 py-1.5">{g.notAttending ? `${g.guestName} (not attending now)` : g.guestName}</td>
                             <td className="px-3 py-1.5 text-neutral-500 dark:text-neutral-400">{g.fromTableLabel ?? "—"}</td>
                             <td className="px-3 py-1.5 text-neutral-500 dark:text-neutral-400">{g.toTableLabel ?? "—"}</td>
                             <td className="px-3 py-1.5">
@@ -1342,6 +1413,11 @@ export function PlanTab({
                     <p className="mb-2 text-sm text-amber-800 dark:text-amber-300" data-testid="restore-will-be-draft">
                       The current plan is approved, so this will be saved as a comparison draft — the approved
                       plan stays current. Only the owner or a Couple member can replace an approved plan.
+                    </p>
+                  )}
+                  {restoreReplacesApproved && (
+                    <p className="mb-2 text-sm font-medium text-amber-800 dark:text-amber-300" data-testid="restore-replaces-approved">
+                      {REPLACES_APPROVED_PLAN}
                     </p>
                   )}
                   {restorePreview.droppedGuests.length > 0 && (

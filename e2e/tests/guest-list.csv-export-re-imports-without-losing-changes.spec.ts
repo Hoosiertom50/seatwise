@@ -194,6 +194,10 @@ defineQualityTest(
     const guestsNow = async () => ((await (await context.request.get(api("guests"))).json()) as { guests: Guest[] }).guests;
     const kept = await weddingData.createGuest(w, uniquePersonName(testInfo.workerIndex));
     const removed = await weddingData.createGuest(w, uniquePersonName(testInfo.workerIndex));
+    // TS-234: with no plan yet a guest delete waits for the wedding's lock (for a first Generate),
+    // which this test holds -- with a plan it takes the plan's lock instead and goes ahead.
+    await weddingData.createTable(w, { label: "Table 1", capacity: 8 });
+    await weddingData.generatePlanVersion(w);
     const exported = await (await context.request.get(api("guests/export"))).text();
     const before = await guestsNow();
 

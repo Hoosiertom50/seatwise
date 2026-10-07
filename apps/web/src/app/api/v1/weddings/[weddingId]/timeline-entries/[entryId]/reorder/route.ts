@@ -2,8 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { reorderTimelineEntrySchema } from "@seatwise/shared";
 import { reorderTimelineEntry, TimelineReorderConflictError } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
-import { errorResponse, zodErrorResponse, readJson, weddingDeletedResponse } from "@/lib/api-response";
+import { errorResponse, zodErrorResponse, readJson } from "@/lib/api-response";
 import { requireAccess } from "@/lib/access";
+import { timelineChangeRefusedResponse } from "@/lib/timeline-answers";
 
 type Params = { params: Promise<{ weddingId: string; entryId: string }> };
 
@@ -31,7 +32,8 @@ export async function POST(req: NextRequest, { params }: Params) {
     // TS-174: the entry changed mid-reorder -- "it changed, try again", not a server error.
     if (err instanceof TimelineReorderConflictError) return errorResponse(err.message, 409);
     // TS-204: access dropped while it waited (403), or the wedding was deleted (404) -- nothing saved.
-    const refused = weddingDeletedResponse(err);
+    // TS-234: and a lost race (409) or a too-busy database (503), not a server error.
+    const refused = timelineChangeRefusedResponse(err);
     if (refused) return refused;
     throw err;
   }

@@ -23,12 +23,12 @@ export async function GET(req: NextRequest, { params }: Params) {
     // TS-208: whether confirming will be saved as a comparison draft (the current plan is approved
     // and this person can't replace an approved plan) -- the restore route decides the same way,
     // and the preview now says so before they confirm rather than after.
-    const willSaveAsDraft =
-      access.accessLevel !== "VIEW" &&
-      (await getCurrentPlanVersionStatus(weddingId)) === "APPROVED" &&
-      // TS-204: from the request's one access reading (requireAccess).
-      !mayManageApproval(access);
-    return NextResponse.json({ preview, willSaveAsDraft });
+    const currentIsApproved = access.accessLevel !== "VIEW" && (await getCurrentPlanVersionStatus(weddingId)) === "APPROVED";
+    // TS-204: from the request's one access reading (requireAccess).
+    const willSaveAsDraft = currentIsApproved && !mayManageApproval(access);
+    // TS-231: or, for someone who may replace it, that confirming replaces the approved plan.
+    const willReplaceApproved = currentIsApproved && mayManageApproval(access);
+    return NextResponse.json({ preview, willSaveAsDraft, willReplaceApproved });
   } catch (err) {
     if (err instanceof RestoreError) return errorResponse(err.message, 404);
     throw err;

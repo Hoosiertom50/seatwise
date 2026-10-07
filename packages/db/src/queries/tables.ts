@@ -5,7 +5,7 @@ import { compareTableLabels } from "@seatwise/shared";
 import {
   resyncTables,
   refreshPlanCompleteness,
-  lockCurrentPlan,
+  lockCurrentPlanOrWedding,
   recordRecheckIfApproved,
   tablesAffectedBy,
   lockRestrictedLists,
@@ -14,19 +14,7 @@ import {
 } from "./seat-checks";
 import { inWeddingChange, lockWeddingRow, recheckActorAccess, type ActorAccess } from "./wedding-lock";
 import { assertWeddingHasRoom } from "./wedding-caps";
-
-// TS-224: lockCurrentPlan, and when the wedding has no current plan yet, the wedding's lock and
-// then lockCurrentPlan again. A first Generate holds the wedding lock while it saves the new plan
-// but there is no plan row yet for a table change to wait on -- before, a table removed, edited or
-// given a required-guest list in that moment carried on as if there were still no plan (a removal
-// counted 0 seated guests and left the new plan "complete" with guests silently unseated). Nothing
-// is held when lockCurrentPlan finds no plan, so taking the wedding lock now keeps the lock order.
-async function lockCurrentPlanOrWedding(client: PoolClient, weddingId: string): Promise<string | null> {
-  const planId = await lockCurrentPlan(client, weddingId);
-  if (planId) return planId;
-  await lockWeddingRow(client, weddingId);
-  return lockCurrentPlan(client, weddingId);
-}
+import { notifyWeddingCollaborators } from "./notifications";
 
 export interface SeatingTableRow {
   id: string;
@@ -668,6 +656,8 @@ export async function removeSeatingTable(
   actor?: ActorAccess
 ): Promise<RemoveTableResult> {
   const client = await pool.connect();
+  let removed!: Extract<RemoveTableResult, { status: "REMOVED" }>;
+  let notifyApproved = false; // TS-231
   try {
     await beginTransaction(client);
     // TS-173: the current plan's row first, then the table (see lockCurrentPlan). TS-181: and the
@@ -733,6 +723,7 @@ export async function removeSeatingTable(
     if (currentPlanId && seatedCount === 0 && recheckChanged) {
       await recordRecheckIfApproved(client, currentPlanId, `Table "${label}" removed — some guests' Needs Reassignment flags changed`, actorUserId);
     }
+    let unseatedOnApprovedPlan = false;
     if (currentPlanId && seatedCount > 0) {
       const guests = seatedCount === 1 ? "1 guest" : `${seatedCount} guests`;
       await client.query(
@@ -740,16 +731,37 @@ export async function removeSeatingTable(
          VALUES ($1, $2, 'TABLE_REMOVED', $3, $4, ${HISTORY_CREATED_AT})`,
         [randomUUID(), currentPlanId, `Table "${label}" removed — ${guests} left unassigned`, actorUserId]
       );
+      // TS-231: read under the plan's lock (held since the start).
+      const { rows: planRows } = await client.query<{ status: string }>(`SELECT status FROM "plan_versions" WHERE id = $1`, [currentPlanId]);
+      unseatedOnApprovedPlan = planRows[0]?.status === "APPROVED";
     }
 
     await client.query("COMMIT");
-    return { status: "REMOVED", label, seatedCount };
+    removed = { status: "REMOVED", label, seatedCount };
+    notifyApproved = unseatedOnApprovedPlan;
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});
     throw err;
   } finally {
     client.release();
   }
+
+  // TS-231: guests unseated from an approved plan -- told like a move on it (TABLE_CHANGED). Saved
+  // already, so this is best effort and never turns the removal into an error.
+  if (notifyApproved) {
+    const guests = removed.seatedCount === 1 ? "1 guest was" : `${removed.seatedCount} guests were`;
+    try {
+      await notifyWeddingCollaborators(
+        weddingId,
+        actorUserId,
+        "TABLE_CHANGED",
+        `Table "${removed.label}" was removed from the approved plan — ${guests} left unassigned.`
+      );
+    } catch (err) {
+      console.error("Saved, but notifying the wedding's members failed:", err);
+    }
+  }
+  return removed;
 }
 
 // FR-3.7a: replace a Restricted table's entire required-guest list in one atomic operation — the
@@ -825,7 +837,8 @@ export async function setRequiredGuestsForTable(
 // and keep isComplete in sync, all in one transaction. Nobody is ever unseated.
 export async function resyncTableSeating(
   weddingId: string,
-  tableId: string,
+  /** TS-234: null when only the alsoGuestIds' tables are re-checked (resyncGuestSeat). */
+  tableId: string | null,
   /** TS-173: also re-check the tables these guests are seated at. */
   alsoGuestIds: string[] = []
 ): Promise<{ newlyFlagged: NewlyFlaggedSeat[] }> {
@@ -843,10 +856,13 @@ export async function resyncTableSeating(
        WHERE "planVersionId" = $1 AND "guestId" = ANY($2::text[])`,
       [planVersionId, alsoGuestIds]
     );
-    const { newlyFlagged, changed } = await resyncTables(client, weddingId, planVersionId, [
-      tableId,
-      ...seatedAt.map((r) => r.tableId as string),
-    ]);
+    const tableIds = [...(tableId ? [tableId] : []), ...seatedAt.map((r) => r.tableId as string)];
+    // TS-234: nothing to re-check (the one guest isn't seated in the plan found under the lock).
+    if (tableIds.length === 0) {
+      await client.query("COMMIT");
+      return { newlyFlagged: [] };
+    }
+    const { newlyFlagged, changed } = await resyncTables(client, weddingId, planVersionId, tableIds);
     await refreshPlanCompleteness(client, weddingId, planVersionId, { bumpRevision: changed });
     if (changed) await recordRecheckIfApproved(client, planVersionId, "Seating re-checked after a change — some guests' Needs Reassignment flags changed", null);
     await client.query("COMMIT");
@@ -867,12 +883,8 @@ export async function resyncGuestSeat(
   weddingId: string,
   guestId: string
 ): Promise<{ newlyFlagged: NewlyFlaggedSeat[] }> {
-  const { rows } = await pool.query<{ tableId: string }>(
-    `SELECT sa."seatingTableId" AS "tableId"
-     FROM "seat_assignments" sa JOIN "plan_versions" pv ON pv.id = sa."planVersionId"
-     WHERE pv."weddingId" = $1 AND pv."isCurrent" AND sa."guestId" = $2`,
-    [weddingId, guestId]
-  );
-  if (!rows[0]) return { newlyFlagged: [] };
-  return resyncTableSeating(weddingId, rows[0].tableId);
+  // TS-234: the guest's seat is now read inside the re-check's transaction, after the plan's lock
+  // (or the wedding's, before a first plan exists). Before, it was read first with no lock, so a
+  // seat given by a first Generate saving at that moment was missed and never re-checked.
+  return resyncTableSeating(weddingId, null, [guestId]);
 }

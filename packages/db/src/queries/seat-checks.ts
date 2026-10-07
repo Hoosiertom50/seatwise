@@ -1,5 +1,6 @@
 import { randomUUID } from "crypto";
 import { pool, beginTransaction } from "../pool";
+import { lockWeddingRow } from "./wedding-lock";
 
 // TS-150: every check of "does the Current Plan Version still keep the hard rules?" lives here, in
 // one place, so the guest edit, the guest import, a new or removed seating rule and a table edit
@@ -366,6 +367,34 @@ export async function lockCurrentPlan(q: Queryable, weddingId: string): Promise<
   throw Object.assign(new Error("The current plan kept changing while this was being saved."), { code: "40001" });
 }
 
+// TS-224: lockCurrentPlan, and when the wedding has no current plan yet, the wedding's lock and
+// then lockCurrentPlan again. A first Generate holds the wedding lock while it saves the new plan
+// but there is no plan row yet for a table change to wait on -- before, a table removed, edited or
+// given a required-guest list in that moment carried on as if there were still no plan (a removal
+// counted 0 seated guests and left the new plan "complete" with guests silently unseated). Nothing
+// is held when lockCurrentPlan finds no plan, so taking the wedding lock now keeps the lock order.
+// TS-234: moved here from tables.ts so guest edits and deletes, a removed seating rule and the
+// re-checks after a guest change wait for a first Generate too. Call it before any other lock
+// (or right after the wedding's own lock -- taking it again in the same transaction is free).
+export async function lockCurrentPlanOrWedding(client: Queryable, weddingId: string): Promise<string | null> {
+  const planId = await lockCurrentPlan(client, weddingId);
+  if (planId) return planId;
+  await lockWeddingRow(client, weddingId);
+  return lockCurrentPlan(client, weddingId);
+}
+
+// TS-234: for a change that doesn't need the current plan's lock itself (removing a seating rule):
+// only when the wedding has no current plan yet, wait for the wedding's lock, so a first Generate
+// in progress finishes first and the re-check that follows the change sees its plan. With a plan,
+// nothing is locked here -- the change goes ahead as before and its re-check waits on the plan.
+export async function waitForAnyFirstPlan(client: Queryable, weddingId: string): Promise<void> {
+  const { rows } = await client.query(
+    `SELECT 1 FROM "plan_versions" WHERE "weddingId" = $1 AND "isCurrent" LIMIT 1`,
+    [weddingId]
+  );
+  if (rows.length === 0) await lockWeddingRow(client, weddingId);
+}
+
 // TS-181: taken (right after lockCurrentPlan) by everything that checks a new seating rule against
 // the Restricted tables' required-guest lists or the other way round -- saving a list, editing a
 // Restricted table, adding a rule -- so one can't pass its checks against the other's old state.
@@ -446,7 +475,7 @@ export async function resyncGuestsSeats(
   const client = await pool.connect();
   try {
     await beginTransaction(client);
-    const planVersionId = await lockCurrentPlan(client, weddingId);
+    const planVersionId = await lockCurrentPlanOrWedding(client, weddingId); // TS-234
     if (!planVersionId) {
       await client.query("COMMIT");
       return { newlyFlagged: [] };

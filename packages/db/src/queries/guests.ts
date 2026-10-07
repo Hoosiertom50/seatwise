@@ -6,6 +6,7 @@ import { encryptText, decryptText } from "../crypto";
 import {
   applyAttendanceChange,
   lockCurrentPlan,
+  lockCurrentPlanOrWedding,
   lockRestrictedLists,
   recordRecheckIfApproved,
   refreshPlanCompleteness,
@@ -132,8 +133,8 @@ async function insertGuest(q: PoolClient, weddingId: string, input: CreateGuestD
   const id = randomUUID();
   const { rows } = await q.query(
     `INSERT INTO "guests"
-       (id, "weddingId", "firstName", "lastName", "partyName", headcount, tier, "rsvpStatus", "requiresAccessibleTable", "isLocked", "dayOfAttendance", notes, side, "ageCategory", email, "plusOneNames", "updatedAt")
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, now())
+       (id, "weddingId", "firstName", "lastName", "partyName", headcount, tier, "rsvpStatus", "requiresAccessibleTable", "isLocked", "dayOfAttendance", notes, side, "ageCategory", email, "plusOneNames", "updatedAt", "emailChangedAt")
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, now(), now())
      RETURNING id, "weddingId", "firstName", "lastName", "partyName", headcount, tier,
                "rsvpStatus", "requiresAccessibleTable", "isLocked", "dayOfAttendance", notes, side,
                "ageCategory", email, "plusOneNames", "rsvpRespondedAt", "rsvpNotes", revision, "createdAt", "updatedAt"`,
@@ -241,6 +242,14 @@ export async function updateGuestForWedding(
   for (const [key, column] of Object.entries(columnMap)) {
     const value = (input as Record<string, unknown>)[key];
     if (value !== undefined) {
+      // TS-232: when the address really changes (not just its capitals or spaces), note when -- what
+      // "listed for over a day" goes by (see senderListsRecipient). The right-hand side reads the
+      // row as it was, so this compares the old address with the new one.
+      if (key === "email") {
+        fields.push(
+          `"emailChangedAt" = CASE WHEN lower(trim(email)) IS DISTINCT FROM lower(trim($${i}::text)) THEN now() ELSE "emailChangedAt" END`
+        );
+      }
       fields.push(`${column} = $${i++}`);
       values.push(key === "notes" ? encryptText(value as string | null) : value);
     }
@@ -267,7 +276,8 @@ export async function updateGuestForWedding(
     // other way round from saving a list, so the two could each wait for the other.
     if (mayChangeAttendance) await lockWeddingRow(client, weddingId);
     let planVersionId: string | null = null;
-    if (mayChangeAttendance || checksLists) planVersionId = await lockCurrentPlan(client, weddingId);
+    // TS-234: ...OrWedding, so an edit made during a first Generate waits for the new plan.
+    if (mayChangeAttendance || checksLists) planVersionId = await lockCurrentPlanOrWedding(client, weddingId);
     if (checksLists) await lockRestrictedLists(client, weddingId);
     // TS-204: the person's access read again, under the locks above -- lowered or removed while
     // this waited: refused, nothing saved.
@@ -397,7 +407,7 @@ export async function deleteGuestForWedding(
   try {
     await beginTransaction(client);
     // TS-173: the current plan's row first, then the guest's (see lockCurrentPlan).
-    const planVersionId = await lockCurrentPlan(client, weddingId);
+    const planVersionId = await lockCurrentPlanOrWedding(client, weddingId); // TS-234
     // TS-204: the person's access read again under that lock.
     if (actor) await recheckActorAccess(client, weddingId, actor);
     const affected = planVersionId ? await tablesAffectedBy(client, weddingId, planVersionId, [id]) : [];
@@ -504,6 +514,14 @@ async function ensureGuestRsvpTokenIn(q: PoolClient, guestId: string, weddingId:
     ]);
   }
   return readStoredLinkToken(stored);
+}
+
+// TS-228: the guest's current RSVP link, read only -- null when they have none (or the guest isn't
+// in this wedding). Unlike ensureGuestRsvpToken it never makes a link: "New link" reads the old one
+// first, and for a guest who never had one that used to make a link only to replace it at once.
+export async function readGuestRsvpToken(guestId: string, weddingId: string): Promise<string | null> {
+  const { rows } = await pool.query(`SELECT "rsvpToken" FROM "guests" WHERE id = $1 AND "weddingId" = $2`, [guestId, weddingId]);
+  return readStoredLinkToken((rows[0]?.rsvpToken as string | null | undefined) ?? null);
 }
 
 // TS-174: whether this guest has ever been given an RSVP link (a link may be out there).
