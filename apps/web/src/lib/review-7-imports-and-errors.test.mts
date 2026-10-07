@@ -296,3 +296,13 @@ test("a failed export is said in words; the time zone goes with the request; the
   assert.match(unseatedExportWarning(1)!, /^1 attending guest isn't seated/);
   assert.match(unseatedExportWarning(3)!, /^3 attending guests aren't seated.*Not seated/);
 });
+
+// Copilot review on PR #102: the separator is found the way parseCsv reads quotes -- a quote in the
+// middle of a cell (5" cake, O"Neil) is a plain character, not the start of a quoted cell.
+test("a quote in the middle of a header cell doesn't throw off finding the separator", () => {
+  assert.equal(detectCsvDelimiter('Cake 5" tall,extra;Side;Table;Seat\r\nA;B;C;D'), ";");
+  assert.equal(detectCsvDelimiter('First name,O"Neil,Last name\nA,B,C'), ",");
+  assert.equal(detectCsvDelimiter('"Name; first"\t"Say ""hi"""\tSide\nA\tB\tC'), "\t");
+  const { headers } = parseCsv('First name;Cake 5" tall;Side\r\nAnn;Yes;Bride');
+  assert.deepEqual(headers, ["First name", 'Cake 5" tall', "Side"]);
+});

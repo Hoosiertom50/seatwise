@@ -16,12 +16,32 @@ export const CSV_BOM = "﻿";
 // such a file was read as one column.
 export function detectCsvDelimiter(text: string): "," | "\t" | ";" {
   const counts = { ",": 0, "\t": 0, ";": 0 };
+  // Quotes are read the way parseCsv reads them (Copilot review): a quote only opens a quoted cell
+  // at the start of a cell, and "" inside one is a quote; anywhere else (5" cake) it's a plain
+  // character. Counting every quote used to flip in and out of "quoted" on those and miscount.
   let inQuotes = false;
+  let atCellStart = true;
   for (let i = 0; i < text.length; i++) {
     const c = text[i];
-    if (c === '"') inQuotes = !inQuotes;
-    else if (!inQuotes && (c === "\n" || c === "\r")) break;
-    else if (!inQuotes && (c === "," || c === "\t" || c === ";")) counts[c]++;
+    if (inQuotes) {
+      if (c === '"') {
+        if (text[i + 1] === '"') i++;
+        else inQuotes = false;
+      }
+      continue;
+    }
+    if (c === "\n" || c === "\r") break;
+    if (c === '"' && atCellStart) {
+      inQuotes = true;
+      atCellStart = false;
+      continue;
+    }
+    if (c === "," || c === "\t" || c === ";") {
+      counts[c]++;
+      atCellStart = true;
+      continue;
+    }
+    atCellStart = false;
   }
   if (counts["\t"] > counts[","] && counts["\t"] >= counts[";"]) return "\t";
   if (counts[";"] > counts[","]) return ";";

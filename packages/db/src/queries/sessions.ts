@@ -18,11 +18,17 @@ export async function revokeSession(sessionId: string, userId: string, expiresAt
     [sessionId, userId, expiresAt]
   );
   // Cleared a few at a time, so no one log out does a big delete.
-  await pool.query(
-    `DELETE FROM "revoked_sessions" WHERE id IN (
-       SELECT id FROM "revoked_sessions" WHERE "expiresAt" < now() LIMIT 500
-     )`
-  );
+  // TS-204 (Copilot review): only housekeeping -- the session is already ended above, so a failure
+  // here is logged and never turns a log out that worked into an error.
+  try {
+    await pool.query(
+      `DELETE FROM "revoked_sessions" WHERE id IN (
+         SELECT id FROM "revoked_sessions" WHERE "expiresAt" < now() LIMIT 500
+       )`
+    );
+  } catch (err) {
+    console.error("Logged out, but clearing old ended sessions failed:", err);
+  }
 }
 
 /** True when this session was ended with "Log out". */
