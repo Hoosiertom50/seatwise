@@ -18,6 +18,9 @@ const {
   setRecipientEmailCounterForTests,
   setAccountShareCounterForTests,
   setSenderRecipientCounterForTests,
+  setAccountIsNewForTests,
+  setNewAccountsCounterForTests,
+  setUnlistedSendersForTests,
   EMAILS_PER_RECIPIENT_PER_SENDER,
   EMAILS_PER_RECIPIENT_PER_DAY,
   inviteAcceptConfirmsEmail,
@@ -51,6 +54,10 @@ beforeEach(() => {
   });
   setAccountShareCounterForTests((account) => counter(`share:${account}`));
   setSenderRecipientCounterForTests((account, to) => counter(`sender:${account}:${to}`));
+  // TS-219: every account here is past its first week, and only "planner" has long had the addresses.
+  setAccountIsNewForTests(async () => false);
+  setNewAccountsCounterForTests(counter("new-accounts"));
+  setUnlistedSendersForTests({ counter: (to) => counter(`unlisted:${to}`), listed: async (account) => account === "planner" });
 });
 afterEach(() => {
   setEmailSenderForTests();
@@ -60,6 +67,9 @@ afterEach(() => {
   setRecipientEmailCounterForTests();
   setAccountShareCounterForTests();
   setSenderRecipientCounterForTests();
+  setAccountIsNewForTests();
+  setNewAccountsCounterForTests();
+  setUnlistedSendersForTests();
 });
 
 async function quietly<T>(fn: () => Promise<T>): Promise<T> {
@@ -140,7 +150,8 @@ test("no account can use more than a quarter of the everyday allowance (60 of 24
   setEmailSenderForTests(async () => {});
   await quietly(async () => {
     for (let i = 0; i < 60; i++) {
-      // Its own emails and the notifications its guests set off, together.
+      // Its own emails and the notifications its own actions set off, together. (TS-219: not those
+      // its guests set off -- see review-8-email-limits.test.mts.)
       const options = i % 2 ? { account: "acct-1" } : { toWeddingMember: true, account: "acct-1" };
       assert.equal(await sendEmail(`p${i}@example.invalid`, "s", "t", GMAIL, options), "sent", `email ${i}`);
     }
@@ -252,7 +263,9 @@ test("every notification email says how to open the wedding, why it came, and ho
   assert.match(body, /^Sam replied to the invitation\.\n/);
   assert.match(body, /Open the wedding in Seatwise: https:\/\/seatwise\.example\/weddings\/w1/);
   assert.match(body, /You're getting this because you're a member of "Ana & Bo" on Seatwise\./);
-  assert.match(body, /To stop these emails: open the wedding → Collaborators → your row, and turn off "Email me about this wedding"\./);
+  // TS-223: worded to fit the owner too, whose switch isn't on a row.
+  assert.match(body, /To stop these emails: open the wedding → Collaborators, and turn off "Email me about this wedding"\./);
+  assert.doesNotMatch(body, /your row/);
   // Without a usable site address or a safe wedding name, the rest is still there.
   const plain = notificationEmailBody({ text: "An update.", weddingName: null, weddingUrl: null });
   assert.doesNotMatch(plain, /Open the wedding in Seatwise/);

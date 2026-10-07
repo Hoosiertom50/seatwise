@@ -88,3 +88,15 @@ function ipv6Groups(value: string): number[] | null {
   const zeros = Array<number>(8 - known).fill(0);
   return [...head.map((g) => parseInt(g, 16)), ...zeros, ...rest.map((g) => parseInt(g, 16)), ...tail];
 }
+
+/**
+ * TS-219: the IPv4 /24 an address is in ("203.0.113.0/24"), for the per-network count of emails
+ * anyone signed out can make Seatwise send -- a few neighbouring addresses (cheap to rent) each had
+ * their own 10 a day. null for anything that isn't a plain IPv4 address (as rateLimitAddress gives
+ * it: IPv4 written the IPv6 way is already turned into plain IPv4 there).
+ */
+export function rateLimitIpv4Block(address: string): string | null {
+  const octets = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(address.trim());
+  if (!octets || octets.slice(1).some((o) => Number(o) > 255)) return null;
+  return `${Number(octets[1])}.${Number(octets[2])}.${Number(octets[3])}.0/24`;
+}

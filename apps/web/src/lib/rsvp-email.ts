@@ -8,6 +8,7 @@ import {
   releaseCooldown,
   sendEmailNotification,
   type ActorAccess,
+  type EmailResult,
 } from "@seatwise/db";
 import { isRsvpCutoffPast, type RsvpEmailOutcomeDTO } from "@seatwise/shared";
 import { releaseEmailSend, reserveEmailSend, RSVP_RESEND_COOLDOWN_SECONDS, rsvpLinkCooldownKey } from "./rate-limit";
@@ -40,6 +41,8 @@ export async function sendGuestRsvpLink(
   recentlyEmailed?: boolean;
   recipientLimited?: boolean;
   rsvpClosed?: boolean;
+  // TS-219: the email may have been sent (the mail server stopped answering part-way).
+  uncertain?: boolean;
 } | null> {
   // TS-178: worked out first -- on a live site without a proper APP_URL this throws before any
   // link is changed (see ./app-url).
@@ -100,7 +103,6 @@ export async function sendGuestRsvpLink(
   });
   // TS-203: charged to the planner's account (its share of Seatwise's email, and of what one address may receive).
   const result = await sendEmailNotification(guest.email, subject, text, { account: sender.id });
-  const emailed = emailDelivered(result);
   // TS-203: "uncertain" -- the mail server went quiet after it may have taken the email -- keeps
   // its counts and the hour's cooldown (it may well have arrived), though the planner is told it
   // may not have, with the link to send themselves.
@@ -110,9 +112,24 @@ export async function sendGuestRsvpLink(
     // day's limit, a failed send) -- so it doesn't use up the planner's allowance either.
     await releaseEmailSend("rsvpEmails", sender.id, reservation);
   }
+  return rsvpEmailSendOutcome(url, result);
+}
+
+/**
+ * What one RSVP email's send result means for the planner (pure, so it can be unit-tested).
+ * TS-219: "uncertain" -- the mail server stopped answering after it may have taken the email -- is
+ * reported as `uncertain` ("may have been sent"), not as a plain failure: it keeps the hour's
+ * cooldown, so calling it "Couldn't email" was followed by "Already emailed" on the next click.
+ */
+export function rsvpEmailSendOutcome(
+  url: string,
+  result: EmailResult
+): { url: string; emailed: boolean; emailFailed: boolean; emailLimited?: boolean; emailLimitedToday?: boolean; recipientLimited?: boolean; uncertain?: boolean } {
+  const emailed = emailDelivered(result);
   if (result === "recipient-limited") return { url, emailed: false, emailFailed: true, recipientLimited: true };
   // TS-203: the account's share of Seatwise's email is used up for now -- more in the next 24 hours.
   if (result === "account-limited") return { url, emailed: false, emailFailed: true, emailLimited: true, emailLimitedToday: true };
+  if (result === "uncertain") return { url, emailed: false, emailFailed: true, uncertain: true };
   return { url, emailed, emailFailed: !emailed };
 }
 
@@ -130,5 +147,6 @@ export function rsvpEmailOutcome(
     recentlyEmailed: sent.recentlyEmailed ?? false,
     recipientLimited: sent.recipientLimited ?? false,
     rsvpClosed: sent.rsvpClosed ?? false,
+    uncertain: sent.uncertain ?? false,
   };
 }

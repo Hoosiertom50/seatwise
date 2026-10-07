@@ -46,6 +46,8 @@ import { FIELD_LIMITS } from "@seatwise/shared";
 // TS-202
 import { plusOnesToPrint } from "@seatwise/shared";
 import { GuestDetailsEditor, type GuestDetailsChanges } from "./GuestDetailsEditor";
+// TS-219
+import { rsvpMaybeSentNote } from "@/lib/email-outcome-text";
 
 const TIERS: GuestTier[] = ["VIP", "FAMILY", "FRIEND", "PLUS_ONE", "OTHER"];
 const RSVP_STATUSES: RsvpStatus[] = ["PENDING", "CONFIRMED", "DECLINED"];
@@ -71,6 +73,8 @@ interface RsvpEmailOutcome {
   // TS-171
   recentlyEmailed?: boolean;
   recipientLimited?: boolean;
+  // TS-219: may have been sent (the email service stopped answering part-way).
+  uncertain?: boolean;
 }
 
 // TS-156: shown when the planner has hit their email limit. TS-177: says which one -- the
@@ -711,6 +715,8 @@ export function GuestsTab({
           ? `${RECIPIENT_LIMITED_NOTE} — use "RSVP link" to copy it and send it yourself.`
           : outcome.recentlyEmailed
           ? `Already emailed the RSVP link to ${email} within the last hour.`
+          : outcome.uncertain
+          ? `${rsvpMaybeSentNote(email)} — if they don't get it, use "RSVP link" to copy it and send it yourself.`
           : `Couldn't email ${email} — use "RSVP link" to copy it and send it yourself.`,
     }));
   }
@@ -854,6 +860,8 @@ export function GuestsTab({
         ? `${RECIPIENT_LIMITED_NOTE} — send ${guestEmail} the link yourself. `
         : rsvp.recentlyEmailed
         ? `Already emailed to ${guestEmail} within the last hour, so not sent again. `
+        : rsvp.uncertain
+        ? `${rsvpMaybeSentNote(guestEmail ?? "this guest")} — if they don't get it, send them the link yourself. `
         : rsvp.emailFailed
           ? `Couldn't email ${guestEmail} — send them the link yourself. `
           : "";

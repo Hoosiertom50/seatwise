@@ -1,22 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 import { signupSchema } from "@seatwise/shared";
-import { createUser, emailDelivered, emailMayHaveGone, findUserByEmail, hitRateLimit, undoRateLimitHit } from "@seatwise/db";
+import { createUser, findUserByEmail } from "@seatwise/db";
 import { hashPassword, signToken, setAuthCookie, wantsBearerToken } from "@/lib/auth";
 import { errorResponse, readJson, zodErrorResponse } from "@/lib/api-response";
-import {
-  accountEmailCounters,
-  clientAddress,
-  rateLimitOr429,
-  SIGNUP_LIMITS,
-} from "@/lib/rate-limit";
-import { sendVerificationEmail } from "@/lib/email-verification";
+import { networkRateLimitOr429, perNetworkCounters, SIGNUP_LIMITS } from "@/lib/rate-limit";
+import { sendFirstConfirmationEmail } from "@/lib/signup-email";
 
 export async function POST(req: NextRequest) {
   // TS-163: counted before anything else (including the password hash, the expensive part).
-  const address = clientAddress(req);
-  const limited =
-    (await rateLimitOr429(`signup:addr:hour:${address}`, SIGNUP_LIMITS.perAddressHour)) ??
-    (await rateLimitOr429(`signup:addr:day:${address}`, SIGNUP_LIMITS.perAddressDay));
+  // TS-219: per address (an IPv4 address, or an IPv6 /64) as before, and for IPv6 its /48 too.
+  const limited = await networkRateLimitOr429([
+    ...perNetworkCounters(req, (network) => `signup:addr:hour:${network}`, SIGNUP_LIMITS.perAddressHour, SIGNUP_LIMITS.perWiderNetworkHour),
+    ...perNetworkCounters(req, (network) => `signup:addr:day:${network}`, SIGNUP_LIMITS.perAddressDay, SIGNUP_LIMITS.perWiderNetworkDay),
+  ]);
   if (limited) return limited;
 
   // TS-179: refuses a body that isn't JSON (415) here too, not only in proxy.ts.
@@ -46,24 +42,11 @@ export async function POST(req: NextRequest) {
   }
   const token = await signToken({ sub: user.id, email: user.email, sessionVersion: user.sessionVersion });
   // TS-164: the new account is signed in straight away, and asked to confirm its email address.
-  // TS-171: the confirmation email counts with resends and resets from this address. Past the
-  // address's daily allowance the account is still made (a whole office may sign up from one
-  // network) -- just without the email; the banner offers "Resend link" for later.
-  // TS-194: one count per network address (10 a day) for every email an outsider can trigger --
-  // it replaces the separate count of sign-up confirmations (see ACCOUNT_EMAIL_LIMITS).
-  // TS-203: rolling over 24 hours, and for IPv6 the /48 as well (see accountEmailCounters).
-  const emailCounters = accountEmailCounters(req);
-  const hits = await Promise.all(emailCounters.map(({ key, limit, windowSeconds }) => hitRateLimit(key, limit, windowSeconds)));
-  const giveBack = () =>
-    Promise.all(emailCounters.map(({ key, windowSeconds }, i) => undoRateLimitHit(key, windowSeconds, hits[i].windowStart)));
-  const mayEmail = hits.every((h) => h.allowed);
-  // TS-178: the email also has to fit in the confirmations' own share of the day's email (see
-  // sendEmail's `confirmation`); past it, the same happens -- account made, no email.
-  const result = mayEmail ? await sendVerificationEmail(user) : null;
-  const verificationEmailSent = result !== null && emailDelivered(result);
-  // TS-178 / TS-186: nothing went out (refused, or not sent), so it doesn't use up either allowance.
-  // TS-203: unless it may have gone out after all ("uncertain").
-  if (result === null || !emailMayHaveGone(result)) await giveBack();
+  // TS-220: the account is made by now, so its confirmation email is best effort. The counters
+  // failing (the database busy) used to turn a made account into a 500 with no sign-in -- and
+  // trying again then said "An account with that email already exists". Now it's still a 201,
+  // signed in, just without the email; the banner offers "Resend link".
+  const verificationEmailSent = await sendFirstConfirmationEmail(req, user);
 
   const response = NextResponse.json(
     {

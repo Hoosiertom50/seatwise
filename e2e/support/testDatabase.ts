@@ -1022,3 +1022,49 @@ export async function removePlanVersionAsPruningWould(planVersionId: string): Pr
   );
   if (!rowCount) throw new Error(`testDatabase: no removable test plan version ${planVersionId}.`);
 }
+
+/**
+ * TS-219: the per-/48 counts an IPv6 source is also held to (apps/web/src/lib/rate-limit.ts) --
+ * sign-ups per hour (SIGNUP_LIMITS.perWiderNetworkHour), wrong passwords
+ * (LOGIN_LIMITS.failuresPerWiderNetwork) and RSVP-link requests (RSVP_LIMITS.perWiderNetwork) --
+ * by the key and window the app uses for each.
+ */
+export type Ipv6NetworkCounter = "signups-hour" | "sign-in-failures" | "rsvp-requests";
+const IPV6_NETWORK_COUNTERS: Record<Ipv6NetworkCounter, { prefix: string; windowSeconds: number }> = {
+  "signups-hour": { prefix: "signup:addr:hour:net48:", windowSeconds: 3600 },
+  "sign-in-failures": { prefix: "login:net48:", windowSeconds: 900 },
+  "rsvp-requests": { prefix: "rsvp:addr:net48:", windowSeconds: 600 },
+};
+
+/** TS-219: sets one of those counts for a /48 in the documentation-only range (2001:db8::/32) tests use. */
+export async function setIpv6NetworkCount(network48: string, counter: Ipv6NetworkCounter, count: number): Promise<void> {
+  if (!/^2001:db8:[0-9a-f]{1,4}::\/48$/.test(network48)) throw new Error(`testDatabase: ${network48} isn't a test IPv6 /48.`);
+  const { prefix, windowSeconds } = IPV6_NETWORK_COUNTERS[counter];
+  await setCounter(`${prefix}${network48}`, windowSeconds, count);
+}
+
+/**
+ * TS-219: how many of a test address's planner-sent emails in the last 24 hours came from senders
+ * whose weddings hadn't long had the address (EMAILS_PER_RECIPIENT_FROM_UNLISTED_SENDERS in
+ * packages/db/src/email.ts).
+ */
+export async function setUnlistedEmailsToAddressToday(email: string, count: number): Promise<void> {
+  const address = requireTestEmail(email);
+  if (address.includes("+")) throw new Error("testDatabase: use a test address without a +tag.");
+  await setCounter(`email:to:unlisted:day:${address}`, 86_400, count);
+}
+
+export async function unlistedEmailsToAddressToday(email: string): Promise<number> {
+  return readCounter(`email:to:unlisted:day:${requireTestEmail(email)}`, 86_400);
+}
+
+/** TS-219: makes a test guest look added, and last changed, `hours` ago. Test weddings only. */
+export async function backdateGuest(guestId: string, hours: number): Promise<void> {
+  const { rowCount } = await testPool().query(
+    `UPDATE "guests" g SET "createdAt" = now() - make_interval(hours => $2), "updatedAt" = now() - make_interval(hours => $2)
+     FROM "weddings" w JOIN "users" u ON u.id = w."ownerId"
+     WHERE g.id = $1 AND w.id = g."weddingId" AND u.email LIKE $3`,
+    [guestId, hours, TEST_EMAIL_PATTERN],
+  );
+  if (!rowCount) throw new Error(`testDatabase: no guest ${guestId} on a test wedding.`);
+}

@@ -28,8 +28,8 @@ export const NOTIFICATION_EMAILS_PER_WEDDING_WITHOUT_ACTOR = [
 // TS-203: rolling over the last 24 hours (it used to start again at midnight UTC, so twice the pool
 // fitted in a couple of hours) -- and only 20 while the owner's account is in its first week, so a
 // few fresh accounts can't use guests' answers (their own guests' links, submitted in turn) to
-// spend Seatwise's email allowance. Every one of these also counts toward the owner's share of the
-// everyday allowance (ACCOUNT_SHARE_OF_EVERYDAY in ../email.ts).
+// spend Seatwise's email allowance. TS-219: these no longer count toward the owner's share of the
+// everyday allowance (ACCOUNT_SHARE_OF_EVERYDAY in ../email.ts) -- see notificationEmailCharge.
 export const NOTIFICATION_EMAILS_PER_OWNER_WITHOUT_ACTOR = { limit: 60, windowSeconds: 86_400 } as const;
 export const NEW_OWNER_NOTIFICATION_EMAILS_WITHOUT_ACTOR = { limit: 20, windowSeconds: 86_400 } as const;
 export const ownerNotificationEmailKey = (ownerId: string) => `email:notify-owner:86400:${ownerId}`;
@@ -135,8 +135,22 @@ export function notificationEmailBody({
     "—",
     ...(weddingUrl ? [`Open the wedding in Seatwise: ${weddingUrl}`] : []),
     `You're getting this because you're a member of ${wedding} on Seatwise.`,
-    `To stop these emails: open the wedding → Collaborators → your row, and turn off "Email me about this wedding". You'll still see updates in the app.`,
+    // TS-223: worded to fit owners too -- their switch is in the wedding's settings on that tab, not on a row.
+    `To stop these emails: open the wedding → Collaborators, and turn off "Email me about this wedding". You'll still see updates in the app.`,
   ].join("\n");
+}
+
+/**
+ * TS-219: who a notification email is charged to. Someone's own action: their account (its share
+ * of Seatwise's email). A guest's answer (no one signed in): nobody's share -- TS-186 (Tom's
+ * decision) says guests' answers must never use up the owner's own email, but each one was still
+ * charged to the owner's share, so an RSVP rush could stop the owner sending invites and RSVP
+ * links. Those are bounded by the wedding's and the owner's pools for guests' answers (see
+ * notificationEmailCounters) and the site's limits instead; `forGuestsOf` only lets a first-week
+ * owner's count toward the first-week accounts' combined share. Pure, so it can be unit-tested.
+ */
+export function notificationEmailCharge(actorUserId: string | null, ownerId: string): { account?: string; forGuestsOf?: string } {
+  return actorUserId ? { account: actorUserId } : { forGuestsOf: ownerId };
 }
 
 /** TS-213: the wedding's page, for the email's link -- left out when the site's own address isn't set up. */
@@ -196,8 +210,9 @@ export async function sendEmailNotification(
   toEmail: string,
   subject: string,
   body: string,
-  // TS-203: `account` -- who the email is charged to (see sendEmail).
-  options: { toWeddingMember?: boolean; account?: string } = {}
+  // TS-203: `account` -- who the email is charged to (see sendEmail). TS-219: `forGuestsOf` -- for
+  // an email a guest set off, the wedding's owner (not charged to them; see sendEmail).
+  options: { toWeddingMember?: boolean; account?: string; forGuestsOf?: string } = {}
 ): Promise<EmailResult> {
   return sendEmail(toEmail, subject, body, process.env, options);
 }
@@ -340,9 +355,9 @@ async function notifyEveryone(
       weddingName,
       weddingUrl: weddingPageUrl(weddingId),
     });
-    // TS-203: charged to whoever caused it -- or for a guest's answer, the wedding's owner -- so it
-    // counts toward that account's share of Seatwise's email.
-    const account = actorUserId ?? wedding.ownerId;
+    // TS-203: charged to whoever caused it, so it counts toward that account's share of Seatwise's
+    // email. TS-219: a guest's answer is not charged to the owner (see notificationEmailCharge).
+    const charge = notificationEmailCharge(actorUserId, wedding.ownerId);
     // TS-203: everyone is emailed at the same time (over the shared, pooled mail connection), not
     // one after another -- a guest's RSVP used to wait for each planner's email in turn.
     await Promise.all(
@@ -366,7 +381,7 @@ async function notifyEveryone(
             weddingName ? `Seatwise: ${weddingName}` : "Seatwise: a wedding update",
             body,
             // TS-171: a confirmed member of this wedding, so not held to the per-address daily cap.
-            { toWeddingMember: true, account }
+            { toWeddingMember: true, ...charge }
           );
           // TS-178: nothing went out (failed, held back by the day's limit, or no email service), so it
           // doesn't use up the sender's or the wedding's allowance. TS-203: unless it may have gone
