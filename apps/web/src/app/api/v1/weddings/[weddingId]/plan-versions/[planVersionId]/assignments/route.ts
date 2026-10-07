@@ -56,7 +56,9 @@ export async function POST(req: NextRequest, { params }: Params) {
             user.id,
             parsed.data.expectedRevision,
             // TS-204: read again under the plan's lock.
-            access.actor
+            access.actor,
+            // TS-228: an undo -- refused under the plan's lock if it would split a must-sit group.
+            parsed.data.undoSeatsBefore
           );
     return NextResponse.json({ planVersion, warnings });
   } catch (err) {

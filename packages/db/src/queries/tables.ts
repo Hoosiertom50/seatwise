@@ -14,6 +14,7 @@ import {
 } from "./seat-checks";
 import { inWeddingChange, lockWeddingRow, recheckActorAccess, type ActorAccess } from "./wedding-lock";
 import { assertWeddingHasRoom } from "./wedding-caps";
+import { notifyWeddingCollaborators } from "./notifications";
 
 // TS-224: lockCurrentPlan, and when the wedding has no current plan yet, the wedding's lock and
 // then lockCurrentPlan again. A first Generate holds the wedding lock while it saves the new plan
@@ -668,6 +669,8 @@ export async function removeSeatingTable(
   actor?: ActorAccess
 ): Promise<RemoveTableResult> {
   const client = await pool.connect();
+  let removed!: Extract<RemoveTableResult, { status: "REMOVED" }>;
+  let notifyApproved = false; // TS-231
   try {
     await beginTransaction(client);
     // TS-173: the current plan's row first, then the table (see lockCurrentPlan). TS-181: and the
@@ -733,6 +736,7 @@ export async function removeSeatingTable(
     if (currentPlanId && seatedCount === 0 && recheckChanged) {
       await recordRecheckIfApproved(client, currentPlanId, `Table "${label}" removed — some guests' Needs Reassignment flags changed`, actorUserId);
     }
+    let unseatedOnApprovedPlan = false;
     if (currentPlanId && seatedCount > 0) {
       const guests = seatedCount === 1 ? "1 guest" : `${seatedCount} guests`;
       await client.query(
@@ -740,16 +744,37 @@ export async function removeSeatingTable(
          VALUES ($1, $2, 'TABLE_REMOVED', $3, $4, ${HISTORY_CREATED_AT})`,
         [randomUUID(), currentPlanId, `Table "${label}" removed — ${guests} left unassigned`, actorUserId]
       );
+      // TS-231: read under the plan's lock (held since the start).
+      const { rows: planRows } = await client.query<{ status: string }>(`SELECT status FROM "plan_versions" WHERE id = $1`, [currentPlanId]);
+      unseatedOnApprovedPlan = planRows[0]?.status === "APPROVED";
     }
 
     await client.query("COMMIT");
-    return { status: "REMOVED", label, seatedCount };
+    removed = { status: "REMOVED", label, seatedCount };
+    notifyApproved = unseatedOnApprovedPlan;
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});
     throw err;
   } finally {
     client.release();
   }
+
+  // TS-231: guests unseated from an approved plan -- told like a move on it (TABLE_CHANGED). Saved
+  // already, so this is best effort and never turns the removal into an error.
+  if (notifyApproved) {
+    const guests = removed.seatedCount === 1 ? "1 guest was" : `${removed.seatedCount} guests were`;
+    try {
+      await notifyWeddingCollaborators(
+        weddingId,
+        actorUserId,
+        "TABLE_CHANGED",
+        `Table "${removed.label}" was removed from the approved plan — ${guests} left unassigned.`
+      );
+    } catch (err) {
+      console.error("Saved, but notifying the wedding's members failed:", err);
+    }
+  }
+  return removed;
 }
 
 // FR-3.7a: replace a Restricted table's entire required-guest list in one atomic operation — the
