@@ -67,11 +67,32 @@ export async function isPasswordResetTokenUsable(token: string): Promise<boolean
 /**
  * TS-171: a link whose email didn't go out is cancelled, so it never counts as "already sent"
  * (see hasUsablePasswordResetToken) -- the person can ask again straight away.
+ * TS-219: deleted outright (it never reached anyone), so every link left from the last day is one
+ * that was emailed -- what lastPasswordResetAt goes by.
  */
 export async function discardPasswordResetToken(token: string): Promise<void> {
-  await pool.query(`UPDATE "password_reset_tokens" SET "usedAt" = now() WHERE "tokenHash" = $1 AND "usedAt" IS NULL`, [
-    hashResetToken(token),
-  ]);
+  await pool.query(`DELETE FROM "password_reset_tokens" WHERE "tokenHash" = $1 AND "usedAt" IS NULL`, [hashResetToken(token)]);
+}
+
+// TS-219: once the day's reset counts for an address are full, the newest reset still goes out if
+// none has gone to the account for this long. Someone who signed up with another person's address
+// could otherwise ask for 3 resets (an hour apart) and use up the count meant for the address's
+// owner, who then couldn't get the reset that lets them take the account back. The owner now waits
+// at most this long; the inbox still gets no more than one reset every few hours past the count.
+export const NEWEST_RESET_AFTER_SECONDS = 3 * 3600;
+
+/** TS-219: when the newest reset link from the last 24 hours was made (null if none). */
+export async function lastPasswordResetAt(userId: string): Promise<Date | null> {
+  const { rows } = await pool.query<{ last: Date | null }>(
+    `SELECT max("createdAt") AS last FROM "password_reset_tokens" WHERE "userId" = $1 AND "createdAt" > now() - interval '24 hours'`,
+    [userId]
+  );
+  return rows[0]?.last ?? null;
+}
+
+/** TS-219: whether the newest reset may go out past full daily counts (see NEWEST_RESET_AFTER_SECONDS). Pure. */
+export function newestResetMayGo(lastResetAt: Date | null, nowMs: number = Date.now()): boolean {
+  return lastResetAt === null || nowMs - lastResetAt.getTime() >= NEWEST_RESET_AFTER_SECONDS * 1000;
 }
 
 /**

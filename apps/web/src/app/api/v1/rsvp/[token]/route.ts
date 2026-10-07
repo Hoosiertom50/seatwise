@@ -9,7 +9,7 @@ import {
   notifyWeddingCollaborators,
 } from "@seatwise/db";
 import { errorResponse, zodErrorResponse, readJson } from "@/lib/api-response";
-import { clientAddress, rateLimitOr429, RSVP_LIMITS, RSVP_LINK_TOO_MANY_SUBMITS } from "@/lib/rate-limit";
+import { networkRateLimitOr429, rateLimitOr429, RSVP_LIMITS, RSVP_LINK_TOO_MANY_SUBMITS, rsvpNetworkCounters } from "@/lib/rate-limit";
 
 type Params = { params: Promise<{ token: string }> };
 
@@ -33,7 +33,8 @@ const NO_STORE = { "Cache-Control": "no-store" };
 export async function GET(req: NextRequest, { params }: Params) {
   const { token } = await params;
   // TS-98: this endpoint needs no sign-in, so it's rate-limited per network address.
-  const limited = await rateLimitOr429(`rsvp:addr:${clientAddress(req)}`, RSVP_LIMITS.perAddress);
+  // TS-219: and for IPv6, per /48 as well.
+  const limited = await networkRateLimitOr429(rsvpNetworkCounters(req));
   if (limited) return limited;
   const guest = await getGuestByRsvpToken(token);
 
@@ -68,7 +69,8 @@ export async function POST(req: NextRequest, { params }: Params) {
   // TS-98: per network address, and per guest link -- so neither one flooding source nor one
   // leaked link can hammer a guest's record.
   const limited =
-    (await rateLimitOr429(`rsvp:addr:${clientAddress(req)}`, RSVP_LIMITS.perAddress)) ??
+    // TS-219: and for IPv6, per /48 as well.
+    (await networkRateLimitOr429(rsvpNetworkCounters(req))) ??
     // TS-160: keyed by the link's hash, so the counters table never holds a working link either.
     // TS-177: this one counts submits on the link from anywhere, so the message can't say "from here".
     (await rateLimitOr429(

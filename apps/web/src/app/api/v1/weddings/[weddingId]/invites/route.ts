@@ -113,8 +113,10 @@ export async function POST(req: NextRequest, { params }: Params) {
     // TS-132: if the email didn't go out, hand the owner the accept link to send themselves --
     // otherwise the invitee has no way in. (Accepting still requires signing in with this exact
     // address, so the link is no use to anyone else.)
+    // TS-219: `uncertain` -- the email may have been sent (the email service stopped answering
+    // part-way), so the screen says "may have been sent" rather than "couldn't be sent".
     return NextResponse.json(
-      { invite: invitePublic, emailed, ...(emailed ? {} : { acceptUrl }) },
+      { invite: invitePublic, emailed, ...(sent === "uncertain" ? { uncertain: true } : {}), ...(emailed ? {} : { acceptUrl }) },
       { status: 201 }
     );
   } catch (err) {

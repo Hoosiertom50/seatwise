@@ -18,6 +18,8 @@ import { FIELD_LIMITS } from "@seatwise/shared";
 // TS-214: asks before saving an RSVP cutoff in the past or after the wedding.
 import { rsvpCutoffWarning } from "@seatwise/shared";
 import { formatDate, localTodayIso } from "@/lib/display-format";
+// TS-219: "may have been sent" when the email service stopped answering part-way.
+import { inviteSentMessage } from "@/lib/email-outcome-text";
 
 // TS-179: guest RSVP and vendor links someone copied while they had access aren't tied to them,
 // so taking access away doesn't stop those links -- the owner's reset below does.
@@ -469,17 +471,13 @@ export function CollaboratorsTab({
     setInviteSent(null);
     setAdding(true);
     try {
-      const res = await api.post<{ invite: WeddingInviteDTO; emailed: boolean; acceptUrl?: string }>(
+      const res = await api.post<{ invite: WeddingInviteDTO; emailed: boolean; uncertain?: boolean; acceptUrl?: string }>(
         `/api/v1/weddings/${weddingId}/invites`,
         { email, permissionLevel: level, role }
       );
       await refreshInvites();
       // TS-132: only say "sent" when the email really went. Otherwise hand over the link to share.
-      setInviteSent(
-        res.emailed
-          ? `Invite sent to ${email}.`
-          : `Invite created, but the email to ${email} couldn't be sent. Send them this link yourself: ${res.acceptUrl}`
-      );
+      setInviteSent(inviteSentMessage(email, res));
       setEmail("");
       setLevel("VIEW");
       setRole("COLLABORATOR");

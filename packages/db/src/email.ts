@@ -161,8 +161,9 @@ export const CONFIRMATION_SHARE_OF_EVERYDAY = 0.25;
 // can sign up with any address), held to this smaller share of the everyday allowance -- so resets
 // asked for on such accounts can't crowd out invites and RSVP emails either.
 export const UNCONFIRMED_RESET_SHARE_OF_EVERYDAY = 0.1;
-// TS-203: no one account -- with every kind of email it sends, and every email its weddings' guests
-// set off, together -- may use more than this share of the everyday allowance in any 24 hours. Each
+// TS-203: no one account -- with every kind of email it sends, together -- may use more than this
+// share of the everyday allowance in any 24 hours. (TS-219: emails its weddings' guests set off no
+// longer count here -- see sendEmail's `forGuestsOf`.) Each
 // of its own limits was fine alone, but together they let one account (or three new ones) use up
 // all of it, and then nobody's invites, RSVP links or confirmations went out.
 export const ACCOUNT_SHARE_OF_EVERYDAY = 0.25;
@@ -173,6 +174,11 @@ export const PLANNER_EMAIL_FLOOR_SHARE_OF_EVERYDAY = 0.2;
 // TS-203: this many of the resets' own budget are kept for accounts locked out by wrong passwords
 // (the person most needing a reset) -- other resets stop short of them.
 export const LOCKED_OUT_RESETS_RESERVED = 15;
+// TS-219: every account in its first week (NEW_ACCOUNT_DAYS), together, may use at most this share
+// of the everyday allowance -- including the emails their weddings' guests set off. Each new
+// account alone was held to 20, but a dozen of them (cheap to make) could still use all 240 between
+// them, and then nobody's invites or RSVP links went out.
+export const NEW_ACCOUNTS_SHARE_OF_EVERYDAY = 0.25;
 
 export function dailyEmailLimits(env: EmailEnv = process.env): {
   everyday: number;
@@ -182,6 +188,7 @@ export function dailyEmailLimits(env: EmailEnv = process.env): {
   accountShare: number;
   plannerFloor: number;
   lockedOutResets: number;
+  newAccounts: number;
 } {
   const configured = Number(env.EMAIL_DAILY_LIMIT);
   const asked = Number.isInteger(configured) && configured > 0 ? configured : EVERYDAY_EMAILS_PER_24_HOURS;
@@ -195,6 +202,7 @@ export function dailyEmailLimits(env: EmailEnv = process.env): {
     accountShare: Math.max(1, Math.floor(everyday * ACCOUNT_SHARE_OF_EVERYDAY)),
     plannerFloor: Math.floor(everyday * PLANNER_EMAIL_FLOOR_SHARE_OF_EVERYDAY),
     lockedOutResets: Math.min(LOCKED_OUT_RESETS_RESERVED, RESET_EMAILS_PER_24_HOURS - 1),
+    newAccounts: Math.max(1, Math.floor(everyday * NEW_ACCOUNTS_SHARE_OF_EVERYDAY)),
   };
 }
 
@@ -243,6 +251,21 @@ export function setAccountShareCounterForTests(fake?: (accountId: string) => Dai
   accountShareCounter = fake ?? realAccountShareCounter;
 }
 
+// TS-219: the first-week accounts' combined share (NEW_ACCOUNTS_SHARE_OF_EVERYDAY) -- real sends only.
+const realNewAccountsCounter = rollingCounterFor("email:global:24h:new-accounts");
+let newAccountsCounter: DailyCounter = realNewAccountsCounter;
+/** Tests only: replace the first-week accounts' combined counter (pass nothing to restore it). */
+export function setNewAccountsCounterForTests(fake?: DailyCounter): void {
+  newAccountsCounter = fake ?? realNewAccountsCounter;
+}
+// TS-219: whether an account is in its first week (see accountDailyEmailLimit).
+const realAccountIsNew = async (accountId: string) => (await accountDailyEmailLimit(accountId)).newAccount;
+let accountIsNew: (accountId: string) => Promise<boolean> = realAccountIsNew;
+/** Tests only: replace the "is this account in its first week?" lookup (pass nothing to restore it). */
+export function setAccountIsNewForTests(fake?: (accountId: string) => Promise<boolean>): void {
+  accountIsNew = fake ?? realAccountIsNew;
+}
+
 // TS-171: at most a few emails a day to any one address, however they're asked for and by however
 // many accounts -- so nobody can use Seatwise to fill a stranger's inbox. Confirmed accounts'
 // password resets have their own per-address limits (see the forgot-password route), and
@@ -265,6 +288,12 @@ export const EMAILS_PER_RECIPIENT_PER_DAY = 5;
 export const ANONYMOUS_EMAILS_PER_RECIPIENT_PER_DAY = 3;
 export const UNCONFIRMED_RESETS_PER_RECIPIENT_PER_DAY = 3;
 export const EMAILS_PER_RECIPIENT_PER_SENDER = 3;
+// TS-219: and senders whose weddings haven't long had the address (see senderListsRecipient) may
+// use only this many of the 5 between them -- so two accounts (3 + 2) can no longer fill a
+// stranger's 5 and leave the planner whose guest list really has them no way to email them. The
+// rest (1) is kept for planners whose wedding has had the address for over a day.
+export const EMAILS_PER_RECIPIENT_FROM_UNLISTED_SENDERS = 4;
+export const LISTED_RECIPIENT_MIN_AGE_SECONDS = 86_400;
 export type RecipientCount = "planner" | "anonymous" | "unconfirmed-reset";
 const RECIPIENT_LIMITS: Record<RecipientCount, number> = {
   planner: EMAILS_PER_RECIPIENT_PER_DAY,
@@ -295,6 +324,10 @@ export function recipientCountKey(kind: RecipientCount, to: string): string {
   if (kind === "anonymous") return `email:to:anon:day:${address}`;
   if (kind === "unconfirmed-reset") return `email:to:reset:day:${address}`;
   return `email:to:day:${address}`;
+}
+/** TS-219: the key for what senders who haven't long listed the address have sent it, together. */
+export function unlistedSendersRecipientCountKey(to: string): string {
+  return `email:to:unlisted:day:${recipientCountAddress(to)}`;
 }
 /** TS-203: the key for one account's share of an address's planner-sent emails. */
 export function senderRecipientCountKey(accountId: string, to: string): string {
@@ -340,12 +373,62 @@ export function setSenderRecipientCounterForTests(fake?: (accountId: string, to:
   senderRecipientCounter = fake ?? realSenderRecipientCounter;
 }
 
+// TS-219: what senders that don't (yet) count as the address's own planner have sent it, together
+// (counted in every mode, like the per-address count).
+const realUnlistedSendersCounter = (to: string): DailyCounter => {
+  const key = unlistedSendersRecipientCountKey(to);
+  return {
+    hit: () => hitRateLimitCount(key, DAILY_WINDOW_SECONDS),
+    undo: (windowStart) => undoRateLimitHit(key, DAILY_WINDOW_SECONDS, windowStart),
+  };
+};
+let unlistedSendersCounter: (to: string) => DailyCounter = realUnlistedSendersCounter;
+
+/**
+ * TS-219: whether a wedding this account owns or helps plan has had this address for over a day,
+ * unchanged -- on a guest nobody has edited since, or on a pending invite made before then. Anyone
+ * can add any address to a wedding of their own and email it straight away, so a listing made just
+ * now proves nothing; one that has stood for a day means an attack had to be planned well ahead.
+ */
+export async function senderListsRecipient(accountId: string, to: string): Promise<boolean> {
+  const { rows } = await pool.query<{ listed: boolean }>(
+    `WITH mine AS (
+       SELECT id FROM "weddings" WHERE "ownerId" = $1
+       UNION SELECT "weddingId" FROM "wedding_collaborators" WHERE "userId" = $1
+     )
+     SELECT EXISTS (
+              SELECT 1 FROM "guests" g
+               WHERE g."weddingId" IN (SELECT id FROM mine) AND lower(trim(g.email)) = lower(trim($2))
+                 AND g."updatedAt" < now() - make_interval(secs => $3)
+            )
+         OR EXISTS (
+              SELECT 1 FROM "wedding_invites" i
+               WHERE i."weddingId" IN (SELECT id FROM mine) AND lower(trim(i.email)) = lower(trim($2))
+                 AND i.status = 'PENDING' AND i."createdAt" < now() - make_interval(secs => $3)
+            ) AS listed`,
+    [accountId, to, LISTED_RECIPIENT_MIN_AGE_SECONDS]
+  );
+  return rows[0]?.listed ?? false;
+}
+let listsRecipient: (accountId: string, to: string) => Promise<boolean> = senderListsRecipient;
+
+/** Tests only: replace the unlisted senders' counter and the "listed" lookup (pass nothing to restore them). */
+export function setUnlistedSendersForTests(fakes?: {
+  counter: (to: string) => DailyCounter;
+  listed: (accountId: string, to: string) => Promise<boolean>;
+}): void {
+  unlistedSendersCounter = fakes?.counter ?? realUnlistedSendersCounter;
+  listsRecipient = fakes?.listed ?? senderListsRecipient;
+}
+
 // TS-171: every email one signed-in account can make Seatwise send in a day, of every kind
 // (invites, RSVP emails, notifications its actions set off), counted together. Without it, the
 // separate per-kind limits added up to more than the whole day's allowance, so one account could
 // stop email for everyone.
 // TS-194 (Tom's decision): a new account -- in its first 7 days -- gets 20 a day instead of 100, so
-// a batch of fresh accounts can't spend the site's allowance between them.
+// a batch of fresh accounts can't spend the site's allowance between them. TS-219: on its own that
+// still let about 12 of them do it (12 x 20 = 240), so first-week accounts together are also held
+// to NEW_ACCOUNTS_SHARE_OF_EVERYDAY.
 // TS-203: "a day" is the last 24 hours, rolling -- it used to start again at midnight UTC, so twice
 // the allowance fitted in a couple of hours. And whatever this allows, real sends are also held to
 // the account's share of Seatwise's everyday allowance (ACCOUNT_SHARE_OF_EVERYDAY).
@@ -390,6 +473,8 @@ export async function sendEmail(
     unconfirmedReset = false,
     account,
     lockedOut = false,
+    forGuestsOf,
+    newestReset = false,
   }: {
     /**
      * A password reset for an account that has confirmed its address: counted only against the
@@ -409,12 +494,28 @@ export async function sendEmail(
      */
     unconfirmedReset?: boolean;
     /**
-     * TS-203: the account this email is charged to -- whoever sent it, or for an email a guest set
-     * off, the wedding's owner. Held to that account's share of the everyday allowance (real sends
-     * only), and, for an email a planner sends to someone, to the account's share of what that
-     * address may receive (EMAILS_PER_RECIPIENT_PER_SENDER).
+     * TS-203: the account this email is charged to -- whoever sent it. Held to that account's share
+     * of the everyday allowance (real sends only), and, for an email a planner sends to someone, to
+     * the account's share of what that address may receive (EMAILS_PER_RECIPIENT_PER_SENDER).
+     * TS-219: never set for an email a guest set off (see `forGuestsOf`).
      */
     account?: string;
+    /**
+     * TS-219: an email a guest set off (an RSVP answer) in a wedding this account owns. Not charged
+     * to the owner's share (TS-186: guests' answers must never use up the owner's own email) -- the
+     * wedding's and the owner's pools for guests' answers (see notifications.ts) and the site's
+     * limits bound it. While the owner's account is in its first week it does count toward the
+     * first-week accounts' combined share.
+     */
+    forGuestsOf?: string;
+    /**
+     * TS-219: an unconfirmed account's reset that may go out even though the address's count for
+     * those is full, because no reset has gone to the account for a few hours (see the
+     * forgot-password route). It isn't counted on the address then -- so whoever signed up with
+     * someone else's address can't use that count up and stop the address's owner getting the
+     * reset that lets them take the account back.
+     */
+    newestReset?: boolean;
     /** TS-203: a reset for an account locked out by wrong passwords -- may use the resets kept for that. */
     lockedOut?: boolean;
   } = {}
@@ -458,8 +559,11 @@ export async function sendEmail(
       if (toThisAddress.count > RECIPIENT_LIMITS[recipientKind]) {
         // Taken back, so refused attempts don't pile up on the count.
         await giveBack();
-        console.warn(`[email] not sent to ${shown}: this address has had its ${recipientKind} emails from Seatwise in the last 24 hours.`);
-        return "recipient-limited";
+        // TS-219: the newest reset after a quiet few hours still goes (not counted on the address).
+        if (!(recipientKind === "unconfirmed-reset" && newestReset)) {
+          console.warn(`[email] not sent to ${shown}: this address has had its ${recipientKind} emails from Seatwise in the last 24 hours.`);
+          return "recipient-limited";
+        }
       }
       // TS-203: and this account's share of them.
       if (recipientKind === "planner" && account) {
@@ -470,6 +574,18 @@ export async function sendEmail(
           await giveBack();
           console.warn(`[email] not sent to ${shown}: this account has sent this address its share of emails in the last 24 hours.`);
           return "recipient-limited";
+        }
+        // TS-219: senders whose weddings haven't long had the address share fewer of the 5, so the
+        // last one is kept for the planner whose guest list really has it.
+        if (!(await listsRecipient(account, to))) {
+          const unlisted = unlistedSendersCounter(recipient);
+          const together = await unlisted.hit();
+          counted.push(() => unlisted.undo(together.windowStart));
+          if (together.count > EMAILS_PER_RECIPIENT_FROM_UNLISTED_SENDERS) {
+            await giveBack();
+            console.warn(`[email] not sent to ${shown}: the rest of this address's emails for the last 24 hours are kept for its own planner.`);
+            return "recipient-limited";
+          }
         }
       }
     }
@@ -515,6 +631,12 @@ export async function sendEmail(
           console.warn(`[email] not sent to ${shown}: the account's share of ${limits.accountShare} emails in the last 24 hours has been used.`);
           return "account-limited";
         }
+      }
+      // TS-219: and for an account in its first week (whether it sent this or its guests set it
+      // off), the first-week accounts' combined share -- refused as Seatwise's limit.
+      const chargedTo = account ?? forGuestsOf;
+      if (chargedTo && (await accountIsNew(chargedTo))) {
+        if (!(await fits(newAccountsCounter, limits.newAccounts, "share for accounts in their first week"))) return "limited";
       }
       // TS-203: only invites and RSVP links (planner-sent, to someone outside the wedding) may use
       // the last part of the everyday allowance.
