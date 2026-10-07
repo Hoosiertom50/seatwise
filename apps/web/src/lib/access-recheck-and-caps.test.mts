@@ -205,18 +205,27 @@ test("TS-205: the cap messages read plainly", () => {
   );
 });
 
-test("TS-205: pruning keeps approved and current versions and only removes past the cap", async () => {
+test("TS-205: pruning reads the versions and removes only the chosen ones, never approved or current", async () => {
   fakeDatabase(() => undefined);
-  await pruneOldPlanVersions({ query: async (sql: string, params?: unknown[]) => {
-    log.push(sql.replace(/\s+/g, " ").trim());
-    assert.deepEqual(params, ["wedding", 50]);
-    return { rows: [], rowCount: 0 };
+  const versions = Array.from({ length: 52 }, (_, i) => ({
+    id: `v${i + 1}`,
+    versionNumber: i + 1,
+    status: i === 0 ? "APPROVED" : "DRAFT",
+    isCurrent: i === 51,
+    restoredFromId: null,
+  }));
+  const seen: { sql: string; params?: unknown[] }[] = [];
+  const removed = await pruneOldPlanVersions({ query: async (sql: string, params?: unknown[]) => {
+    seen.push({ sql: sql.replace(/\s+/g, " ").trim(), params });
+    if (/^SELECT/.test(seen.at(-1)!.sql)) return { rows: versions, rowCount: versions.length };
+    return { rows: [], rowCount: (params?.[1] as string[]).length };
   } }, "wedding");
-  const sql = log.at(-1) ?? "";
-  assert.match(sql, /DELETE FROM "plan_versions"/);
-  assert.match(sql, /status <> 'APPROVED' AND NOT "isCurrent"/);
-  assert.match(sql, /ORDER BY "versionNumber" ASC/);
-  assert.match(sql, /GREATEST\(0, \(SELECT count\(\*\) FROM "plan_versions" WHERE "weddingId" = \$1\) - \$2\)/);
+  assert.equal(seen.length, 2);
+  assert.match(seen[0].sql, /FROM "plan_versions" WHERE "weddingId" = \$1/);
+  assert.match(seen[1].sql, /DELETE FROM "plan_versions" WHERE "weddingId" = \$1 AND id = ANY\(\$2::text\[\]\) AND status <> 'APPROVED' AND NOT "isCurrent"/);
+  // 52 versions, cap 50: the two oldest that aren't approved (v1 is) go.
+  assert.deepEqual(seen[1].params, ["wedding", ["v2", "v3"]]);
+  assert.equal(removed, 2);
 });
 
 // --- TS-204: one access reading, and the owner-only note ---------------------------------------

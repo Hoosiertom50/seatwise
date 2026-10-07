@@ -627,6 +627,7 @@ export async function setPlanVersionStatus(
   }
 
   let previousStatus: PlanVersionStatusValue;
+  let saved: PlanVersionDetail | null;
   const client = await pool.connect();
   try {
     await beginTransaction(client);
@@ -734,10 +735,11 @@ export async function setPlanVersionStatus(
       // TS-181: flags the re-check just corrected are kept, so the planner sees who to fix.
       // TS-189: committed in every case here (with nothing to keep it's an empty commit), so this
       // refusal always leaves the plan the same way.
-      await client.query("COMMIT");
       // TS-197: the plan as it is now goes back with the refusal, so the screen shows who to fix
       // (and holds the new revision) without a second request.
+      // TS-209: read before COMMIT on this connection, so a failed read can't follow a saved recheck.
       const fresh = await getPlanVersionDetail(id, weddingId, client);
+      await client.query("COMMIT");
       throw new PlanVersionStatusError(
         // TS-177: a plan is held back by flagged guests too, not just unseated ones.
         "This plan can't be approved yet — some guests aren't seated, or are flagged Needs Reassignment. Sort those out first.",
@@ -769,6 +771,10 @@ export async function setPlanVersionStatus(
       [randomUUID(), id, description, actorUserId]
     );
 
+    // TS-209: read back on this transaction's own connection, before COMMIT (as move, unassign,
+    // swap and restore do) -- read after it, a failure answered "nothing was saved" (503) for a
+    // status change that was saved.
+    saved = await getPlanVersionDetail(id, weddingId, client);
     await client.query("COMMIT");
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});
@@ -802,7 +808,7 @@ export async function setPlanVersionStatus(
     console.error("Saved, but notifying the wedding's members failed:", err);
   }
 
-  return getPlanVersionDetail(id, weddingId);
+  return saved;
 }
 
 export async function getPlanVersionDetail(
@@ -2202,14 +2208,17 @@ export async function setPlanVersionLabel(
       await client.query("ROLLBACK").catch(() => {});
       return null;
     }
+    // TS-209: read back before COMMIT on this connection -- read after it, a failure answered
+    // "nothing was saved" (503) for a label that was saved.
+    const saved = await getPlanVersionDetail(id, weddingId, client);
     await client.query("COMMIT");
+    return saved;
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});
     throw err;
   } finally {
     client.release();
   }
-  return getPlanVersionDetail(id, weddingId);
 }
 
 export interface GuestComparisonEntry {

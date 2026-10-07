@@ -69,21 +69,51 @@ export async function assertWeddingHasRoom(q: Queryable, weddingId: string, kind
   if (have + adding > WEDDING_CAPS[kind]) throw new WeddingCapError(weddingCapMessage(kind, have, adding), kind);
 }
 
+/** TS-205: what pruning needs to know about each of a wedding's plan versions. */
+export interface PrunablePlanVersion {
+  id: string;
+  versionNumber: number;
+  status: string;
+  isCurrent: boolean;
+  restoredFromId: string | null;
+}
+
+/**
+ * TS-205: which versions to remove so at most `keep` remain -- the oldest ones that are neither
+ * approved nor current. A version that a kept version was restored from is skipped too: removing it
+ * cleared the kept version's "Restored from version N" (the link is set to null). Skipped in one
+ * step only -- a version kept just because it is a source doesn't in turn keep its own source --
+ * so a long chain of restores can't grow a wedding's versions without limit (at most `keep` plus
+ * the sources of those kept, i.e. no more than twice the cap).
+ */
+export function planVersionsToPrune(versions: PrunablePlanVersion[], keep: number): string[] {
+  const excess = versions.length - keep;
+  if (excess <= 0) return [];
+  const oldestFirst = [...versions].sort((a, b) => a.versionNumber - b.versionNumber);
+  const removable = oldestFirst.filter((v) => v.status !== "APPROVED" && !v.isCurrent).slice(0, excess);
+  const removing = new Set(removable.map((v) => v.id));
+  const sourcesOfKept = new Set(
+    versions.filter((v) => !removing.has(v.id) && v.restoredFromId).map((v) => v.restoredFromId as string)
+  );
+  return removable.filter((v) => !sourcesOfKept.has(v.id)).map((v) => v.id);
+}
+
 /**
  * TS-205: keeps at most WEDDING_CAPS.planVersionsKept plan versions, removing the oldest ones that
- * are neither approved nor current (with their seats and history). An approved or current version
- * is never removed, even past the cap. Call it with the wedding's lock held, after saving a new
- * version (Generate, Restore). Returns how many were removed.
+ * are neither approved nor current (with their seats and history) -- see planVersionsToPrune. An
+ * approved or current version is never removed, even past the cap. Call it with the wedding's lock
+ * held, after saving a new version (Generate, Restore). Returns how many were removed.
  */
 export async function pruneOldPlanVersions(q: Queryable, weddingId: string): Promise<number> {
+  const { rows } = await q.query(
+    `SELECT id, "versionNumber", status, "isCurrent", "restoredFromId" FROM "plan_versions" WHERE "weddingId" = $1`,
+    [weddingId]
+  );
+  const ids = planVersionsToPrune(rows as unknown as PrunablePlanVersion[], WEDDING_CAPS.planVersionsKept);
+  if (ids.length === 0) return 0;
   const { rowCount } = await q.query(
-    `DELETE FROM "plan_versions" WHERE id IN (
-       SELECT id FROM "plan_versions"
-       WHERE "weddingId" = $1 AND status <> 'APPROVED' AND NOT "isCurrent"
-       ORDER BY "versionNumber" ASC
-       LIMIT GREATEST(0, (SELECT count(*) FROM "plan_versions" WHERE "weddingId" = $1) - $2)
-     )`,
-    [weddingId, WEDDING_CAPS.planVersionsKept]
+    `DELETE FROM "plan_versions" WHERE "weddingId" = $1 AND id = ANY($2::text[]) AND status <> 'APPROVED' AND NOT "isCurrent"`,
+    [weddingId, ids]
   );
   return rowCount ?? 0;
 }

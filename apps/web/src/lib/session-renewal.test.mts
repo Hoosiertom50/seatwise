@@ -47,3 +47,25 @@ test("a token signed with a different secret is rejected", async () => {
   const [header, payload] = good.split(".");
   assert.equal(await verifyToken(`${header}.${payload}.${"x".repeat(43)}`), null);
 });
+
+// TS-204: a session ended with "Log out" must stay ended for as long as any renewed copy of its
+// token could be valid -- not just until the logging-out token's own expiry.
+test("an ended session is kept until the last renewal's token would expire", async () => {
+  const { revokedSessionKeepUntil } = await import("./session-renewal");
+  const authTime = NOW - 10 * 24 * 60 * 60;
+  const expiresAt = NOW + AUTH_TOKEN_TTL_SECONDS;
+  const keepUntil = revokedSessionKeepUntil({ authTime, expiresAt }, AUTH_TOKEN_TTL_SECONDS);
+  assert.equal(keepUntil, authTime + RENEWAL_LIMIT_SECONDS + AUTH_TOKEN_TTL_SECONDS);
+  assert.ok(keepUntil > expiresAt);
+
+  // The latest moment a copy can still be renewed is one second before the limit; the token that
+  // renewal issues must still be inside the kept window.
+  const lastRenewal = authTime + RENEWAL_LIMIT_SECONDS - 1;
+  assert.equal(shouldRenew({ issuedAt: lastRenewal - RENEW_AFTER_SECONDS, authTime }, lastRenewal), true);
+  assert.ok(lastRenewal + AUTH_TOKEN_TTL_SECONDS <= keepUntil);
+  // ...and at the limit no more renewals happen.
+  assert.equal(shouldRenew({ issuedAt: lastRenewal - RENEW_AFTER_SECONDS, authTime }, authTime + RENEWAL_LIMIT_SECONDS), false);
+
+  // A token that already expires later than that (it can't, but never shorten) keeps its own expiry.
+  assert.equal(revokedSessionKeepUntil({ authTime, expiresAt: keepUntil + 5 }, AUTH_TOKEN_TTL_SECONDS), keepUntil + 5);
+});

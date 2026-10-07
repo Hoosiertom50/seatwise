@@ -227,7 +227,8 @@ export async function createComment(
         weddingId,
         authorUserId,
         "COMMENT_ADDED",
-        `New comment on "${targetLabel}": ${input.body.slice(0, 120)}`,
+        // TS-214: cut between whole characters, with "…", as replies are.
+        `New comment on "${targetLabel}": ${shortenWithEllipsis(input.body, 120)}`,
         // TS-168: as for replies, the email points to the app rather than carrying the comment.
         { emailMessage: `There's a new comment on "${targetLabel}" — open Seatwise to read it.` }
       );
@@ -259,10 +260,15 @@ export async function resolveComment(
   if (comment.authorUserId !== requesterId && !requesterCanEdit) {
     throw new CommentError("Only the original commenter or an editor can resolve this comment.", "FORBIDDEN");
   }
-  await inWeddingChange(weddingId, actor, (client) =>
-    client.query(`UPDATE "comments" SET "resolvedAt" = now(), "resolvedByUserId" = $1 WHERE id = $2`, [requesterId, commentId])
-  );
-
-  const { rows: updatedRows } = await pool.query(`${SELECT_COMMENT} WHERE c.id = $1`, [commentId]);
-  return updatedRows[0];
+  // TS-204: resolving someone else's comment relies on Edit access, so that is what's read again
+  // (the route's actor carries only its minimum, Comment).
+  const recheckAs: ActorAccess | undefined =
+    actor && comment.authorUserId !== requesterId ? { ...actor, accessLevel: actor.accessLevel === "OWNER" ? "OWNER" : "EDIT" } : actor;
+  // TS-209: the resolved comment is read back inside the change, before it commits -- read after
+  // it, a failure answered an error for a comment that was resolved.
+  return inWeddingChange(weddingId, recheckAs, async (client) => {
+    await client.query(`UPDATE "comments" SET "resolvedAt" = now(), "resolvedByUserId" = $1 WHERE id = $2`, [requesterId, commentId]);
+    const { rows: updatedRows } = await client.query<CommentRow>(`${SELECT_COMMENT} WHERE c.id = $1`, [commentId]);
+    return updatedRows[0];
+  });
 }
