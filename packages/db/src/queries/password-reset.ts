@@ -1,5 +1,6 @@
 import { createHash, randomBytes, randomUUID } from "crypto";
 import { pool, beginTransaction } from "../pool";
+import { claimCooldown, releaseCooldown } from "./rate-limit";
 
 // TS-142: "forgot password" links. The emailed token is 32 random bytes; only its SHA-256 hash is
 // stored. A link works once, for one hour, and asking for a new one cancels any older unused ones.
@@ -93,6 +94,34 @@ export async function lastPasswordResetAt(userId: string): Promise<Date | null> 
 /** TS-219: whether the newest reset may go out past full daily counts (see NEWEST_RESET_AFTER_SECONDS). Pure. */
 export function newestResetMayGo(lastResetAt: Date | null, nowMs: number = Date.now()): boolean {
   return lastResetAt === null || nowMs - lastResetAt.getTime() >= NEWEST_RESET_AFTER_SECONDS * 1000;
+}
+
+/**
+ * TS-232: how long until the newest reset may go out past full daily counts (see
+ * NEWEST_RESET_AFTER_SECONDS), in whole seconds -- 0 when it already may. Pure.
+ */
+export function newestResetWaitSeconds(lastResetAt: Date | null, nowMs: number = Date.now()): number {
+  if (newestResetMayGo(lastResetAt, nowMs)) return 0;
+  return Math.max(1, Math.ceil((lastResetAt!.getTime() + NEWEST_RESET_AFTER_SECONDS * 1000 - nowMs) / 1000));
+}
+
+/** TS-228: the key the newest-reset slot (see claimNewestResetSlot) is kept under. */
+export const newestResetSlotKey = (userId: string) => `pw-reset:newest:${userId}`;
+
+/**
+ * TS-228: claims, atomically, the one reset that may go out past full daily counts after a quiet
+ * few hours. Checking the quiet spell on its own let several requests sent at the same moment all
+ * pass it (up to 3 resets instead of 1); only one of them can claim this. `release` gives it back
+ * when no email went out after all. Lasts NEWEST_RESET_AFTER_SECONDS, like the quiet spell itself.
+ */
+export async function claimNewestResetSlot(
+  userId: string
+): Promise<{ claimed: boolean; retryAfterSeconds: number; release: () => Promise<void> }> {
+  const key = newestResetSlotKey(userId);
+  const claim = await claimCooldown(key, NEWEST_RESET_AFTER_SECONDS);
+  if (!claim.allowed || !claim.claimedAt) return { claimed: false, retryAfterSeconds: claim.retryAfterSeconds, release: async () => {} };
+  const claimedAt = claim.claimedAt;
+  return { claimed: true, retryAfterSeconds: 0, release: () => releaseCooldown(key, claimedAt) };
 }
 
 /**

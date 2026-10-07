@@ -133,8 +133,8 @@ async function insertGuest(q: PoolClient, weddingId: string, input: CreateGuestD
   const id = randomUUID();
   const { rows } = await q.query(
     `INSERT INTO "guests"
-       (id, "weddingId", "firstName", "lastName", "partyName", headcount, tier, "rsvpStatus", "requiresAccessibleTable", "isLocked", "dayOfAttendance", notes, side, "ageCategory", email, "plusOneNames", "updatedAt")
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, now())
+       (id, "weddingId", "firstName", "lastName", "partyName", headcount, tier, "rsvpStatus", "requiresAccessibleTable", "isLocked", "dayOfAttendance", notes, side, "ageCategory", email, "plusOneNames", "updatedAt", "emailChangedAt")
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, now(), now())
      RETURNING id, "weddingId", "firstName", "lastName", "partyName", headcount, tier,
                "rsvpStatus", "requiresAccessibleTable", "isLocked", "dayOfAttendance", notes, side,
                "ageCategory", email, "plusOneNames", "rsvpRespondedAt", "rsvpNotes", revision, "createdAt", "updatedAt"`,
@@ -242,6 +242,14 @@ export async function updateGuestForWedding(
   for (const [key, column] of Object.entries(columnMap)) {
     const value = (input as Record<string, unknown>)[key];
     if (value !== undefined) {
+      // TS-232: when the address really changes (not just its capitals or spaces), note when -- what
+      // "listed for over a day" goes by (see senderListsRecipient). The right-hand side reads the
+      // row as it was, so this compares the old address with the new one.
+      if (key === "email") {
+        fields.push(
+          `"emailChangedAt" = CASE WHEN lower(trim(email)) IS DISTINCT FROM lower(trim($${i}::text)) THEN now() ELSE "emailChangedAt" END`
+        );
+      }
       fields.push(`${column} = $${i++}`);
       values.push(key === "notes" ? encryptText(value as string | null) : value);
     }

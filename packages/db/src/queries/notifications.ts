@@ -1,5 +1,5 @@
 import { randomUUID } from "crypto";
-import { accountDailyEmailKey, accountDailyEmailLimit, emailMayHaveGone, sendEmail, type EmailResult } from "../email";
+import { accountDailyEmailLimit, emailMayHaveGone, sendEmail, type EmailResult } from "../email";
 import { pool } from "../pool";
 import { claimCooldown, hitRateLimit, releaseCooldown, undoRateLimitHit } from "./rate-limit";
 import { appBaseUrl, emailSafeWeddingName, looksLikePhoneNumber, looksLikeWebAddress } from "@seatwise/shared";
@@ -34,6 +34,14 @@ export const NOTIFICATION_EMAILS_PER_OWNER_WITHOUT_ACTOR = { limit: 60, windowSe
 export const NEW_OWNER_NOTIFICATION_EMAILS_WITHOUT_ACTOR = { limit: 20, windowSeconds: 86_400 } as const;
 export const ownerNotificationEmailKey = (ownerId: string) => `email:notify-owner:86400:${ownerId}`;
 
+// TS-232: the notification emails one person's own actions set off have a daily allowance of their
+// own, the same size as the account's allowance for invites and RSVP links (20 in its first week,
+// 100 after -- see accountDailyEmailLimit). They used to come out of that same allowance, so a
+// first-week planner with two collaborators used 3 of their 20 on every guest they added (the RSVP
+// link plus a "guest added" email to each collaborator) and could only email about 6 guests their
+// link. Real sends are still held to the account's share of Seatwise's email (see sendEmail).
+export const actorNotificationEmailKey = (userId: string) => `email:notify-account:day:${userId}`;
+
 // TS-186 (Tom's decision): a guest's changed RSVP answer is emailed to the planners at most this
 // many times per guest per day; after that it only shows in the app.
 export const CHANGED_RSVP_EMAILS_PER_GUEST_PER_DAY = { limit: 3, windowSeconds: 86_400 } as const;
@@ -61,8 +69,21 @@ type Counter = { key: string; limit: number; windowSeconds: number };
  * When allowed, `giveBack` takes all the counts back -- for an email that then didn't go out.
  * TS-186: each count is taken back from the window it was made in.
  */
-async function reserveNotificationEmail(counters: Counter[]): Promise<{ allowed: boolean; giveBack: () => Promise<void> }> {
-  const results = await Promise.all(counters.map(({ key, limit, windowSeconds }) => hitRateLimit(key, limit, windowSeconds)));
+export async function reserveNotificationEmail(counters: Counter[]): Promise<{ allowed: boolean; giveBack: () => Promise<void> }> {
+  // TS-232: every count settles before anything is decided; if one of them failed (the database
+  // busy), the ones that landed are given back before the error goes on -- they used to stay
+  // counted with no email sent.
+  const settled = await Promise.allSettled(counters.map(({ key, limit, windowSeconds }) => hitRateLimit(key, limit, windowSeconds)));
+  const failed = settled.find((r): r is PromiseRejectedResult => r.status === "rejected");
+  if (failed) {
+    await Promise.all(
+      settled.map((r, i) =>
+        r.status === "fulfilled" ? undoRateLimitHit(counters[i].key, counters[i].windowSeconds, r.value.windowStart).catch(() => {}) : null
+      )
+    );
+    throw failed.reason;
+  }
+  const results = settled.map((r) => (r as PromiseFulfilledResult<Awaited<ReturnType<typeof hitRateLimit>>>).value);
   const giveBack = async () => {
     await Promise.all(counters.map((c, i) => undoRateLimitHit(c.key, c.windowSeconds, results[i].windowStart)));
   };
@@ -71,7 +92,7 @@ async function reserveNotificationEmail(counters: Counter[]): Promise<{ allowed:
   return { allowed: false, giveBack: async () => {} };
 }
 
-async function notificationEmailCounters(actorUserId: string | null, weddingId: string, ownerId: string): Promise<Counter[]> {
+export async function notificationEmailCounters(actorUserId: string | null, weddingId: string, ownerId: string): Promise<Counter[]> {
   if (actorUserId) {
     // TS-194: a new account's allowance is smaller (see accountDailyEmailLimit).
     const { limit, windowSeconds } = await accountDailyEmailLimit(actorUserId);
@@ -81,8 +102,9 @@ async function notificationEmailCounters(actorUserId: string | null, weddingId: 
         limit,
         windowSeconds,
       })),
-      // TS-171: these count toward the account's one daily allowance for every kind of email.
-      { key: accountDailyEmailKey(actorUserId), limit, windowSeconds },
+      // TS-171: these counted toward the account's one daily allowance for every kind of email.
+      // TS-232: they now have one of their own, the same size (see actorNotificationEmailKey).
+      { key: actorNotificationEmailKey(actorUserId), limit, windowSeconds },
     ];
   }
   // TS-186 (Tom's decision): with nobody signed in behind it (a guest's RSVP), only the wedding's

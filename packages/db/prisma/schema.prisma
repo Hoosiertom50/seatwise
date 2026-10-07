@@ -490,6 +490,9 @@ model Guest {
   rsvpNotes               String?
   createdAt               DateTime   @default(now())
   updatedAt               DateTime   @updatedAt
+  // TS-232: when `email` last changed (any other edit, or the guest's RSVP, leaves it alone) --
+  // what "this wedding has had the address for over a day" goes by when emailing it.
+  emailChangedAt          DateTime?  @default(now())
 
   relationshipsFrom GuestRelationship[] @relation("relationshipGuestA")
   relationshipsTo   GuestRelationship[] @relation("relationshipGuestB")

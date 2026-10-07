@@ -1088,10 +1088,14 @@ export async function unlistedEmailsToAddressToday(email: string): Promise<numbe
   return readCounter(`email:to:unlisted:day:${requireTestEmail(email)}`, 86_400);
 }
 
-/** TS-219: makes a test guest look added, and last changed, `hours` ago. Test weddings only. */
+/**
+ * TS-219: makes a test guest look added, and last changed, `hours` ago. Test weddings only.
+ * TS-232: their email address too ("emailChangedAt", what "listed for over a day" goes by).
+ */
 export async function backdateGuest(guestId: string, hours: number): Promise<void> {
   const { rowCount } = await testPool().query(
-    `UPDATE "guests" g SET "createdAt" = now() - make_interval(hours => $2), "updatedAt" = now() - make_interval(hours => $2)
+    `UPDATE "guests" g SET "createdAt" = now() - make_interval(hours => $2), "updatedAt" = now() - make_interval(hours => $2),
+            "emailChangedAt" = now() - make_interval(hours => $2)
      FROM "weddings" w JOIN "users" u ON u.id = w."ownerId"
      WHERE g.id = $1 AND w.id = g."weddingId" AND u.email LIKE $3`,
     [guestId, hours, TEST_EMAIL_PATTERN],

@@ -18,6 +18,7 @@ const {
   setAccountIsNewForTests,
   setNewAccountsCounterForTests,
   setUnlistedSendersForTests,
+  setGuestAnswersCounterForTests,
   dailyEmailLimits,
   EMAILS_PER_RECIPIENT_FROM_UNLISTED_SENDERS,
   UNCONFIRMED_RESETS_PER_RECIPIENT_PER_DAY,
@@ -75,6 +76,7 @@ beforeEach(() => {
   setAccountIsNewForTests(async (account) => newAccounts.has(account));
   setNewAccountsCounterForTests(counter("new-accounts"));
   setUnlistedSendersForTests({ counter: (to) => counter(`unlisted:${to}`), listed: async (account, to) => listed.has(`${account}:${to}`) });
+  setGuestAnswersCounterForTests(counter("guest-answers"));
 });
 afterEach(() => {
   setEmailSenderForTests();
@@ -87,6 +89,7 @@ afterEach(() => {
   setAccountIsNewForTests();
   setNewAccountsCounterForTests();
   setUnlistedSendersForTests();
+  setGuestAnswersCounterForTests();
   setSignupEmailForTests();
 });
 
@@ -111,9 +114,10 @@ test("TS-219: a guest's answer is charged to nobody's share; someone's own actio
   assert.deepEqual(notificationEmailCharge("collab-1", "owner-1"), { account: "collab-1" });
 });
 
-test("TS-219: 60 emails set off by guests' answers leave the owner's own share untouched, so their invites still go", async () => {
+test("TS-219: emails set off by guests' answers leave the owner's own share untouched, so their invites still go", async () => {
   await quietly(async () => {
-    for (let i = 0; i < 60; i++) {
+    // TS-232: as many as guests' answers' site-wide share allows (48 of 240).
+    for (let i = 0; i < 48; i++) {
       const result = await sendEmail(`planner${i}@example.invalid`, "s", "t", GMAIL, { toWeddingMember: true, ...notificationEmailCharge(null, "owner") });
       assert.equal(result, "sent", `guest-caused email ${i}`);
     }
@@ -123,7 +127,7 @@ test("TS-219: 60 emails set off by guests' answers leave the owner's own share u
   });
   assert.equal(counts.get("share:owner"), 1);
   // Still bounded by the site's allowance (counted there), short of the planner floor.
-  assert.equal(counts.get("everyday"), 61);
+  assert.equal(counts.get("everyday"), 49);
 });
 
 // --- 2. Accounts in their first week share one pool ---
