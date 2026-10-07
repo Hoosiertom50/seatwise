@@ -103,8 +103,34 @@ async function sweepNotificationTriggers(pool: Pool, dryRun: boolean): Promise<v
   }
 }
 
+/** TS-215: projects that never touch the database (no app, no browser). */
+const DATABASE_FREE_PROJECTS = new Set(["framework-unit", "unit"]);
+
+/**
+ * TS-215: the projects named on the command line (`--project=x` or `--project x`), or null when
+ * none were (every project runs). Playwright runs this teardown for any run, whatever projects it
+ * selects -- so a quick unit-test run used to sweep away every test account while a browser run in
+ * another terminal was still using them.
+ */
+export function selectedProjects(argv: readonly string[]): string[] | null {
+  const names: string[] = [];
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg.startsWith("--project=")) names.push(arg.slice("--project=".length));
+    else if (arg === "--project" && i + 1 < argv.length) names.push(argv[++i]);
+  }
+  return names.length > 0 ? names : null;
+}
+
+/** TS-215: true when only database-free projects were selected -- then there's nothing to sweep. */
+export function onlyDatabaseFreeProjects(argv: readonly string[]): boolean {
+  const names = selectedProjects(argv);
+  return names !== null && names.every((n) => DATABASE_FREE_PROJECTS.has(n));
+}
+
 export default async function globalTeardown(): Promise<void> {
   const dryRun = process.env.PW_TEARDOWN_SWEEP === DRY_RUN_VALUE;
+  if (onlyDatabaseFreeProjects(process.argv)) return;
 
   let pool: Pool | undefined;
   try {

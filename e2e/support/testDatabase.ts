@@ -799,8 +799,9 @@ const rollsDaily = (windowSeconds: number) => windowSeconds >= 86_400;
  * key belongs to a test address or test account. */
 async function setCounter(key: string, windowSeconds: number, count: number, window: "current" | "previous" = "current"): Promise<void> {
   // TS-215: a preset made just before the window ends would be in the next window by the time the
-  // test's request arrives -- wait for the new window first (TS-203: an hour, for rolling limits).
-  await settleIntoWindow(rollsDaily(windowSeconds) ? HOUR_MS / 1000 : windowSeconds);
+  // test's request arrives -- wait for the new window first. TS-203: not for a rolling limit, whose
+  // next hour still counts this one.
+  if (!rollsDaily(windowSeconds)) await settleIntoWindow(windowSeconds);
   if (rollsDaily(windowSeconds)) {
     const hour = currentWindowStart(HOUR_MS / 1000);
     await testPool().query(`DELETE FROM "rate_limit_counters" WHERE key = $1 AND "windowStart" >= $2::timestamp`, [

@@ -153,8 +153,9 @@ else deploys:
 **Environment variables** (Netlify → Project configuration → Environment variables; never in the
 repo): `DATABASE_URL` (Neon's **pooled** `-pooler` string), `JWT_SECRET`, `ENCRYPTION_KEY`,
 `APP_URL` (`https://seatwise-app.netlify.app`), and the email settings `SMTP_USER`/`SMTP_PASSWORD`
-(see Email delivery). The running app refuses a `JWT_SECRET` shorter than 32 characters or
-left at a placeholder such as the one in `.env.example` (TS-179) -- but only when it first uses it,
+(see Email delivery). The running app refuses a `JWT_SECRET` shorter than 32 characters,
+left at a placeholder such as the one in `.env.example` (TS-179), or the same as `ENCRYPTION_KEY`
+(TS-204) -- but only when it first uses it,
 **not at build time** (TS-215). A wrong `JWT_SECRET`, `ENCRYPTION_KEY` or `APP_URL` builds and
 deploys without a word (spending the deploy's credits), and then every sign-in or link fails --
 so check them before publishing (step 1 of the publish steps below). The three secrets are marked *Contains secret
@@ -223,10 +224,9 @@ should be live together, so the gap between them is as short as possible:
    but a local database, whatever it's passed.
 5. Check the live site by hand (sign in, open a wedding, its seating plan).
 
-   TS-215: when a release brings in the rolling email counters (TS-203), they **start at 0** on
-   publish -- emails sent before it under the old counters aren't counted toward them, so for the
-   first day the limits can let a few more emails through than usual. Nothing to do; it evens out
-   once a full window has passed.
+   TS-215: when a release brings in the rolling 24-hour limits (TS-203), the counts already made
+   that day carry over -- the limits keep their names, and today's count is still inside the last 24
+   hours -- so nothing resets on publish. Nothing to do.
 
    TS-187: someone who signed up in the gap between steps 2 and 3 got their "confirm your email"
    link from the old code. If it doesn't work for them, they can use **Resend link** on the

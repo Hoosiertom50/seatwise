@@ -86,6 +86,8 @@ export default defineConfig({
     {
       name: "framework-unit",
       testDir: "./playwright-framework/tests",
+      // TS-215: its own results folder, so a unit-only run doesn't clear a browser run's evidence.
+      outputDir: "artifacts/playwright/runs/unit-results/framework",
     },
 
     // TS-215: the e2e helpers' own unit tests (tab-order rules, token redaction, test-address ids,
@@ -94,6 +96,9 @@ export default defineConfig({
     {
       name: "unit",
       testDir: "./e2e/tests/unit",
+      // TS-215: its own results folder (see framework-unit), and the teardown sweep skips a run of
+      // only these two projects (e2e/support/globalTeardown.ts).
+      outputDir: "artifacts/playwright/runs/unit-results/e2e",
     },
 
     // Application E2E tests. Chromium is the required baseline browser (spec Section 5 defaults).
