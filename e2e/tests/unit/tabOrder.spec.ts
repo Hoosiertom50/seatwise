@@ -4,7 +4,15 @@
  */
 
 import { test, expect } from "@playwright/test";
-import { tabOrderProblems, tabWalkProblems, type TabStop, type TabWalk } from "../../support/tabOrder.js";
+import {
+  tabOrderProblems,
+  tabWalkProblems,
+  endAfterFocusFell,
+  endWhenTabStaysPut,
+  walkWorthRetrying,
+  type TabStop,
+  type TabWalk,
+} from "../../support/tabOrder.js";
 
 let n = 0;
 function stop(description: string, left: number, top: number, extra: Partial<TabStop> = {}): TabStop {
@@ -93,5 +101,42 @@ test.describe("tabWalkProblems", () => {
 
   test("a count that doesn't match the stops is reported", () => {
     expect(tabWalkProblems(walk({ focusableCount: 3 }))[0]).toContain("2 visible stops, but there are 3 visible controls");
+  });
+});
+
+// TS-215: a trap must never read as a clean end, and a trap is never walked again until it passes.
+test.describe("walk endings and retries", () => {
+  const walk = (extra: Partial<TabWalk> = {}): TabWalk => ({
+    stops: [stop("name", 0, 0), stop("save", 0, 60)],
+    end: "left-page",
+    maxStops: 250,
+    focusableCount: 2,
+    unreached: [],
+    uncounted: [],
+    ...extra,
+  });
+
+  test("after focus falls to the page: nowhere or the first control is leaving; another seen control is a trap", () => {
+    const seen = new Set(["1", "2", "3"]);
+    expect(endAfterFocusFell(null, seen, "1")).toBe("left-page");
+    expect(endAfterFocusFell("1", seen, "1")).toBe("left-page");
+    expect(endAfterFocusFell("2", seen, "1")).toBe("trapped");
+    expect(endAfterFocusFell("9", seen, "1")).toBe("lost-focus");
+  });
+
+  test("Tab staying on one control is leaving the page only when the page didn't hold it there", () => {
+    expect(endWhenTabStaysPut(0)).toBe("left-page");
+    expect(endWhenTabStaysPut(1)).toBe("stuck");
+    expect(tabWalkProblems(walk({ end: "stuck" }))[0]).toContain("Tab stayed on save (stop 2)");
+    expect(tabWalkProblems(walk({ end: "stuck" }))[0]).toContain("keyboard trap");
+  });
+
+  test("only a count that can still be settling is walked again -- never a trap or lost focus", () => {
+    expect(walkWorthRetrying(walk(), [])).toBe(false);
+    expect(walkWorthRetrying(walk({ end: "left-page" }), ["Tab never reached x"])).toBe(true);
+    expect(walkWorthRetrying(walk({ end: "max-stops" }), ["gave up"])).toBe(true);
+    for (const end of ["trapped", "stuck", "lost-focus"] as const) {
+      expect(walkWorthRetrying(walk({ end }), ["a problem"])).toBe(false);
+    }
   });
 });
