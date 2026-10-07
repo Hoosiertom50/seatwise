@@ -25,3 +25,26 @@ test("TS-192: never when Netlify's runtime variables are set, even without NETLI
     assert.equal(directCollaboratorAddAllowed({ NODE_ENV: "development", ...runtime }), false, JSON.stringify(runtime));
   }
 });
+
+test("TS-204: the strict check -- URL set to anything, or netlify dev, switches it off", () => {
+  for (const extra of [
+    { URL: "https://example.com" },
+    { URL: "http://localhost:3000" },
+    { URL: "anything" },
+    { NETLIFY_DEV: "true" },
+    { NETLIFY_DEV: "true", NETLIFY: "true" },
+    { CONTEXT: "dev" },
+  ]) {
+    assert.equal(directCollaboratorAddAllowed({ NODE_ENV: "development", ...extra }), false, JSON.stringify(extra));
+    assert.equal(
+      directCollaboratorAddAllowed({ NODE_ENV: "production", ALLOW_DIRECT_COLLABORATOR_ADD: "1", ...extra }),
+      false,
+      JSON.stringify(extra)
+    );
+  }
+  // CI's own setup (no URL, no Netlify variables) still allows it.
+  assert.equal(
+    directCollaboratorAddAllowed({ NODE_ENV: "production", ALLOW_DIRECT_COLLABORATOR_ADD: "1", APP_URL: "http://localhost:3000", CI: "true" }),
+    true
+  );
+});

@@ -25,3 +25,13 @@ export function runningOnNetlify(env: Env): boolean {
   if (env.NETLIFY_DEV) return false;
   return Boolean(env.NETLIFY || env.CONTEXT || env.SITE_ID || env.DEPLOY_ID || isNetlifyAddress(env.URL));
 }
+
+/**
+ * TS-204: the stricter answer, for switching off something that must never run on a hosted site
+ * (the test-only direct collaborator add): any of Netlify's variables at all, URL with any value
+ * (not just a Netlify address), and NETLIFY_DEV too -- a wrong "yes" here only switches a test
+ * helper off, a wrong "no" would switch it on for real people.
+ */
+export function mightBeHosted(env: Env): boolean {
+  return Boolean(env.NETLIFY || env.NETLIFY_DEV || env.CONTEXT || env.SITE_ID || env.DEPLOY_ID || env.URL);
+}

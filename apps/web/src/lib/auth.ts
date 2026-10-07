@@ -1,7 +1,7 @@
 import { SignJWT, jwtVerify } from "jose";
 import type { NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
-import { isPlaceholderSecret } from "@seatwise/shared";
+import { isPlaceholderSecret, normalizeSecretForCheck, sameSecret } from "@seatwise/shared";
 import { appBaseUrl } from "./app-url";
 
 const JWT_SECRET = process.env.JWT_SECRET;
@@ -18,13 +18,22 @@ const MIN_SECRET_LENGTH = 32;
  * short or placeholder secret is refused. Outside production only a missing one is, so local
  * development keeps working with the README's example value.
  */
-export function jwtSecretProblem(secret: string | undefined, nodeEnv: string | undefined): string | null {
+export function jwtSecretProblem(
+  secret: string | undefined,
+  nodeEnv: string | undefined,
+  encryptionKey?: string | undefined
+): string | null {
   if (!secret) return "JWT_SECRET environment variable is not set";
   if (nodeEnv !== "production") return null;
   if (isPlaceholderSecret(secret)) {
     return "JWT_SECRET is still a placeholder value -- set it to a long random value (e.g. openssl rand -hex 32).";
   }
-  if (secret.length < MIN_SECRET_LENGTH) {
+  // TS-204: one value for both would mean anyone who learns either can do what both protect.
+  if (sameSecret(secret, encryptionKey)) {
+    return "JWT_SECRET is the same as ENCRYPTION_KEY -- give each its own long random value (e.g. openssl rand -hex 32).";
+  }
+  // TS-204: measured without surrounding quotes or invisible characters a paste can add.
+  if (normalizeSecretForCheck(secret).length < MIN_SECRET_LENGTH) {
     return `JWT_SECRET is shorter than ${MIN_SECRET_LENGTH} characters -- set it to a long random value (e.g. openssl rand -hex 32).`;
   }
   return null;
@@ -34,7 +43,7 @@ function getSecretKey() {
   // TS-172 only logged a short secret; TS-179 refuses it (and a placeholder) in production, the same
   // way ENCRYPTION_KEY is refused (packages/db/src/crypto.ts). Checked on use, not at import, so
   // `next build` doesn't need the secret.
-  const problem = jwtSecretProblem(JWT_SECRET, process.env.NODE_ENV);
+  const problem = jwtSecretProblem(JWT_SECRET, process.env.NODE_ENV, process.env.ENCRYPTION_KEY);
   if (problem) throw new Error(problem);
   return new TextEncoder().encode(JWT_SECRET);
 }
