@@ -147,6 +147,34 @@ export class CollaboratorsTabPage extends BasePage {
     await this.page.waitForURL((url) => url.pathname === "/dashboard");
   }
 
+  // TS-214: the date-and-venue boxes, and a save whose answer is returned (a 409 when another tab
+  // changed the settings first).
+  weddingDateInput() {
+    return this.page.getByLabel("Wedding date", { exact: true });
+  }
+  venueInput() {
+    return this.page.getByLabel("Venue", { exact: true });
+  }
+  async submitDateAndVenue(date: string): Promise<number> {
+    await this.weddingDateInput().fill(date);
+    const [response] = await Promise.all([
+      this.page.waitForResponse((r) => r.request().method() === "PATCH" && /\/api\/v1\/weddings\/[^/]+$/.test(new URL(r.url()).pathname)),
+      this.page.getByRole("button", { name: "Save date and venue", exact: true }).click(),
+    ]);
+    return response.status();
+  }
+
+  /** TS-214: the "Save anyway?" question shown for an RSVP cutoff before today or after the wedding. */
+  rsvpCutoffQuestion() {
+    return this.page.getByRole("alertdialog").filter({ hasText: /RSVP cutoff/ });
+  }
+  async saveCutoffAnyway(): Promise<void> {
+    await this.rsvpCutoffQuestion().getByRole("button", { name: "Save anyway", exact: true }).click();
+  }
+  async changeCutoff(): Promise<void> {
+    await this.rsvpCutoffQuestion().getByRole("button", { name: "Change it", exact: true }).click();
+  }
+
   /** TS-154: sets the wedding's date and venue in the owner settings and waits for the save. */
   async saveDateAndVenue(date: string, venue: string): Promise<void> {
     await this.page.getByLabel("Wedding date", { exact: true }).fill(date);

@@ -7,6 +7,9 @@ import { requireAccess } from "@/lib/access";
 
 type Params = { params: Promise<{ weddingId: string }> };
 
+const SETTINGS_CONFLICT_MESSAGE =
+  "This wedding's settings changed since you opened them (maybe in another tab) — showing the latest. Your change wasn't saved; make it again if it's still needed.";
+
 export async function GET(req: NextRequest, { params }: Params) {
   const user = await getAuthUser(req);
   if (!user) return errorResponse("Not authenticated", 401);
@@ -43,7 +46,16 @@ export async function PATCH(req: NextRequest, { params }: Params) {
     return errorResponse(SIDE_LABELS_MESSAGE, 422, { [sideLabel1 !== undefined ? "sideLabel1" : "sideLabel2"]: [SIDE_LABELS_MESSAGE] });
   }
 
-  const saved = await updateWeddingForOwner(weddingId, user.id, parsed.data);
+  const { expectedRevision, ...changes } = parsed.data;
+  const saved = await updateWeddingForOwner(weddingId, user.id, changes, expectedRevision);
+  // TS-214: the settings changed since this copy was loaded (another tab, most likely) -- nothing
+  // was saved; the latest settings come back so the screen can show them.
+  if (saved === "CONFLICT") {
+    return NextResponse.json(
+      { error: SETTINGS_CONFLICT_MESSAGE, wedding: await getWeddingById(weddingId) },
+      { status: 409 }
+    );
+  }
   // TS-195: the other side was renamed to this same name a moment ago (another tab) -- checked
   // again as it saves; nothing was saved.
   if (saved === "SIDE_LABELS_CLASH") {

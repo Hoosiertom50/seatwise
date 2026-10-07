@@ -10,6 +10,8 @@ export interface TimelineEntryRow {
   id: string;
   weddingId: string;
   time: string;
+  // TS-214: after midnight -- listed after the wedding day's own entries.
+  nextDay: boolean;
   description: string;
   sortOrder: number;
   // TS-92: bumped on every edit and reorder.
@@ -18,12 +20,14 @@ export interface TimelineEntryRow {
   updatedAt: Date;
 }
 
-const COLUMNS = `id, "weddingId", time, description, "sortOrder", revision, "createdAt", "updatedAt"`;
+const COLUMNS = `id, "weddingId", time, "nextDay", description, "sortOrder", revision, "createdAt", "updatedAt"`;
 
 // TS-174: the one order entries are shown and reordered in. Ties on sortOrder (left from before
 // TS-153) are broken the same way in both, so "Up" always swaps with the entry shown just above --
 // before, the list and the reorder could break a tie differently and swap the wrong pair.
-const ENTRY_ORDER = `time ASC, "sortOrder" ASC, "createdAt" ASC, id ASC`;
+// TS-214: next-day entries (after midnight) come after the wedding day's own -- the same order as
+// compareTimelineEntries in @seatwise/shared, which the screens use.
+export const TIMELINE_ENTRY_ORDER = `"nextDay" ASC, time ASC, "sortOrder" ASC, "createdAt" ASC, id ASC`;
 
 // TS-174: the entry changed (its time moved, or it was removed) while it was being reordered --
 // nothing was reordered; the caller shows the latest and the planner can try again.
@@ -46,7 +50,7 @@ export class TimelineConflictError extends Error {
 
 export async function listTimelineEntriesForWedding(weddingId: string): Promise<TimelineEntryRow[]> {
   const { rows } = await pool.query(
-    `SELECT ${COLUMNS} FROM "timeline_entries" WHERE "weddingId" = $1 ORDER BY ${ENTRY_ORDER}`,
+    `SELECT ${COLUMNS} FROM "timeline_entries" WHERE "weddingId" = $1 ORDER BY ${TIMELINE_ENTRY_ORDER}`,
     [weddingId]
   );
   return rows;
@@ -62,6 +66,8 @@ export async function getTimelineEntryForWedding(id: string, weddingId: string):
 
 export interface CreateTimelineEntryData {
   time: string;
+  // TS-214: optional -- false (the wedding day) when not given.
+  nextDay?: boolean;
   description: string;
 }
 
@@ -73,16 +79,16 @@ export async function createTimelineEntry(
 ): Promise<TimelineEntryRow> {
   const id = randomUUID();
   const { rows: maxRows } = await pool.query(
-    `SELECT COALESCE(MAX("sortOrder"), -1) AS "maxSortOrder" FROM "timeline_entries" WHERE "weddingId" = $1 AND time = $2`,
-    [weddingId, input.time]
+    `SELECT COALESCE(MAX("sortOrder"), -1) AS "maxSortOrder" FROM "timeline_entries" WHERE "weddingId" = $1 AND time = $2 AND "nextDay" = $3`,
+    [weddingId, input.time, input.nextDay ?? false]
   );
   const sortOrder = maxRows[0].maxSortOrder + 1;
 
   const { rows } = await pool.query(
-    `INSERT INTO "timeline_entries" (id, "weddingId", time, description, "sortOrder", "updatedAt")
-     VALUES ($1, $2, $3, $4, $5, now())
+    `INSERT INTO "timeline_entries" (id, "weddingId", time, "nextDay", description, "sortOrder", "updatedAt")
+     VALUES ($1, $2, $3, $4, $5, $6, now())
      RETURNING ${COLUMNS}`,
-    [id, weddingId, input.time, input.description, sortOrder]
+    [id, weddingId, input.time, input.nextDay ?? false, input.description, sortOrder]
   );
   return rows[0];
 }
@@ -100,8 +106,12 @@ export async function updateTimelineEntry(
     fields.push(`time = $${i++}`);
     values.push(input.time);
   }
+  if (input.nextDay !== undefined) {
+    fields.push(`"nextDay" = ${i++}`);
+    values.push(input.nextDay);
+  }
   if (input.description !== undefined) {
-    fields.push(`description = $${i++}`);
+    fields.push(`description = ${i++}`);
     values.push(input.description);
   }
   if (fields.length === 0) return getTimelineEntryForWedding(id, weddingId);
@@ -128,11 +138,14 @@ export async function updateTimelineEntry(
     // TS-153: moving an entry to a different time puts it last among that time's entries -- keeping
     // its old position number could tie with an entry already there, and tied entries could never
     // be reordered past each other.
-    if (input.time !== undefined && input.time !== current[0].time) {
+    // TS-214: moving it to or from the next day is a move to a different time too.
+    const newTime = input.time ?? current[0].time;
+    const newNextDay = input.nextDay ?? current[0].nextDay;
+    if (newTime !== current[0].time || newNextDay !== current[0].nextDay) {
       const { rows: maxRows } = await client.query(
         `SELECT COALESCE(MAX("sortOrder"), -1) AS "maxSortOrder" FROM "timeline_entries"
-         WHERE "weddingId" = $1 AND time = $2 AND id <> $3`,
-        [weddingId, input.time, id]
+         WHERE "weddingId" = $1 AND time = $2 AND "nextDay" = $3 AND id <> $4`,
+        [weddingId, newTime, newNextDay, id]
       );
       fields.splice(fields.length - 2, 0, `"sortOrder" = ${maxRows[0].maxSortOrder + 1}`);
     }
@@ -171,7 +184,7 @@ export async function reorderTimelineEntry(
   try {
     await beginTransaction(client);
     const { rows: entryRows } = await client.query(
-      `SELECT time FROM "timeline_entries" WHERE id = $1 AND "weddingId" = $2`,
+      `SELECT time, "nextDay" FROM "timeline_entries" WHERE id = $1 AND "weddingId" = $2`,
       [id, weddingId]
     );
     if (!entryRows[0]) {
@@ -182,9 +195,9 @@ export async function reorderTimelineEntry(
     // once can't both act on a stale picture; and renumber it 0..n-1 as it's saved, which also
     // repairs any ties left from before.
     const { rows: group } = await client.query<{ id: string; sortOrder: number }>(
-      `SELECT id, "sortOrder" FROM "timeline_entries" WHERE "weddingId" = $1 AND time = $2
-       ORDER BY ${ENTRY_ORDER} FOR NO KEY UPDATE`,
-      [weddingId, entryRows[0].time]
+      `SELECT id, "sortOrder" FROM "timeline_entries" WHERE "weddingId" = $1 AND time = $2 AND "nextDay" = $3
+       ORDER BY ${TIMELINE_ENTRY_ORDER} FOR NO KEY UPDATE`,
+      [weddingId, entryRows[0].time, entryRows[0].nextDay]
     );
     const index = group.findIndex((g) => g.id === id);
     // TS-174: its time was changed (or it was removed) between the two reads above -- before, this

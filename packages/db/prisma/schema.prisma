@@ -98,6 +98,9 @@ model Wedding {
   budgetCents Int?
   // TS-92: optimistic-concurrency counter for budgetCents alone (see the migration comment).
   budgetRevision Int @default(0)
+  // TS-214: optimistic-concurrency counter for the wedding settings above (name, date, venue, note,
+  // side names, side mixing, RSVP cutoff) -- bumped on every settings save.
+  settingsRevision Int @default(0)
   createdAt DateTime      @default(now())
   updatedAt DateTime      @updatedAt
 
@@ -249,6 +252,8 @@ model TimelineEntry {
   weddingId   String
   wedding     Wedding  @relation(fields: [weddingId], references: [id], onDelete: Cascade)
   time        String
+  // TS-214: after midnight -- listed after the wedding day's own entries, shown "(next day)".
+  nextDay     Boolean  @default(false)
   description String
   sortOrder   Int      @default(0)
   // TS-92: optimistic-concurrency counter, bumped on every edit or reorder.

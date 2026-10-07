@@ -612,7 +612,8 @@ export default function DashboardPage() {
                       )}
                       {/* TS-177: invitations and people, the same as the Guests tab's header. */}
                       <span>
-                        {formatGuestCounts(w.guestCount, w.peopleCount)}
+                        {/* TS-214: invited and attending (the Tables tab's count). */}
+                        {formatGuestCounts(w.guestCount, w.peopleCount, w.attendingCount)}
                       </span>
                     </div>
                   </Link>

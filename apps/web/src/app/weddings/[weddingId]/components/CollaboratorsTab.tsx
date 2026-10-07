@@ -15,6 +15,9 @@ import type {
 import { useUnsavedChanges, useUnsavedFields } from "@/lib/unsaved-changes";
 // TS-193: the same limits the server checks (packages/shared/src/field-limits.ts).
 import { FIELD_LIMITS } from "@seatwise/shared";
+// TS-214: asks before saving an RSVP cutoff in the past or after the wedding.
+import { rsvpCutoffWarning } from "@seatwise/shared";
+import { formatDate, localTodayIso } from "@/lib/display-format";
 
 // TS-179: guest RSVP and vendor links someone copied while they had access aren't tied to them,
 // so taking access away doesn't stop those links -- the owner's reset below does.
@@ -106,6 +109,8 @@ export function CollaboratorsTab({
   // pattern as the note/side labels above. Empty string means no cutoff at all.
   const [rsvpCutoffDate, setRsvpCutoffDate] = useState(wedding?.rsvpCutoffDate ?? "");
   const [savingRsvpCutoff, setSavingRsvpCutoff] = useState(false);
+  // TS-214: a cutoff waiting for "Save anyway" (before today, or after the wedding date).
+  const [cutoffWarning, setCutoffWarning] = useState<{ value: string; message: string } | null>(null);
   // TS-159: tell the page this tab has input that leaving it would lose.
   // TS-182: the settings that save when you leave the box count too while they differ from what's
   // saved (a reload or Back with a half-typed name or note used to lose it without a word). Only
@@ -131,7 +136,15 @@ export function CollaboratorsTab({
   useEffect(() => {
     api
       .get<{ collaborators: CollaboratorDTO[] }>(`/api/v1/weddings/${weddingId}/collaborators`)
-      .then((res) => setCollaborators(res.collaborators))
+      .then((res) => {
+        setCollaborators(res.collaborators);
+        // TS-214: what's saved is what the server just sent -- a value remembered from an earlier
+        // save (confirmedAccess, below) could be out of date by now, and a failed change would
+        // have gone back to it.
+        confirmedAccess.current = new Map(
+          res.collaborators.map((c) => [c.id, { permissionLevel: c.permissionLevel, role: c.role }])
+        );
+      })
       .catch(() => setError("Couldn't load collaborators."))
       .finally(() => setLoading(false));
   }, [weddingId]);
@@ -177,12 +190,84 @@ export function CollaboratorsTab({
   // TS-206: with the setting's name and the reason, so a save that fails after this tab was closed
   // shows "Couldn't save the wedding note: <reason>" on the page instead of a phantom unsaved mark.
   // Returns false (not saved) for the save handlers below, so Back waits and stays.
-  function keepTypedUnlessConflict(err: unknown, fieldKey: string, putBack: () => void, field: string, reason: string): false {
+  // TS-214: on a 409 the box shows the latest saved value (from the server's answer, see
+  // showFreshSettings) -- putBack is given that fresh wedding.
+  function keepTypedUnlessConflict(
+    err: unknown,
+    fieldKey: string,
+    putBack: (fresh: WeddingDTO) => void,
+    field: string,
+    reason: string
+  ): false {
     if (err instanceof ApiError && err.status === 409) {
-      putBack();
+      putBack(conflictWedding(err) ?? wedding!);
       settingFields.markDirty(fieldKey, false);
     } else settingFields.keepUnsaved(fieldKey, field, reason);
     return false;
+  }
+
+  // TS-214: wedding settings are saved compare-and-set. Each save carries the settingsRevision it's
+  // based on; if another tab (or a moment-earlier save elsewhere) changed the settings first, the
+  // server refuses it (409) and sends the latest -- before, the last save won and quietly put back
+  // what the other tab had changed. This tab's own saves go one at a time, each with the revision
+  // the previous one returned, so two quick saves here never refuse each other.
+  const settingsRevision = useRef(wedding?.settingsRevision ?? 0);
+  useEffect(() => {
+    if (wedding && wedding.settingsRevision > settingsRevision.current) settingsRevision.current = wedding.settingsRevision;
+  }, [wedding]);
+  const settingsSaves = useRef<Promise<unknown>>(Promise.resolve());
+  function saveSettings(change: Partial<WeddingDTO>): Promise<WeddingDTO> {
+    const run = async () => {
+      const { wedding: updated } = await api.patch<{ wedding: WeddingDTO }>(`/api/v1/weddings/${weddingId}`, {
+        ...change,
+        expectedRevision: settingsRevision.current,
+      });
+      settingsRevision.current = updated.settingsRevision;
+      return updated;
+    };
+    const next = settingsSaves.current.catch(() => {}).then(run);
+    settingsSaves.current = next;
+    return next.catch((err) => {
+      const fresh = conflictWedding(err);
+      if (fresh) showFreshSettings(fresh);
+      throw err;
+    });
+  }
+  function conflictWedding(err: unknown): WeddingDTO | null {
+    return err instanceof ApiError && err.status === 409 ? ((err.data?.wedding as WeddingDTO | undefined) ?? null) : null;
+  }
+  // TS-214: shows the latest settings after a conflict. A box nobody is typing in (it still shows
+  // the old saved value) takes the new value; one with typing in it keeps it.
+  function showFreshSettings(fresh: WeddingDTO) {
+    settingsRevision.current = fresh.settingsRevision;
+    const old = wedding;
+    setWedding((w) =>
+      w
+        ? {
+            ...w,
+            name: fresh.name,
+            eventDate: fresh.eventDate,
+            venueName: fresh.venueName,
+            note: fresh.note,
+            sideMixing: fresh.sideMixing,
+            sideLabel1: fresh.sideLabel1,
+            sideLabel2: fresh.sideLabel2,
+            rsvpCutoffDate: fresh.rsvpCutoffDate,
+            settingsRevision: fresh.settingsRevision,
+            updatedAt: fresh.updatedAt,
+          }
+        : w
+    );
+    if (!old) return;
+    const refill = (set: React.Dispatch<React.SetStateAction<string>>, was: string, now: string) =>
+      set((cur) => (cur === was ? now : cur));
+    refill(setWeddingName, old.name, fresh.name);
+    refill(setEventDate, old.eventDate ?? "", fresh.eventDate ?? "");
+    refill(setVenueName, old.venueName ?? "", fresh.venueName ?? "");
+    refill(setSideLabel1, old.sideLabel1, fresh.sideLabel1);
+    refill(setSideLabel2, old.sideLabel2, fresh.sideLabel2);
+    refill(setNote, old.note ?? "", fresh.note ?? "");
+    refill(setRsvpCutoffDate, old.rsvpCutoffDate ?? "", fresh.rsvpCutoffDate ?? "");
   }
 
   // The wedding's name is required (min length 1) server-side -- an emptied-out field just
@@ -199,17 +284,16 @@ export function CollaboratorsTab({
     setSavingName(true);
     setError(null);
     try {
-      const { wedding: updated } = await api.patch<{ wedding: WeddingDTO }>(
-        `/api/v1/weddings/${weddingId}`,
-        { name: trimmed }
-      );
+      const updated = await saveSettings({ name: trimmed });
       // TS-182: only the field this save owns, so a slower answer can't undo another setting.
-      setWedding((w) => (w ? { ...w, name: updated.name, updatedAt: updated.updatedAt } : w));
+      setWedding((w) =>
+        w ? { ...w, name: updated.name, settingsRevision: updated.settingsRevision, updatedAt: updated.updatedAt } : w
+      );
       setWeddingName(updated.name);
     } catch (err) {
       const reason = apiErrorMessage(err, ["name"], "Couldn't save the wedding name.");
       setError(reason);
-      return keepTypedUnlessConflict(err, "setting-name", () => setWeddingName(wedding.name), "the wedding name", reason);
+      return keepTypedUnlessConflict(err, "setting-name", (fresh) => setWeddingName(fresh.name), "the wedding name", reason);
     } finally {
       setSavingName(false);
     }
@@ -224,18 +308,34 @@ export function CollaboratorsTab({
     setDetailsSaved(false);
     setError(null);
     try {
-      const { wedding: updated } = await api.patch<{ wedding: WeddingDTO }>(`/api/v1/weddings/${weddingId}`, {
+      // TS-214: compare-and-set (saveSettings) -- this save used to send both boxes and silently put
+      // back a venue (or date) another tab had just changed.
+      const updated = await saveSettings({
         eventDate: eventDate || null,
         venueName: venueName.trim() || null,
       });
       setWedding((w) =>
-        w ? { ...w, eventDate: updated.eventDate, venueName: updated.venueName, updatedAt: updated.updatedAt } : w
+        w
+          ? {
+              ...w,
+              eventDate: updated.eventDate,
+              venueName: updated.venueName,
+              settingsRevision: updated.settingsRevision,
+              updatedAt: updated.updatedAt,
+            }
+          : w
       );
       setEventDate(updated.eventDate ?? "");
       setVenueName(updated.venueName ?? "");
       setDetailsSaved(true);
     } catch (err) {
       setError(apiErrorMessage(err, ["eventDate", "venueName"], "Couldn't save the date and venue."));
+      // TS-214: on a conflict both boxes show what's saved now; the change can be made again.
+      const fresh = conflictWedding(err);
+      if (fresh) {
+        setEventDate(fresh.eventDate ?? "");
+        setVenueName(fresh.venueName ?? "");
+      }
     } finally {
       setSavingDetails(false);
     }
@@ -256,17 +356,16 @@ export function CollaboratorsTab({
     }
     setError(null);
     try {
-      const { wedding: updated } = await api.patch<{ wedding: WeddingDTO }>(
-        `/api/v1/weddings/${weddingId}`,
-        { [field]: label }
+      const updated = await saveSettings({ [field]: label });
+      setWedding((w) =>
+        w ? { ...w, [field]: updated[field], settingsRevision: updated.settingsRevision, updatedAt: updated.updatedAt } : w
       );
-      setWedding((w) => (w ? { ...w, [field]: updated[field], updatedAt: updated.updatedAt } : w));
       // A blank box shows what it saved as (Bride/Groom), unless the planner has typed since.
       setTyped((current) => (current.trim() === "" ? updated[field] : current));
     } catch (err) {
       const reason = apiErrorMessage(err, [], "Couldn't save the side labels.");
       setError(reason);
-      return keepTypedUnlessConflict(err, `setting-side-${which}`, () => setTyped(wedding[field]), `side ${which}'s label`, reason);
+      return keepTypedUnlessConflict(err, `setting-side-${which}`, (fresh) => setTyped(fresh[field]), `side ${which}'s label`, reason);
     }
   }
 
@@ -278,16 +377,15 @@ export function CollaboratorsTab({
     setSavingNote(true);
     setError(null);
     try {
-      const { wedding: updated } = await api.patch<{ wedding: WeddingDTO }>(
-        `/api/v1/weddings/${weddingId}`,
-        { note: trimmed || null }
+      const updated = await saveSettings({ note: trimmed || null });
+      setWedding((w) =>
+        w ? { ...w, note: updated.note, settingsRevision: updated.settingsRevision, updatedAt: updated.updatedAt } : w
       );
-      setWedding((w) => (w ? { ...w, note: updated.note, updatedAt: updated.updatedAt } : w));
       setNote(updated.note ?? "");
     } catch (err) {
       const reason = apiErrorMessage(err, [], "Couldn't save the note.");
       setError(reason);
-      return keepTypedUnlessConflict(err, "setting-note", () => setNote(wedding.note ?? ""), "the wedding note", reason);
+      return keepTypedUnlessConflict(err, "setting-note", (fresh) => setNote(fresh.note ?? ""), "the wedding note", reason);
     } finally {
       setSavingNote(false);
     }
@@ -481,15 +579,35 @@ export function CollaboratorsTab({
     }
     if (!wedding) return;
     const trimmed = rsvpCutoffDate.trim();
-    if (trimmed === (wedding.rsvpCutoffDate ?? "")) return;
+    if (trimmed === (wedding.rsvpCutoffDate ?? "")) {
+      setCutoffWarning(null);
+      return;
+    }
+    // TS-214: a cutoff before today (closes every guest's link at once) or after the wedding (almost
+    // always a slip in the year) is only saved once the planner says so -- it used to be saved
+    // without a word. Until then it stays typed in the box and counts as unsaved.
+    const warning = rsvpCutoffWarning(trimmed, localTodayIso(), wedding.eventDate);
+    if (warning) {
+      setCutoffWarning({ value: trimmed, message: warning });
+      settingFields.markDirty("setting-rsvp-cutoff", true);
+      return;
+    }
+    await saveRsvpCutoff(trimmed);
+  }
+
+  async function saveRsvpCutoff(value: string) {
+    if (!wedding) return;
+    setCutoffWarning(null);
+    settingFields.markDirty("setting-rsvp-cutoff", false);
     setSavingRsvpCutoff(true);
     setError(null);
     try {
-      const { wedding: updated } = await api.patch<{ wedding: WeddingDTO }>(
-        `/api/v1/weddings/${weddingId}`,
-        { rsvpCutoffDate: trimmed || null }
+      const updated = await saveSettings({ rsvpCutoffDate: value || null });
+      setWedding((w) =>
+        w
+          ? { ...w, rsvpCutoffDate: updated.rsvpCutoffDate, settingsRevision: updated.settingsRevision, updatedAt: updated.updatedAt }
+          : w
       );
-      setWedding((w) => (w ? { ...w, rsvpCutoffDate: updated.rsvpCutoffDate, updatedAt: updated.updatedAt } : w));
       setRsvpCutoffDate(updated.rsvpCutoffDate ?? "");
     } catch (err) {
       const reason = apiErrorMessage(err, [], "Couldn't save the RSVP cutoff.");
@@ -497,13 +615,21 @@ export function CollaboratorsTab({
       return keepTypedUnlessConflict(
         err,
         "setting-rsvp-cutoff",
-        () => setRsvpCutoffDate(wedding.rsvpCutoffDate ?? ""),
+        (fresh) => setRsvpCutoffDate(fresh.rsvpCutoffDate ?? ""),
         "the RSVP cutoff",
         reason
       );
     } finally {
       setSavingRsvpCutoff(false);
     }
+  }
+
+  // TS-214: "Change it" -- the saved cutoff goes back in the box, and the box gets focus.
+  function onKeepOldCutoff() {
+    setCutoffWarning(null);
+    setRsvpCutoffDate(wedding?.rsvpCutoffDate ?? "");
+    settingFields.markDirty("setting-rsvp-cutoff", false);
+    setTimeout(() => document.getElementById("rsvp-cutoff-date")?.focus(), 0);
   }
 
   async function onToggleEmailNotifications() {
@@ -842,6 +968,7 @@ export function CollaboratorsTab({
                 value={rsvpCutoffDate}
                 onChange={(e) => {
                   setRsvpCutoffDate(e.target.value);
+                  setCutoffWarning(null);
                   settingFields.markDirty("setting-rsvp-cutoff", e.target.value.trim() !== (wedding.rsvpCutoffDate ?? ""));
                 }}
                 onBlur={(e) => {
@@ -850,6 +977,32 @@ export function CollaboratorsTab({
                 }}
                 disabled={savingRsvpCutoff}
               />
+              {/* TS-214: asks before saving a cutoff that's in the past or after the wedding. */}
+              {cutoffWarning && (
+                <div
+                  role="alertdialog"
+                  aria-labelledby="rsvp-cutoff-warning"
+                  className="mt-2 flex flex-wrap items-center gap-3 rounded-md bg-amber-50 dark:bg-amber-950 px-3 py-2 text-sm text-amber-900 dark:text-amber-200"
+                >
+                  <span id="rsvp-cutoff-warning" className="flex-1">
+                    {cutoffWarning.message} Save {formatDate(cutoffWarning.value)} anyway?
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => void saveRsvpCutoff(cutoffWarning.value)}
+                    className="rounded-md bg-amber-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-amber-800"
+                  >
+                    Save anyway
+                  </button>
+                  <button
+                    type="button"
+                    onClick={onKeepOldCutoff}
+                    className="rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800"
+                  >
+                    Change it
+                  </button>
+                </div>
+              )}
             </div>
           )}
         </>

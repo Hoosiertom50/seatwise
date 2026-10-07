@@ -90,7 +90,8 @@ export function GettingStarted({
       tab: "guests",
       label: "1. Add your guests",
       done: guestCount > 0,
-      detail: guestCount > 0 ? `${formatGuestCounts(guestCount, peopleCount)} added` : "one at a time, or import a CSV",
+      // TS-214: the count now ends in "invited", so no "added" after it.
+      detail: guestCount > 0 ? formatGuestCounts(guestCount, peopleCount) : "one at a time, or import a CSV",
     },
     {
       tab: "tables",

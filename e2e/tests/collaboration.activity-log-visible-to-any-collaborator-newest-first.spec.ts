@@ -32,11 +32,8 @@
  * is still there to read, asserted below by deleting the guest a MANUAL_MOVE entry named and
  * confirming that entry's description is untouched by the deletion.
  *
- * Third, GENERATE's own INSERT (confirmed directly in plan-versions.ts) never includes an
- * actorUserId column at all -- generation is recorded as a system action with no actor, by
- * design, unlike every other action type here, which always passes the acting user's id. Asserted
- * below as GENERATE's own documented exception rather than folded into a blanket "every entry has
- * an actor" assumption that the real data would fail.
+ * Third, TS-214: GENERATE is credited to the person who generated the plan, like every other
+ * action type here (before, its INSERT had no actorUserId, so it never showed "by …").
  */
 
 import { request as playwrightRequest } from "@playwright/test";
@@ -126,15 +123,9 @@ defineQualityTest(
       manualMoveDescription = manualMove!.description;
 
       for (const entry of entries) {
-        // Real finding, asserted directly rather than assumed: GENERATE's own INSERT (confirmed
-        // directly in plan-versions.ts) never includes an actorUserId column at all -- generation
-        // is recorded as a system action with no actor, by design, unlike every other action type
-        // here (MANUAL_MOVE/STATUS_CHANGE), which always pass the acting user's id.
-        if (entry.action === "GENERATE") {
-          expect(entry.actorName, `actorName for GENERATE entry ${entry.id}`).toBeNull();
-        } else {
-          expect(entry.actorName, `actorName for ${entry.action} entry ${entry.id}`).toBeTruthy();
-        }
+        // TS-214: GENERATE is credited to whoever generated the plan too -- it used to be the one
+        // entry with no actor, so the activity log never said "by …" for it.
+        expect(entry.actorName, `actorName for ${entry.action} entry ${entry.id}`).toBeTruthy();
         expect(Number.isNaN(new Date(entry.createdAt).getTime()), `createdAt for entry ${entry.id}`).toBe(false);
       }
     });

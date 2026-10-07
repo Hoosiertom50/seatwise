@@ -5,6 +5,8 @@ import { ConfirmDeleteButton } from "@/components/ConfirmDeleteButton";
 import { CommitSelect } from "@/components/CommitSelect";
 import { api, ApiError, apiErrorMessage } from "@/lib/api-client";
 import { formatMomentDate } from "@/lib/display-format";
+// TS-214: the server's own guest order (last name, first name, then id).
+import { compareGuestNames } from "@/lib/guest-name-order";
 import type {
   AgeCategory,
   GuestDTO,
@@ -17,6 +19,7 @@ import type {
 } from "@seatwise/shared";
 import {
   formatGuestCounts,
+  attendingPeople,
   parseCsv,
   toCsv,
   CsvParseError,
@@ -392,7 +395,7 @@ export function GuestsTab({
         ),
         overwriteChanged,
       });
-      setGuests(updatedGuests.sort((a, b) => a.lastName.localeCompare(b.lastName)));
+      setGuests(updatedGuests.sort(compareGuestNames));
       setImportResult(result);
       resetImport();
       // TS-212: Confirm goes away with the preview -- focus moves to the result message (it used to
@@ -428,7 +431,7 @@ export function GuestsTab({
         notes: notes.trim() || null,
       });
       // TS-166: built from the list as it is now, so another change made meanwhile isn't lost.
-      setGuests((cur) => [...cur, guest].sort((a, b) => a.lastName.localeCompare(b.lastName)));
+      setGuests((cur) => [...cur, guest].sort(compareGuestNames));
       // TS-212: said out loud -- adding a guest was never announced.
       setAddedAnnouncement(`Added ${guest.firstName} ${guest.lastName}.`);
       // TS-143: a guest added with an email was just sent their RSVP link -- say so on their row.
@@ -466,7 +469,7 @@ export function GuestsTab({
       if (res.warnings?.length) setWarning(res.warnings.join(" "));
     } catch {
       // TS-166: put back just this guest, not an older copy of the whole list.
-      if (removed) setGuests((cur) => [...cur, removed].sort((a, b) => a.lastName.localeCompare(b.lastName)));
+      if (removed) setGuests((cur) => [...cur, removed].sort(compareGuestNames));
       setError("Couldn't delete that guest.");
     }
   }
@@ -1323,7 +1326,8 @@ export function GuestsTab({
         {/* TS-177: invitations and people, the same as the dashboard -- "Guests (N)" counted people
             while the dashboard's "N guests" counted invitations. */}
         <h2 className="text-lg font-medium">
-          Guests ({formatGuestCounts(guests.length, guests.reduce((sum, g) => sum + g.headcount, 0))})
+          {/* TS-214: invited and attending, the same attending count as the Tables tab. */}
+          Guests ({formatGuestCounts(guests.length, guests.reduce((sum, g) => sum + g.headcount, 0), attendingPeople(guests))})
         </h2>
         {/* TS-170: a download, not a page change -- so it doesn't set off "leave this page?" for
             half-typed input, or replace the page with an error if the session has run out. */}
@@ -1492,15 +1496,19 @@ export function GuestsTab({
                     >
                       {rsvpLinkBusy.has(g.id) ? "..." : "RSVP link"}
                     </button>
-                    <button
-                      onClick={() => onRsvpLink(g.id, g.email, true)}
-                      aria-label={`New link for ${g.firstName} ${g.lastName}`}
+                    {/* TS-214: asks first, like Turn off link on a vendor -- the guest's current
+                        link stops working straight away. TS-212: named for the guest. */}
+                    <ConfirmDeleteButton
+                      id={`guest-${g.id}-new-link`}
+                      label="New link"
+                      ariaLabel={`New link for ${g.firstName} ${g.lastName}`}
+                      question={`Make a new RSVP link for ${g.firstName} ${g.lastName}? The link they have now stops working right away.${g.email ? " The new one is emailed to them if RSVPs are still open." : ""}`}
+                      confirmLabel="Yes, make a new link"
+                      busyLabel="Making…"
                       disabled={rsvpLinkBusy.has(g.id)}
-                      title="Makes a new RSVP link (the old one stops working) and emails it to the guest if they have an email address and RSVPs are still open."
+                      onConfirm={() => onRsvpLink(g.id, g.email, true)}
                       className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50"
-                    >
-                      New link
-                    </button>
+                    />
                     <ConfirmDeleteButton
                       id={`guest-${g.id}-remove`}
                       ariaLabel={`Remove ${g.firstName} ${g.lastName}`}

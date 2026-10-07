@@ -328,6 +328,8 @@ export interface TimelineEntryDetail {
   id: string;
   weddingId: string;
   time: string;
+  // TS-214: after midnight -- listed after the wedding day's own entries.
+  nextDay: boolean;
   description: string;
   sortOrder: number;
   createdAt: string;
@@ -776,7 +778,8 @@ export class WeddingDataSetup {
    * cases, not a setup failure. */
   async createTimelineEntry(
     weddingId: string,
-    input: { time: string; description: string },
+    // TS-214: nextDay -- "After midnight (next day)".
+    input: { time: string; description: string; nextDay?: boolean },
   ): Promise<{ status: number; body: { entry?: TimelineEntryDetail; error?: string } }> {
     const res = await this.request.post(`/api/v1/weddings/${weddingId}/timeline-entries`, { data: input });
     return { status: res.status(), body: await res.json() };

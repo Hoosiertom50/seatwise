@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError, apiErrorMessage } from "@/lib/api-client";
 import { useSerialTasks } from "@/lib/serial-tasks";
+// TS-214: the server's own guest order (last name, first name, then id).
+import { compareGuestNames } from "@/lib/guest-name-order";
 import { useUnsavedChanges } from "@/lib/unsaved-changes";
 import { PickThenActControl } from "@/components/PickThenActControl";
 import { tableChoicesFor, seatResultMessage } from "@/lib/day-of-choices";
@@ -232,7 +234,7 @@ export function DayOfTab({
   }, [detail]);
   const filteredGuests = useMemo(() => {
     const q = search.trim().toLowerCase();
-    const sorted = [...guests].sort((a, b) => a.lastName.localeCompare(b.lastName));
+    const sorted = [...guests].sort(compareGuestNames);
     if (!q) return sorted;
     return sorted.filter((g) =>
       `${g.firstName} ${g.lastName} ${g.partyName ?? ""}`.toLowerCase().includes(q)
@@ -436,8 +438,9 @@ export function DayOfTab({
           dayOfAttendance: "ATTENDING",
         });
         progress.added = guest;
-        guestsRef.current = [...guestsRef.current, guest];
-        setGuests((cur) => [...cur, guest]);
+        // TS-214: put in its place in the list (it used to go on the end until a reload).
+        guestsRef.current = [...guestsRef.current, guest].sort(compareGuestNames);
+        setGuests((cur) => [...cur, guest].sort(compareGuestNames));
         setWalkInFirst("");
         setWalkInLast("");
         setWalkInPartySize("1");

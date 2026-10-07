@@ -709,6 +709,26 @@ function currentWindowStart(windowSeconds: number): Date {
   return new Date(Math.floor(Date.now() / ms) * ms);
 }
 
+/** TS-215: how close to a window's end a preset waits for the next window instead. */
+export const WINDOW_END_MARGIN_MS = 15_000;
+
+/**
+ * TS-215: how long to wait before presetting a counter so the test's own requests land in the same
+ * window -- 0 normally; within WINDOW_END_MARGIN_MS of the window's end (a daily counter at 00:00
+ * UTC, 8 pm Eastern), until just after the next window starts. Pure, so it's unit-tested.
+ */
+export function waitBeforePresetMs(windowSeconds: number, nowMs: number): number {
+  const ms = windowSeconds * 1000;
+  const left = ms - (nowMs % ms);
+  return left <= WINDOW_END_MARGIN_MS ? left + 250 : 0;
+}
+
+/** TS-215: waits, if needed, so a counter preset now is still the current window when the test uses it. */
+async function settleIntoWindow(windowSeconds: number): Promise<void> {
+  const wait = waitBeforePresetMs(windowSeconds, Date.now());
+  if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
+}
+
 /**
  * TS-194: the app stores rate-limit windows as UTC (the column has no time zone), so the helpers
  * do too -- as text, whose "Z" the column ignores. A JavaScript date would be stored in this
@@ -732,6 +752,7 @@ export async function accountEmailCount(email: string, counter: AccountEmailCoun
  * without sending a hundred emails. */
 export async function setAccountEmailCount(email: string, counter: AccountEmailCounter, count: number): Promise<void> {
   const { prefix, windowSeconds } = ACCOUNT_EMAIL_COUNTERS[counter];
+  await settleIntoWindow(windowSeconds); // TS-215
   await testPool().query(
     `INSERT INTO "rate_limit_counters" (key, "windowStart", count) VALUES ($1, $2::timestamp, $3)
      ON CONFLICT (key, "windowStart") DO UPDATE SET count = $3`,
@@ -742,6 +763,9 @@ export async function setAccountEmailCount(email: string, counter: AccountEmailC
 /** TS-178: sets one counter's value in its current window. Every caller below checks first that the
  * key belongs to a test address or test account. */
 async function setCounter(key: string, windowSeconds: number, count: number, window: "current" | "previous" = "current"): Promise<void> {
+  // TS-215: a preset made just before the window ends would be in yesterday's window by the time
+  // the test's request arrives -- wait for the new window first.
+  await settleIntoWindow(windowSeconds);
   const start = currentWindowStart(windowSeconds);
   // TS-184: "previous" is the window just before the current one, which shorter limits still count.
   if (window === "previous") start.setTime(start.getTime() - windowSeconds * 1000);
