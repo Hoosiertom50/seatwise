@@ -233,8 +233,13 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   // gone (or no longer theirs): that 404 is a real answer the page must show.
   const firstTryItemGone =
     options.method === "DELETE" && res.status === 404 && path !== ACCOUNT_PATH && !isWeddingGone404(data);
+  // TS-220: a retry's 404 counts as "the first try deleted it" only when it's about the item --
+  // "Wedding not found" / "This wedding was deleted" on a retry means the person lost access (or the
+  // wedding went), and the item used to show as deleted when it wasn't.
   const alreadyGone =
-    (options.method === "DELETE" && retriedResponses.has(res) && (res.status === 404 || accountReallyGone)) ||
+    (options.method === "DELETE" &&
+      retriedResponses.has(res) &&
+      ((res.status === 404 && !isWeddingGone404(data)) || accountReallyGone)) ||
     firstTryItemGone;
   // TS-177: likewise a retried edit "refused" only because the first try already saved it.
   const alreadySaved =

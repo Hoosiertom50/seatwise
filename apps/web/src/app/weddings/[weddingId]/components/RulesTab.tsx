@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { ConfirmDeleteButton } from "@/components/ConfirmDeleteButton";
-import { api, ApiError } from "@/lib/api-client";
+import { api, ApiError, isItemGoneError } from "@/lib/api-client";
 import type { GuestDTO, RelationshipDTO, RelationshipTypeValue } from "@seatwise/shared";
 import { useUnsavedChanges } from "@/lib/unsaved-changes";
 
@@ -89,7 +89,10 @@ export function RulesTab({
       // TS-188: removed, but the seats it affected couldn't be re-checked -- say so, as adding does.
       setWarnings(res?.warnings ?? []);
     } catch (err) {
-      if (err instanceof ApiError && err.status === 404) {
+      // TS-220: a 404 about the rule itself is answered as success by api-client (TS-209), so one
+      // that gets here is about the wedding (deleted, or no longer open to this person) -- show the
+      // server's own message and put the row back, rather than "That rule was already removed".
+      if (isItemGoneError(err)) {
         setError("That rule was already removed — possibly by another collaborator.");
       } else {
         if (removed)

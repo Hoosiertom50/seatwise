@@ -1425,11 +1425,19 @@ export async function setGuestAttendance(
   // TS-204: actorAccess -- the access a planner's request was let in with, read again under the locks.
   // TS-207: onOutcome -- told whether the guest already had that attendance, as found under the
   // locks (a read before them could be overtaken by a change made at the same moment).
+  // TS-220: onPlanNotRefreshed -- told when the change was saved but the plan couldn't be read back
+  // (the answer then has no plan, though there is one), so the route can say so.
   {
     notify = true,
     actorAccess,
     onOutcome,
-  }: { notify?: boolean; actorAccess?: ActorAccess; onOutcome?: (outcome: { unchanged: boolean }) => void } = {}
+    onPlanNotRefreshed,
+  }: {
+    notify?: boolean;
+    actorAccess?: ActorAccess;
+    onOutcome?: (outcome: { unchanged: boolean }) => void;
+    onPlanNotRefreshed?: () => void;
+  } = {}
 ): Promise<PlanVersionDetail | null> {
   const { rows: guestRows } = await pool.query(
     `SELECT id, ("firstName" || ' ' || "lastName") AS name, "dayOfAttendance"
@@ -1451,6 +1459,9 @@ export async function setGuestAttendance(
     return currentPlanVersionId ? getPlanVersionDetail(currentPlanVersionId, weddingId) : null;
   }
 
+  // TS-220: whether the current plan is approved, read under the change's locks -- so whether to
+  // tell people doesn't depend on reading the plan back afterwards (that read can fail).
+  let planApproved = false;
   const client = await pool.connect();
   try {
     await beginTransaction(client);
@@ -1495,6 +1506,14 @@ export async function setGuestAttendance(
       }
     }
 
+    if (currentPlanVersionId) {
+      const { rows: planRows } = await client.query<{ status: string }>(
+        `SELECT status FROM "plan_versions" WHERE id = $1`,
+        [currentPlanVersionId]
+      );
+      planApproved = planRows[0]?.status === "APPROVED";
+    }
+
     await client.query("COMMIT");
     onOutcome?.({ unchanged: false });
   } catch (err) {
@@ -1511,10 +1530,12 @@ export async function setGuestAttendance(
     detail = currentPlanVersionId ? await getPlanVersionDetail(currentPlanVersionId, weddingId) : null;
   } catch (err) {
     console.error("Attendance saved, but reading the plan back failed:", err);
+    onPlanNotRefreshed?.();
   }
 
   // FR-10.2: attendance changes are only notification-worthy once the plan has been approved.
-  if (notify && detail?.status === "APPROVED") {
+  // TS-220: as found under the locks -- before, a failed read-back skipped the notification.
+  if (notify && planApproved) {
     // TS-194: the change above is already saved -- telling people about it is best effort, so a
     // failure is logged and never turns the saved change into an error.
     try {

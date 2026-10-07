@@ -248,12 +248,19 @@ export async function reorderTimelineEntry(
         );
       }
     }
+    // TS-220: the moved entry is read back inside the transaction, before COMMIT -- a read after
+    // the commit could fail (500) or find nothing (404) after a reorder that was saved, and a second
+    // click would then move it twice.
+    const { rows: saved } = await client.query<TimelineEntryRow>(
+      `SELECT ${COLUMNS} FROM "timeline_entries" WHERE id = $1 AND "weddingId" = $2`,
+      [id, weddingId]
+    );
     await client.query("COMMIT");
+    return saved[0] ?? null;
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});
     throw err;
   } finally {
     client.release();
   }
-  return getTimelineEntryForWedding(id, weddingId);
 }

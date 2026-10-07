@@ -316,7 +316,12 @@ export function DayOfTab({
     const nextAttendance = guest.dayOfAttendance === "ATTENDING" ? "NOT_ATTENDING" : "ATTENDING";
     const hadSeat = (detailRef.current?.assignments ?? []).some((a) => a.guestId === guest.id);
     try {
-      const res = await api.post<{ planVersion: PlanVersionDetailDTO | null; guest: GuestDTO | null; unchanged?: boolean }>(
+      const res = await api.post<{
+        planVersion: PlanVersionDetailDTO | null;
+        guest: GuestDTO | null;
+        unchanged?: boolean;
+        warnings?: string[];
+      }>(
         `/api/v1/weddings/${weddingId}/guests/${guest.id}/attendance`,
         { attendance: nextAttendance }
       );
@@ -334,6 +339,14 @@ export function DayOfTab({
           nextAttendance === "NOT_ATTENDING"
             ? `${name} was already marked not attending (changed elsewhere).`
             : `${name} was already marked attending (changed elsewhere).`
+        );
+        return;
+      }
+      // TS-220: saved, but the plan or the guest couldn't be read back -- the screen may still show
+      // the old seat, so it says that plainly instead of "their seat is now free".
+      if (res.warnings && res.warnings.length > 0) {
+        setNotice(
+          `${name} marked ${nextAttendance === "NOT_ATTENDING" ? "not attending" : "attending again"}. ${res.warnings.join(" ")}`
         );
         return;
       }
