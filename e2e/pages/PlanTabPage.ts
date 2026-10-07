@@ -495,8 +495,24 @@ export class PlanTabPage extends BasePage {
     return this.saveAsDraftCheckbox();
   }
 
-  /** TS-179: the approved plan's PDF export links (shown only on the current, approved version). */
+  /** TS-179: the approved plan's PDF export buttons (shown only on the current, approved version).
+   * TS-211: buttons now -- each fetches its PDF and says inline when it can't. */
   exportLinks() {
-    return this.page.getByRole("link", { name: /\(PDF\)$/ });
+    return this.page.getByRole("button", { name: /\(PDF\)$/ });
+  }
+
+  /** TS-211: one PDF export button, by its label (e.g. "Seating chart (PDF)"). */
+  exportButton(label: string) {
+    return this.page.getByRole("button", { name: label, exact: true });
+  }
+
+  /** TS-211: the warning next to Export while attending guests aren't seated. */
+  exportUnseatedWarning() {
+    return this.page.getByTestId("export-unseated-warning");
+  }
+
+  /** TS-211: a failed export's message, shown next to the export buttons. */
+  exportError(text: string | RegExp) {
+    return this.page.getByRole("alert").filter({ hasText: text });
   }
 }

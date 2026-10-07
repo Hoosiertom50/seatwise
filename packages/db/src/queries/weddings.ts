@@ -1,6 +1,7 @@
 import { randomUUID } from "crypto";
 import { pool, beginTransaction } from "../pool";
 import { TemplateNotFoundError } from "./templates";
+import { lockCurrentPlan, lockRestrictedLists } from "./seat-checks";
 
 export interface WeddingRow {
   id: string;
@@ -352,10 +353,33 @@ export async function updateWeddingForOwner(
   return rows[0] ? "SIDE_LABELS_CLASH" : "NOT_FOUND";
 }
 
+// TS-209: one transaction that takes the locks in the app's usual order -- the wedding's row, then
+// the current plan's row, then the Restricted lists -- before the DELETE (which removes the guests,
+// tables, seats and rules with it). As one bare DELETE it locked those rows in whatever order the
+// cascade reached them, and could deadlock with a rule being added or a group being moved (the
+// delete lost, with a server error). A deadlock that still happens is answered "try again" (409)
+// by the route.
 export async function deleteWeddingForOwner(id: string, ownerId: string): Promise<boolean> {
-  const { rowCount } = await pool.query(
-    `DELETE FROM "weddings" WHERE id = $1 AND "ownerId" = $2`,
-    [id, ownerId]
-  );
-  return (rowCount ?? 0) > 0;
+  const client = await pool.connect();
+  try {
+    await beginTransaction(client);
+    const { rows } = await client.query(
+      `SELECT id FROM "weddings" WHERE id = $1 AND "ownerId" = $2 FOR NO KEY UPDATE`,
+      [id, ownerId]
+    );
+    if (!rows[0]) {
+      await client.query("ROLLBACK");
+      return false;
+    }
+    await lockCurrentPlan(client, id);
+    await lockRestrictedLists(client, id);
+    const { rowCount } = await client.query(`DELETE FROM "weddings" WHERE id = $1 AND "ownerId" = $2`, [id, ownerId]);
+    await client.query("COMMIT");
+    return (rowCount ?? 0) > 0;
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
 }

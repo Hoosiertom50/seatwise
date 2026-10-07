@@ -133,12 +133,13 @@ export function TimelineTab({ weddingId, canEdit }: { weddingId: string; canEdit
     try {
       await api.delete(`/api/v1/weddings/${weddingId}/timeline-entries/${entryId}`);
       listChange.current++; // TS-199
-    } catch {
+    } catch (err) {
       if (removed)
         setEntries((cur) =>
           [...cur, removed].sort((a, b) => a.time.localeCompare(b.time) || a.sortOrder - b.sortOrder)
         );
-      setError("Couldn't remove that timeline entry.");
+      // TS-209: the server's own reason. An entry already removed counts as removed (see api-client).
+      setError(apiErrorMessage(err, [], "Couldn't remove that timeline entry."));
     }
   }
 

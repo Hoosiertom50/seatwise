@@ -168,10 +168,17 @@ export async function createComment(
   }
 
   const id = randomUUID();
+  let created: CommentRow;
   try {
-    await pool.query(
+    // TS-209: the saved comment comes back from the insert itself -- it used to be read again at the
+    // end, and a failure there answered an error for a comment that was saved.
+    const { rows: inserted } = await pool.query<CommentRow>(
       `INSERT INTO "comments" (id, "weddingId", "targetType", "guestId", "tableId", "timelineEntryId", "targetLabel", body, "authorUserId", "parentCommentId")
-       VALUES ($1, $2, $3::"CommentTargetType", $4, $5, $6, $7, $8, $9, $10)`,
+       VALUES ($1, $2, $3::"CommentTargetType", $4, $5, $6, $7, $8, $9, $10)
+       RETURNING id, "weddingId", "targetType", "guestId", "tableId", "timelineEntryId", "targetLabel",
+         false AS "targetRemoved", body, "authorUserId",
+         COALESCE((SELECT name FROM "users" WHERE id = $9), 'Former member') AS "authorName", "parentCommentId",
+         "resolvedAt", "resolvedByUserId", NULL::text AS "resolvedByName", "createdAt"`,
       [
         id,
         weddingId,
@@ -185,6 +192,7 @@ export async function createComment(
         input.parentCommentId ?? null,
       ]
     );
+    created = inserted[0];
   } catch (err) {
     // TS-195: what the comment is about was removed between the check above and saving it -- the
     // database refused the comment (nothing saved). Said in words, not a server error.
@@ -212,8 +220,7 @@ export async function createComment(
     }
   }
 
-  const { rows } = await pool.query(`${SELECT_COMMENT} WHERE c.id = $1`, [id]);
-  return rows[0];
+  return created;
 }
 
 // FR-10.3: only the original commenter or someone with Edit access may resolve a thread. Returns

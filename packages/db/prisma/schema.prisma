@@ -117,9 +117,26 @@ model Wedding {
   // (sourceWeddingId goes null on the template, see SeatingTemplate below) since a template is a
   // standalone, reusable asset, never a live link back to where it came from.
   seatingTemplates SeatingTemplate[]
+  // TS-209
+  guestImportResults GuestImportResult[]
 
   @@index([ownerId])
   @@map("weddings")
+}
+
+// TS-209: the answer to a committed guest import, under the key the browser sent with it -- an
+// import sent again with the same key (its first answer was lost) gets this answer back instead of
+// adding every new guest a second time. Kept for a day.
+model GuestImportResult {
+  weddingId String
+  wedding   Wedding  @relation(fields: [weddingId], references: [id], onDelete: Cascade)
+  importKey String
+  result    Json
+  createdAt DateTime @default(now())
+
+  @@id([weddingId, importKey])
+  @@index([createdAt])
+  @@map("guest_import_results")
 }
 
 // --- Collaboration & notifications (FR-10.x) ------------------------------

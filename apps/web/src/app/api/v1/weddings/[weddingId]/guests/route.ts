@@ -12,7 +12,7 @@ import { errorResponse, zodErrorResponse, weddingDeletedResponse } from "@/lib/a
 import { requireAccess } from "@/lib/access";
 import { guestForViewer } from "@/lib/guest-privacy";
 import { rsvpEmailOutcome, sendGuestRsvpLink } from "@/lib/rsvp-email";
-import { SAVED_BUT_NOT_RECHECKED } from "@/lib/post-save";
+import { SAVED_BUT_NOT_RECHECKED, RSVP_EMAIL_FAILED, afterSave } from "@/lib/post-save";
 
 type Params = { params: Promise<{ weddingId: string }> };
 
@@ -69,7 +69,9 @@ export async function POST(req: NextRequest, { params }: Params) {
   }
 
   // FR-10.2: guest addition is only notification-worthy post-approval.
-  const status = await getCurrentPlanVersionStatus(weddingId);
+  // TS-209: the guest is saved by now -- a failure from here on can't answer an error (Add kept the
+  // typed fields, so pressing it again added the guest twice).
+  const status = await afterSave("reading the plan's status", () => getCurrentPlanVersionStatus(weddingId), warnings, null, null);
   if (status === "APPROVED") {
     // TS-194: the change above is already saved -- telling people about it is best effort, so a
     // failure is logged and never turns the saved change into an error.
@@ -87,7 +89,9 @@ export async function POST(req: NextRequest, { params }: Params) {
 
   // TS-143 (Tom, 2026-10-02): a guest added with an email gets their RSVP link straight away. (A
   // CSV import never does -- see guest-import -- so a big import can't email everyone by surprise.)
-  const rsvpEmail = guest.email ? await sendGuestRsvpLink(guest, access.wedding, user) : null;
+  const rsvpEmail = guest.email
+    ? await afterSave("emailing the RSVP link", () => sendGuestRsvpLink(guest, access.wedding, user), warnings, null, RSVP_EMAIL_FAILED)
+    : null;
 
   return NextResponse.json(
     { guest, warnings, ...(rsvpEmail ? { rsvpEmail: rsvpEmailOutcome(rsvpEmail) } : {}) },

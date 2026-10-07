@@ -1092,6 +1092,7 @@ export async function moveGuestAssignment(
     }
   }
 
+  let planVersion!: PlanVersionDetail;
   const client = await pool.connect();
   try {
     await beginTransaction(client);
@@ -1168,6 +1169,11 @@ export async function moveGuestAssignment(
       [randomUUID(), planVersionId, description, actorUserId]
     );
 
+    // TS-209: read back on this transaction's own connection, before COMMIT -- read after it, a
+    // failure answered an error (or "nothing was saved") for a change that was saved.
+    const readBack = await getPlanVersionDetail(planVersionId, weddingId, client);
+    if (!readBack) throw new ManualMoveError("Plan version not found after move.");
+    planVersion = readBack;
     await client.query("COMMIT");
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});
@@ -1176,8 +1182,6 @@ export async function moveGuestAssignment(
     client.release();
   }
 
-  const planVersion = await getPlanVersionDetail(planVersionId, weddingId);
-  if (!planVersion) throw new ManualMoveError("Plan version not found after move.");
   // TS-197: the move's warnings come back once, as `warnings` -- they're no longer copied into the
   // plan's own list too (the Seating plan tab showed them twice).
 
@@ -1268,6 +1272,7 @@ export async function unassignGuestFromPlan(
     throw new ManualMoveError("That guest is marked Not Attending, so they don't have a seat to take away.");
   }
 
+  let planVersion!: PlanVersionDetail;
   const client = await pool.connect();
   try {
     await beginTransaction(client);
@@ -1318,6 +1323,11 @@ export async function unassignGuestFromPlan(
       [randomUUID(), planVersionId, description, actorUserId]
     );
 
+    // TS-209: read back on this transaction's own connection, before COMMIT -- read after it, a
+    // failure answered an error (or "nothing was saved") for a change that was saved.
+    const readBack = await getPlanVersionDetail(planVersionId, weddingId, client);
+    if (!readBack) throw new ManualMoveError("Plan version not found after unassign.");
+    planVersion = readBack;
     await client.query("COMMIT");
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});
@@ -1326,8 +1336,6 @@ export async function unassignGuestFromPlan(
     client.release();
   }
 
-  const planVersion = await getPlanVersionDetail(planVersionId, weddingId);
-  if (!planVersion) throw new ManualMoveError("Plan version not found after unassign.");
   planVersion.warnings = [];
 
   if (planVersion.status === "APPROVED") {
@@ -1430,7 +1438,14 @@ export async function setGuestAttendance(
     client.release();
   }
 
-  const detail = currentPlanVersionId ? await getPlanVersionDetail(currentPlanVersionId, weddingId) : null;
+  // TS-209: the change is saved -- a failed read-back is logged, not answered as an error (or as
+  // "nothing was saved").
+  let detail: PlanVersionDetail | null = null;
+  try {
+    detail = currentPlanVersionId ? await getPlanVersionDetail(currentPlanVersionId, weddingId) : null;
+  } catch (err) {
+    console.error("Attendance saved, but reading the plan back failed:", err);
+  }
 
   // FR-10.2: attendance changes are only notification-worthy once the plan has been approved.
   if (notify && detail?.status === "APPROVED") {
@@ -1697,6 +1712,7 @@ export async function swapGuestAssignments(
     }
   }
 
+  let planVersion!: PlanVersionDetail;
   const client = await pool.connect();
   try {
     await beginTransaction(client);
@@ -1734,6 +1750,11 @@ export async function swapGuestAssignments(
       [randomUUID(), planVersionId, description, actorUserId]
     );
 
+    // TS-209: read back on this transaction's own connection, before COMMIT -- read after it, a
+    // failure answered an error (or "nothing was saved") for a change that was saved.
+    const readBack = await getPlanVersionDetail(planVersionId, weddingId, client);
+    if (!readBack) throw new SwapError("Plan version not found after swap.");
+    planVersion = readBack;
     await client.query("COMMIT");
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});
@@ -1742,8 +1763,6 @@ export async function swapGuestAssignments(
     client.release();
   }
 
-  const planVersion = await getPlanVersionDetail(planVersionId, weddingId);
-  if (!planVersion) throw new SwapError("Plan version not found after swap.");
   // TS-197: the warnings come back once, as `warnings` (see moveGuestAssignment).
 
   // FR-10.2: same "only once approved" gating as a plain move.
@@ -1989,6 +2008,7 @@ export async function restorePlanVersion(
   // then left current and the restored version is saved as a comparison draft beside it.
   options: { mayReplaceApproved?: boolean; /** TS-195: read again under the wedding lock. */ actorAccess?: ActorAccess } = {}
 ): Promise<ManualMoveResult & { savedAsDraftBecauseApproved: boolean }> {
+  let planVersion!: PlanVersionDetail;
   const client = await pool.connect();
   let newVersionId: string;
   let savedAsDraftBecauseApproved = false;
@@ -2052,6 +2072,11 @@ export async function restorePlanVersion(
       [randomUUID(), newVersionId, description, actorUserId]
     );
 
+    // TS-209: read back on this transaction's own connection, before COMMIT -- read after it, a
+    // failure answered an error (or "nothing was saved") for a change that was saved.
+    const readBack = await getPlanVersionDetail(newVersionId, weddingId, client);
+    if (!readBack) throw new RestoreError("Plan version not found after restore.");
+    planVersion = readBack;
     await client.query("COMMIT");
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});
@@ -2062,8 +2087,6 @@ export async function restorePlanVersion(
     client.release();
   }
 
-  const planVersion = await getPlanVersionDetail(newVersionId, weddingId);
-  if (!planVersion) throw new RestoreError("Plan version not found after restore.");
   const warnings = [...result.warnings];
   for (const d of result.droppedGuests) {
     warnings.push(`${d.guestName} was left Unassigned — ${d.reason}.`);
