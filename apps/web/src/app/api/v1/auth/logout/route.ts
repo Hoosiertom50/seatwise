@@ -15,8 +15,9 @@ const logoutSchema = z.object({ everywhere: z.boolean().optional() }).strict();
 // TS-204 (Tom's decision): "Log out" ends only this device's session (its id is recorded as ended,
 // see revokeSession); signing out on a phone no longer signs the laptop out. "Log out on all
 // devices" ends every session of the account, as TS-155's log out used to (the session version
-// moves on). A token from before sessions had their own ids can't be ended on its own, so logging
-// out with one ends every session, as before. The mobile app's Bearer tokens work the same way.
+// moves on). A token from before sessions had their own ids is ended by the id worked out from its
+// sign-in (sessionIdFor), which every copy and renewal of it shares -- so it too ends on this device
+// only. The mobile app's Bearer tokens work the same way.
 export async function POST(req: NextRequest) {
   const json = await readJson(req);
   if (!json.ok) return json.response;
