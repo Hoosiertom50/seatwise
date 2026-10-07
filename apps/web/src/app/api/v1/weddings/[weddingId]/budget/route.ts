@@ -4,6 +4,7 @@ import { getBudgetSummaryForWedding, setBudgetForWedding, BudgetConflictError } 
 import { getAuthUser } from "@/lib/session";
 import { errorResponse, zodErrorResponse, readJson, weddingDeletedResponse } from "@/lib/api-response";
 import { requireAccess } from "@/lib/access";
+import { afterSave, SAVED_BUT_NOT_REFRESHED } from "@/lib/post-save";
 
 type Params = { params: Promise<{ weddingId: string }> };
 
@@ -49,6 +50,15 @@ export async function PATCH(req: NextRequest, { params }: Params) {
     if (refused) return refused;
     throw err;
   }
-  const summary = await getBudgetSummaryForWedding(weddingId);
-  return NextResponse.json({ summary });
+  // TS-209: the budget is saved by now -- if reading the totals back fails, that's said as a warning
+  // (with no totals), never as an error the planner would take to mean it wasn't saved.
+  const warnings: string[] = [];
+  const summary = await afterSave(
+    "reading the budget totals back",
+    () => getBudgetSummaryForWedding(weddingId),
+    warnings,
+    SAVED_BUT_NOT_REFRESHED,
+    null
+  );
+  return NextResponse.json({ summary, warnings });
 }

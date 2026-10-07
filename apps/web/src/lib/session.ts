@@ -1,5 +1,6 @@
 import { NextRequest } from "next/server";
 import { findUserById, isSessionRevoked, type UserRow } from "@seatwise/db";
+import { sessionIdFor } from "./session-renewal";
 import { verifyToken, AUTH_COOKIE_NAME, type VerifiedToken } from "./auth";
 
 /**
@@ -30,7 +31,8 @@ export async function getAuthSession(req: NextRequest): Promise<AuthSession> {
 
   const [user, revoked] = await Promise.all([
     findUserById(payload.sub),
-    payload.sessionId ? isSessionRevoked(payload.sessionId) : Promise.resolve(false),
+    // TS-204: by the id the session goes by -- a token from before session ids included.
+    sessionIdFor(payload).then(isSessionRevoked),
   ]);
   if (!user) return { user: null, reason: "ACCOUNT_GONE" };
   // TS-155: a session ended by a password reset or "Log out on all devices" stays ended, even

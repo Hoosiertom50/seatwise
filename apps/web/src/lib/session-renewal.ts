@@ -37,3 +37,22 @@ export function revokedSessionKeepUntil(
 ): number {
   return Math.max(claims.expiresAt, claims.authTime + RENEWAL_LIMIT_SECONDS + tokenTtlSeconds);
 }
+
+/**
+ * TS-204: the id a session goes by. A token signed before session ids existed has none -- it gets
+ * one worked out from the sign-in itself (account, sign-in time, session version), so every copy of
+ * that token, and every renewal of each copy, shares it. Before, each renewal of such a token made up
+ * a new random id, so two copies of one token renewed into two sessions and "Log out" on one left
+ * the other working.
+ */
+export async function sessionIdFor(claims: {
+  sub: string;
+  authTime: number;
+  sessionVersion: number;
+  sessionId: string | null;
+}): Promise<string> {
+  if (claims.sessionId) return claims.sessionId;
+  const bytes = new TextEncoder().encode(`${claims.sub}:${claims.authTime}:${claims.sessionVersion}`);
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
+  return `legacy-${Array.from(digest, (b) => b.toString(16).padStart(2, "0")).join("")}`;
+}

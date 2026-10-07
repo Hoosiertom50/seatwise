@@ -1423,7 +1423,13 @@ export async function setGuestAttendance(
   actorUserId: string | null,
   // TS-167: the RSVP route sends its own notification about the response, so it skips this one.
   // TS-204: actorAccess -- the access a planner's request was let in with, read again under the locks.
-  { notify = true, actorAccess }: { notify?: boolean; actorAccess?: ActorAccess } = {}
+  // TS-207: onOutcome -- told whether the guest already had that attendance, as found under the
+  // locks (a read before them could be overtaken by a change made at the same moment).
+  {
+    notify = true,
+    actorAccess,
+    onOutcome,
+  }: { notify?: boolean; actorAccess?: ActorAccess; onOutcome?: (outcome: { unchanged: boolean }) => void } = {}
 ): Promise<PlanVersionDetail | null> {
   const { rows: guestRows } = await pool.query(
     `SELECT id, ("firstName" || ' ' || "lastName") AS name, "dayOfAttendance"
@@ -1441,6 +1447,7 @@ export async function setGuestAttendance(
 
   if (guest.dayOfAttendance === attendance) {
     // Already at the requested attendance — no-op, just return current state.
+    onOutcome?.({ unchanged: true });
     return currentPlanVersionId ? getPlanVersionDetail(currentPlanVersionId, weddingId) : null;
   }
 
@@ -1470,6 +1477,7 @@ export async function setGuestAttendance(
     if (!lockedGuest[0]) throw new AttendanceError("Guest not found.");
     if (lockedGuest[0].dayOfAttendance === attendance) {
       await client.query("COMMIT");
+      onOutcome?.({ unchanged: true });
       return currentPlanVersionId ? getPlanVersionDetail(currentPlanVersionId, weddingId) : null;
     }
     // TS-174: the change itself is shared with a guest's own RSVP (submitGuestRsvp), which makes it
@@ -1488,6 +1496,7 @@ export async function setGuestAttendance(
     }
 
     await client.query("COMMIT");
+    onOutcome?.({ unchanged: false });
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});
     throw err;

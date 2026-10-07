@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { bumpSessionVersion, revokeSession } from "@seatwise/db";
 import { AUTH_COOKIE_NAME, AUTH_TOKEN_TTL_SECONDS, isSecureCookieContext } from "@/lib/auth";
-import { revokedSessionKeepUntil } from "@/lib/session-renewal";
+import { revokedSessionKeepUntil, sessionIdFor } from "@/lib/session-renewal";
 import { getAuthSession } from "@/lib/session";
 import { readJson, zodErrorResponse } from "@/lib/api-response";
 
@@ -26,12 +26,14 @@ export async function POST(req: NextRequest) {
 
   const session = await getAuthSession(req);
   if (session.user) {
-    if (everywhere || !session.token.sessionId) {
+    if (everywhere) {
       await bumpSessionVersion(session.user.id);
     } else {
       // TS-204: kept until no token of this session (renewed copies included) can still be valid.
+      // A token from before session ids is ended by the id worked out from its sign-in
+      // (sessionIdFor), which every copy and renewal of it shares.
       const keepUntil = revokedSessionKeepUntil(session.token, AUTH_TOKEN_TTL_SECONDS);
-      await revokeSession(session.token.sessionId, session.user.id, new Date(keepUntil * 1000));
+      await revokeSession(await sessionIdFor(session.token), session.user.id, new Date(keepUntil * 1000));
     }
   }
   const response = NextResponse.json({ ok: true, everywhere });

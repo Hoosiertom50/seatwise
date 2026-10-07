@@ -33,16 +33,16 @@ export async function POST(req: NextRequest, { params }: Params) {
 
   try {
     // TS-207: whether the guest already had that attendance (changed on another screen, or by their
-    // own RSVP link) -- the screen then says so, instead of claiming it just made the change.
-    const before = await getGuestForWedding(guestId, weddingId);
-    const unchanged = before?.dayOfAttendance === parsed.data.attendance;
+    // own RSVP link) -- the screen then says so, instead of claiming it just made the change. Found
+    // under the change's own locks, so a change made at the same moment can't make it wrong.
+    let unchanged = false;
     const planVersion = await setGuestAttendance(
       weddingId,
       guestId,
       parsed.data.attendance,
       user.id,
       // TS-204: read again under the change's locks.
-      { actorAccess: access.actor }
+      { actorAccess: access.actor, onOutcome: (outcome) => (unchanged = outcome.unchanged) }
     );
     // TS-175: the guest too -- the change bumps their revision (TS-165), and a screen that kept the
     // old one got a false "edited elsewhere" on its next edit of them.

@@ -231,13 +231,23 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
     if (problem) return setError(problem);
     setSavingBudget(true);
     try {
-      const { summary: updated } = await api.patch<{ summary: BudgetSummaryDTO }>(
+      const { summary: saved, warnings } = await api.patch<{ summary: BudgetSummaryDTO | null; warnings?: string[] }>(
         `/api/v1/weddings/${weddingId}/budget`,
         // TS-92: the version this figure is based on -- a stale one is refused, never overwrites.
         { budgetCents: dollarsStringToCents(budgetInput), expectedRevision: summary?.budgetRevision }
       );
-      setSummary(updated);
-      setBudgetInput(centsToDollarsString(updated.budgetCents));
+      // TS-209: saved, but the totals couldn't be read back -- fetch them again (so the next save
+      // carries the new version), and say so if that fails too.
+      const updated =
+        saved ??
+        (await api
+          .get<{ summary: BudgetSummaryDTO }>(`/api/v1/weddings/${weddingId}/budget`)
+          .then((r) => r.summary)
+          .catch(() => null));
+      if (updated) {
+        setSummary(updated);
+        setBudgetInput(centsToDollarsString(updated.budgetCents));
+      } else if (warnings?.length) setError(warnings.join(" "));
     } catch (err) {
       // TS-92: someone else changed the budget first -- show their figure in the box, so the
       // number on screen is what's actually on record.

@@ -8,7 +8,7 @@ import { randomBytes } from "node:crypto";
 
 process.env.JWT_SECRET = randomBytes(32).toString("hex");
 
-const { RENEW_AFTER_SECONDS, RENEWAL_LIMIT_SECONDS, shouldRenew } = await import("./session-renewal");
+const { RENEW_AFTER_SECONDS, RENEWAL_LIMIT_SECONDS, sessionIdFor, shouldRenew } = await import("./session-renewal");
 const { signToken, verifyToken, AUTH_TOKEN_TTL_SECONDS } = await import("./auth");
 
 const NOW = 2_000_000_000;
@@ -68,4 +68,23 @@ test("an ended session is kept until the last renewal's token would expire", asy
 
   // A token that already expires later than that (it can't, but never shorten) keeps its own expiry.
   assert.equal(revokedSessionKeepUntil({ authTime, expiresAt: keepUntil + 5 }, AUTH_TOKEN_TTL_SECONDS), keepUntil + 5);
+});
+
+// TS-204 (Copilot review on PR #102): a token signed before session ids existed gets one worked out
+// from its sign-in -- the same for every copy and every renewal -- so "Log out" on one copy ends them
+// all. Each renewal used to make up a new random id.
+test("a token from before session ids gets the same id for every copy and renewal", async () => {
+  const legacy = { sub: "user-1", authTime: 1_790_000_000, sessionVersion: 3, sessionId: null };
+  const first = await sessionIdFor(legacy);
+  assert.equal(await sessionIdFor({ ...legacy }), first);
+  assert.match(first, /^legacy-[0-9a-f]{64}$/);
+  assert.notEqual(await sessionIdFor({ ...legacy, authTime: legacy.authTime + 1 }), first);
+  assert.notEqual(await sessionIdFor({ ...legacy, sessionVersion: 4 }), first);
+});
+
+test("a token that has a session id keeps it", async () => {
+  assert.equal(
+    await sessionIdFor({ sub: "user-1", authTime: 1, sessionVersion: 0, sessionId: "abc-123" }),
+    "abc-123"
+  );
 });
