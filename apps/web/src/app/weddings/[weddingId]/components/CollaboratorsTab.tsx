@@ -174,11 +174,15 @@ export function CollaboratorsTab({
   // typed in its box and keeps counting as unsaved, with the error shown -- it used to be swapped
   // back for the saved value, losing the typing. Only a 409 (someone else changed the wedding)
   // puts the saved value back.
-  function keepTypedUnlessConflict(err: unknown, fieldKey: string, putBack: () => void) {
+  // TS-206: with the setting's name and the reason, so a save that fails after this tab was closed
+  // shows "Couldn't save the wedding note: <reason>" on the page instead of a phantom unsaved mark.
+  // Returns false (not saved) for the save handlers below, so Back waits and stays.
+  function keepTypedUnlessConflict(err: unknown, fieldKey: string, putBack: () => void, field: string, reason: string): false {
     if (err instanceof ApiError && err.status === 409) {
       putBack();
       settingFields.markDirty(fieldKey, false);
-    } else settingFields.markDirty(fieldKey, true);
+    } else settingFields.keepUnsaved(fieldKey, field, reason);
+    return false;
   }
 
   // The wedding's name is required (min length 1) server-side -- an emptied-out field just
@@ -190,7 +194,7 @@ export function CollaboratorsTab({
     if (trimmed === "") {
       setError("Wedding name can't be blank.");
       setWeddingName(wedding.name);
-      return;
+      return false;
     }
     setSavingName(true);
     setError(null);
@@ -203,8 +207,9 @@ export function CollaboratorsTab({
       setWedding((w) => (w ? { ...w, name: updated.name, updatedAt: updated.updatedAt } : w));
       setWeddingName(updated.name);
     } catch (err) {
-      setError(apiErrorMessage(err, ["name"], "Couldn't save the wedding name."));
-      keepTypedUnlessConflict(err, "setting-name", () => setWeddingName(wedding.name));
+      const reason = apiErrorMessage(err, ["name"], "Couldn't save the wedding name.");
+      setError(reason);
+      return keepTypedUnlessConflict(err, "setting-name", () => setWeddingName(wedding.name), "the wedding name", reason);
     } finally {
       setSavingName(false);
     }
@@ -259,8 +264,9 @@ export function CollaboratorsTab({
       // A blank box shows what it saved as (Bride/Groom), unless the planner has typed since.
       setTyped((current) => (current.trim() === "" ? updated[field] : current));
     } catch (err) {
-      setError(apiErrorMessage(err, [], "Couldn't save the side labels."));
-      keepTypedUnlessConflict(err, `setting-side-${which}`, () => setTyped(wedding[field]));
+      const reason = apiErrorMessage(err, [], "Couldn't save the side labels.");
+      setError(reason);
+      return keepTypedUnlessConflict(err, `setting-side-${which}`, () => setTyped(wedding[field]), `side ${which}'s label`, reason);
     }
   }
 
@@ -279,8 +285,9 @@ export function CollaboratorsTab({
       setWedding((w) => (w ? { ...w, note: updated.note, updatedAt: updated.updatedAt } : w));
       setNote(updated.note ?? "");
     } catch (err) {
-      setError(apiErrorMessage(err, [], "Couldn't save the note."));
-      keepTypedUnlessConflict(err, "setting-note", () => setNote(wedding.note ?? ""));
+      const reason = apiErrorMessage(err, [], "Couldn't save the note.");
+      setError(reason);
+      return keepTypedUnlessConflict(err, "setting-note", () => setNote(wedding.note ?? ""), "the wedding note", reason);
     } finally {
       setSavingNote(false);
     }
@@ -425,6 +432,8 @@ export function CollaboratorsTab({
       if (back && collaboratorSaves.current.get(id) === save)
         setCollaborators((cur) => cur.map((c) => (c.id === id ? { ...c, ...back } : c)));
       setError("Couldn't change that collaborator's access level.");
+      // TS-206: not saved -- Back waits for this and stays.
+      return false;
     }
   }
 
@@ -441,6 +450,7 @@ export function CollaboratorsTab({
       if (back && collaboratorSaves.current.get(id) === save)
         setCollaborators((cur) => cur.map((c) => (c.id === id ? { ...c, ...back } : c)));
       setError("Couldn't change that collaborator's role.");
+      return false;
     }
   }
 
@@ -467,7 +477,7 @@ export function CollaboratorsTab({
     // and say so; only a box that's really empty clears it.
     if (input.validity.badInput) {
       setError("Finish typing the RSVP cutoff date (or clear the box) — it hasn't been changed.");
-      return;
+      return false;
     }
     if (!wedding) return;
     const trimmed = rsvpCutoffDate.trim();
@@ -482,8 +492,15 @@ export function CollaboratorsTab({
       setWedding((w) => (w ? { ...w, rsvpCutoffDate: updated.rsvpCutoffDate, updatedAt: updated.updatedAt } : w));
       setRsvpCutoffDate(updated.rsvpCutoffDate ?? "");
     } catch (err) {
-      setError(apiErrorMessage(err, [], "Couldn't save the RSVP cutoff."));
-      keepTypedUnlessConflict(err, "setting-rsvp-cutoff", () => setRsvpCutoffDate(wedding.rsvpCutoffDate ?? ""));
+      const reason = apiErrorMessage(err, [], "Couldn't save the RSVP cutoff.");
+      setError(reason);
+      return keepTypedUnlessConflict(
+        err,
+        "setting-rsvp-cutoff",
+        () => setRsvpCutoffDate(wedding.rsvpCutoffDate ?? ""),
+        "the RSVP cutoff",
+        reason
+      );
     } finally {
       setSavingRsvpCutoff(false);
     }
@@ -658,7 +675,8 @@ export function CollaboratorsTab({
                 }}
                 onBlur={() => {
                   settingFields.markDirty("setting-name", false);
-                  void onSaveName();
+                  // TS-206: registered, so Back waits for it (and stays if it fails).
+                  void settingFields.trackSave("setting-name", onSaveName());
                 }}
                 maxLength={FIELD_LIMITS.weddingName}
                 disabled={savingName}
@@ -718,11 +736,10 @@ export function CollaboratorsTab({
                 >
                   {savingDetails ? "Saving..." : "Save date and venue"}
                 </button>
-                {detailsSaved && (
-                  <span role="status" className="text-sm text-green-700 dark:text-green-400">
-                    Saved
-                  </span>
-                )}
+                {/* TS-212: always there, only its text changes, so "Saved" is announced reliably. */}
+                <span role="status" className="text-sm text-green-700 dark:text-green-400">
+                  {detailsSaved ? "Saved" : ""}
+                </span>
               </div>
             </form>
           )}
@@ -751,7 +768,7 @@ export function CollaboratorsTab({
                     }}
                     onBlur={() => {
                       settingFields.markDirty("setting-side-1", false);
-                      void onSaveSideLabel(1);
+                      void settingFields.trackSave("setting-side-1", onSaveSideLabel(1));
                     }}
                     maxLength={FIELD_LIMITS.sideLabel}
                   />
@@ -771,7 +788,7 @@ export function CollaboratorsTab({
                     }}
                     onBlur={() => {
                       settingFields.markDirty("setting-side-2", false);
-                      void onSaveSideLabel(2);
+                      void settingFields.trackSave("setting-side-2", onSaveSideLabel(2));
                     }}
                     maxLength={FIELD_LIMITS.sideLabel}
                   />
@@ -801,7 +818,7 @@ export function CollaboratorsTab({
                 }}
                 onBlur={() => {
                   settingFields.markDirty("setting-note", false);
-                  void onSaveNote();
+                  void settingFields.trackSave("setting-note", onSaveNote());
                 }}
                 disabled={savingNote}
                 placeholder="Nothing noted yet"
@@ -829,7 +846,7 @@ export function CollaboratorsTab({
                 }}
                 onBlur={(e) => {
                   settingFields.markDirty("setting-rsvp-cutoff", false);
-                  void onSaveRsvpCutoff(e.currentTarget);
+                  void settingFields.trackSave("setting-rsvp-cutoff", onSaveRsvpCutoff(e.currentTarget));
                 }}
                 disabled={savingRsvpCutoff}
               />
@@ -866,7 +883,7 @@ export function CollaboratorsTab({
                     aria-label={`Role for ${c.userName}`}
                     className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1.5 text-sm"
                     value={c.role}
-                    onCommit={(v) => onChangeRole(c.id, v as CollaboratorRole)}
+                    onCommit={(v) => settingFields.trackSave(`collaborator-${c.id}-role`, onChangeRole(c.id, v as CollaboratorRole))}
                     onPendingChange={(p) => settingFields.markDirty(`collaborator-${c.id}-role`, p)}
                   >
                     {ROLES.map((r) => (
@@ -880,7 +897,7 @@ export function CollaboratorsTab({
                     aria-label={`Access level for ${c.userName}`}
                     className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1.5 text-sm"
                     value={c.permissionLevel}
-                    onCommit={(v) => onChangeLevel(c.id, v as CollaboratorPermission)}
+                    onCommit={(v) => settingFields.trackSave(`collaborator-${c.id}-level`, onChangeLevel(c.id, v as CollaboratorPermission))}
                     onPendingChange={(p) => settingFields.markDirty(`collaborator-${c.id}-level`, p)}
                   >
                     {LEVELS.map((l) => (

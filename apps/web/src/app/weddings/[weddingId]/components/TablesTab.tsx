@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { ConfirmDeleteButton } from "@/components/ConfirmDeleteButton";
+import { ConfirmDeleteButton, focusNeighbour, rowNeighbours } from "@/components/ConfirmDeleteButton";
 import { api, ApiError, apiErrorMessage } from "@/lib/api-client";
 import type {
   GuestDTO,
@@ -1003,8 +1003,11 @@ export function TablesTab({
                   {canEdit ? (
                     <>
                       <label className="flex items-center gap-1.5 text-sm">
+                        {/* TS-212: each row's controls name their table -- a screen reader's list
+                            read "Accessible, Accessible…" and "Lock, Lock…". */}
                         <input
                           type="checkbox"
+                          aria-label={`Accessible: ${t.label}`}
                           checked={t.isAccessible}
                           onChange={(e) => onToggleAccessible(t.id, e.target.checked)}
                         />
@@ -1013,6 +1016,7 @@ export function TablesTab({
                       <label className="flex items-center gap-1.5 text-sm">
                         <input
                           type="checkbox"
+                          aria-label={`Single-side: ${t.label}`}
                           checked={t.singleSideOnly}
                           onChange={(e) => onToggleSingleSideOnly(t.id, e.target.checked)}
                         />
@@ -1020,6 +1024,7 @@ export function TablesTab({
                       </label>
                       <button
                         onClick={() => onToggleLock(t.id, !t.isLocked)}
+                        aria-label={`${t.isLocked ? "Unlock" : "Lock"} ${t.label}`}
                         title="Locked: new plans keep the people already here and seat nobody new here."
                         className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800"
                       >
@@ -1028,7 +1033,9 @@ export function TablesTab({
                       <button
                         onClick={() => {
                           // TS-182: opening another table used to throw away a changed open edit.
-                          if (editingId && editingId !== t.id && editDirty) {
+                          // TS-212: and pressing this table's own Edit again closed it, throwing away
+                          // what was changed -- it now asks to Save or Cancel first, too.
+                          if (editingId && editDirty) {
                             setError(OPEN_EDIT_MESSAGE);
                             return;
                           }
@@ -1088,14 +1095,28 @@ export function TablesTab({
                   >
                     <span className="flex-1">{confirmRemoval.message}</span>
                     <button
-                      onClick={() => onRemove(t.id, true, confirmRemoval.seatedCount)}
+                      onClick={(e) => {
+                        // TS-212: if the table goes, focus moves to the next row (or the one before,
+                        // or the list's heading) -- it used to drop to the top of the page.
+                        const neighbours = rowNeighbours(e.currentTarget);
+                        void onRemove(t.id, true, confirmRemoval.seatedCount).then(() => {
+                          setTimeout(() => {
+                            const active = document.activeElement;
+                            if (!active || active === document.body || !active.isConnected) focusNeighbour(neighbours);
+                          }, 0);
+                        });
+                      }}
                       disabled={removingAnyway}
                       className="rounded-md bg-red-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-red-800 disabled:opacity-50"
                     >
                       {removingAnyway ? "Removing…" : "Remove anyway"}
                     </button>
                     <button
-                      onClick={() => setConfirmRemoval(null)}
+                      onClick={() => {
+                        setConfirmRemoval(null);
+                        // TS-212: back to the table's Remove button.
+                        setTimeout(() => document.getElementById(`table-${t.id}-remove`)?.focus(), 0);
+                      }}
                       disabled={removingAnyway}
                       className="rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50"
                     >
@@ -1167,6 +1188,9 @@ function FloorPlan({
 
   function onPointerDown(e: React.PointerEvent<HTMLDivElement>, t: SeatingTableDTO) {
     if (!canEdit) return;
+    // TS-212: only the main button drags -- a right-click (or Ctrl-click on a Mac, which is the
+    // same) used to pick the table up too.
+    if (e.button !== 0 || (e.pointerType === "mouse" && e.ctrlKey)) return;
     holdOrder();
     const el = e.currentTarget;
     el.setPointerCapture(e.pointerId);
@@ -1178,6 +1202,12 @@ function FloorPlan({
 
   function onPointerMove(e: React.PointerEvent<HTMLDivElement>) {
     if (!dragId.current || !containerRef.current) return;
+    // TS-212: the button was let go somewhere the release wasn't seen (outside the window, say) --
+    // the drag ends where the table is now, rather than the table following the pointer.
+    if (e.pointerType === "mouse" && e.buttons === 0) {
+      void onPointerUp();
+      return;
+    }
     const containerRect = containerRef.current.getBoundingClientRect();
     let x = e.clientX - containerRect.left - dragOffset.current.x;
     let y = e.clientY - containerRect.top - dragOffset.current.y;
@@ -1290,7 +1320,11 @@ function FloorPlan({
       </p>
       {/* TS-175: the room scrolls inside its box (as on the Plan tab) instead of being cut off at
           the screen's edge, so on a phone every table can still be reached. */}
+      {/* TS-212: Chrome 130+ and Firefox make a scrolling box a Tab stop of its own. With tables to
+          Tab to it isn't needed (focusing a table scrolls it into view), so it's taken out; view-only,
+          it's the only way to scroll by keyboard, so it's a named region. */}
       <div
+        {...(canEdit ? { tabIndex: -1 } : { role: "region", "aria-label": "Room floor plan, scrollable", tabIndex: 0 })}
         style={{ width: "100%", maxWidth: width }}
         className="overflow-auto rounded-lg border border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-900"
       >

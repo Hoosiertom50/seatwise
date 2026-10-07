@@ -283,11 +283,12 @@ export class TablesTabPage extends BasePage {
 
   /** TS-166: the row's "Accessible" and "Single-side" checkboxes. */
   accessibleCheckbox(label: string) {
-    return this.tableRow(label).getByRole("checkbox", { name: "Accessible", exact: true });
+    // TS-212: the checkboxes name their table ("Accessible: Table 1").
+    return this.tableRow(label).getByRole("checkbox", { name: `Accessible: ${label}`, exact: true });
   }
 
   singleSideCheckbox(label: string) {
-    return this.tableRow(label).getByRole("checkbox", { name: "Single-side", exact: true });
+    return this.tableRow(label).getByRole("checkbox", { name: `Single-side: ${label}`, exact: true });
   }
 
   /** TS-166: any error shown on the Tables tab. */

@@ -35,8 +35,10 @@ export const saveStatusStore = {
   getServerSnapshot(): SaveStatus {
     return SERVER_SNAPSHOT;
   },
+  // TS-206: Dismiss hides the failure and shows nothing -- it used to turn the header green with
+  // "All changes saved", though the failed change was never saved.
   dismissError() {
-    set({ lastError: null });
+    set({ lastError: null, lastSavedAt: null });
   },
   /** Forget saved/failed history (e.g. on opening a different wedding, so one wedding's "Not
    * saved" never appears on another). In-flight writes are still counted. */
@@ -63,4 +65,31 @@ export function writeAwaitingConfirmation() {
 
 export function writeFailed(reason: string) {
   set({ pending: Math.max(0, status.pending - 1), lastError: reason });
+}
+
+// TS-206: what the header shows, worked out in one place (and unit tested). `unsavedCount` is how
+// many fields on the page are unsaved right now -- typed and not yet left, or kept in their box
+// after a failed save. While there are any, the header never says "All changes saved".
+export type SaveStatusView =
+  | { kind: "offline" }
+  | { kind: "saving" }
+  | { kind: "error"; message: string }
+  | { kind: "saved" }
+  | { kind: "none" };
+
+export function saveStatusView(
+  s: SaveStatus,
+  { online = true, unsavedCount = 0 }: { online?: boolean; unsavedCount?: number } = {}
+): SaveStatusView {
+  if (!online) return { kind: "offline" };
+  if (s.pending > 0) return { kind: "saving" };
+  if (s.lastError) {
+    // TS-177: no "Not saved:" in front of a message that already says what happened.
+    const message = /^not saved\b|\bwas(n't| not) saved\b|\bwere saved\b/i.test(s.lastError)
+      ? s.lastError
+      : `Not saved: ${s.lastError}`;
+    return { kind: "error", message };
+  }
+  if (s.lastSavedAt && unsavedCount === 0) return { kind: "saved" };
+  return { kind: "none" };
 }

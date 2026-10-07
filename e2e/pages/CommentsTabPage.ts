@@ -64,7 +64,8 @@ export class CommentsTabPage extends BasePage {
 
   // TS-118: replying to and resolving a thread through the UI.
   replyOpener(threadBody: string) {
-    return this.threadByBody(threadBody).first().getByRole("button", { name: "Reply", exact: true });
+    // TS-212: the button names the comment it replies to ("Reply to Ann's comment on Table 1").
+    return this.threadByBody(threadBody).first().getByRole("button", { name: /^Reply to / });
   }
 
   async reply(threadBody: string, text: string): Promise<void> {
@@ -100,7 +101,12 @@ export class CommentsTabPage extends BasePage {
   }
 
   async resolve(threadBody: string): Promise<void> {
-    await this.threadByBody(threadBody).first().getByRole("button", { name: "Resolve", exact: true }).click();
+    await this.resolveButton(threadBody).click();
+  }
+
+  /** TS-212: the thread's Resolve button (its name says whose comment, on what). */
+  resolveButton(threadBody: string) {
+    return this.threadByBody(threadBody).first().getByRole("button", { name: /^Resolve / });
   }
 
   resolvedBadge(threadBody: string) {

@@ -65,10 +65,9 @@ export class GuestRow {
 
   /** TS-38: the Lock/Unlock toggle -- its accessible name flips with the guest's own `isLocked`
    * state (see GuestsTab.tsx), so `{ exact: true }` keeps "Lock" from also matching "Unlock". */
+  // TS-212: the name also says which guest ("Lock Jane Smith"), so it's matched from the start.
   private lockButton() {
-    return this.root.getByRole("button", { name: "Lock", exact: true }).or(
-      this.root.getByRole("button", { name: "Unlock", exact: true }),
-    );
+    return this.root.getByRole("button", { name: /^(Lock|Unlock) / });
   }
 
   /** Clicks the Lock/Unlock toggle, whichever state it's currently in, and waits for the button
@@ -90,7 +89,7 @@ export class GuestRow {
     ]);
     expect(res.ok(), `saving the lock returned ${res.status()}`).toBe(true);
     const newLabel = wasLocked ? "Lock" : "Unlock";
-    await this.root.getByRole("button", { name: newLabel, exact: true }).waitFor();
+    await this.root.getByRole("button", { name: new RegExp(`^${newLabel} `) }).waitFor();
   }
 
   async isLocked(): Promise<boolean> {
@@ -190,6 +189,16 @@ export class GuestRow {
     return this.emailInput().inputValue();
   }
 
+  /** TS-206: types into the email box without leaving it (nothing saved yet). */
+  async typeEmailWithoutLeaving(value: string): Promise<void> {
+    await this.emailInput().fill(value);
+  }
+
+  /** TS-206: the email box itself (e.g. to check it still holds what was typed). */
+  emailBox(): Locator {
+    return this.emailInput();
+  }
+
   /** TS-118: email saves on blur -- replace the text, then Tab away. Waits for the save (or its
    * refusal) to come back, so a caller never checks the saved value while it's still in flight. */
   async editEmail(value: string): Promise<void> {
@@ -219,7 +228,7 @@ export class GuestRow {
 
   /** TS-117: "New link" -- issues a fresh RSVP token, invalidating the old one. */
   async requestNewRsvpLink(): Promise<void> {
-    await this.root.getByRole("button", { name: "New link", exact: true }).click();
+    await this.root.getByRole("button", { name: /^New link for / }).click();
   }
 
   /** TS-117: the line the row shows after an RSVP-link action: "Link copied…", "Emailed to …", or

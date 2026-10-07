@@ -392,6 +392,9 @@ export function GuestsTab({
       setGuests(updatedGuests.sort((a, b) => a.lastName.localeCompare(b.lastName)));
       setImportResult(result);
       resetImport();
+      // TS-212: Confirm goes away with the preview -- focus moves to the result message (it used to
+      // drop to the page, so the next Tab started from the top).
+      setTimeout(() => document.getElementById("guest-import-result")?.focus(), 0);
     } catch (err) {
       setImportError(err instanceof ApiError ? err.message : "Couldn't complete that import.");
     } finally {
@@ -399,8 +402,11 @@ export function GuestsTab({
     }
   }
 
+  // TS-212: the text of the always-present status region below the Add form.
+  const [addedAnnouncement, setAddedAnnouncement] = useState("");
   async function onAddGuest(e: React.FormEvent) {
     e.preventDefault();
+    setAddedAnnouncement("");
     setError(null);
     setAdding(true);
     try {
@@ -420,6 +426,8 @@ export function GuestsTab({
       });
       // TS-166: built from the list as it is now, so another change made meanwhile isn't lost.
       setGuests((cur) => [...cur, guest].sort((a, b) => a.lastName.localeCompare(b.lastName)));
+      // TS-212: said out loud -- adding a guest was never announced.
+      setAddedAnnouncement(`Added ${guest.firstName} ${guest.lastName}.`);
       // TS-143: a guest added with an email was just sent their RSVP link -- say so on their row.
       if (rsvpEmail && guest.email) showAutoRsvpResult(guest.id, guest.email, rsvpEmail);
       // TS-177: e.g. the guest was saved but the plan couldn't be re-checked just then.
@@ -523,9 +531,14 @@ export function GuestsTab({
   type RowTextField = "firstName" | "lastName" | "notes" | "email";
   const [unsavedText, setUnsavedText] = useState<Record<string, string>>({});
   const unsavedTextKey = (guestId: string, field: RowTextField) => `${guestId}-${field}`;
-  function keepUnsavedText(guestId: string, field: RowTextField, text: string) {
+  // TS-206: with the reason, so a save that fails after the Guests tab was closed shows "Couldn't
+  // save <name>'s email: <reason>" on the page instead of leaving a phantom unsaved mark.
+  function keepUnsavedText(guestId: string, field: RowTextField, text: string, reason: string) {
     setUnsavedText((cur) => ({ ...cur, [unsavedTextKey(guestId, field)]: text }));
-    rowFields.markDirty(`guest-row-${guestId}-${field}`, true);
+    const guest = guestsNow.current.find((g) => g.id === guestId);
+    const fieldName = field === "firstName" ? "first name" : field === "lastName" ? "last name" : field;
+    const label = guest ? `${guest.firstName} ${guest.lastName}'s ${fieldName}` : `a guest's ${fieldName}`;
+    rowFields.keepUnsaved(`guest-row-${guestId}-${field}`, label, reason);
   }
   function dropUnsavedText(guestId: string, field: RowTextField) {
     const key = unsavedTextKey(guestId, field);
@@ -543,11 +556,14 @@ export function GuestsTab({
     );
   }
 
-  async function onUpdateRsvp(guestId: string, newStatus: RsvpStatus) {
+  // TS-206: each row save answers whether it went through (false = not saved), so Back can wait
+  // for it and stay when it didn't.
+  async function onUpdateRsvp(guestId: string, newStatus: RsvpStatus): Promise<boolean> {
     const before = guests.find((g) => g.id === guestId);
     patchRow(guestId, { rsvpStatus: newStatus });
     try {
       await saveGuest(guestId, { rsvpStatus: newStatus });
+      return true;
     } catch (err) {
       const fresh = conflictGuest(err);
       if (fresh) showConflict(fresh);
@@ -555,16 +571,18 @@ export function GuestsTab({
         if (before) patchRow(guestId, { rsvpStatus: before.rsvpStatus });
         setRowError(guestId, err instanceof ApiError ? err.message : "Couldn't update RSVP status.");
       }
+      return false;
     }
   }
 
   // FR-1.3a/FR-3.4: only the BRIDE/GROOM/BOTH value is ever written here -- this wedding's side
   // labels only affect how that value is displayed (see SIDE_OPTIONS above).
-  async function onUpdateSide(guestId: string, newSide: GuestSide) {
+  async function onUpdateSide(guestId: string, newSide: GuestSide): Promise<boolean> {
     const before = guests.find((g) => g.id === guestId);
     patchRow(guestId, { side: newSide });
     try {
       await saveGuest(guestId, { side: newSide });
+      return true;
     } catch (err) {
       const fresh = conflictGuest(err);
       if (fresh) showConflict(fresh);
@@ -572,6 +590,7 @@ export function GuestsTab({
         if (before) patchRow(guestId, { side: before.side });
         setRowError(guestId, err instanceof ApiError ? err.message : "Couldn't update that guest's side.");
       }
+      return false;
     }
   }
 
@@ -598,18 +617,19 @@ export function GuestsTab({
   // TS-17 (FR-12.4): inline-editable per row, same optimistic-update-then-reconcile pattern as
   // the other per-guest edit handlers above. TS-93: uncontrolled like the name inputs (TS-108), so a
   // rejected edit writes the committed email back into the input itself.
-  async function onUpdateEmail(guestId: string, input: HTMLInputElement) {
+  async function onUpdateEmail(guestId: string, input: HTMLInputElement): Promise<boolean> {
     const current = guests.find((g) => g.id === guestId);
     const typed = input.value;
     const normalized = typed.trim() || null;
     dropUnsavedText(guestId, "email");
     // TS-199: typed back to what's saved -- nothing to send.
-    if (current && normalized === (current.email ?? null)) return;
+    if (current && normalized === (current.email ?? null)) return true;
     patchRow(guestId, { email: normalized });
     try {
       const { guest, rsvpEmail } = await saveGuest(guestId, { email: normalized });
       // TS-143: giving a guest their first email sends their RSVP link.
       if (rsvpEmail && guest.email) showAutoRsvpResult(guest.id, guest.email, rsvpEmail);
+      return true;
     } catch (err) {
       const fresh = conflictGuest(err);
       if (fresh) {
@@ -617,26 +637,29 @@ export function GuestsTab({
         input.value = fresh.email ?? "";
       } else {
         patchRow(guestId, { email: current?.email ?? null });
-        // TS-199: the typed address stays in the box (see keepUnsavedText).
-        keepUnsavedText(guestId, "email", typed);
         // TS-135: a 422's top-level message is just "Validation failed" -- show the field's own reason.
-        setRowError(guestId, apiErrorMessage(err, ["email"], "Couldn't update that guest's email."));
+        const reason = apiErrorMessage(err, ["email"], "Couldn't update that guest's email.");
+        // TS-199: the typed address stays in the box (see keepUnsavedText).
+        keepUnsavedText(guestId, "email", typed, reason);
+        setRowError(guestId, reason);
       }
+      return false;
     }
   }
 
   // TS-129: the planner's private notes (dietary, accessibility, anything the team should know),
   // inline-editable like the email above and uncontrolled for the same reason (TS-108): every path
   // that doesn't keep the planner's text writes the committed note back into the textarea itself.
-  async function onUpdateNotes(guestId: string, input: HTMLTextAreaElement) {
+  async function onUpdateNotes(guestId: string, input: HTMLTextAreaElement): Promise<boolean> {
     const current = guests.find((g) => g.id === guestId);
     const typed = input.value;
     const normalized = typed.trim() || null;
     dropUnsavedText(guestId, "notes");
-    if (!current || normalized === (current.notes ?? null)) return;
+    if (!current || normalized === (current.notes ?? null)) return true;
     patchRow(guestId, { notes: normalized });
     try {
       await saveGuest(guestId, { notes: normalized });
+      return true;
     } catch (err) {
       const fresh = conflictGuest(err);
       if (fresh) {
@@ -644,10 +667,12 @@ export function GuestsTab({
         input.value = fresh.notes ?? "";
       } else {
         patchRow(guestId, { notes: current.notes });
+        const reason = apiErrorMessage(err, ["notes"], "Couldn't update that guest's notes.");
         // TS-199: the typed note stays in the box (see keepUnsavedText).
-        keepUnsavedText(guestId, "notes", typed);
-        setRowError(guestId, apiErrorMessage(err, ["notes"], "Couldn't update that guest's notes."));
+        keepUnsavedText(guestId, "notes", typed, reason);
+        setRowError(guestId, reason);
       }
+      return false;
     }
   }
 
@@ -660,20 +685,21 @@ export function GuestsTab({
   // defaultValue into an already-mounted input -- so restoring state alone leaves the rejected
   // text on screen. Every path that doesn't keep the user's text writes the committed name back
   // into the input element itself.
-  async function onUpdateName(guestId: string, field: "firstName" | "lastName", input: HTMLInputElement) {
+  async function onUpdateName(guestId: string, field: "firstName" | "lastName", input: HTMLInputElement): Promise<boolean> {
     const typed = input.value;
     const trimmed = typed.trim();
     const current = guests.find((g) => g.id === guestId);
     dropUnsavedText(guestId, field);
-    if (!current || trimmed === current[field]) return;
+    if (!current || trimmed === current[field]) return true;
     if (trimmed === "") {
       setRowError(guestId, field === "firstName" ? "First name can't be blank." : "Last name can't be blank.");
       input.value = current[field];
-      return;
+      return false;
     }
     patchRow(guestId, { [field]: trimmed });
     try {
       await saveGuest(guestId, { [field]: trimmed });
+      return true;
     } catch (err) {
       const fresh = conflictGuest(err);
       if (fresh) {
@@ -681,16 +707,16 @@ export function GuestsTab({
         input.value = fresh[field];
       } else {
         patchRow(guestId, { [field]: current[field] });
-        // TS-199: the typed name stays in the box (see keepUnsavedText).
-        keepUnsavedText(guestId, field, typed);
-        setRowError(guestId, 
-          apiErrorMessage(
-            err,
-            [field],
-            `Couldn't update that guest's ${field === "firstName" ? "first" : "last"} name.`
-          )
+        const reason = apiErrorMessage(
+          err,
+          [field],
+          `Couldn't update that guest's ${field === "firstName" ? "first" : "last"} name.`
         );
+        // TS-199: the typed name stays in the box (see keepUnsavedText).
+        keepUnsavedText(guestId, field, typed, reason);
+        setRowError(guestId, reason);
       }
+      return false;
     }
   }
 
@@ -968,6 +994,9 @@ export function GuestsTab({
           {adding ? "Adding..." : "Add guest"}
         </button>
       </form>
+      <p role="status" className="sr-only" data-testid="guest-added-announcement">
+        {addedAnnouncement}
+      </p>
 
       {/* TS-182: a message about a guest who is no longer in the list is shown up here instead. */}
       {error && (!errorGuestId || !guests.some((g) => g.id === errorGuestId)) && (
@@ -1009,7 +1038,7 @@ export function GuestsTab({
                 map each of your file&apos;s columns to a guest field below once it&apos;s chosen.
                 This is just one example of a clean file:
               </p>
-              <div className="overflow-x-auto">
+              <div role="region" aria-label="Example file" tabIndex={0} className="overflow-x-auto">
                 <table className="min-w-full text-xs">
                   <thead>
                     <tr className="text-left text-neutral-500 dark:text-neutral-400">
@@ -1118,6 +1147,9 @@ export function GuestsTab({
         )}
 
         {importError && <p role="alert" className="mb-3 text-sm text-red-600 dark:text-red-400">{importError}</p>}
+        {/* TS-212: always on the page, only its contents change, so "Import complete" is announced
+            (it never was); focus comes here after Confirm. */}
+        <div id="guest-import-result" role="status" tabIndex={-1} className="focus:outline-none">
         {importResult && (
           <div className="mb-3">
             <p className="text-sm text-green-700 dark:text-green-400">
@@ -1137,6 +1169,7 @@ export function GuestsTab({
             )}
           </div>
         )}
+        </div>
 
         {importPreview && (
           <div>
@@ -1158,7 +1191,15 @@ export function GuestsTab({
               <strong>{importPreview.summary.errorCount}</strong> with errors (of{" "}
               {importPreview.summary.totalRows} row(s)).
             </p>
-            <ul className="mb-3 max-h-64 overflow-y-auto rounded-md border border-neutral-200 dark:border-neutral-700">
+            {/* TS-212: a scrolling box is a Tab stop in Chrome 130+ and Firefox -- named, so it isn't a silent one. */}
+            <div
+              role="region"
+              aria-label="Import preview rows"
+              tabIndex={0}
+              className="mb-3 max-h-64 overflow-y-auto rounded-md border border-neutral-200 dark:border-neutral-700"
+            >
+            <ul
+            >
               {importPreview.rows.map((r) => (
                 <li
                   key={r.rowNumber}
@@ -1202,6 +1243,7 @@ export function GuestsTab({
                 </li>
               ))}
             </ul>
+            </div>
             {/* TS-180: guests changed in Seatwise since the file was exported are left alone
                 unless the planner says otherwise. */}
             {importPreview.summary.conflictCount > 0 && (
@@ -1297,7 +1339,8 @@ export function GuestsTab({
                         onInput={(e) => rowFields.markDirty(`guest-row-${g.id}-firstName`, e.currentTarget.value.trim() !== g.firstName)}
                         onBlur={(e) => {
                           rowFields.markDirty(`guest-row-${g.id}-firstName`, false);
-                          onUpdateName(g.id, "firstName", e.currentTarget);
+                          // TS-206: registered, so Back waits for it (and stays if it fails).
+                          void rowFields.trackSave(`guest-row-${g.id}-firstName`, onUpdateName(g.id, "firstName", e.currentTarget));
                         }}
                         maxLength={FIELD_LIMITS.personName}
                       />
@@ -1311,7 +1354,8 @@ export function GuestsTab({
                         onInput={(e) => rowFields.markDirty(`guest-row-${g.id}-lastName`, e.currentTarget.value.trim() !== g.lastName)}
                         onBlur={(e) => {
                           rowFields.markDirty(`guest-row-${g.id}-lastName`, false);
-                          onUpdateName(g.id, "lastName", e.currentTarget);
+                          // TS-206: registered, so Back waits for it (and stays if it fails).
+                          void rowFields.trackSave(`guest-row-${g.id}-lastName`, onUpdateName(g.id, "lastName", e.currentTarget));
                         }}
                         maxLength={FIELD_LIMITS.personName}
                       />
@@ -1378,7 +1422,7 @@ export function GuestsTab({
                       aria-label={`Side for ${g.firstName} ${g.lastName}`}
                       className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm"
                       value={g.side}
-                      onCommit={(v) => onUpdateSide(g.id, v as GuestSide)}
+                      onCommit={(v) => rowFields.trackSave(`guest-row-${g.id}-side`, onUpdateSide(g.id, v as GuestSide))}
                       onPendingChange={(p) => rowFields.markDirty(`guest-row-${g.id}-side`, p)}
                     >
                       {SIDE_OPTIONS.map((o) => (
@@ -1392,7 +1436,7 @@ export function GuestsTab({
                       aria-label={`RSVP status for ${g.firstName} ${g.lastName}`}
                       className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm"
                       value={g.rsvpStatus}
-                      onCommit={(v) => onUpdateRsvp(g.id, v as RsvpStatus)}
+                      onCommit={(v) => rowFields.trackSave(`guest-row-${g.id}-rsvpStatus`, onUpdateRsvp(g.id, v as RsvpStatus))}
                       onPendingChange={(p) => rowFields.markDirty(`guest-row-${g.id}-rsvpStatus`, p)}
                     >
                       {RSVP_STATUSES.map((s) => (
@@ -1401,8 +1445,11 @@ export function GuestsTab({
                         </option>
                       ))}
                     </CommitSelect>
+                    {/* TS-212: each row's buttons name their guest -- a screen reader's list of buttons
+                        used to read "Lock, Lock, Lock…". */}
                     <button
                       onClick={() => onToggleLock(g.id, !g.isLocked)}
+                      aria-label={`${g.isLocked ? "Unlock" : "Lock"} ${g.firstName} ${g.lastName}`}
                       title="Locking keeps this guest at their current table when a new plan is generated, whenever the rules allow."
                       className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800"
                     >
@@ -1413,6 +1460,7 @@ export function GuestsTab({
                         always issues a fresh token, invalidating whatever link was out there. */}
                     <button
                       onClick={() => onRsvpLink(g.id, g.email, false)}
+                      aria-label={`RSVP link for ${g.firstName} ${g.lastName}`}
                       disabled={rsvpLinkBusy.has(g.id)}
                       title="Copies this guest's RSVP link, and emails it to them if they have an address on file."
                       className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50"
@@ -1421,6 +1469,7 @@ export function GuestsTab({
                     </button>
                     <button
                       onClick={() => onRsvpLink(g.id, g.email, true)}
+                      aria-label={`New link for ${g.firstName} ${g.lastName}`}
                       disabled={rsvpLinkBusy.has(g.id)}
                       title="Makes a new RSVP link (the old one stops working) and emails it to the guest if they have an email address and RSVPs are still open."
                       className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50"
@@ -1472,7 +1521,8 @@ export function GuestsTab({
                     onInput={(e) => rowFields.markDirty(`guest-row-${g.id}-notes`, (e.currentTarget.value.trim() || null) !== (g.notes ?? null))}
                     onBlur={(e) => {
                       rowFields.markDirty(`guest-row-${g.id}-notes`, false);
-                      onUpdateNotes(g.id, e.currentTarget);
+                      // TS-206: registered, so Back waits for it (and stays if it fails).
+                      void rowFields.trackSave(`guest-row-${g.id}-notes`, onUpdateNotes(g.id, e.currentTarget));
                     }}
                   />
                 ) : (
@@ -1498,7 +1548,8 @@ export function GuestsTab({
                       rowFields.markDirty(`guest-row-${g.id}-email`, false);
                       // TS-199: always checked, so a box put back to the saved address stops showing
                       // "not saved yet" (onUpdateEmail sends nothing when it matches).
-                      onUpdateEmail(g.id, e.currentTarget);
+                      // TS-206: registered, so Back waits for it (and stays if it fails).
+                      void rowFields.trackSave(`guest-row-${g.id}-email`, onUpdateEmail(g.id, e.currentTarget));
                     }}
                   />
                 ) : (
@@ -1511,9 +1562,11 @@ export function GuestsTab({
                       Not saved yet — what you typed is still in the box. Click into it and away again to try once more.
                     </p>
                   )}
-                {rsvpLinkResult[g.id] && (
-                  <p role="status" className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">{rsvpLinkResult[g.id]}</p>
-                )}
+                {/* TS-212: always on the page, only its text changes -- a status box inserted already
+                    holding its text is skipped by some screen readers. */}
+                <p role="status" className={rsvpLinkResult[g.id] ? "mt-1 text-xs text-neutral-500 dark:text-neutral-400" : ""}>
+                  {rsvpLinkResult[g.id] ?? ""}
+                </p>
               </div>
               {error && errorGuestId === g.id && (
                 <p role="alert" className="basis-full text-sm text-red-600 dark:text-red-400">

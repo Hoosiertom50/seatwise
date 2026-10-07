@@ -560,8 +560,10 @@ export function DayOfTab({
 
       {tables.length > 0 && (
         <div>
-          <p className="mb-2 text-sm font-medium">Table occupancy</p>
-          <div className="flex gap-2 overflow-x-auto pb-1">
+          <p id="dayof-occupancy-heading" className="mb-2 text-sm font-medium">Table occupancy</p>
+          {/* TS-212: the strip scrolls sideways on a phone, which makes it a Tab stop in Chrome 130+
+              and Firefox -- a named region, so it says what it is (and scrolls with the arrow keys). */}
+          <div role="region" aria-labelledby="dayof-occupancy-heading" tabIndex={0} className="flex gap-2 overflow-x-auto pb-1">
             {occupancy.map(({ table, seated }) => (
               <div
                 key={table.id}
@@ -660,6 +662,8 @@ export function DayOfTab({
                   <button
                     onClick={() => onToggleAttendance(g)}
                     disabled={busyIds.has(g.id)}
+                    // TS-212: names the guest -- a screen reader's button list read "Mark not attending" over and over.
+                    aria-label={`${notAttending ? "Mark attending" : "Mark not attending"}: ${g.firstName} ${g.lastName}`}
                     className={`min-h-11 rounded-md border px-3 py-2 text-sm font-medium disabled:opacity-50 ${
                       notAttending
                         ? "border-neutral-300 dark:border-neutral-600 hover:bg-neutral-50 dark:hover:bg-neutral-800"

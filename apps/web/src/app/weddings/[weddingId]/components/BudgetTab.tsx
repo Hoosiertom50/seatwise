@@ -77,6 +77,17 @@ function sortVendors(list: VendorDTO[]): VendorDTO[] {
   return [...list].sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
 }
 
+// TS-212: after the vendor form swaps back to the row (Save, Cancel) or a suggestion fills the form,
+// focus goes to a stable control by id -- it used to drop to the page, so the next Tab started from
+// the top. Only if focus was lost (someone who has clicked elsewhere keeps their place).
+function focusIfLost(id: string) {
+  setTimeout(() => {
+    const active = document.activeElement;
+    if (active && active !== document.body && active.isConnected) return;
+    document.getElementById(id)?.focus();
+  }, 0);
+}
+
 export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: boolean }) {
   const [vendors, setVendors] = useState<VendorDTO[]>([]);
   const [summary, setSummary] = useState<BudgetSummaryDTO | null>(null);
@@ -186,6 +197,9 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
     setContactEmail(s.contactEmail ?? "");
     setContactPhone(s.contactPhone ?? "");
     setPickedSuggestion(s.name);
+    // TS-212: the suggestion list goes away with the pick; the Cost box (the next thing to fill in,
+    // since cost is this wedding's own) takes focus.
+    setTimeout(() => document.getElementById("vendor-cost")?.focus(), 0);
   }
 
   // TS-166: the totals are refreshed after a vendor change on their own -- if only this refresh
@@ -284,6 +298,8 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
     setEditingId(vendor.id);
     setEditVendor({ ...vendor });
     setEditCostText(centsToDollarsString(vendor.costCents));
+    // TS-212: the Edit button is replaced by the form -- focus its first box.
+    focusIfLost(`vendor-${vendor.id}-edit-name`);
   }
 
   // FR-7.7, extended to vendors: a stale save (someone else's edit landed first) refreshes this
@@ -330,6 +346,8 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
       );
       setVendors((cur) => sortVendors(cur.map((v) => (v.id === vendorId ? vendor : v))));
       setEditingId(null);
+      // TS-212: back to this vendor's Edit button.
+      focusIfLost(`vendor-${vendorId}-edit`);
       await refreshSummary();
     } catch (err) {
       const fresh = conflictVendor(err);
@@ -338,6 +356,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
         // TS-175: close the editor, as Timeline does. It used to stay open with the old values,
         // and a second Save then wrote them over the other person's change.
         setEditingId(null);
+        focusIfLost(`vendor-${vendorId}-edit`);
         setError(`"${fresh.name}" changed since you loaded it (maybe in another tab, or by someone else) — showing the latest. Try again if you still want to make this change.`);
       } else {
         // TS-151: say which field was refused, not just "Validation failed".
@@ -526,12 +545,15 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
                   </ul>
                 </div>
               )}
-              {pickedSuggestion && (
-                <p role="status" className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
-                  Filled in {pickedSuggestion}&apos;s details from your other weddings. Add this wedding&apos;s cost and
-                  contract details below.
-                </p>
-              )}
+              {/* TS-212: always on the page, only its text changes, so screen readers announce it. */}
+              <p role="status" className={pickedSuggestion ? "mt-1 text-xs text-neutral-500 dark:text-neutral-400" : ""}>
+                {pickedSuggestion && (
+                  <>
+                    Filled in {pickedSuggestion}&apos;s details from your other weddings. Add this wedding&apos;s cost and
+                    contract details below.
+                  </>
+                )}
+              </p>
             </div>
             <div>
               <label htmlFor="vendor-category" className="mb-1 block text-sm font-medium">
@@ -660,85 +682,113 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
             <li key={v.id} className="rounded-lg border border-neutral-200 dark:border-neutral-700 px-4 py-3">
               {editingId === v.id ? (
                 <div className="flex flex-col gap-2">
+                  {/* TS-212: every box has a visible label (they only had placeholders, which disappear once typed in). */}
                   <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                    <input
-                      maxLength={FIELD_LIMITS.vendorName}
-                      aria-label="Edit vendor name"
-                      className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm"
-                      value={editVendor.name ?? ""}
-                      onChange={(e) => setEditVendor({ ...editVendor, name: e.target.value })}
-                    />
-                    <select
-                      aria-label="Edit category"
-                      className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm"
-                      value={editVendor.category}
-                      onChange={(e) => setEditVendor({ ...editVendor, category: e.target.value as VendorCategory })}
-                    >
-                      {CATEGORIES.map((c) => (
-                        <option key={c.value} value={c.value}>
-                          {c.label}
-                        </option>
-                      ))}
-                    </select>
-                    {editVendor.category === "OTHER" && (
+                    <label className="flex flex-col gap-1 text-xs font-medium text-neutral-600 dark:text-neutral-300">
+                      Vendor name
                       <input
-                        maxLength={FIELD_LIMITS.vendorCategoryOther}
-                        aria-label="Edit category label"
+                        id={`vendor-${v.id}-edit-name`}
+                        maxLength={FIELD_LIMITS.vendorName}
                         className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm"
-                        value={editVendor.categoryOther ?? ""}
-                        onChange={(e) => setEditVendor({ ...editVendor, categoryOther: e.target.value })}
+                        value={editVendor.name ?? ""}
+                        onChange={(e) => setEditVendor({ ...editVendor, name: e.target.value })}
                       />
+                    </label>
+                    <label className="flex flex-col gap-1 text-xs font-medium text-neutral-600 dark:text-neutral-300">
+                      Category
+                      <select
+                        id={`vendor-${v.id}-edit-category`}
+                        className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm"
+                        value={editVendor.category}
+                        onChange={(e) => setEditVendor({ ...editVendor, category: e.target.value as VendorCategory })}
+                      >
+                        {CATEGORIES.map((c) => (
+                          <option key={c.value} value={c.value}>
+                            {c.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    {editVendor.category === "OTHER" && (
+                      <label className="flex flex-col gap-1 text-xs font-medium text-neutral-600 dark:text-neutral-300">
+                        Other category
+                        <input
+                          id={`vendor-${v.id}-edit-category-label`}
+                          maxLength={FIELD_LIMITS.vendorCategoryOther}
+                          className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm"
+                          value={editVendor.categoryOther ?? ""}
+                          onChange={(e) => setEditVendor({ ...editVendor, categoryOther: e.target.value })}
+                        />
+                      </label>
                     )}
-                    <input
-                      maxLength={FIELD_LIMITS.vendorContactName}
-                      aria-label="Edit contact name"
-                      placeholder="Contact name"
-                      className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm"
-                      value={editVendor.contactName ?? ""}
-                      onChange={(e) => setEditVendor({ ...editVendor, contactName: e.target.value })}
-                    />
-                    <input
-                      maxLength={FIELD_LIMITS.email} inputMode="email"
-                      aria-label="Edit contact email"
-                      placeholder="Contact email"
-                      className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm"
-                      value={editVendor.contactEmail ?? ""}
-                      onChange={(e) => setEditVendor({ ...editVendor, contactEmail: e.target.value })}
-                    />
-                    <input
-                      maxLength={FIELD_LIMITS.vendorContactPhone} type="tel" inputMode="tel" autoComplete="tel" pattern={CONTACT_PHONE_HTML_PATTERN} title={CONTACT_PHONE_MESSAGE}
-                      aria-label="Edit contact phone"
-                      placeholder="Contact phone"
-                      className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm"
-                      value={editVendor.contactPhone ?? ""}
-                      onChange={(e) => setEditVendor({ ...editVendor, contactPhone: e.target.value })}
-                    />
-                    <input
-                      aria-label="Edit arrival time"
-                      type="time"
-                      className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm"
-                      value={editVendor.arrivalTime ?? ""}
-                      onChange={(e) => setEditVendor({ ...editVendor, arrivalTime: e.target.value || null })}
-                    />
-                    <input
-                      maxLength={FIELD_LIMITS.money}
-                      aria-label="Edit cost"
-                      type="text"
-                      inputMode="decimal"
-                      placeholder="Cost ($)"
-                      className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm"
-                      value={editCostText}
-                      onChange={(e) => setEditCostText(e.target.value)}
-                    />
+                    <label className="flex flex-col gap-1 text-xs font-medium text-neutral-600 dark:text-neutral-300">
+                      Contact name
+                      <input
+                        id={`vendor-${v.id}-edit-contact-name`}
+                        maxLength={FIELD_LIMITS.vendorContactName}
+                        placeholder="Contact name"
+                        className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm"
+                        value={editVendor.contactName ?? ""}
+                        onChange={(e) => setEditVendor({ ...editVendor, contactName: e.target.value })}
+                      />
+                    </label>
+                    <label className="flex flex-col gap-1 text-xs font-medium text-neutral-600 dark:text-neutral-300">
+                      Contact email
+                      <input
+                        id={`vendor-${v.id}-edit-contact-email`}
+                        maxLength={FIELD_LIMITS.email} inputMode="email"
+                        placeholder="Contact email"
+                        className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm"
+                        value={editVendor.contactEmail ?? ""}
+                        onChange={(e) => setEditVendor({ ...editVendor, contactEmail: e.target.value })}
+                      />
+                    </label>
+                    <label className="flex flex-col gap-1 text-xs font-medium text-neutral-600 dark:text-neutral-300">
+                      Contact phone
+                      <input
+                        id={`vendor-${v.id}-edit-contact-phone`}
+                        maxLength={FIELD_LIMITS.vendorContactPhone} type="tel" inputMode="tel" autoComplete="tel" pattern={CONTACT_PHONE_HTML_PATTERN} title={CONTACT_PHONE_MESSAGE}
+                        placeholder="Contact phone"
+                        className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm"
+                        value={editVendor.contactPhone ?? ""}
+                        onChange={(e) => setEditVendor({ ...editVendor, contactPhone: e.target.value })}
+                      />
+                    </label>
+                    <label className="flex flex-col gap-1 text-xs font-medium text-neutral-600 dark:text-neutral-300">
+                      Arrival time
+                      <input
+                        id={`vendor-${v.id}-edit-arrival-time`}
+                        type="time"
+                        className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm"
+                        value={editVendor.arrivalTime ?? ""}
+                        onChange={(e) => setEditVendor({ ...editVendor, arrivalTime: e.target.value || null })}
+                      />
+                    </label>
+                    <label className="flex flex-col gap-1 text-xs font-medium text-neutral-600 dark:text-neutral-300">
+                      Cost ($)
+                      <input
+                        id={`vendor-${v.id}-edit-cost`}
+                        maxLength={FIELD_LIMITS.money}
+                        type="text"
+                        inputMode="decimal"
+                        placeholder="Cost ($)"
+                        className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm"
+                        value={editCostText}
+                        onChange={(e) => setEditCostText(e.target.value)}
+                      />
+                    </label>
                   </div>
-                  <textarea
-                    maxLength={FIELD_LIMITS.vendorContractNotes}
-                    aria-label="Edit contract notes"
-                    rows={2}
-                    className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm"
-                    value={editVendor.contractNotes ?? ""}
-                    onChange={(e) => setEditVendor({ ...editVendor, contractNotes: e.target.value })}
-                  />
+                  <label className="flex flex-col gap-1 text-xs font-medium text-neutral-600 dark:text-neutral-300">
+                    Contract details / notes
+                    <textarea
+                      id={`vendor-${v.id}-edit-notes`}
+                      maxLength={FIELD_LIMITS.vendorContractNotes}
+                      rows={2}
+                      className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm"
+                      value={editVendor.contractNotes ?? ""}
+                      onChange={(e) => setEditVendor({ ...editVendor, contractNotes: e.target.value })}
+                    />
+                  </label>
                   <div className="flex gap-2">
                     <button
                       onClick={() => onSaveEdit(v.id)}
@@ -748,7 +798,11 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
                       Save
                     </button>
                     <button
-                      onClick={() => setEditingId(null)}
+                      onClick={() => {
+                        setEditingId(null);
+                        // TS-212: back to this vendor's Edit button.
+                        focusIfLost(`vendor-${v.id}-edit`);
+                      }}
                       className="rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800"
                     >
                       Cancel
@@ -782,9 +836,10 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
                       <p className="text-sm text-neutral-500 dark:text-neutral-400">Arrives {formatClockTime(v.arrivalTime)}</p>
                     )}
                     {v.contractNotes && <p className="mt-1 whitespace-pre-line break-words text-sm text-neutral-500 dark:text-neutral-400 [overflow-wrap:anywhere]">{v.contractNotes}</p>}
-                    {shareResult[v.id] && (
-                      <p className="mt-1 break-all text-xs text-neutral-500 dark:text-neutral-400">{shareResult[v.id]}</p>
-                    )}
+                    {/* TS-212: the link result was never announced -- a status region, always there. */}
+                    <p role="status" className={shareResult[v.id] ? "mt-1 break-all text-xs text-neutral-500 dark:text-neutral-400" : ""}>
+                      {shareResult[v.id] ?? ""}
+                    </p>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="font-medium">{v.costCents === null ? "No cost set" : formatCents(v.costCents)}</span>
@@ -823,6 +878,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
                           </>
                         )}
                         <button
+                          id={`vendor-${v.id}-edit`}
                           onClick={() => startEdit(v)}
                           // TS-175: says which vendor, for screen readers.
                           aria-label={`Edit ${v.name}`}

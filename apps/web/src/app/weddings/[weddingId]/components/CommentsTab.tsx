@@ -132,6 +132,13 @@ export function CommentsTab({
       setComments((cur) => [...cur, comment]);
       setReplyBodies((cur) => ({ ...cur, [parentCommentId]: "" }));
       setReplyingTo(null);
+      // TS-212: the reply box closes -- focus goes back to the thread's Reply button (it used to
+      // drop to the page; Cancel already did this).
+      setTimeout(() => {
+        const active = document.activeElement;
+        if (!active || active === document.body || !active.isConnected)
+          document.getElementById(`reply-open-${parentCommentId}`)?.focus();
+      }, 0);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't post that reply.");
     } finally {
@@ -301,6 +308,8 @@ export function CommentsTab({
                       <button
                         onClick={() => onResolve(root.id)}
                         disabled={resolving.has(root.id)}
+                        // TS-212: says which comment -- a screen reader's button list read "Resolve, Resolve…".
+                        aria-label={`${resolving.has(root.id) ? "Resolving" : "Resolve"} ${root.authorName}'s comment on ${root.targetLabel}`}
                         className="shrink-0 rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-xs hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50"
                       >
                         {resolving.has(root.id) ? "Resolving…" : "Resolve"}
@@ -385,6 +394,7 @@ export function CommentsTab({
                       <button
                         id={`reply-open-${root.id}`}
                         onClick={() => setReplyingTo(root.id)}
+                        aria-label={`Reply to ${root.authorName}'s comment on ${root.targetLabel}`}
                         className="text-sm text-neutral-500 dark:text-neutral-400 hover:underline"
                       >
                         Reply

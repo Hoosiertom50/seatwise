@@ -23,7 +23,8 @@ export class DayOfTabPage extends BasePage {
   }
 
   private attendanceButton(guestName: string) {
-    return this.guestRow(guestName).getByRole("button", { name: /^mark (not attending|attending)$/i });
+    // TS-212: the button's name ends with the guest's name ("Mark not attending: Jane Smith").
+    return this.guestRow(guestName).getByRole("button", { name: /^mark (not attending|attending)\b/i });
   }
 
   private seatAtSelect(guestName: string) {
@@ -220,7 +221,7 @@ export class DayOfTabPage extends BasePage {
     // state -- "Mark not attending" means the guest is currently attending, and vice versa.
     const guestCurrentlyAttending = /not attending/i.test((await button.textContent()) ?? "");
     await button.click();
-    const newLabel = guestCurrentlyAttending ? /^mark attending$/i : /^mark not attending$/i;
+    const newLabel = guestCurrentlyAttending ? /^mark attending\b/i : /^mark not attending\b/i;
     await this.guestRow(guestName).getByRole("button", { name: newLabel }).waitFor();
   }
 

@@ -78,23 +78,40 @@ export default function WeddingDetailPage() {
   // TS-159: a tab change waiting on "you have unsaved changes" -- see goToTab.
   // TS-170: the browser's Back button with unsaved input asks first, like the links do.
   const unsaved = useUnsavedChangesProvider({
-    onBackRequested: () => {
-      // TS-199: Back while typing in a box that saves when you leave it (a guest's name, notes or
-      // email; a wedding setting) -- leaving it saves it, so the box is left (which saves it) and
-      // Back carries on without asking. Anything else unsaved still asks, as before.
+    onBackRequested: () => void onBack(),
+  });
+  // TS-199: Back while typing in a box that saves when you leave it (a guest's name, notes or
+  // email; a wedding setting; a list changed with the keyboard) -- the box is left, which saves it.
+  // TS-206: and Back then waits for that save (and any other still on its way) and only leaves once
+  // they have all saved. It used to leave straight away, so a refused name ("J0hn") or a dropped
+  // connection lost the typing and the reason without a word. If one fails, the page stays: the row
+  // shows why with the typing still in its box (focus goes back to it), and if anything is still
+  // unsaved the usual question is asked. Anything else unsaved asks, as before.
+  const backInProgress = useRef(false);
+  async function onBack() {
+    if (backInProgress.current) return;
+    backInProgress.current = true;
+    try {
       const active = document.activeElement;
       rememberOpener();
-      if (active instanceof HTMLElement && active.hasAttribute("data-blur-save")) {
-        active.blur();
-        if (!unsaved.hasUnsaved()) {
-          questionOpener.current = null;
-          unsaved.goBackPastPage(() => router.replace("/dashboard"));
-          return;
-        }
+      if (active instanceof HTMLElement && active.hasAttribute("data-blur-save")) active.blur();
+      const allSaved = unsaved.isSaving() ? await unsaved.waitForSaves() : true;
+      if (allSaved && !unsaved.hasUnsaved()) {
+        questionOpener.current = null;
+        unsaved.goBackPastPage(() => router.replace("/dashboard"));
+        return;
       }
-      setPendingHref(BACK);
-    },
-  });
+      if (unsaved.hasUnsaved()) setPendingHref(BACK);
+      else {
+        // Failed, but nothing is held as unsaved (e.g. someone else changed the guest and the row
+        // now shows their copy): just stay, back in the box, with the row's message showing.
+        restoreFocus(questionOpener.current);
+        questionOpener.current = null;
+      }
+    } finally {
+      backInProgress.current = false;
+    }
+  }
   const [pendingTab, setPendingTab] = useState<Tab | null>(null);
   // TS-166: leaving the wedding page itself ("Back to dashboard") asks the same question; the
   // browser's own prompt only covers closing or reloading the page, not links inside the app.
@@ -352,7 +369,7 @@ export default function WeddingDetailPage() {
           &larr; Back to dashboard
         </Link>
         <div className="flex items-center gap-4">
-          <SaveStatusIndicator />
+          <SaveStatusIndicator unsavedCount={unsaved.unsavedCount} />
           <NotificationsBell onLeave={requestLeavePage} />
         </div>
       </div>
@@ -437,6 +454,14 @@ export default function WeddingDetailPage() {
         <div
           role="alertdialog"
           aria-labelledby="unsaved-question"
+          // TS-212: Escape means Stay, as in every other question in the app.
+          onKeyDown={(e) => {
+            if (e.key === "Escape") {
+              e.preventDefault();
+              e.stopPropagation();
+              stayOnTab();
+            }
+          }}
           className="mb-6 flex flex-wrap items-center gap-3 rounded-md bg-amber-50 dark:bg-amber-950 px-4 py-3 text-sm text-amber-900 dark:text-amber-200"
         >
           <span id="unsaved-question" className="flex-1">
@@ -459,6 +484,36 @@ export default function WeddingDetailPage() {
           </button>
         </div>
       )}
+
+      {/* TS-206: a save that failed after its tab was closed -- the tab (and the typing) is gone, so
+          the reason is kept here, near the tabs, until it is dismissed. The region is always on the
+          page so screen readers announce a note when it appears (TS-212). */}
+      <div role="status" aria-live="polite" className={unsaved.notes.length ? "mb-6 flex flex-col gap-2" : ""}>
+        {unsaved.notes.map((note) => (
+          <div
+            key={note.id}
+            data-testid="unsaved-note"
+            className="flex items-center justify-between gap-3 rounded-md bg-red-50 dark:bg-red-950 px-3 py-2 text-sm text-red-800 dark:text-red-300"
+          >
+            <span className="break-words [overflow-wrap:anywhere]">{note.text}</span>
+            <button
+              type="button"
+              id={`unsaved-note-${note.id}-dismiss`}
+              aria-label={`Dismiss: ${note.text}`}
+              onClick={() => {
+                // Focus moves to the next note, or the open tab -- not the top of the page.
+                const others = unsaved.notes.filter((n) => n.id !== note.id);
+                unsaved.dismissNote(note.id);
+                const nextId = others.length ? `unsaved-note-${others[0].id}-dismiss` : `tab-${tab}`;
+                setTimeout(() => document.getElementById(nextId)?.focus(), 0);
+              }}
+              className="shrink-0 underline hover:no-underline"
+            >
+              Dismiss
+            </button>
+          </div>
+        ))}
+      </div>
 
       <unsaved.Provider value={unsaved.registry}>
       <div id="wedding-tabpanel" role="tabpanel" aria-labelledby={`tab-${tab}`}>
