@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { listNotificationsForUser, countUnreadNotifications, markAllNotificationsRead } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
-import { errorResponse } from "@/lib/api-response";
+import { errorResponse, readJson } from "@/lib/api-response";
 
 // FR-10.2: this user's in-app notifications across every wedding they own or collaborate on.
 export async function GET(req: NextRequest) {
@@ -22,7 +22,10 @@ export async function POST(req: NextRequest) {
   const user = await getAuthUser(req);
   if (!user) return errorResponse("Not authenticated", 401);
 
-  const body = (await req.json().catch(() => null)) as { upTo?: unknown } | null;
+  // TS-204: readJson refuses a non-JSON or oversized body (413), even one sent without a Content-Length.
+  const json = await readJson(req);
+  if (!json.ok) return json.response;
+  const body = json.body as { upTo?: unknown } | null;
   let upTo: Date | undefined;
   if (body && body.upTo !== undefined && body.upTo !== null) {
     upTo = typeof body.upTo === "string" ? new Date(body.upTo) : undefined;

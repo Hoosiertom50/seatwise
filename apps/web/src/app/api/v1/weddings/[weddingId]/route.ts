@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { updateWeddingSchema, sideLabelsClash, SIDE_LABELS_MESSAGE } from "@seatwise/shared";
 import { getWeddingById, updateWeddingForOwner, deleteWeddingForOwner, getWeddingAccessDetail } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
-import { errorResponse, zodErrorResponse } from "@/lib/api-response";
+import { errorResponse, zodErrorResponse, readJson } from "@/lib/api-response";
 import { requireAccess } from "@/lib/access";
 
 type Params = { params: Promise<{ weddingId: string }> };
@@ -31,7 +31,10 @@ export async function PATCH(req: NextRequest, { params }: Params) {
   const access = await requireAccess(weddingId, user.id, "OWNER");
   if ("error" in access) return access.error;
 
-  const body = await req.json().catch(() => null);
+  // TS-204: readJson refuses a non-JSON or oversized body (413), even one sent without a Content-Length.
+  const json = await readJson(req);
+  if (!json.ok) return json.response;
+  const body = json.body;
   const parsed = updateWeddingSchema.safeParse(body);
   if (!parsed.success) return zodErrorResponse(parsed.error);
   // TS-190: a side name saved on its own must still differ from the other, stored one.

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createVendorSchema } from "@seatwise/shared";
 import { createVendor, listVendorsForWedding } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
-import { errorResponse, zodErrorResponse, weddingDeletedResponse } from "@/lib/api-response";
+import { errorResponse, zodErrorResponse, weddingDeletedResponse, readJson } from "@/lib/api-response";
 import { requireAccess } from "@/lib/access";
 
 type Params = { params: Promise<{ weddingId: string }> };
@@ -35,7 +35,10 @@ export async function POST(req: NextRequest, { params }: Params) {
   const access = await requireAccess(weddingId, user.id, "EDIT");
   if ("error" in access) return access.error;
 
-  const body = await req.json().catch(() => null);
+  // TS-204: readJson refuses a non-JSON or oversized body (413), even one sent without a Content-Length.
+  const json = await readJson(req);
+  if (!json.ok) return json.response;
+  const body = json.body;
   const parsed = createVendorSchema.safeParse(body);
   if (!parsed.success) return zodErrorResponse(parsed.error);
 

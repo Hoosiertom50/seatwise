@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { updateTimelineEntrySchema } from "@seatwise/shared";
 import { getTimelineEntryForWedding, updateTimelineEntry, deleteTimelineEntry, TimelineConflictError } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
-import { errorResponse, zodErrorResponse } from "@/lib/api-response";
+import { errorResponse, zodErrorResponse, readJson } from "@/lib/api-response";
 import { requireAccess } from "@/lib/access";
 
 type Params = { params: Promise<{ weddingId: string; entryId: string }> };
@@ -15,7 +15,10 @@ export async function PATCH(req: NextRequest, { params }: Params) {
   const access = await requireAccess(weddingId, user.id, "EDIT");
   if ("error" in access) return access.error;
 
-  const body = await req.json().catch(() => null);
+  // TS-204: readJson refuses a non-JSON or oversized body (413), even one sent without a Content-Length.
+  const json = await readJson(req);
+  if (!json.ok) return json.response;
+  const body = json.body;
   const parsed = updateTimelineEntrySchema.safeParse(body);
   if (!parsed.success) return zodErrorResponse(parsed.error);
 

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createWeddingSchema } from "@seatwise/shared";
 import { createWedding, listWeddingsWithSummaryForUser, TemplateNotFoundError } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
-import { errorResponse, zodErrorResponse } from "@/lib/api-response";
+import { errorResponse, zodErrorResponse, readJson } from "@/lib/api-response";
 import { countOr429, TOO_MANY_WEDDINGS_TODAY, WEDDING_CREATE_LIMITS, weddingCreateKey } from "@/lib/rate-limit";
 
 // FR-11.1/FR-11.2: the dashboard's list now carries each wedding's plan status and
@@ -19,7 +19,10 @@ export async function POST(req: NextRequest) {
   const user = await getAuthUser(req);
   if (!user) return errorResponse("Not authenticated", 401);
 
-  const body = await req.json().catch(() => null);
+  // TS-204: readJson refuses a non-JSON or oversized body (413), even one sent without a Content-Length.
+  const json = await readJson(req);
+  if (!json.ok) return json.response;
+  const body = json.body;
   const parsed = createWeddingSchema.safeParse(body);
   if (!parsed.success) return zodErrorResponse(parsed.error);
 

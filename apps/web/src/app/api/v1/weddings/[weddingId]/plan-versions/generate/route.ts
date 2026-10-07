@@ -18,7 +18,7 @@ import {
   getWeddingById,
 } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
-import { errorResponse, zodErrorResponse, concurrentChangeResponse } from "@/lib/api-response";
+import { errorResponse, zodErrorResponse, concurrentChangeResponse, readJson } from "@/lib/api-response";
 import { requireAccess, canManageApproval, actorAccessFor } from "@/lib/access";
 import { SAVED_AS_DRAFT_BECAUSE_APPROVED, MADE_CURRENT_BECAUSE_NO_CURRENT_PLAN } from "@/lib/plan-approval-text";
 
@@ -35,7 +35,10 @@ export async function POST(req: NextRequest, { params }: Params) {
   // FR-5.6: an empty/absent body defaults every field to unset, which the schema treats as
   // makeCurrent's own default (true) below -- existing callers that generate with no body at all
   // keep their old "always current" behavior unchanged.
-  const body = await req.json().catch(() => ({}));
+  // TS-204: readJson refuses a non-JSON or oversized body (413), even one sent without a Content-Length.
+  const json = await readJson(req);
+  if (!json.ok) return json.response;
+  const body = json.body ?? {};
   const parsedBody = generatePlanVersionSchema.safeParse(body);
   if (!parsedBody.success) return zodErrorResponse(parsedBody.error);
   const makeCurrent = parsedBody.data.makeCurrent ?? true;
