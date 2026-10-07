@@ -190,3 +190,30 @@ test("the repair still seats a group that fits the free seats", () => {
   const plain = generateSeatingPlan(guests, [], tables, "BALANCED_MIX", { repair: false });
   assert.deepEqual([...plain.unassignedGuestIds].sort(), ["Huge", "Party2"]);
 });
+
+// TS-227 (Copilot on PR #104): a locked family whose table was deleted (a failed lock) with one
+// person who needs the accessible table used to be placed ahead of every unpinned group, filling the
+// only accessible table while three guests who all need it were left unseated.
+test("a failed lock with one person needing the accessible table doesn't take it from a group where everyone does", () => {
+  const locked = { isLocked: true, currentTableId: "Gone" };
+  const guests = [
+    guest("Dad", { headcount: 2, ...locked }),
+    guest("Mom", { requiresAccessibleTable: true, ...locked }),
+    guest("Kid", locked),
+    guest("Ann", { requiresAccessibleTable: true }),
+    guest("Bo", { requiresAccessibleTable: true }),
+    guest("Cy", { requiresAccessibleTable: true }),
+  ];
+  const rels: EngineRelationship[] = [
+    { guestAId: "Dad", guestBId: "Mom", type: "MUST_SIT_TOGETHER" },
+    { guestAId: "Mom", guestBId: "Kid", type: "MUST_SIT_TOGETHER" },
+    { guestAId: "Ann", guestBId: "Bo", type: "MUST_SIT_TOGETHER" },
+    { guestAId: "Bo", guestBId: "Cy", type: "MUST_SIT_TOGETHER" },
+  ];
+  const tables = [table("Acc", 4, { isAccessible: true }), table("T2", 8)];
+  for (const list of [guests, [...guests].reverse()]) {
+    const result = generateSeatingPlan(list, rels, tables);
+    assert.deepEqual(["Ann", "Bo", "Cy"].map((g) => tableOf(result, g)), ["Acc", "Acc", "Acc"]);
+    assert.deepEqual([...result.unassignedGuestIds].sort(), ["Dad", "Kid", "Mom"]);
+  }
+});

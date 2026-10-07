@@ -960,9 +960,11 @@ export function generateSeatingPlan(
   // (failed locks, then unpinned), tried when the normal order leaves someone unseated. With
   // `forced` (a repaired plan), each listed group is seated at its given table, and anyone not
   // listed is tried last, once every listed group has its seat.
-  // TS-226: "accessibleByNeed" is "accessibleFirst" with the unpinned groups that need an accessible
-  // table ordered by how many of their people need it (most first; ties stay largest-first), so a
-  // big party with one person needing those seats can't take them from a group where everyone does.
+  // TS-226: "accessibleByNeed" is "accessibleFirst" with the groups that need an accessible table
+  // ordered by how many of their people need it (most first; ties keep the normal order), so a big
+  // party with one person needing those seats can't take them from a group where everyone does.
+  // TS-227: failed locks are in that ordering too -- a locked group whose table is gone used to go
+  // ahead of every unpinned group however few of its people needed the accessible seats.
   function runPlacement(
     order: "accessibleFirst" | "largestFirst" | "accessibleByNeed",
     forced: Map<Unit, string> | null
@@ -978,16 +980,18 @@ export function generateSeatingPlan(
     const failedLocks: { unit: Unit; target: EngineTable | undefined }[] = [];
     placePinnedUnits(failedLocks);
 
-    const accessibleUnpinned = unpinnedUnits.filter((u) => u.requiresAccessible);
+    const accessibleSteps: Step[] = [
+      ...failedLocks.filter((f) => f.unit.requiresAccessible).map((lock) => ({ lock })),
+      ...unpinnedUnits.filter((u) => u.requiresAccessible).map((unit) => ({ unit })),
+    ];
     if (order === "accessibleByNeed") {
-      // Array sort is stable, so equal counts keep the largest-first order.
-      accessibleUnpinned.sort((x, y) => accessibleNeed(y) - accessibleNeed(x));
+      // Array sort is stable, so equal counts keep the normal order (failed locks, then largest first).
+      accessibleSteps.sort((x, y) => accessibleNeed(stepUnit(y)) - accessibleNeed(stepUnit(x)));
     }
     const steps: Step[] =
       order !== "largestFirst"
         ? [
-            ...failedLocks.filter((f) => f.unit.requiresAccessible).map((lock) => ({ lock })),
-            ...accessibleUnpinned.map((unit) => ({ unit })),
+            ...accessibleSteps,
             ...failedLocks.filter((f) => !f.unit.requiresAccessible).map((lock) => ({ lock })),
             ...unpinnedUnits.filter((u) => !u.requiresAccessible).map((unit) => ({ unit })),
           ]
@@ -1153,9 +1157,10 @@ export function generateSeatingPlan(
     // TS-226: if people who need an accessible table are still left unseated, also try seating the
     // groups with the most such people first. Tried last, so it's only kept when strictly better --
     // a plan can never get worse. Skipped when it would be the same order as the normal one.
-    const accessibleUnpinned = unpinnedUnits.filter((u) => u.requiresAccessible);
-    const needOrderDiffers = accessibleUnpinned.some(
-      (u, i) => i > 0 && accessibleNeed(u) > accessibleNeed(accessibleUnpinned[i - 1])
+    // TS-227: judged on the normal attempt's own accessible steps, failed locks included.
+    const accessibleOrder = primary.steps.map(stepUnit).filter((u) => u.requiresAccessible);
+    const needOrderDiffers = accessibleOrder.some(
+      (u, i) => i > 0 && accessibleNeed(u) > accessibleNeed(accessibleOrder[i - 1])
     );
     if (rank(best)[0] > 0 && needOrderDiffers) better(runPlacement("accessibleByNeed", null));
   }
