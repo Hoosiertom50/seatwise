@@ -320,4 +320,9 @@ export class WeddingGuestsPage extends BasePage {
   exportCsvError(text: string | RegExp) {
     return this.page.getByRole("alert").filter({ hasText: text });
   }
+
+  /** TS-235: the choices in a guest row's Side list (named "Side for <name>"), as shown. */
+  async rowSideChoices(guestName: string): Promise<string[]> {
+    return this.page.getByRole("combobox", { name: `Side for ${guestName}`, exact: true }).locator("option").allInnerTexts();
+  }
 }

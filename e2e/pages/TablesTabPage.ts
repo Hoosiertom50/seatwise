@@ -296,6 +296,11 @@ export class TablesTabPage extends BasePage {
     return this.tableRow(label).getByRole("checkbox", { name: `Single-side: ${label}`, exact: true });
   }
 
+  /** TS-235: a table row's "X/Y seated (Z remaining)" line. */
+  seatedText(label: string) {
+    return this.tableRow(label).getByText(/^\d+\/\d+ seated \(/);
+  }
+
   /** TS-166: any error shown on the Tables tab. */
   errorText() {
     return this.page.locator("p.text-red-600, p.text-red-400");

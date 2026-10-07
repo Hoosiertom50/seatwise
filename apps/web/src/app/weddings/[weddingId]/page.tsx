@@ -25,6 +25,7 @@ import { SaveStatusIndicator } from "@/components/SaveStatusIndicator";
 import { saveStatusStore } from "@/lib/save-status";
 import { mergeRefreshedGuests, guestIdFromFieldId, crossesGuestPrivacyLine, guestsAfterAccessChange } from "@/lib/guest-refresh";
 import { compareGuestNames } from "@/lib/guest-name-order";
+import { weddingAfterPoll } from "@/lib/wedding-poll";
 
 type Tab =
   | "guests"
@@ -330,6 +331,12 @@ export default function WeddingDetailPage() {
   const accessLevelRef = useRef<AccessLevel | null>(null);
   const [accessNotice, setAccessNotice] = useState<string | null>(null);
   const [accessRevoked, setAccessRevoked] = useState(false);
+  // TS-235: when the wedding is no longer available, focus goes to "Go now" (it used to stay on a
+  // control that had just gone from the page).
+  const goNowRef = useRef<HTMLAnchorElement>(null);
+  useEffect(() => {
+    if (accessRevoked) goNowRef.current?.focus();
+  }, [accessRevoked]);
 
   useEffect(() => {
     // TS-93: the save indicator's history belongs to the wedding it happened on.
@@ -398,6 +405,9 @@ export default function WeddingDetailPage() {
         lastAnswered = check;
         // TS-182: the role (Couple or Collaborator) can change too, and decides who may approve.
         setRole(res.role ?? null);
+        // TS-235: the wedding's name, date, venue and side labels from every check that has a newer
+        // copy (they used to change only with the access level, so stayed stale for collaborators).
+        setWedding((cur) => weddingAfterPoll(cur, res.wedding));
         if (res.accessLevel !== accessLevelRef.current) {
           const previous = accessLevelRef.current;
           accessLevelRef.current = res.accessLevel;
@@ -473,9 +483,12 @@ export default function WeddingDetailPage() {
   if (accessRevoked) {
     return (
       <main className="flex flex-1 flex-col items-center justify-center gap-3">
-        <p className="text-sm text-red-600 dark:text-red-400">{accessNotice}</p>
-        <p className="text-sm text-neutral-500 dark:text-neutral-400">Taking you back to your dashboard...</p>
-        <Link href="/dashboard" className="text-sm underline">
+        {/* TS-235: announced (it replaces the whole page), and focus goes to "Go now". */}
+        <div role="alert" className="flex flex-col items-center gap-3">
+          <p className="text-sm text-red-600 dark:text-red-400">{accessNotice}</p>
+          <p className="text-sm text-neutral-500 dark:text-neutral-400">Taking you back to your dashboard...</p>
+        </div>
+        <Link href="/dashboard" ref={goNowRef} id="access-removed-go-now" className="text-sm underline">
           Go now
         </Link>
       </main>
@@ -508,20 +521,23 @@ export default function WeddingDetailPage() {
       <div className="mt-4">
         <EmailVerificationNotice />
       </div>
-      {accessNotice && !accessRevoked && (
-        // FR-1.6: access changed (but was not revoked entirely) while this tab was already open --
-        // a non-blocking notice, dismissable by the user, rather than the full-page redirect used
-        // for a full revocation above.
-        <div className="mt-3 flex items-center justify-between gap-3 rounded-md bg-amber-50 dark:bg-amber-950 px-3 py-2 text-sm text-amber-800 dark:text-amber-300">
-          <span>{accessNotice}</span>
-          <button
-            onClick={() => setAccessNotice(null)}
-            className="shrink-0 text-amber-800 dark:text-amber-300 underline hover:no-underline"
-          >
-            Dismiss
-          </button>
-        </div>
-      )}
+      {/* TS-235: the region is always on the page, so the notice is announced when it appears (TS-212). */}
+      <div role="status" aria-live="polite" data-testid="access-notice-region">
+        {accessNotice && !accessRevoked && (
+          // FR-1.6: access changed (but was not revoked entirely) while this tab was already open --
+          // a non-blocking notice, dismissable by the user, rather than the full-page redirect used
+          // for a full revocation above.
+          <div className="mt-3 flex items-center justify-between gap-3 rounded-md bg-amber-50 dark:bg-amber-950 px-3 py-2 text-sm text-amber-800 dark:text-amber-300">
+            <span>{accessNotice}</span>
+            <button
+              onClick={() => setAccessNotice(null)}
+              className="shrink-0 text-amber-800 dark:text-amber-300 underline hover:no-underline"
+            >
+              Dismiss
+            </button>
+          </div>
+        )}
+      </div>
       <h1 className="mt-2 mb-1 text-2xl font-semibold break-words [overflow-wrap:anywhere]">{wedding?.name}</h1>
       <p className="mb-6 text-sm text-neutral-500 dark:text-neutral-400">
         {wedding?.eventDate ? formatDate(wedding.eventDate) : "No date set"}

@@ -18,6 +18,7 @@ import { FIELD_LIMITS, CONTACT_PHONE_HTML_PATTERN, CONTACT_PHONE_MESSAGE, arriva
 // TS-214: the most a cost or the budget can be, with the server's own plain-dollar messages.
 import { MAX_BUDGET_CENTS, BUDGET_TOO_HIGH_MESSAGE, MAX_VENDOR_COST_CENTS, VENDOR_COST_TOO_HIGH_MESSAGE } from "@seatwise/shared";
 import { focusIfLost } from "@/lib/focus-if-lost";
+import { editAfterReload } from "@/lib/vendor-edit";
 
 // TS-20 (FR-15.1/FR-15.2): a per-wedding vendor list plus the wedding's overall budget figure and
 // a running total/remaining against it. Money is always handled here in whole dollars for
@@ -149,21 +150,56 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
     setEditingId(null);
   }, [canEdit]);
 
+  // TS-235: the Edit access the vendor list on screen was loaded with. Raised from View to Edit, the
+  // Edit buttons used to appear before the reload with contract notes landed -- an edit opened from
+  // the View copy (notes left out) then saved its empty notes over the real ones. Edit waits for it
+  // now (as TS-217 does for guests).
+  const [vendorsLoadedWithEdit, setVendorsLoadedWithEdit] = useState<boolean | null>(null);
+  const vendorsReloading = canEdit && vendorsLoadedWithEdit !== true;
+  const vendorLoads = useRef(0);
+  const vendorsRef = useRef(vendors);
+  const editingIdRef = useRef(editingId);
   useEffect(() => {
+    vendorsRef.current = vendors;
+    editingIdRef.current = editingId;
+  }, [vendors, editingId]);
+
+  useEffect(() => {
+    // TS-235: numbered, so an answer to an earlier load (at the old access level) that arrives late
+    // never replaces a newer one.
+    const request = ++vendorLoads.current;
+    const loadedWithEdit = canEdit;
     (async () => {
       try {
         const [vendorsRes, summaryRes] = await Promise.all([
           api.get<{ vendors: VendorDTO[] }>(`/api/v1/weddings/${weddingId}/vendors`),
           api.get<{ summary: BudgetSummaryDTO }>(`/api/v1/weddings/${weddingId}/budget`),
         ]);
+        if (request !== vendorLoads.current) return;
         // TS-180: in the same order the list keeps after every change (see sortVendors).
-        setVendors(sortVendors(vendorsRes.vendors));
+        const fresh = sortVendors(vendorsRes.vendors);
+        // TS-235: an edit open while the list is replaced takes the fresh copy for every box nobody
+        // has changed (so it never saves an old copy's empty notes); it closes if the vendor is gone.
+        const openId = editingIdRef.current;
+        if (openId) {
+          const now = fresh.find((v) => v.id === openId);
+          const was = vendorsRef.current.find((v) => v.id === openId);
+          if (!now) setEditingId(null);
+          else {
+            setEditVendor((cur) => editAfterReload(cur, was, now));
+            const wasCost = was ? centsToDollarsString(was.costCents) : null;
+            setEditCostText((cur) => (wasCost !== null && cur !== wasCost ? cur : centsToDollarsString(now.costCents)));
+          }
+        }
+        setVendors(fresh);
+        setVendorsLoadedWithEdit(loadedWithEdit);
         setSummary(summaryRes.summary);
         setBudgetInput(centsToDollarsString(summaryRes.summary.budgetCents));
       } catch {
+        if (request !== vendorLoads.current) return;
         setError("Couldn't load budget & vendor info.");
       } finally {
-        setLoading(false);
+        if (request === vendorLoads.current) setLoading(false);
       }
     })();
     // TS-180: loaded again when access changes -- someone promoted from View to Edit had vendors
@@ -301,6 +337,8 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
   }
 
   function startEdit(vendor: VendorDTO) {
+    // TS-235: not from a copy loaded without Edit access (its contract notes are left out).
+    if (vendorsReloading) return;
     // TS-182: opening another vendor used to throw away a changed open edit without a word.
     if (editChanged && editingId !== vendor.id) {
       setError(OPEN_EDIT_MESSAGE);
@@ -902,9 +940,11 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
                         <button
                           id={`vendor-${v.id}-edit`}
                           onClick={() => startEdit(v)}
+                          // TS-235: off until the list with contract notes has loaded (see vendorsReloading).
+                          disabled={vendorsReloading}
                           // TS-175: says which vendor, for screen readers.
                           aria-label={`Edit ${v.name}`}
-                          className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800"
+                          className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50"
                         >
                           Edit
                         </button>

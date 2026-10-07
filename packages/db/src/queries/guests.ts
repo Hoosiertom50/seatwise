@@ -508,6 +508,14 @@ async function ensureGuestRsvpTokenIn(q: PoolClient, guestId: string, weddingId:
   return readStoredLinkToken(stored);
 }
 
+// TS-228: the guest's current RSVP link, read only -- null when they have none (or the guest isn't
+// in this wedding). Unlike ensureGuestRsvpToken it never makes a link: "New link" reads the old one
+// first, and for a guest who never had one that used to make a link only to replace it at once.
+export async function readGuestRsvpToken(guestId: string, weddingId: string): Promise<string | null> {
+  const { rows } = await pool.query(`SELECT "rsvpToken" FROM "guests" WHERE id = $1 AND "weddingId" = $2`, [guestId, weddingId]);
+  return readStoredLinkToken((rows[0]?.rsvpToken as string | null | undefined) ?? null);
+}
+
 // TS-174: whether this guest has ever been given an RSVP link (a link may be out there).
 export async function guestHasRsvpLink(guestId: string, weddingId: string): Promise<boolean> {
   const { rows } = await pool.query(
