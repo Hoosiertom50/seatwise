@@ -91,6 +91,8 @@ defineQualityTest(
     });
 
     await test.step("A walk-in whose table is full is added once, and the form clears", async () => {
+      // The guests are seated at another table; Head Table is added afterwards, so it has room.
+      await weddingData.createTable(w, { label: "Main Table", capacity: 10 });
       await weddingData.generatePlanVersion(w);
       const table = await weddingData.createTable(w, { label: "Head Table", capacity: 1 });
       expect(table.id).toBeTruthy();

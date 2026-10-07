@@ -121,6 +121,7 @@ export function useUnsavedChangesProvider({ onBackRequested }: { onBackRequested
     return () => window.removeEventListener("beforeunload", warn);
   }, [count]);
 
+
   // TS-170: the browser's Back button (or a back swipe) moves within the app without unloading the
   // page, so "beforeunload" never fires and half-typed input was lost without a word. While there's
   // unsaved input, the page adds one extra history entry for itself (a copy of the current one, so
@@ -135,6 +136,16 @@ export function useUnsavedChangesProvider({ onBackRequested }: { onBackRequested
   const ignoreNextPop = useRef(false);
   /** Set while the page is leaving on purpose, so the extra entry isn't taken off in the meantime. */
   const leaving = useRef(false);
+  // TS-206: a reload, or opening another address, while nothing is unsaved: the page is going, so
+  // the extra history entry isn't taken off any more. A save that finished just then used to take it
+  // off with history.back(), which cancelled the reload the person had just asked for.
+  useEffect(() => {
+    const going = () => {
+      if (!registry.hasUnsaved()) leaving.current = true;
+    };
+    window.addEventListener("beforeunload", going);
+    return () => window.removeEventListener("beforeunload", going);
+  }, [registry]);
   /** False once this page has closed -- a timer it started must then do nothing (see goBackPastPage). */
   const mounted = useRef(true);
   useEffect(() => {

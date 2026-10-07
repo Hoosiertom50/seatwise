@@ -143,6 +143,8 @@ export class GuestRow {
     // value is then chosen after a key that changes a closed list in place (Page Down), so the list
     // takes it as an in-place keyboard change and waits for Enter, as an arrow change on Linux does.
     if ((await list.inputValue()) === before) {
+      // Escape first: the arrows marked the list's pop-up as open (they open it on a real Mac).
+      await list.press("Escape");
       await list.press("PageDown");
     }
     if ((await list.inputValue()) === before) {
