@@ -34,8 +34,6 @@ function isLocalHost(hostname: string): boolean {
   return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]" || hostname.endsWith(".localhost");
 }
 
-/** The app's own address, without a trailing slash. Throws AppUrlNotConfiguredError in a
- * production build when APP_URL is missing or isn't https:// (see above). */
 /** The address with any trailing slashes taken off -- a plain loop rather than a pattern, so the
  * time it takes only ever grows with the address's length (CodeQL alert #14). */
 function withoutTrailingSlashes(value: string): string {
@@ -44,6 +42,8 @@ function withoutTrailingSlashes(value: string): string {
   return value.slice(0, end);
 }
 
+/** The app's own address, without a trailing slash. Throws AppUrlNotConfiguredError in a
+ * production build when APP_URL is missing or isn't https:// (see above). */
 export function appBaseUrl(env: Env = process.env): string {
   const trimmed = env.APP_URL?.trim();
   const configured = trimmed === undefined ? undefined : withoutTrailingSlashes(trimmed);
