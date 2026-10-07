@@ -74,16 +74,40 @@ function utf16WithoutBom(view: Uint8Array): "utf-16le" | "utf-16be" | null {
  * TS-210: whether the bytes hold a UTF-8 letter that windows-1252 would show as two or three odd
  * characters ("Ã©", "Ã±", "Å¡", "â€™"). Two-byte letters starting with C6-DF are left out: read as
  * windows-1252 they are a capital accented letter then a quote or dash ("É”"), which real text has.
+ * TS-233: a three-byte sequence is no longer enough on its own -- in a real Windows file a small
+ * accented letter, a no-break space and a French quote ("café »", bytes E9 A0 BB) look like one.
+ * A three-byte sequence counts only when it is a UTF-8 dash, quote, ellipsis or euro sign ("â€™",
+ * which real Windows text never has), or a letter -- and letters only when there are two or more and
+ * more of them than stray bytes (a file that is mostly UTF-8 has many letters and a stray byte or two; a
+ * Windows file has many lone accented letters and the odd accidental "letter").
  */
 function hasUtf8LetterPairs(view: Uint8Array): boolean {
   const cont = (b: number | undefined) => b !== undefined && b >= 0x80 && b <= 0xbf;
+  let threeByteLetters = 0;
+  let strayBytes = 0;
   for (let i = 0; i < view.length; i++) {
     const b = view[i];
+    if (b < 0x80) continue;
     if (b >= 0xc2 && b <= 0xc5 && cont(view[i + 1])) return true;
-    if (b >= 0xe0 && b <= 0xef && cont(view[i + 1]) && cont(view[i + 2])) return true;
     if (b >= 0xf0 && b <= 0xf4 && cont(view[i + 1]) && cont(view[i + 2]) && cont(view[i + 3])) return true;
+    if (b >= 0xe0 && b <= 0xef && cont(view[i + 1]) && cont(view[i + 2])) {
+      const codePoint = ((b & 0x0f) << 12) | ((view[i + 1] & 0x3f) << 6) | (view[i + 2] & 0x3f);
+      // Not a real three-byte character (too small, or half of a UTF-16 pair): just stray bytes.
+      if (codePoint >= 0x800 && (codePoint < 0xd800 || codePoint > 0xdfff)) {
+        // TS-233: U+2000-U+20CF -- dashes, curly quotes, the ellipsis, the euro sign.
+        if (codePoint >= 0x2000 && codePoint <= 0x20cf) return true;
+        if (/\p{L}/u.test(String.fromCodePoint(codePoint))) threeByteLetters++;
+        i += 2;
+        continue;
+      }
+    }
+    if (b >= 0xc2 && b <= 0xdf && cont(view[i + 1])) {
+      i += 1;
+      continue;
+    }
+    strayBytes++;
   }
-  return false;
+  return threeByteLetters > 1 && threeByteLetters > strayBytes;
 }
 
 // TS-198: the characters windows-1252 shows for Mac Roman's accented letters -- Ž is é, Ÿ is ü, ƒ is
@@ -100,11 +124,13 @@ const MAC_ROMAN_NOT_LETTERS = "ƒ‡ˆ‰†‹›\u0081\u008d\u008f\u0090\u009d
 // claimed it, but only "RenŽe" was caught), and ƒ ‡ ˆ ‰ † ‹ › starting a word before a letter
 // ("ƒloise" for Éloise, "‡ngel" for Ángel). "Željko Žižek" and "HAŸ-LES-ROSES" are still fine.
 const MAC_ROMAN_NOT_LETTERS_AT_START = "ƒ‡ˆ‰†‹›";
-const MAC_ROMAN_IN_A_WORD = new RegExp(
-  `\\p{L}[${MAC_ROMAN_NOT_LETTERS}]\\p{L}|\\p{Ll}[ŽŠŒŸ]|\\p{Lu}[ŽŠŒŸ]\\p{Ll}|(?<!\\p{L})[${MAC_ROMAN_NOT_LETTERS_AT_START}]\\p{L}`,
+// TS-233: the start-of-word rule, like the curly-quote rule, is for names only -- in a Windows
+// notes cell "‹VIP›" or "In memory of †Opa" is real text.
+const MAC_ROMAN_IN_A_WORD = new RegExp(`\\p{L}[${MAC_ROMAN_NOT_LETTERS}]\\p{L}|\\p{Ll}[ŽŠŒŸ]|\\p{Lu}[ŽŠŒŸ]\\p{Ll}`, "u");
+const MAC_ROMAN_IN_A_NAME = new RegExp(
+  `\\p{Ll}[’‘]\\p{Ll}|\\p{L}[¿§]|(?<!\\p{L})[${MAC_ROMAN_NOT_LETTERS_AT_START}]\\p{L}`,
   "u"
 );
-const MAC_ROMAN_IN_A_NAME = /\p{Ll}[’‘]\p{Ll}|\p{L}[¿§]/u;
 
 /** TS-210: whether one cell (read as windows-1252) looks like it was saved in the older Mac format. */
 export function looksLikeMacRoman(cell: string, isName = false): boolean {
@@ -113,8 +139,8 @@ export function looksLikeMacRoman(cell: string, isName = false): boolean {
 
 /**
  * TS-210: the first cell an import uses that looks like the older Mac format, or null. `columns` are
- * the mapped columns' indexes; `nameColumns` the ones holding names (first/last name, household,
- * plus-ones). Only for a file read as windows-1252 -- UTF-8 and UTF-16 files are read exactly.
+ * the mapped columns' indexes; `nameColumns` the ones holding names (TS-233: first and last name
+ * only -- "Bride’s college friends" in Household is real Windows text). Only for a file read as windows-1252 -- UTF-8 and UTF-16 files are read exactly.
  */
 export function findMacRomanCell(
   rows: string[][],

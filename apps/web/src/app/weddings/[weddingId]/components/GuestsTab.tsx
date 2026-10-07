@@ -26,6 +26,8 @@ import {
   findDuplicateCsvHeader,
   duplicateCsvHeaderMessage,
   decodeCsvFile,
+  MAX_IMPORT_COLUMNS,
+  tooManyColumnsMessage,
   CsvEncodingError,
   type CsvTextEncoding,
   spreadsheetRowNumber,
@@ -318,6 +320,11 @@ export function GuestsTab({
         setImportError("Couldn't find a header row in that file.");
         return;
       }
+      // TS-233: a file far wider than any guest list is refused (the server refuses it too).
+      if (headers.length > MAX_IMPORT_COLUMNS) {
+        setImportError(tooManyColumnsMessage(headers.length));
+        return;
+      }
       // TS-180: two columns with one name can't be told apart in the column pickers below.
       const duplicate = findDuplicateCsvHeader(headers);
       if (duplicate !== null) {
@@ -400,7 +407,8 @@ export function GuestsTab({
       setImportKey(crypto.randomUUID());
     } catch (err) {
       if (request !== previewRequest.current) return;
-      setImportError(err instanceof ApiError ? err.message : "Couldn't preview that file.");
+      // TS-233: the reason a refused file gives (e.g. "too big") rather than "Validation failed".
+      setImportError(apiErrorMessage(err, ["csv"], "Couldn't preview that file."));
     } finally {
       // A newer request (or Cancel) owns the busy state from here.
       if (request === previewRequest.current) setPreviewing(false);
@@ -459,7 +467,8 @@ export function GuestsTab({
       // TS-209: the rows the import still refuses, shown in the preview with their reasons.
       const errorRows = commitErrorRows(err);
       if (errorRows) setImportPreview((cur) => (cur ? withCommitErrorRows(cur, errorRows) : cur));
-      const message = err instanceof ApiError ? err.message : "Couldn't complete that import.";
+      // TS-233: the reason a refused file gives (e.g. "too big") rather than "Validation failed".
+      const message = apiErrorMessage(err, ["csv"], "Couldn't complete that import.");
       // TS-209: no answer, or a server error -- it may have gone in. The list is loaded again and the
       // planner asked to check it (Confirm sends the same key again, so it can't import twice).
       if (importMayHaveSaved(err)) {

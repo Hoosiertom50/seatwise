@@ -4,7 +4,7 @@ import { commitGuestImport, GuestImportError, listGuestsByWedding, GuestImportCo
 import { getAuthUser } from "@/lib/session";
 import { errorResponse, zodErrorResponse, concurrentChangeResponse, readJson } from "@/lib/api-response";
 import { requireAccess, type GrantedAccess } from "@/lib/access";
-import { limitedWeddingWork } from "@/lib/rate-limit";
+import { limitedWeddingWork, refusedButCounted } from "@/lib/rate-limit";
 import { guestForViewer } from "@/lib/guest-privacy";
 import { SAVED_BUT_NOT_REFRESHED, afterSave } from "@/lib/post-save";
 
@@ -57,8 +57,12 @@ async function commitImport(req: NextRequest, weddingId: string, user: UserRow, 
     }
     // TS-209: with the rows that still have errors, so the screen can list them (it said "N rows
     // still have errors" and showed none).
+    // TS-233: and, as a file refused after being read through, it still counts against the hourly
+    // limit (conflicts, busy and bad requests are still given back).
     if (err instanceof GuestImportError) {
-      return NextResponse.json({ error: err.message, ...(err.rows ? { rows: err.rows } : {}) }, { status: 422 });
+      return refusedButCounted(
+        NextResponse.json({ error: err.message, ...(err.rows ? { rows: err.rows } : {}) }, { status: 422 })
+      );
     }
     // TS-187: lost a race with another change (nothing saved) -- 409, not a server error.
     const conflict = concurrentChangeResponse(err);
