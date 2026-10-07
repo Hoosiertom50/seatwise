@@ -81,7 +81,12 @@ export class WeddingGuestsPage extends BasePage {
    * still collapsed (a no-op once open). */
   async openMoreDetails(): Promise<void> {
     const toggle = this.page.getByRole("button", { name: /^\+ More details/ });
-    if (await toggle.count()) await toggle.click();
+    if (await toggle.count()) {
+      await toggle.click();
+      // TS-191: opening it moves focus to its first box a moment later -- waited for, so whatever the
+      // test does next (a Tab-order walk, say) starts after that and isn't overtaken by it.
+      await expect(this.page.getByLabel("Party / household", { exact: true })).toBeFocused();
+    }
   }
 
   /** TS-112: whether the optional fields are currently showing. */
