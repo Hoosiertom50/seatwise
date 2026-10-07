@@ -41,4 +41,15 @@ export class AccountPage extends BasePage {
   deletedHeading() {
     return this.page.getByRole("heading", { name: "Your account has been deleted" });
   }
+
+  /** TS-204: the "Signed in elsewhere" section and its Log out on all devices button. */
+  logOutEverywhereButton() {
+    return this.page.getByRole("region", { name: "Signed in elsewhere", exact: true }).getByRole("button", { name: "Log out on all devices", exact: true });
+  }
+
+  /** TS-204: signs out every device, landing on the sign-in page. */
+  async logOutEverywhere(): Promise<void> {
+    await this.logOutEverywhereButton().click();
+    await this.page.waitForURL(/\/login/);
+  }
 }
