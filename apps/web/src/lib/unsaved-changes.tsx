@@ -1,7 +1,7 @@
 "use client";
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
-import { UnsavedRegistry, couldntSaveNote, type UnsavedNote } from "./unsaved-registry";
+import { UnsavedRegistry, LeavingFlag, couldntSaveNote, type UnsavedNote } from "./unsaved-registry";
 
 // TS-159: the wedding page shows one tab at a time, so switching tabs used to throw away whatever
 // was half-typed in the tab being left (an Add guest / table / vendor form, an open edit, a draft
@@ -135,17 +135,27 @@ export function useUnsavedChangesProvider({ onBackRequested }: { onBackRequested
   /** A Back the page made itself (taking the extra entry off) -- not the user's. */
   const ignoreNextPop = useRef(false);
   /** Set while the page is leaving on purpose, so the extra entry isn't taken off in the meantime. */
-  const leaving = useRef(false);
+  // TS-218: a LeavingFlag (unsaved-registry.ts), so a cancelled reload's mark can be lifted.
+  const [leaving] = useState(() => new LeavingFlag());
   // TS-206: a reload, or opening another address, while nothing is unsaved: the page is going, so
   // the extra history entry isn't taken off any more. A save that finished just then used to take it
   // off with history.back(), which cancelled the reload the person had just asked for.
+  // TS-218: if the reload was cancelled, the mark is lifted the next time the page is used (a key, a
+  // click or a tap) -- it used to stay for the page's whole life, switching the Back guard off.
   useEffect(() => {
     const going = () => {
-      if (!registry.hasUnsaved()) leaving.current = true;
+      if (!registry.hasUnsaved()) leaving.pageGoing();
+    };
+    const used = () => {
+      leaving.stillHere();
     };
     window.addEventListener("beforeunload", going);
-    return () => window.removeEventListener("beforeunload", going);
-  }, [registry]);
+    for (const type of ["keydown", "pointerdown", "input"] as const) window.addEventListener(type, used, true);
+    return () => {
+      window.removeEventListener("beforeunload", going);
+      for (const type of ["keydown", "pointerdown", "input"] as const) window.removeEventListener(type, used, true);
+    };
+  }, [registry, leaving]);
   /** False once this page has closed -- a timer it started must then do nothing (see goBackPastPage). */
   const mounted = useRef(true);
   useEffect(() => {
@@ -157,7 +167,7 @@ export function useUnsavedChangesProvider({ onBackRequested }: { onBackRequested
   const onGuardEntry = () => window.history.state?.seatwiseGuard === true;
 
   const reconcile = useCallback(() => {
-    if (leaving.current || ignoreNextPop.current) return;
+    if (leaving.value || ignoreNextPop.current) return;
     if (pageUrl.current !== null && window.location.href !== pageUrl.current) return;
     // TS-206: added only for unsaved input; a save on its way just keeps one already there (so a
     // pick from a list doesn't add and take off a history entry every time).
@@ -168,7 +178,7 @@ export function useUnsavedChangesProvider({ onBackRequested }: { onBackRequested
       ignoreNextPop.current = true;
       window.history.back();
     }
-  }, [needsGuard, registry]);
+  }, [needsGuard, registry, leaving]);
 
   // Runs on load too: after a reload the extra entry is still there with nothing unsaved, and is
   // taken off here (before, one Back press then seemed to do nothing).
@@ -186,7 +196,7 @@ export function useUnsavedChangesProvider({ onBackRequested }: { onBackRequested
         reconcile();
         return;
       }
-      if (leaving.current) return;
+      if (leaving.value) return;
       if (needsGuard() && !onGuardEntry()) {
         // The user pressed Back from the extra entry: put it back and ask.
         reconcile();
@@ -197,7 +207,7 @@ export function useUnsavedChangesProvider({ onBackRequested }: { onBackRequested
     };
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
-  }, [reconcile, needsGuard]);
+  }, [reconcile, needsGuard, leaving]);
 
   const hasUnsaved = useCallback(() => registry.hasUnsaved(), [registry]);
   const clear = useCallback(() => registry.clearDirty(), [registry]);
@@ -211,17 +221,17 @@ export function useUnsavedChangesProvider({ onBackRequested }: { onBackRequested
    * (so the extra entry becomes the new page instead of being left behind as a dead entry).
    */
   const releaseForLink = useCallback(() => {
-    leaving.current = true;
+    leaving.set();
     registry.clearDirty();
     return onGuardEntry();
-  }, [registry]);
+  }, [registry, leaving]);
   /**
    * TS-170: "Leave without saving" after Back -- skips the extra entry and the page itself.
    * TS-175: if there's nothing before this page (it was opened in a fresh tab), `fallback` runs
    * instead (before, Leave did nothing there).
    */
   const goBackPastPage = useCallback((fallback: () => void) => {
-    leaving.current = true;
+    leaving.set();
     registry.clearDirty();
     window.history.go(onGuardEntry() ? -2 : -1);
     // If the page is still here shortly after, there was nowhere to go back to.
@@ -232,7 +242,7 @@ export function useUnsavedChangesProvider({ onBackRequested }: { onBackRequested
       if (mounted.current && window.location.href === pageUrl.current) fallback();
     }, 500);
     window.addEventListener("pagehide", () => window.clearTimeout(timer), { once: true });
-  }, [registry]);
+  }, [registry, leaving]);
   return {
     registry,
     hasUnsaved,
