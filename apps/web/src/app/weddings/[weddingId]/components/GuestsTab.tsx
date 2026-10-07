@@ -61,14 +61,15 @@ interface RsvpEmailOutcome {
 // account's daily allowance (every kind of email together) or the hourly limit on RSVP emails.
 function emailLimitedNote(outcome: RsvpEmailOutcome): string {
   return outcome.emailLimitedToday
-    ? "You've reached today's email limit for your account, so this one wasn't sent"
+    ? // TS-203: the account's allowance rolls over 24 hours -- not "today".
+      "You've reached your account's email limit for the last 24 hours, so this one wasn't sent"
     : "You've sent a lot of emails in the last hour, so this one wasn't sent";
 }
 // TS-177 (Tom's decision): after the RSVP cutoff, Seatwise doesn't email the link.
 const RSVP_CLOSED_NOTE =
   "RSVPs have closed, so this guest wasn't emailed — use \"RSVP link\" to copy it if you still want to send it.";
-// TS-171: this address has already had its share of Seatwise email today.
-const RECIPIENT_LIMITED_NOTE = "This address has already had several emails from Seatwise today, so this one wasn't sent";
+// TS-171: this address has already had its share of Seatwise email. TS-203: over the last 24 hours.
+const RECIPIENT_LIMITED_NOTE = "This address has already had several emails from Seatwise in the last 24 hours, so this one wasn't sent";
 // TS-164
 const CONFIRM_EMAIL_NOTE = "Not emailed — confirm your own email address first (see the note at the top of the page)";
 

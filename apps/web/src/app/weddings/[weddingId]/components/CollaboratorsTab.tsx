@@ -84,6 +84,9 @@ export function CollaboratorsTab({
   const [inviteSent, setInviteSent] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [savingSettings, setSavingSettings] = useState(false);
+  // TS-213: your own "Email me about this wedding" switch (null until loaded).
+  const [myEmails, setMyEmails] = useState<boolean | null>(null);
+  const [savingMyEmails, setSavingMyEmails] = useState(false);
   // The wedding's own name (e.g. "Alex & Jordan's Wedding") -- previously only settable at
   // creation, with no way to fix a typo afterward even though the API already supported it. Same
   // local-input-then-save-on-blur pattern as the fields below.
@@ -154,6 +157,22 @@ export function CollaboratorsTab({
   useEffect(() => {
     refreshInvites();
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [weddingId, isOwner]);
+
+  // TS-213: each member's own switch, after a hand-off too (it moves with the person).
+  useEffect(() => {
+    let current = true;
+    api
+      .get<{ myEmailNotificationsEnabled: boolean }>(`/api/v1/weddings/${weddingId}/notification-settings`)
+      .then((res) => {
+        if (current) setMyEmails(res.myEmailNotificationsEnabled);
+      })
+      .catch(() => {
+        /* non-critical -- the switch just isn't shown */
+      });
+    return () => {
+      current = false;
+    };
   }, [weddingId, isOwner]);
 
   useEffect(() => {
@@ -508,6 +527,39 @@ export function CollaboratorsTab({
     }
   }
 
+  // TS-213: turns notification emails about this wedding on or off for you alone -- in-app
+  // notifications carry on either way.
+  async function onToggleMyEmails() {
+    if (myEmails === null) return;
+    const next = !myEmails;
+    setMyEmails(next);
+    setSavingMyEmails(true);
+    try {
+      await api.patch(`/api/v1/weddings/${weddingId}/notification-settings`, { myEmailNotificationsEnabled: next });
+    } catch {
+      setMyEmails(!next);
+      setError("Couldn't update your email setting for this wedding.");
+    } finally {
+      setSavingMyEmails(false);
+    }
+  }
+
+  // TS-213: the same switch wherever it's shown -- the owner's in the settings, a collaborator's on their own row.
+  const myEmailsSwitch = (className: string) =>
+    myEmails === null ? null : (
+      <label className={className}>
+        <input
+          id="my-email-notifications"
+          type="checkbox"
+          className="h-5 w-5"
+          checked={myEmails}
+          onChange={onToggleMyEmails}
+          disabled={savingMyEmails}
+        />
+        Email me about this wedding
+      </label>
+    );
+
   if (loading) return <p className="text-sm text-neutral-500 dark:text-neutral-400">Loading collaborators...</p>;
 
   return (
@@ -627,7 +679,7 @@ export function CollaboratorsTab({
           )}
 
           {wedding && (
-            <label className="mb-8 flex items-center gap-3 rounded-lg border border-neutral-200 dark:border-neutral-700 px-4 py-3 text-sm">
+            <label className="mb-3 flex items-center gap-3 rounded-lg border border-neutral-200 dark:border-neutral-700 px-4 py-3 text-sm">
               <input
                 type="checkbox"
                 className="h-5 w-5"
@@ -637,6 +689,10 @@ export function CollaboratorsTab({
               />
               Also send email notifications for this wedding (in-app notifications always happen)
             </label>
+          )}
+          {/* TS-213: the owner's own switch -- the one above is for everyone. */}
+          {myEmailsSwitch(
+            "mb-8 flex items-center gap-3 rounded-lg border border-neutral-200 dark:border-neutral-700 px-4 py-3 text-sm"
           )}
 
           {wedding && (
@@ -903,6 +959,8 @@ export function CollaboratorsTab({
                     {LEVELS.find((l) => l.value === c.permissionLevel)?.label}
                   </span>
                   <span className="text-xs text-neutral-500 dark:text-neutral-400">{roleLabel(c.role)}</span>
+                  {/* TS-213: your own switch for this wedding's notification emails, on your row. */}
+                  {c.userId === currentUserId && myEmailsSwitch("flex items-center gap-2 text-sm")}
                   {/* TS-148: anyone can take themselves off a wedding. */}
                   {c.userId === currentUserId && (
                     <ConfirmDeleteButton

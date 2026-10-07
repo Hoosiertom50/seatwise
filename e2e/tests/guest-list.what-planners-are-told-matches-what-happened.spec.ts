@@ -7,7 +7,8 @@
  *   instructions say, and an unknown value is named with those words.
  * - Guest counts on the Guests tab and the dashboard both show invitations and people.
  * - An email a limit refuses uses up none of the other limits, and when it's the account's daily
- *   allowance the message says "tomorrow" rather than "a short time".
+ *   allowance the message says when more can go (TS-203: a rolling 24 hours, not "tomorrow")
+ *   rather than "a short time".
  * - Editing a guest only says they were flagged when that edit flagged them, in words that fit why.
  * Email is only logged in tests; the limit counters are read and set in the local test database.
  */
@@ -21,7 +22,10 @@ import { DashboardPage } from "../pages/DashboardPage.js";
 
 const RSVP_CLOSED_NOTE =
   'RSVPs have closed, so this guest wasn\'t emailed — use "RSVP link" to copy it if you still want to send it.';
-const ACCOUNT_DAILY_LIMIT_MESSAGE = "You've reached today's email limit for your account — you can send more tomorrow.";
+// TS-203: the allowance rolls over the last 24 hours, so the message says so, and how long: with all
+// 100 counted in the last hour, room comes back about a day later (never "today"/"tomorrow", which
+// meant midnight UTC).
+const ACCOUNT_DAILY_LIMIT_MESSAGE = "You've reached your account's email limit for the last 24 hours — you can send more in about a day.";
 
 type RsvpEmail = {
   emailed: boolean;
@@ -159,11 +163,11 @@ defineQualityTest(
 defineQualityTest(
   {
     id: "guest-list.what-planners-are-told-matches-what-happened.refused-emails-use-up-nothing",
-    title: "an email refused by the account's daily allowance uses up no other limit, and the message says it's until tomorrow",
+    title: "an email refused by the account's 24-hour allowance uses up no other limit, and the message says how long until more can go",
     objective:
-      "Confirms that with the account's daily email allowance used up, an invite is refused with the 'today's email limit for your account' message and a guest's RSVP email is held back (emailLimited, emailLimitedToday), that neither counts against the hourly or daily invite limits or the hourly RSVP email limit, and that the guest's hourly re-send cooldown wasn't used either -- once the allowance is back, asking for their link emails it.",
+      "Confirms that with the account's email allowance for the last 24 hours used up, an invite is refused with a message saying so and when more can go (TS-203: not 'today'/'tomorrow') and a guest's RSVP email is held back (emailLimited, emailLimitedToday), that neither counts against the hourly or daily invite limits or the hourly RSVP email limit, and that the guest's hourly re-send cooldown wasn't used either -- once the allowance is back, asking for their link emails it.",
     expectedOutcome:
-      "Invite: 429 with exactly \"You've reached today's email limit for your account — you can send more tomorrow.\". Guest: rsvpEmail.emailed false, emailLimited true, emailLimitedToday true. Invites-hour, invites-day and rsvp-emails-hour counts stay 0. With the allowance reset: the RSVP link returns emailed true, and an invite returns 201.",
+      "Invite: 429 with exactly \"You've reached your account's email limit for the last 24 hours — you can send more in about a day.\". Guest: rsvpEmail.emailed false, emailLimited true, emailLimitedToday true. Invites-hour, invites-day and rsvp-emails-hour counts stay 0. With the allowance reset: the RSVP link returns emailed true, and an invite returns 201.",
     requirementIds: ["REQ-NON-FUNCTIONAL"],
     tags: ["@mutating", "@feature:collaboration", "@feature:guests", "@risk:high", "@suite:regression"],
   },
@@ -178,7 +182,7 @@ defineQualityTest(
       });
     let guestId = "";
 
-    await test.step("With the day's allowance used up, an invite and an RSVP email are both refused, saying it's until tomorrow", async () => {
+    await test.step("With the 24-hour allowance used up, an invite and an RSVP email are both refused, saying when more can go", async () => {
       // TS-194: an account past its first week (a new one has a smaller allowance, with its own words).
       await ageTestAccount(account.email, 8);
       await setAccountEmailCount(account.email, "account-day", 100);

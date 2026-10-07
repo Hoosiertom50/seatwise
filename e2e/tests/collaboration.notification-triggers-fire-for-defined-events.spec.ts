@@ -10,7 +10,8 @@
  * ("share a plan," "reply to a comment," "after approval, change a table/guest/attendance/status")
  * against the actual `NotificationType` values that exist (PLAN_SHARED, COMMENT_REPLY,
  * TABLE_CHANGED, GUEST_ADDED, GUEST_REMOVED, ATTENDANCE_CHANGED, STATUS_CHANGED), confirms a
- * *top-level* comment does NOT notify (only a reply does), confirms the real "post-approval only"
+ * *top-level* comment notifies the others as COMMENT_ADDED (TS-213, Tom's decision -- it used to
+ * notify no one) and a reply as COMMENT_REPLY, confirms the real "post-approval only"
  * gating that TABLE_CHANGED/GUEST_ADDED/GUEST_REMOVED/ATTENDANCE_CHANGED all share (a Draft
  * plan's own constant churn would otherwise spam every collaborator), and confirms the
  * `emailNotificationsEnabled` toggle affects only the (unobservable, see below) email attempt --
@@ -49,11 +50,11 @@ async function notifications(ctx: { get: (url: string) => Promise<{ json(): Prom
 defineQualityTest(
   {
     id: "collaboration.notification-triggers-fire-for-defined-events.share-reply-and-post-approval-changes-notify-the-right-recipient",
-    title: "sharing a plan, replying to a comment, and post-approval table/guest/attendance/status changes each notify the right collaborator in-app; a top-level comment and any pre-approval change notify no one; and disabling email never blocks the action or the in-app notification",
+    title: "sharing a plan, a new comment, replying to a comment, and post-approval table/guest/attendance/status changes each notify the right collaborator in-app; any pre-approval change notifies no one; and disabling email never blocks the action or the in-app notification",
     objective:
-      "Confirms PLAN_SHARED fires on share-for-review, COMMENT_REPLY fires only on a reply (never a top-level comment) and goes to the other party, and TABLE_CHANGED/GUEST_ADDED/GUEST_REMOVED/ATTENDANCE_CHANGED/STATUS_CHANGED all fire correctly for their respective post-approval actions -- while the same table-change action taken before approval notifies no one. Also confirms disabling a wedding's emailNotificationsEnabled setting leaves both the action's own success and its in-app notification completely unaffected.",
+      "Confirms PLAN_SHARED fires on share-for-review, COMMENT_ADDED fires on a new top-level comment (TS-213, Tom's decision) and COMMENT_REPLY only on a reply, each going to the other party, and TABLE_CHANGED/GUEST_ADDED/GUEST_REMOVED/ATTENDANCE_CHANGED/STATUS_CHANGED all fire correctly for their respective post-approval actions -- while the same table-change action taken before approval notifies no one. Also confirms disabling a wedding's emailNotificationsEnabled setting leaves both the action's own success and its in-app notification completely unaffected.",
     expectedOutcome:
-      "Each trigger produces exactly the expected NotificationType and message for its recipient (the party who did NOT perform the action). A top-level comment and a pre-approval table move produce no new notification. After emailNotificationsEnabled is turned off, a further status change still returns 200 and still produces a new in-app STATUS_CHANGED notification.",
+      "Each trigger produces exactly the expected NotificationType and message for its recipient (the party who did NOT perform the action). A top-level comment produces one COMMENT_ADDED for the collaborator (none for its writer, and no COMMENT_REPLY); a pre-approval table move produces no new notification. After emailNotificationsEnabled is turned off, a further status change still returns 200 and still produces a new in-app STATUS_CHANGED notification.",
     requirementIds: ["REQ-COLLABORATION-NOTIFICATIONS"],
     tags: ["@mutating", "@feature:collaboration", "@risk:critical", "@suite:regression"],
   },
@@ -117,7 +118,9 @@ defineQualityTest(
       });
 
       let commentId = "";
-      await test.step("Act + Assert: a top-level comment (the owner, on guestA) notifies no one", async () => {
+      // TS-213 (Tom's decision): a new comment thread now notifies the others too (COMMENT_ADDED) --
+      // before, only replies did.
+      await test.step("Act + Assert: a top-level comment (the owner, on guestA) notifies the collaborator (COMMENT_ADDED), not the writer", async () => {
         const before = await notifications(collabCtx);
         const res = await context.request.post(`/api/v1/weddings/${managedWedding.id}/comments`, {
           data: { targetType: "GUEST", guestId: guestAId, body: "Is this seat confirmed?" },
@@ -126,9 +129,16 @@ defineQualityTest(
         commentId = ((await res.json()) as { comment: { id: string } }).comment.id;
 
         const after = await notifications(collabCtx);
+        const added = after.filter((n) => n.type === "COMMENT_ADDED");
+        expect(added).toHaveLength(before.filter((n) => n.type === "COMMENT_ADDED").length + 1);
+        expect(added[0].message).toContain(`New comment on "Guest: ${guestAName}"`);
+        expect(added[0].message).toContain("Is this seat confirmed?");
+        // It isn't a reply.
         expect(after.filter((n) => n.type === "COMMENT_REPLY")).toHaveLength(
           before.filter((n) => n.type === "COMMENT_REPLY").length,
         );
+        const ownerNotifs = await notifications(context.request);
+        expect(ownerNotifs.find((n) => n.type === "COMMENT_ADDED" && n.message.includes("Is this seat confirmed?"))).toBeFalsy();
       });
 
       await test.step("Act + Assert: the collaborator replying to that comment notifies the owner (COMMENT_REPLY), the other party -- not the replier", async () => {
