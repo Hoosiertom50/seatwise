@@ -388,6 +388,11 @@ export class PlanTabPage extends BasePage {
   restorePreview(versionNumber: number) {
     return this.page.getByText(new RegExp(`^Restoring version ${versionNumber} will create a new version`));
   }
+  /** TS-208: the restore preview's note that confirming will save a comparison draft (the current
+   * plan is approved and this person can't replace it). */
+  restoreWillBeDraftNote() {
+    return this.page.getByTestId("restore-will-be-draft");
+  }
   async confirmRestore(): Promise<void> {
     await this.page.getByRole("button", { name: "Confirm restore", exact: true }).click();
   }

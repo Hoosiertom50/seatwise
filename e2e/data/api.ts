@@ -209,6 +209,8 @@ export interface PlanVersionDetail {
   revision: number;
   assignments: PlanVersionAssignment[];
   unassignedGuestIds: string[];
+  // TS-207: the unassigned guests' names.
+  unassignedGuests?: { id: string; name: string }[];
   // TS-197: seats held by attending guests, and attending guests without one.
   assignedGuestCount: number;
   unassignedGuestCount: number;

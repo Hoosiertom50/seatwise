@@ -23,6 +23,7 @@ import { NotificationsBell } from "@/components/NotificationsBell";
 import { EmailVerificationNotice } from "@/components/EmailVerificationNotice";
 import { SaveStatusIndicator } from "@/components/SaveStatusIndicator";
 import { saveStatusStore } from "@/lib/save-status";
+import { mergeRefreshedGuests, guestIdFromFieldId } from "@/lib/guest-refresh";
 
 type Tab =
   | "guests"
@@ -52,6 +53,9 @@ const TABS: { value: Tab; label: string }[] = [
   { value: "activity", label: "Activity" },
   { value: "collaborators", label: "Collaborators" },
 ];
+
+// TS-207: the tabs that show (or pick from) the guest list -- it's kept fresh while one is open.
+const GUEST_TABS: ReadonlySet<Tab> = new Set<Tab>(["guests", "rules", "tables", "plan", "dayof", "comments"]);
 
 type AccessLevel = "OWNER" | "EDIT" | "COMMENT" | "VIEW";
 
@@ -191,6 +195,51 @@ export default function WeddingDetailPage() {
     restoreFocus(questionOpener.current);
     questionOpener.current = null;
   }
+  // TS-207: the guest list used to be fetched once, with the page, and never again -- RSVP answers,
+  // a walk-in added on another phone, another planner's edits and imports only showed after a
+  // reload (and editing such a guest was refused as "changed since you loaded it"). It's fetched
+  // again on the 4-second check below and whenever a tab that uses it opens, and merged in guest by
+  // guest (only newer copies -- see guest-refresh.ts). Skipped while anything on the page is
+  // unsaved or a save is on its way, and a row whose box has focus is never touched.
+  const guestsRef = useRef<GuestDTO[]>([]);
+  useEffect(() => {
+    guestsRef.current = guests;
+  }, [guests]);
+  const guestFetches = useRef({ sent: 0, answered: 0 });
+  const refreshGuestsRef = useRef<() => Promise<void>>(async () => {});
+  useEffect(() => {
+    const quiet = () => !unsaved.hasUnsaved() && saveStatusStore.getSnapshot().pending === 0;
+    const focusedGuestIds = () => {
+      const id = guestIdFromFieldId(document.activeElement?.id);
+      return new Set(id ? [id] : []);
+    };
+    refreshGuestsRef.current = async () => {
+      if (!quiet()) return;
+      const request = ++guestFetches.current.sent;
+      const idsAtFetchStart = new Set(guestsRef.current.map((g) => g.id));
+      const res = await api.get<{ guests: GuestDTO[] }>(`/api/v1/weddings/${weddingId}/guests`);
+      // An older answer arriving after a newer one is dropped; so is one that lands while something
+      // has just become unsaved (a box being typed in), since merging could redraw that row.
+      if (request < guestFetches.current.answered || !quiet()) return;
+      guestFetches.current.answered = request;
+      setGuests((cur) =>
+        mergeRefreshedGuests(cur, res.guests, {
+          idsAtFetchStart,
+          protectedIds: focusedGuestIds(),
+          compare: (a, b) => a.lastName.localeCompare(b.lastName),
+        })
+      );
+    };
+  });
+  const tabRef = useRef<Tab>(tab);
+  useEffect(() => {
+    tabRef.current = tab;
+    // TS-207: a tab that uses the guest list gets a fresh one as it opens (not on the page's first
+    // load, which has just fetched it).
+    if (!loading && GUEST_TABS.has(tab)) refreshGuestsRef.current().catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- TS-207: only when the tab changes.
+  }, [tab]);
+
   const [startCounts, setStartCounts] = useState<GettingStartedCounts | null>(null);
   // FR-1.6: "a change [to a collaborator's access] takes effect within five seconds, even for a
   // wedding already open in the user's browser." accessLevelRef lets the poll below compare
@@ -253,6 +302,9 @@ export default function WeddingDetailPage() {
     let lastSent = 0;
     let lastAnswered = 0;
     const interval = setInterval(async () => {
+      // TS-207: the guest list too, while a tab that shows it is open (best effort -- the next
+      // tick tries again).
+      if (GUEST_TABS.has(tabRef.current)) refreshGuestsRef.current().catch(() => {});
       const check = ++lastSent;
       try {
         const res = await api.get<{ wedding: WeddingDTO; accessLevel: AccessLevel; role: string | null }>(

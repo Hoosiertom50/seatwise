@@ -64,6 +64,9 @@ export interface PlanVersionAssignmentDTO {
 export interface PlanVersionDetailDTO extends PlanVersionDTO {
   assignments: PlanVersionAssignmentDTO[];
   unassignedGuestIds: string[];
+  /** TS-207: the unassigned guests' names (a guest added on another screen may not be in this
+   * screen's guest list yet). */
+  unassignedGuests?: { id: string; name: string }[];
   warnings: string[];
   modifiedSinceApproval: ModifiedSinceApprovalDTO;
 }
@@ -131,6 +134,9 @@ export const moveGuestAssignmentSchema = z.object({
   // button; only the undo/redo stack calls it directly today).
   tableId: z.string().min(1).nullable(),
   expectedRevision: expectedRevisionField,
+  // TS-208: with tableId null, unseat only these members of the guest's must-sit-together group
+  // (undo of seating a guest whose partner was already at that table keeps the partner seated).
+  onlyGuestIds: z.array(z.string().min(1).max(64)).max(500).optional(),
 });
 export type MoveGuestAssignmentInput = z.infer<typeof moveGuestAssignmentSchema>;
 
