@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import { previewPlanVersionRestore, RestoreError } from "@seatwise/db";
+import { previewPlanVersionRestore, getCurrentPlanVersionStatus, RestoreError } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
 import { errorResponse } from "@/lib/api-response";
-import { requireAccess } from "@/lib/access";
+import { requireAccess, canManageApproval } from "@/lib/access";
 
 type Params = { params: Promise<{ weddingId: string; planVersionId: string }> };
 
@@ -20,7 +20,14 @@ export async function GET(req: NextRequest, { params }: Params) {
 
   try {
     const preview = await previewPlanVersionRestore(planVersionId, weddingId);
-    return NextResponse.json({ preview });
+    // TS-208: whether confirming will be saved as a comparison draft (the current plan is approved
+    // and this person can't replace an approved plan) -- the restore route decides the same way,
+    // and the preview now says so before they confirm rather than after.
+    const willSaveAsDraft =
+      access.accessLevel !== "VIEW" &&
+      (await getCurrentPlanVersionStatus(weddingId)) === "APPROVED" &&
+      !(await canManageApproval(weddingId, user.id, access.accessLevel));
+    return NextResponse.json({ preview, willSaveAsDraft });
   } catch (err) {
     if (err instanceof RestoreError) return errorResponse(err.message, 404);
     throw err;

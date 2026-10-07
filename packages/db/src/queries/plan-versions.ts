@@ -246,6 +246,9 @@ export interface PlanVersionAssignmentRow {
 export interface PlanVersionDetail extends PlanVersionRow {
   assignments: PlanVersionAssignmentRow[];
   unassignedGuestIds: string[];
+  /** TS-207: the unassigned guests' names, so a screen whose guest list is older (a walk-in added
+   * on another phone a moment ago) can still name them instead of showing an id. */
+  unassignedGuests: { id: string; name: string }[];
   warnings: string[];
   modifiedSinceApproval: ModifiedSinceApproval;
 }
@@ -610,8 +613,10 @@ export async function setPlanVersionStatus(
   } = {}
 ): Promise<PlanVersionDetail | null> {
   if (!(await isCurrentVersion(id, weddingId))) {
+    // TS-208: with the plan that's current now, so the Seating plan tab can open it.
     throw new PlanVersionStatusError(
-      "Only the current plan version's status can be changed — this one has been superseded."
+      "Only the current plan version's status can be changed — this one has been superseded.",
+      await getCurrentPlanDetail(weddingId)
     );
   }
 
@@ -647,8 +652,12 @@ export async function setPlanVersionStatus(
     if (permissions.judgedAccess) await recheckActorAccess(client, weddingId, permissions.judgedAccess);
     // TS-165: re-checked under the lock (a Generate could have replaced this version a moment ago).
     if (!current.isCurrent) {
+      // TS-208: the transaction ends first, then the plan that's current now goes back with the
+      // refusal (read on this same connection, see checkPlanVersionRevision).
+      await client.query("ROLLBACK").catch(() => {});
       throw new PlanVersionStatusError(
-        "Only the current plan version's status can be changed — this one has been superseded."
+        "Only the current plan version's status can be changed — this one has been superseded.",
+        await getCurrentPlanDetail(weddingId, client)
       );
     }
     // TS-179: the permission rules, against the status as it is under the lock.
@@ -852,11 +861,14 @@ export async function getPlanVersionDetail(
   // FR-8.1: a guest marked Not Attending doesn't occupy a seat and isn't counted as
   // "unassigned" — they've been excluded from the plan entirely, not left pending.
   const { rows: allGuests } = await q.query(
-    `SELECT id FROM "guests" WHERE "weddingId" = $1 AND "dayOfAttendance" = 'ATTENDING'`,
+    `SELECT id, ("firstName" || ' ' || "lastName") AS name FROM "guests" WHERE "weddingId" = $1 AND "dayOfAttendance" = 'ATTENDING'`,
     [weddingId]
   );
   const assignedIds = new Set(assignments.map((a) => a.guestId));
-  const unassignedGuestIds = allGuests.map((g) => g.id).filter((id) => !assignedIds.has(id));
+  const unassignedGuests = allGuests
+    .filter((g) => !assignedIds.has(g.id))
+    .map((g) => ({ id: g.id as string, name: g.name as string }));
+  const unassignedGuestIds = unassignedGuests.map((g) => g.id);
   // TS-189: an older version's stored "complete" dates from when it was last current -- worked out
   // again against today's guest list (see listPlanVersionsForWedding).
   const attendingIds = new Set(allGuests.map((g) => g.id as string));
@@ -873,6 +885,7 @@ export async function getPlanVersionDetail(
     unassignedGuestCount: unassignedGuestIds.length,
     assignments,
     unassignedGuestIds,
+    unassignedGuests,
     warnings: [],
     modifiedSinceApproval,
   };
@@ -972,7 +985,9 @@ export async function moveGuestAssignment(
     }
   }
   const root = find(guestId);
-  const unit = allGuests.filter((g) => find(g.id) === root);
+  // TS-209: in id order, so a group's seats are always written (and locked) in the same order -- a
+  // link reset touching the same guests the other way round could otherwise deadlock with a move.
+  const unit = allGuests.filter((g) => find(g.id) === root).sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   // TS-197: they declined between the first check and this read -- say so, rather than "moving"
   // nobody and calling it done.
   if (unit.length === 0) throw new ManualMoveError(`${guest.name} is marked Not Attending, so they can't be seated.`);
@@ -1235,7 +1250,8 @@ async function findMustSitTogetherUnit(
     if (parent.has(r.guestAId) && parent.has(r.guestBId)) union(r.guestAId, r.guestBId);
   }
   const root = find(guestId);
-  return allGuests.filter((g) => find(g.id) === root);
+  // TS-209: in id order, like moveGuestAssignment's group (the same lock order every time).
+  return allGuests.filter((g) => find(g.id) === root).sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 }
 
 // FR-7.5: undo/redo needs a way to put a guest (and their must-sit-together unit) back to
@@ -1249,7 +1265,11 @@ export async function unassignGuestFromPlan(
   weddingId: string,
   guestId: string,
   actorUserId: string,
-  expectedRevision?: number
+  expectedRevision?: number,
+  /** TS-208: only these members of the group lose their seat (undo of seating a guest whose
+   * must-sit-together partner was already at that table -- the partner keeps their seat). Must
+   * include `guestId`. Omitted: the whole group, as before. */
+  onlyGuestIds?: string[]
 ): Promise<ManualMoveResult> {
   if (!(await isCurrentVersion(planVersionId, weddingId))) {
     // TS-197: with the plan that is current now, so the screen can switch to it.
@@ -1261,7 +1281,11 @@ export async function unassignGuestFromPlan(
   );
   if (!guestRows[0]) throw new ManualMoveError("Guest not found.");
 
-  const unit = await findMustSitTogetherUnit(weddingId, guestId);
+  const group = await findMustSitTogetherUnit(weddingId, guestId);
+  // TS-208: just the members asked for (always including this guest), never anyone outside the group.
+  const unit = onlyGuestIds
+    ? group.filter((member) => member.id === guestId || onlyGuestIds.includes(member.id))
+    : group;
   // TS-197: they're marked Not Attending (their seat was freed then) -- say so instead of an
   // "unassign" that did nothing and reported success.
   if (unit.length === 0) {
@@ -1780,7 +1804,7 @@ export async function swapGuestAssignments(
 // wedding lock, so attendance can't change between working out the seats and saving them.
 async function computeRestorePlacement(sourceVersionId: string, weddingId: string, q: Pick<typeof pool, "query"> = pool) {
   const { rows: sourceRows } = await q.query(
-    `SELECT id, "versionNumber" FROM "plan_versions" WHERE id = $1 AND "weddingId" = $2`,
+    `SELECT id, "versionNumber", "createdAt" FROM "plan_versions" WHERE id = $1 AND "weddingId" = $2`,
     [sourceVersionId, weddingId]
   );
   const source = sourceRows[0];
@@ -1798,7 +1822,7 @@ async function computeRestorePlacement(sourceVersionId: string, weddingId: strin
   );
 
   const { rows: guests } = await q.query(
-    `SELECT id, ("firstName" || ' ' || "lastName") AS name, headcount, "requiresAccessibleTable"
+    `SELECT id, ("firstName" || ' ' || "lastName") AS name, headcount, "requiresAccessibleTable", "createdAt"
      FROM "guests" WHERE "weddingId" = $1 AND "dayOfAttendance" = 'ATTENDING'`,
     [weddingId]
   );
@@ -1910,6 +1934,23 @@ async function computeRestorePlacement(sourceVersionId: string, weddingId: strin
     kept.push({ guestId: guest.id, tableId: table.id });
     runningHeadcount.set(table.id, currentHeadcount + guest.headcount);
     runningOccupants.set(table.id, [...occupantsHere, guest.id]);
+  }
+
+  // TS-208: attending guests the source version has no seat for at all. Removing a table removes
+  // every version's seats at it (they cascade), so a guest whose table was deleted is simply
+  // missing from the source -- the "their table no longer exists" check above can't see them, and
+  // they used to be left unassigned with no reason given. Each now gets one.
+  const seatedInSource = new Set(sourceAssignments.map((a) => a.guestId as string));
+  for (const guest of guests) {
+    if (seatedInSource.has(guest.id)) continue;
+    droppedGuests.push({
+      guestId: guest.id,
+      guestName: guest.name,
+      reason:
+        new Date(guest.createdAt).getTime() > new Date(source.createdAt).getTime()
+          ? `they were added to the guest list after version ${source.versionNumber} was made`
+          : `version ${source.versionNumber} has no seat for them (they weren't seated in it, or their table has since been removed)`,
+    });
   }
 
   const keptIds = new Set(kept.map((k) => k.guestId));
@@ -2042,8 +2083,10 @@ export async function restorePlanVersion(
 
     const description =
       `Restored from version ${result.sourceVersionNumber}` +
-      (result.droppedGuests.length > 0
-        ? ` (${result.droppedGuests.length} guest(s) left Unassigned — data has changed since then)`
+      // TS-208: everyone the new version leaves unseated (it used to count only those dropped by a
+      // check, missing anyone whose table had since been removed).
+      (result.unassignedGuestIds.length > 0
+        ? ` (${result.unassignedGuestIds.length} guest(s) left Unassigned — data has changed since then)`
         : "") +
       (savedAsDraftBecauseApproved ? " (saved as a comparison draft — the approved plan stays current)" : "");
     await client.query(
