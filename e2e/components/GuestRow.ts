@@ -244,4 +244,74 @@ export class GuestRow {
   async expectVisible(): Promise<void> {
     await expect(this.root).toBeVisible();
   }
+
+  // --- TS-202: the row's "Edit details" form (party size, tier, household, age, accessible). ---
+
+  /** TS-202: the "Edit details" button (Owner/Edit only). */
+  editDetailsButton(): Locator {
+    return this.root.getByRole("button", { name: /^Edit details for / });
+  }
+
+  /** TS-202: the open details form. */
+  detailsForm(): Locator {
+    return this.root.getByRole("form", { name: /^Details for / });
+  }
+
+  /** TS-202: one of the details form's fields, by its label. */
+  detailsField(field: "partyName" | "headcount" | "tier" | "ageCategory" | "accessible"): Locator {
+    const labels = {
+      partyName: "Party / household",
+      headcount: "Party size (headcount)",
+      tier: "Tier",
+      ageCategory: "Age category",
+      accessible: "Requires an accessible table",
+    } as const;
+    return this.detailsForm().getByLabel(labels[field], { exact: true });
+  }
+
+  async openDetails(): Promise<void> {
+    await this.editDetailsButton().click();
+    await expect(this.detailsForm()).toBeVisible();
+  }
+
+  /** TS-202: fills whichever details are given (the form must be open). */
+  async fillDetails(input: {
+    partyName?: string;
+    headcount?: string;
+    tier?: "VIP" | "FAMILY" | "FRIEND" | "PLUS_ONE" | "OTHER";
+    ageCategory?: "ADULT" | "CHILD" | "INFANT";
+    requiresAccessibleTable?: boolean;
+  }): Promise<void> {
+    if (input.partyName !== undefined) await this.detailsField("partyName").fill(input.partyName);
+    if (input.headcount !== undefined) await this.detailsField("headcount").fill(input.headcount);
+    if (input.tier !== undefined) await this.detailsField("tier").selectOption(input.tier);
+    if (input.ageCategory !== undefined) await this.detailsField("ageCategory").selectOption(input.ageCategory);
+    if (input.requiresAccessibleTable !== undefined) {
+      await this.detailsField("accessible").setChecked(input.requiresAccessibleTable);
+    }
+  }
+
+  /** TS-202: presses "Save details" and waits for the save to come back; returns its status. */
+  async saveDetails(): Promise<number> {
+    const page = this.root.page();
+    const [res] = await Promise.all([
+      page.waitForResponse((r) => r.request().method() === "PATCH" && /\/api\/v1\/weddings\/[^/]+\/guests\/[^/]+$/.test(new URL(r.url()).pathname)),
+      this.detailsForm().getByRole("button", { name: "Save details", exact: true }).click(),
+    ]);
+    return res.status();
+  }
+
+  async cancelDetails(): Promise<void> {
+    await this.detailsForm().getByRole("button", { name: "Cancel", exact: true }).click();
+  }
+
+  /** TS-202: the reason shown in the details form when a save is refused. */
+  detailsError(): Locator {
+    return this.detailsForm().getByRole("alert");
+  }
+
+  /** TS-202: the read-only line under the name (household · tier · side · age · with plus-ones). */
+  summaryLine(): Locator {
+    return this.root.locator("p").filter({ hasText: /(VIP|Family|Friend|Plus-one|Other)/ }).first();
+  }
 }

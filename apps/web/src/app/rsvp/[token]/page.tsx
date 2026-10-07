@@ -8,6 +8,11 @@ import type { GuestRsvpPreviewDTO } from "@seatwise/shared";
 // TS-193: the same limits the server checks (packages/shared/src/field-limits.ts).
 import { FIELD_LIMITS } from "@seatwise/shared";
 
+// TS-202: the same words the server uses when a party is too big (submitGuestRsvp).
+function partyLimitText(limit: number): string {
+  return `Your invitation is for up to ${limit} ${limit === 1 ? "person" : "people"}.`;
+}
+
 // TS-17 (FR-12.1/FR-12.2/FR-12.3): the guest's own RSVP page, reached via their unique
 // unauthenticated link. No sign-in of any kind -- mirrors /invites/[token] structurally (a
 // loading -> preview state machine) but the "preview" here doubles as the guest's own
@@ -223,9 +228,14 @@ export default function GuestRsvpPage() {
                     max={preview?.maxHeadcount ?? 20}
                     value={headcount}
                     onChange={(e) => setHeadcount(e.target.value)}
+                    aria-describedby="rsvp-party-limit"
                     className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
                   />
                 </label>
+                {/* TS-202: says how many the invitation is for, before the box stops at it. */}
+                <p id="rsvp-party-limit" className="-mt-3 text-xs text-neutral-500 dark:text-neutral-400">
+                  {partyLimitText(preview?.maxHeadcount ?? 20)}
+                </p>
 
                 {Number(headcount) > 1 && (
                   <label className="text-sm">

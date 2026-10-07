@@ -19,6 +19,7 @@ import {
   changedImportFields,
   importRowChangesNothing,
   parseGuestImportRow,
+  withoutPlusOnesForPartyOfOne,
   type GuestImportKeptField,
   type GuestImportCurrentValues,
   type GuestImportMapping,
@@ -453,6 +454,9 @@ export async function commitGuestImport(
       // TS-190: and only what really changes is written (see changedImportFields).
       const currentValues = isUpdateRow(row) ? currentValuesById.get(row.guestId!) : undefined;
       if (currentValues) p = changedImportFields(p, currentValues);
+      // TS-202: checked again against the guest as they are now (under the lock) -- a party of one
+      // keeps no plus-ones.
+      p = withoutPlusOnesForPartyOfOne(p, currentValues);
       if (row.kind === "new") {
         inserts.push(p);
         createdCount++;

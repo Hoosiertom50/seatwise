@@ -30,6 +30,9 @@ import {
 import { useUnsavedChanges, useUnsavedFields } from "@/lib/unsaved-changes";
 // TS-193: the same limits the server checks (packages/shared/src/field-limits.ts).
 import { FIELD_LIMITS } from "@seatwise/shared";
+// TS-202
+import { plusOnesToPrint } from "@seatwise/shared";
+import { GuestDetailsEditor, type GuestDetailsChanges } from "./GuestDetailsEditor";
 
 const TIERS: GuestTier[] = ["VIP", "FAMILY", "FRIEND", "PLUS_ONE", "OTHER"];
 const RSVP_STATUSES: RsvpStatus[] = ["PENDING", "CONFIRMED", "DECLINED"];
@@ -744,6 +747,28 @@ export function GuestsTab({
     }
   }
 
+  // TS-202: the row's "Edit details" form (party size, tier, household, age, accessible table).
+  // Resolves to null once saved, or to the message the form shows beside the typed values, which it
+  // keeps -- a refusal (a bigger party than a Restricted table's list allows, an accessible need at
+  // a table that isn't accessible) or someone else's change (the row then shows their latest).
+  async function onSaveDetails(guestId: string, changes: GuestDetailsChanges): Promise<string | null> {
+    try {
+      await saveGuest(guestId, changes);
+      return null;
+    } catch (err) {
+      const fresh = conflictGuest(err);
+      if (fresh) {
+        putGuest(fresh);
+        return `${fresh.firstName} ${fresh.lastName} changed since you loaded it (maybe in another tab, or by someone else) — the row now shows the latest. What you typed is still here: Save details again to use it, or Cancel.`;
+      }
+      return apiErrorMessage(
+        err,
+        ["headcount", "tier", "partyName", "ageCategory", "requiresAccessibleTable"],
+        "Couldn't save those details — check your connection and try again."
+      );
+    }
+  }
+
   async function onToggleLock(guestId: string, isLocked: boolean) {
     const before = guests.find((g) => g.id === guestId);
     patchRow(guestId, { isLocked });
@@ -1445,8 +1470,16 @@ export function GuestsTab({
                   {GUEST_TIER_LABELS[g.tier]}
                   {g.side !== "BOTH" ? ` · ${sideLabelFor(g.side)}` : ""}
                   {g.ageCategory !== "ADULT" ? ` · ${g.ageCategory.charAt(0)}${g.ageCategory.slice(1).toLowerCase()}` : ""}
-                  {g.plusOneNames ? ` · with ${g.plusOneNames}` : ""}
+                  {/* TS-202: a party of one has no plus-ones (as the export and printouts show). */}
+                  {plusOnesToPrint(g) ? ` · with ${g.plusOneNames}` : ""}
                 </p>
+                {canEdit && (
+                  <GuestDetailsEditor
+                    guest={g}
+                    onSave={(changes) => onSaveDetails(g.id, changes)}
+                    onDirtyChange={(d) => rowFields.markDirty(`guest-row-${g.id}-details`, d)}
+                  />
+                )}
                 {/* TS-107: the guest's own note from their RSVP link -- read-only here, and kept
                     apart from the planner's private notes, which the guest never sees. */}
                 {g.rsvpNotes && (

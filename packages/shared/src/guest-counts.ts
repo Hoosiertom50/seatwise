@@ -14,3 +14,12 @@ export function formatGuestCounts(invitations: number, people: number): string {
 export function plusOnesToPrint(guest: { headcount: number; plusOneNames: string | null }): string | null {
   return guest.headcount > 1 && guest.plusOneNames?.trim() ? guest.plusOneNames : null;
 }
+
+/**
+ * TS-202: the plus-ones a guest keeps once their party is `headcount` people -- none for a party of
+ * one. Lowering a party to 1 (or adding a party of 1 with names) used to keep the names: the Guests
+ * tab still showed "with ...", while the export and the printouts hid them.
+ */
+export function plusOnesForParty(headcount: number, plusOneNames: string | null | undefined): string | null {
+  return headcount > 1 ? (plusOneNames ?? null) : null;
+}
