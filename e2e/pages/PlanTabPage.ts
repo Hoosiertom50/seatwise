@@ -33,7 +33,8 @@ export class PlanTabPage extends BasePage {
   listTableCard(label: string) {
     return this.page
       .locator("div.rounded-lg")
-      .filter({ has: this.page.getByText(label, { exact: true }) })
+      // TS-221: the heading line only -- another card's "Move to..." list names this table too.
+      .filter({ has: this.page.locator("p").getByText(label, { exact: true }) })
       .filter({ hasText: /seated|seats free/ })
       .last();
   }

@@ -98,7 +98,8 @@ defineQualityTest(
 
     await test.step("An older version opened from the list is removed: Restore opens the current plan instead", async () => {
       const v3 = await weddingData.generatePlanVersion(w);
-      await page.reload();
+      // Opened afresh (a reload lands on the Guests tab), so the version list includes version 3.
+      await planTab.goto(w);
       await expect(planTab.openVersionBadge(3)).toBeVisible();
       await planTab.selectVersion(/^v2\b/);
       await expect(planTab.openVersionBadge(2)).toBeVisible();
