@@ -50,6 +50,11 @@ export class CollaboratorsTabPage extends BasePage {
     return this.page.getByRole("listitem").filter({ hasText: email }).filter({ has: this.page.getByRole("button", { name: "Revoke" }) });
   }
 
+  /** TS-220: why a revoke didn't go through (e.g. the invite was accepted a moment ago). */
+  revokeError() {
+    return this.page.getByTestId("invite-revoke-error");
+  }
+
   async revokeInvite(email: string): Promise<void> {
     await this.pendingInvite(email).getByRole("button", { name: /^Revoke/ }).click();
     await new ConfirmDelete(this.pendingInvite(email)).confirm();

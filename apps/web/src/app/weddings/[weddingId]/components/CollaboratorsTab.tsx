@@ -89,6 +89,8 @@ export function CollaboratorsTab({
   const [adding, setAdding] = useState(false);
   const [inviteSent, setInviteSent] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // TS-220: why revoking an invite didn't go through, shown by the pending invites.
+  const [revokeError, setRevokeError] = useState<string | null>(null);
   const [savingSettings, setSavingSettings] = useState(false);
   // TS-213: your own "Email me about this wedding" switch (null until loaded).
   const [myEmails, setMyEmails] = useState<boolean | null>(null);
@@ -111,6 +113,18 @@ export function CollaboratorsTab({
   // as the side labels above.
   const [note, setNote] = useState(wedding?.note ?? "");
   const [savingNote, setSavingNote] = useState(false);
+  // TS-218: whether the note box has been typed in since it was last filled. Leaving a box nobody
+  // typed in never saves it -- after a hand-off the new owner's box was empty (the note is only sent
+  // to the owner), and just tabbing through it saved "no note", deleting the real one.
+  const noteEdited = useRef(false);
+  // TS-218: filled with the real note as soon as this person can see it -- the wedding copy now has
+  // the note (it's left out for anyone but the owner) or they have just become the owner. A hand-off
+  // changes neither the wedding nor its settings revision, so nothing used to fill it.
+  const noteKnown = !!wedding && "note" in wedding;
+  useEffect(() => {
+    if (isOwner && noteKnown && !noteEdited.current) setNote(wedding?.note ?? "");
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- TS-218: only when the note becomes known or ownership changes.
+  }, [isOwner, noteKnown]);
   // TS-17 (FR-12.2): the planner-configured RSVP cutoff -- same local-input-then-save-on-blur
   // pattern as the note/side labels above. Empty string means no cutoff at all.
   const [rsvpCutoffDate, setRsvpCutoffDate] = useState(wedding?.rsvpCutoffDate ?? "");
@@ -139,8 +153,9 @@ export function CollaboratorsTab({
           (eventDate !== (wedding.eventDate ?? "") || venueName !== (wedding.venueName ?? ""))))
   );
 
-  useEffect(() => {
-    api
+  // TS-220: also loaded again after an invite is revoked (or turns out to have been accepted).
+  function loadCollaborators() {
+    return api
       .get<{ collaborators: CollaboratorDTO[] }>(`/api/v1/weddings/${weddingId}/collaborators`)
       .then((res) => {
         setCollaborators(res.collaborators);
@@ -153,6 +168,10 @@ export function CollaboratorsTab({
       })
       .catch(() => setError("Couldn't load collaborators."))
       .finally(() => setLoading(false));
+  }
+  useEffect(() => {
+    loadCollaborators();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [weddingId]);
 
   // FR-1.4a: pending/expired/revoked invites, shown to the owner only (same audience as managing
@@ -200,6 +219,7 @@ export function CollaboratorsTab({
       setSideLabel1(wedding.sideLabel1);
       setSideLabel2(wedding.sideLabel2);
       setNote(wedding.note ?? "");
+      noteEdited.current = false;
       setRsvpCutoffDate(wedding.rsvpCutoffDate ?? "");
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -411,8 +431,13 @@ export function CollaboratorsTab({
   // FR-1.3: the wedding's optional note -- same save-on-blur pattern as the side labels above.
   async function onSaveNote() {
     if (!wedding) return;
+    // TS-218: a box nobody typed in is never saved (see noteEdited).
+    if (!noteEdited.current) return;
     const trimmed = note.trim();
-    if (trimmed === (wedding.note ?? "")) return;
+    if (trimmed === (wedding.note ?? "")) {
+      noteEdited.current = false;
+      return;
+    }
     setSavingNote(true);
     setError(null);
     try {
@@ -421,10 +446,20 @@ export function CollaboratorsTab({
         w ? { ...w, note: updated.note, settingsRevision: updated.settingsRevision, updatedAt: updated.updatedAt } : w
       );
       setNote(updated.note ?? "");
+      noteEdited.current = false;
     } catch (err) {
       const reason = apiErrorMessage(err, [], "Couldn't save the note.");
       setError(reason);
-      return keepTypedUnlessConflict(err, "setting-note", (fresh) => setNote(fresh.note ?? ""), "the wedding note", reason);
+      return keepTypedUnlessConflict(
+        err,
+        "setting-note",
+        (fresh) => {
+          setNote(fresh.note ?? "");
+          noteEdited.current = false;
+        },
+        "the wedding note",
+        reason
+      );
     } finally {
       setSavingNote(false);
     }
@@ -491,12 +526,18 @@ export function CollaboratorsTab({
   }
 
   async function onRevokeInvite(id: string) {
+    setRevokeError(null);
     try {
       await api.delete(`/api/v1/weddings/${weddingId}/invites/${id}`);
-      await refreshInvites();
+      // TS-220: the collaborators list too -- whoever had this invite may have joined meanwhile.
+      await Promise.all([refreshInvites(), loadCollaborators()]);
     } catch (err) {
       // TS-209: the server's own reason (an invite already gone counts as revoked -- see api-client).
-      setError(apiErrorMessage(err, [], "Couldn't revoke that invite."));
+      // TS-220: a 409 means they accepted the invite a moment ago -- they have access now, and the
+      // message says to remove them from Collaborators if needed. The invite's row stays where it is
+      // (it isn't shown as revoked), and the collaborators list is loaded again so they show there.
+      setRevokeError(apiErrorMessage(err, [], "Couldn't revoke that invite."));
+      if (err instanceof ApiError && err.status === 409) await loadCollaborators();
     }
   }
 
@@ -821,6 +862,16 @@ export function CollaboratorsTab({
             </p>
           )}
 
+          {/* TS-220: why a revoke didn't go through (e.g. the invite was accepted a moment ago). Always
+              on the page, so screen readers announce it when the text appears (TS-212). */}
+          <p
+            role="alert"
+            data-testid="invite-revoke-error"
+            className={revokeError ? "mb-4 text-sm text-red-600 dark:text-red-400" : ""}
+          >
+            {revokeError ?? ""}
+          </p>
+
           {invites.filter((i) => i.status === "PENDING" || i.status === "EXPIRED").length > 0 && (
             <div className="mb-8">
               <h3 className="mb-2 text-sm font-medium">Pending invites</h3>
@@ -1031,6 +1082,7 @@ export function CollaboratorsTab({
                 value={note}
                 onChange={(e) => {
                   setNote(e.target.value);
+                  noteEdited.current = true;
                   settingFields.markDirty("setting-note", e.target.value.trim() !== (wedding.note ?? ""));
                 }}
                 onBlur={() => {

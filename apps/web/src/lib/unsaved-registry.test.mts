@@ -2,7 +2,7 @@
 // Run with `pnpm --filter @seatwise/web test`.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { UnsavedRegistry, couldntSaveNote } from "./unsaved-registry";
+import { UnsavedRegistry, LeavingFlag, couldntSaveNote } from "./unsaved-registry";
 import { saveStatusView, saveStatusStore, writeStarted, writeSucceeded, writeFailed } from "./save-status";
 
 function deferred<T>() {
@@ -103,4 +103,32 @@ test("header: after Dismiss it shows nothing, not 'saved'", () => {
   writeSucceeded();
   assert.equal(saveStatusView(saveStatusStore.getSnapshot(), { unsavedCount: 1 }).kind, "none");
   assert.equal(saveStatusView(saveStatusStore.getSnapshot()).kind, "saved");
+});
+
+// TS-218: a cancelled reload used to switch the Back guard off for the page's whole life.
+test("a reload's 'leaving' mark is lifted once the page is used again (the reload was cancelled)", () => {
+  const leaving = new LeavingFlag();
+  assert.equal(leaving.value, false);
+  leaving.pageGoing();
+  assert.equal(leaving.value, true, "while the reload may be going ahead, a finishing save leaves history alone");
+  assert.equal(leaving.stillHere(), true);
+  assert.equal(leaving.value, false, "the Back guard works again");
+  assert.equal(leaving.stillHere(), false, "nothing to lift a second time");
+});
+
+test("leaving on purpose (a link, or Back past the page) is never lifted", () => {
+  const leaving = new LeavingFlag();
+  leaving.set();
+  assert.equal(leaving.stillHere(), false);
+  assert.equal(leaving.value, true);
+  // A reload attempt afterwards doesn't turn it into a liftable mark either.
+  leaving.pageGoing();
+  leaving.stillHere();
+  assert.equal(leaving.value, true);
+  // And leaving on purpose after a cancelled reload's mark makes it permanent.
+  const other = new LeavingFlag();
+  other.pageGoing();
+  other.set();
+  other.stillHere();
+  assert.equal(other.value, true);
 });

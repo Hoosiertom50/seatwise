@@ -829,7 +829,10 @@ export function GuestsTab({
   // TS-17 (FR-12.4): "get/copy" (regenerate: false) reuses an existing token or lazily creates
   // one; "regenerate" always issues a fresh one. Either way, if the guest has an email on file the
   // server also (re)sends it -- the result line reflects whichever actually happened.
-  async function onRsvpLink(guestId: string, guestEmail: string | null, regenerate: boolean) {
+  async function onRsvpLink(guestId: string, knownEmail: string | null, regenerate: boolean) {
+    // TS-217: the address on screen can be missing (a list loaded before access was raised to Edit)
+    // while the server still emails the guest -- it used to say "Link copied & emailed to null".
+    const guestEmail = knownEmail ?? "the guest";
     setRsvpLinkBusy((cur) => new Set(cur).add(guestId));
     setRsvpLinkResult((prev) => ({ ...prev, [guestId]: "" }));
     try {
