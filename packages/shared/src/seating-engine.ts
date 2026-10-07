@@ -31,7 +31,7 @@
 //     -- TS-201: or two, in a chain) and also tried in plain largest-first order, and the best is
 //     kept: TS-201: fewest people needing an accessible table left unseated, then fewest people.
 //     TS-226: if people needing an accessible table are still unseated, one more order is tried --
-//     the groups with the most such people first.
+//     the groups with the most such people first (TS-236: smaller party first on a tie).
 //     Every hard rule above still holds in each of them, and the result is the same every time.
 
 export type EngineRelationshipType =
@@ -62,6 +62,11 @@ export interface EngineGuest {
   // FR-7.4: if locked and currently seated somewhere, generation tries to keep them there.
   isLocked: boolean;
   currentTableId?: string | null;
+  // TS-236: when they were seated at currentTableId, as a rank (lower = seated earlier). Decides
+  // which locked guests keep a table that no longer has room for all of them -- the same order the
+  // table re-check uses -- instead of the guest-list (last-name) order. Optional: without it, guest
+  // id decides.
+  currentSeatOrder?: number | null;
   // FR-3.4
   side: EngineGuestSide;
   // FR-3.7: read only for a Purpose table's TIER/AGE_CATEGORY criterion.
@@ -202,7 +207,10 @@ interface Unit {
 // kept at no longer depends on guest-list order (a locked table wins).
 // TS-226: version 6 -- one more order is tried when people who need an accessible table are left
 // unseated (groups with the most such people first), so plans can come out differently.
-export const RULE_WEIGHT_CONFIG_VERSION = 6;
+// TS-236: version 7 -- in that order, groups with the same number of such people go smallest party
+// first; the repair seats a group at the table with the fewest "avoid" conflicts; and locked guests
+// competing for too few seats are decided by seating order (or guest id), not by name.
+export const RULE_WEIGHT_CONFIG_VERSION = 7;
 export const RULE_WEIGHT_CONFIG = {
   preferNearBonus: 10,
   avoidPenalty: 10,
@@ -450,6 +458,9 @@ export function generateSeatingPlan(
     }
   }
   const units = [...unitsByRoot.values()];
+  // TS-236: which group each guest is in.
+  const unitOfGuest = new Map<string, Unit>();
+  for (const u of units) for (const id of u.guestIds) unitOfGuest.set(id, u);
 
   // TS-201: a unit's lock pin is chosen once every member is known, so it never depends on the
   // order of the guest list (guests come sorted by last name). Before, the first member listed won.
@@ -646,13 +657,27 @@ export function generateSeatingPlan(
     // true -- before, it was said even when another table was free and the prefer-near or
     // side-mixing bonus simply outweighed the penalty. Checked against every unlocked,
     // unrestricted table (not just `pool`, which is a single table when re-running a repaired plan).
-    const unmetReason = () => {
+    // TS-236: `other` is the guest an "avoid" warning is about (none for Single-Side-Only).
+    const unmetReason = (other?: string) => {
       if (pinned) {
         const who = unit.guestIds.map(guestName).join(", ");
         const verb = unit.guestIds.length === 1 ? "is" : "are";
         return unit.pinReason === "required"
           ? `${who} ${verb} required at "${best.label}"`
           : `${who} ${verb} kept at "${best.label}" because of a lock`;
+      }
+      // TS-236: in a repaired plan the table came from the repair, which moved groups to seat
+      // everyone -- so "best fit overall" or "no other table had room" wouldn't be true. Say a move
+      // did it when this group (or, for "avoid", the other guest's group) was one that moved.
+      if (forcedTable?.has(unit)) {
+        const otherUnit = other !== undefined ? unitOfGuest.get(other) : undefined;
+        if (movedUnits.has(unit)) {
+          return other !== undefined
+            ? "one of them was moved there so everyone could be seated"
+            : "they were moved there so everyone could be seated";
+        }
+        if (otherUnit && movedUnits.has(otherUnit)) return "one of them was moved there so everyone could be seated";
+        return "seats were rearranged so everyone could be seated";
       }
       return candidateTables.some((t) => t.id !== best.id && canTake(unit, t))
         ? "it was the best fit overall, weighing everyone's seating preferences"
@@ -689,7 +714,7 @@ export function generateSeatingPlan(
         if (avoidMap.get(guestId)?.has(other)) {
           warnings.push(
             `${guestName(guestId)} and ${guestName(other)} were seated at the same table despite an ` +
-              `"avoid" preference between them — ${unmetReason()} (weighting-configuration ` +
+              `"avoid" preference between them — ${unmetReason(other)} (weighting-configuration ` +
               `version ${RULE_WEIGHT_CONFIG_VERSION}).`
           );
         }
@@ -742,10 +767,21 @@ export function generateSeatingPlan(
   // pass. Before, pins went in guest-list order and a lock that couldn't be kept was re-seated
   // straight away, so it could take a seat another pin (even a required one) still needed. Now
   // every pin is tried before any lock that couldn't be kept is seated somewhere else.
+  // TS-236: within a pass, groups go in the order their members were seated at the pinned table
+  // (earliest first, as the table re-check counts them), then by guest id. Before, ties kept the
+  // guest-list order -- by last name -- so renaming a guest could change who kept a locked table.
+  const pinOrderKey = (u: Unit): (string | number)[] => {
+    const here = u.guestIds.filter((id) => guestById.get(id)?.currentTableId === u.pinnedTableId);
+    const ids = here.length > 0 ? here : u.guestIds;
+    const seatOrder = Math.min(...ids.map((id) => guestById.get(id)?.currentSeatOrder ?? Infinity));
+    return [u.hasLockedGuest ? 0 : 1, seatOrder, [...ids].sort()[0]];
+  };
   const pinPass = (reason: Unit["pinReason"]) =>
     units
       .filter((u) => u.pinnedTableId && u.pinReason === reason)
-      .sort((x, y) => Number(y.hasLockedGuest) - Number(x.hasLockedGuest));
+      .map((u) => ({ u, key: pinOrderKey(u) }))
+      .sort((x, y) => compareKeys(x.key, y.key))
+      .map(({ u }) => u);
   const pinnedUnits = [...pinPass("required"), ...pinPass("lock"), ...pinPass("table")];
   // (TS-188: units needing an accessible table are taken out of this order and seated first.)
   const unpinnedUnits = [...units.filter((u) => !u.pinnedTableId)].sort(
@@ -757,12 +793,18 @@ export function generateSeatingPlan(
       const g = guestById.get(id);
       return sum + (g?.requiresAccessibleTable ? g.headcount : 0);
     }, 0);
+  // TS-236: the "most need first" order -- most people needing an accessible table first, then the
+  // smaller party (fewer seats taken from them), then as before.
+  const needOrder = (x: Unit, y: Unit) =>
+    accessibleNeed(y) - accessibleNeed(x) || x.totalHeadcount - y.totalHeadcount;
 
   // TS-196: where each automatically seated group (a lock that couldn't be kept, or an unpinned
   // group) landed in the current attempt, and -- when re-running a repaired plan -- the table each
   // of them must go to.
   let autoTable = new Map<Unit, string>();
   let forcedTable: Map<Unit, string> | null = null;
+  // TS-236: in a repaired plan, the groups the repair moved (or newly seated) -- see unmetReason.
+  let movedUnits = new Set<Unit>();
   const autoPool = (unit: Unit): EngineTable[] => {
     const forced = forcedTable?.get(unit);
     return forced ? [tablesById.get(forced)!] : candidateTables;
@@ -967,7 +1009,9 @@ export function generateSeatingPlan(
   // ahead of every unpinned group however few of its people needed the accessible seats.
   function runPlacement(
     order: "accessibleFirst" | "largestFirst" | "accessibleByNeed",
-    forced: Map<Unit, string> | null
+    forced: Map<Unit, string> | null,
+    // TS-236: with `forced`, where each group sat in the attempt that was repaired.
+    repairedFrom: Map<Unit, string> | null = null
   ): Attempt {
     remainingCapacity = new Map(tables.map((t) => [t.id, t.capacity]));
     occupants = new Map(tables.map((t) => [t.id, []]));
@@ -976,6 +1020,7 @@ export function generateSeatingPlan(
     warnings = [];
     autoTable = new Map();
     forcedTable = forced;
+    movedUnits = new Set([...(forced ?? [])].filter(([u, t]) => repairedFrom?.get(u) !== t).map(([u]) => u));
 
     const failedLocks: { unit: Unit; target: EngineTable | undefined }[] = [];
     placePinnedUnits(failedLocks);
@@ -985,8 +1030,10 @@ export function generateSeatingPlan(
       ...unpinnedUnits.filter((u) => u.requiresAccessible).map((unit) => ({ unit })),
     ];
     if (order === "accessibleByNeed") {
-      // Array sort is stable, so equal counts keep the normal order (failed locks, then largest first).
-      accessibleSteps.sort((x, y) => accessibleNeed(stepUnit(y)) - accessibleNeed(stepUnit(x)));
+      // TS-236: equal counts go smallest party first -- before, the bigger party went first, so a
+      // couple where one needs the accessible seats could take them from two guests who both do.
+      // Array sort is stable, so full ties keep the normal order (failed locks, then largest first).
+      accessibleSteps.sort((x, y) => needOrder(stepUnit(x), stepUnit(y)));
     }
     const steps: Step[] =
       order !== "largestFirst"
@@ -1077,17 +1124,45 @@ export function generateSeatingPlan(
     // (each to another table, possibly making room there the same way). `fixed` holds the groups
     // already placed in this chain, which it won't move again. If it can't, or it runs past
     // `limit`, everything is put back as it was and it returns false.
+    // TS-236: how many "avoid" preferences seating `unit` at a table would break (work counted).
+    const hasAvoids = (unit: Unit) => unit.guestIds.some((g) => avoidMap.has(g));
+    const avoidConflicts = (unit: Unit, tableId: string) => {
+      const here = occ.get(tableId)!;
+      let n = 0;
+      for (const g of unit.guestIds) {
+        const avoid = avoidMap.get(g);
+        if (!avoid) continue;
+        work += here.size;
+        for (const o of here) if (avoid.has(o)) n++;
+      }
+      return n;
+    };
+
     function insert(unit: Unit, moves: number, fixed: Set<Unit>, limit: number): boolean {
+      // TS-236: among tables with room, the one with the fewest "avoid" conflicts (first in table
+      // order on a tie). Before, it took the first table with room whatever the preferences. A group
+      // with no "avoid" preferences still takes the first table with room, as before.
+      const checkAvoids = hasAvoids(unit);
+      let pick: EngineTable | null = null;
+      let pickConflicts = Infinity;
       for (const t of candidateTables) {
-        if (work > limit) return false;
+        if (work > limit) break; // out of budget: keep a table already found, if any
         work++;
         if (t.capacity < unit.totalHeadcount || (unit.requiresAccessible && !t.isAccessible)) continue;
         if (fits(unit, t, null)) {
-          seat(unit, t);
-          return true;
+          const conflicts = checkAvoids ? avoidConflicts(unit, t.id) : 0;
+          if (conflicts < pickConflicts) {
+            pick = t;
+            pickConflicts = conflicts;
+          }
+          if (pickConflicts === 0) break;
         }
       }
-      if (moves === 0) return false;
+      if (pick) {
+        seat(unit, pick);
+        return true;
+      }
+      if (moves === 0 || work > limit) return false;
       for (const tv of candidateTables) {
         if (tv.capacity < unit.totalHeadcount || (unit.requiresAccessible && !tv.isAccessible)) continue;
         for (const moving of [...movableAt.get(tv.id)!]) {
@@ -1145,13 +1220,13 @@ export function generateSeatingPlan(
       if (compareKeys(rank(a), rank(best)) < 0) best = a;
     };
     const repaired = repair(primary);
-    if (repaired) better(runPlacement("accessibleFirst", repaired));
+    if (repaired) better(runPlacement("accessibleFirst", repaired, primary.autoTable));
     if (best.unassignedGuestIds.length > 0) {
       const alternate = runPlacement("largestFirst", null);
       better(alternate);
       if (best.unassignedGuestIds.length > 0 && alternate.unassignedGuestIds.length > 0) {
         const repairedAlternate = repair(alternate);
-        if (repairedAlternate) better(runPlacement("largestFirst", repairedAlternate));
+        if (repairedAlternate) better(runPlacement("largestFirst", repairedAlternate, alternate.autoTable));
       }
     }
     // TS-226: if people who need an accessible table are still left unseated, also try seating the
@@ -1159,9 +1234,8 @@ export function generateSeatingPlan(
     // a plan can never get worse. Skipped when it would be the same order as the normal one.
     // TS-227: judged on the normal attempt's own accessible steps, failed locks included.
     const accessibleOrder = primary.steps.map(stepUnit).filter((u) => u.requiresAccessible);
-    const needOrderDiffers = accessibleOrder.some(
-      (u, i) => i > 0 && accessibleNeed(u) > accessibleNeed(accessibleOrder[i - 1])
-    );
+    // TS-236: same order as the sort above (smaller party first on equal need).
+    const needOrderDiffers = accessibleOrder.some((u, i) => i > 0 && needOrder(u, accessibleOrder[i - 1]) < 0);
     if (rank(best)[0] > 0 && needOrderDiffers) better(runPlacement("accessibleByNeed", null));
   }
 

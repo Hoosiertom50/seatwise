@@ -115,7 +115,9 @@ test('an "avoid" warning for a locked guest says the lock kept them there', () =
     [table("T1", 8), table("T2", 8)]
   );
   assert.equal(result.warnings.length, 1);
-  assert.match(result.warnings[0], /Ann is kept at "T1" because of a lock/);
+  // TS-236: locks are placed by seating order, then guest id (not list order), so Ann goes first
+  // and the warning is about Cal, seated second.
+  assert.match(result.warnings[0], /Cal is kept at "T1" because of a lock/);
   assert.doesNotMatch(result.warnings[0], /no other table had room|best fit/);
 });
 

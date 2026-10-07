@@ -43,7 +43,8 @@ const tableOf = (result: ReturnType<typeof generateSeatingPlan>, guestId: string
 
 test("the accessible-table penalty is gone, and the weighting version says so", () => {
   // TS-226: version 6 (one more order for accessible seats; see seating-engine-ts226.test.mts).
-  assert.equal(RULE_WEIGHT_CONFIG_VERSION, 6);
+  // TS-236: version 7 (tie-breaks and the repair's table pick; see seating-engine-ts236.test.mts).
+  assert.equal(RULE_WEIGHT_CONFIG_VERSION, 7);
   assert.equal("accessibleTableMisusePenalty" in RULE_WEIGHT_CONFIG, false);
 });
 

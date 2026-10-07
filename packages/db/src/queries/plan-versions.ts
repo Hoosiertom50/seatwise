@@ -439,17 +439,21 @@ export async function createPlanVersionWithAssignments(
 // the one about to be regenerated) is what a fresh generation tries to preserve. Reads the
 // isCurrent flag (FR-5.6) rather than the highest versionNumber, so a Comparison Draft never
 // gets treated as the source of truth for locks just because it happens to be newer.
+// TS-236: with each seat's seatOrder (1 = seated earliest, by when the guest was seated at that
+// table, then guest id), so the engine decides which locked guests keep a table that's too small
+// for all of them in seating order -- not by name.
 export async function getLatestAssignmentsForWedding(
   weddingId: string
-): Promise<Map<string, string>> {
+): Promise<Map<string, { tableId: string; seatOrder: number }>> {
   const { rows } = await pool.query(
-    `SELECT sa."guestId", sa."seatingTableId" AS "tableId"
+    `SELECT sa."guestId", sa."seatingTableId" AS "tableId",
+            ROW_NUMBER() OVER (ORDER BY sa."createdAt", sa."guestId")::int AS "seatOrder"
      FROM "seat_assignments" sa
      JOIN "plan_versions" pv ON pv.id = sa."planVersionId"
      WHERE pv."weddingId" = $1 AND pv."isCurrent"`,
     [weddingId]
   );
-  return new Map(rows.map((r) => [r.guestId, r.tableId]));
+  return new Map(rows.map((r) => [r.guestId, { tableId: r.tableId, seatOrder: r.seatOrder }]));
 }
 
 // TS-165: a new attending guest has no seat yet, so the plan is no longer complete. Nothing
