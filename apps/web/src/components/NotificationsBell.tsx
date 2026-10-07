@@ -15,6 +15,9 @@ const TYPE_LABELS: Record<string, string> = {
   ATTENDANCE_CHANGED: "Attendance",
   STATUS_CHANGED: "Status change",
   RSVP_RECEIVED: "RSVP",
+  // TS-213
+  COMMENT_ADDED: "Comment",
+  OWNERSHIP_TRANSFERRED: "Now yours",
 };
 
 // TS-13/FR-10.2: a lightweight bell + dropdown, polled rather than pushed (no websocket in this

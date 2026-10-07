@@ -82,6 +82,28 @@ export async function inviteToken(inviteId: string): Promise<string> {
   return token;
 }
 
+/**
+ * TS-203: whether a test invite's email went out (the app records when). Accepting one that did
+ * confirms the account's address; `setInviteEmailed(id, false)` makes it like an invite whose email
+ * failed, whose link the owner copied and sent some other way.
+ */
+export async function inviteWasEmailed(inviteId: string): Promise<boolean> {
+  const { rows } = await testPool().query<{ emailed: boolean }>(
+    `SELECT "emailedAt" IS NOT NULL AS emailed FROM "wedding_invites" WHERE id = $1 AND email LIKE $2`,
+    [inviteId, TEST_EMAIL_PATTERN],
+  );
+  if (!rows[0]) throw new Error(`testDatabase: no test invite ${inviteId}.`);
+  return rows[0].emailed;
+}
+
+export async function setInviteEmailed(inviteId: string, emailed: boolean): Promise<void> {
+  const { rowCount } = await testPool().query(
+    `UPDATE "wedding_invites" SET "emailedAt" = CASE WHEN $3 THEN now() ELSE NULL END WHERE id = $1 AND email LIKE $2`,
+    [inviteId, TEST_EMAIL_PATTERN, emailed],
+  );
+  if (!rowCount) throw new Error(`testDatabase: no test invite ${inviteId}.`);
+}
+
 /** TS-160: what an invite row stores in place of its token. */
 export async function storedInviteToken(inviteId: string): Promise<string> {
   const { rows } = await testPool().query<{ token: string }>(
@@ -674,12 +696,8 @@ export async function holdDeletion(kind: "wedding" | "guest" | "account", idOrEm
  */
 export async function useUpAccountEmailAllowance(address: string, limit: number, remaining: number): Promise<void> {
   if (!/^198\.(18|19)\.\d+\.\d+$/.test(address)) throw new Error(`testDatabase: ${address} isn't a test address.`);
-  const day = 86_400_000;
-  await testPool().query(
-    `INSERT INTO "rate_limit_counters" (key, "windowStart", count) VALUES ($1, $2::timestamp, $3)
-     ON CONFLICT (key, "windowStart") DO UPDATE SET count = $3`,
-    [`account-email:addr:day:${address}`, utc(new Date(Math.floor(Date.now() / day) * day)), limit - remaining],
-  );
+  // TS-203: a rolling 24-hour count, like every daily limit now (see setCounter).
+  await setCounter(`account-email:addr:day:${address}`, 86_400, limit - remaining);
 }
 
 /**
@@ -741,31 +759,44 @@ function utc(date: Date): string {
 /** TS-177: how many emails a test account has counted against one of its limits in the current window. */
 export async function accountEmailCount(email: string, counter: AccountEmailCounter): Promise<number> {
   const { prefix, windowSeconds } = ACCOUNT_EMAIL_COUNTERS[counter];
-  const { rows } = await testPool().query<{ count: number }>(
-    `SELECT count FROM "rate_limit_counters" WHERE key = $1 AND "windowStart" = $2::timestamp`,
-    [`${prefix}${await testAccountId(email)}`, utc(currentWindowStart(windowSeconds))],
-  );
-  return rows[0]?.count ?? 0;
+  return readCounter(`${prefix}${await testAccountId(email)}`, windowSeconds);
 }
 
 /** TS-177: sets a test account's count against one of its email limits, so a test can reach a limit
  * without sending a hundred emails. */
 export async function setAccountEmailCount(email: string, counter: AccountEmailCounter, count: number): Promise<void> {
   const { prefix, windowSeconds } = ACCOUNT_EMAIL_COUNTERS[counter];
-  await settleIntoWindow(windowSeconds); // TS-215
-  await testPool().query(
-    `INSERT INTO "rate_limit_counters" (key, "windowStart", count) VALUES ($1, $2::timestamp, $3)
-     ON CONFLICT (key, "windowStart") DO UPDATE SET count = $3`,
-    [`${prefix}${await testAccountId(email)}`, utc(currentWindowStart(windowSeconds)), count],
-  );
+  await setCounter(`${prefix}${await testAccountId(email)}`, windowSeconds, count);
 }
+
+/**
+ * TS-203: limits of a day or more now roll over the last 24 hours (packages/db/src/queries/rate-limit.ts):
+ * the app keeps them in hourly windows and counts the current hour plus the 24 before it. A test
+ * that sets such a count replaces every window still counted with one in the current hour; reading
+ * it adds up the same windows the app does.
+ */
+const HOUR_MS = 3_600_000;
+const rollsDaily = (windowSeconds: number) => windowSeconds >= 86_400;
 
 /** TS-178: sets one counter's value in its current window. Every caller below checks first that the
  * key belongs to a test address or test account. */
 async function setCounter(key: string, windowSeconds: number, count: number, window: "current" | "previous" = "current"): Promise<void> {
-  // TS-215: a preset made just before the window ends would be in yesterday's window by the time
-  // the test's request arrives -- wait for the new window first.
-  await settleIntoWindow(windowSeconds);
+  // TS-215: a preset made just before the window ends would be in the next window by the time the
+  // test's request arrives -- wait for the new window first (TS-203: an hour, for rolling limits).
+  await settleIntoWindow(rollsDaily(windowSeconds) ? HOUR_MS / 1000 : windowSeconds);
+  if (rollsDaily(windowSeconds)) {
+    const hour = currentWindowStart(HOUR_MS / 1000);
+    await testPool().query(`DELETE FROM "rate_limit_counters" WHERE key = $1 AND "windowStart" >= $2::timestamp`, [
+      key,
+      utc(new Date(hour.getTime() - windowSeconds * 1000 - HOUR_MS)),
+    ]);
+    await testPool().query(`INSERT INTO "rate_limit_counters" (key, "windowStart", count) VALUES ($1, $2::timestamp, $3)`, [
+      key,
+      utc(hour),
+      count,
+    ]);
+    return;
+  }
   const start = currentWindowStart(windowSeconds);
   // TS-184: "previous" is the window just before the current one, which shorter limits still count.
   if (window === "previous") start.setTime(start.getTime() - windowSeconds * 1000);
@@ -777,6 +808,16 @@ async function setCounter(key: string, windowSeconds: number, count: number, win
 }
 
 async function readCounter(key: string, windowSeconds: number): Promise<number> {
+  if (rollsDaily(windowSeconds)) {
+    // TS-203: the current hour and every hour that started in the 24 hours before it.
+    const hour = currentWindowStart(HOUR_MS / 1000);
+    const { rows } = await testPool().query<{ n: number }>(
+      `SELECT COALESCE(SUM(count), 0)::int AS n FROM "rate_limit_counters"
+        WHERE key = $1 AND "windowStart" >= $2::timestamp AND "windowStart" <= $3::timestamp`,
+      [key, utc(new Date(hour.getTime() - windowSeconds * 1000)), utc(hour)],
+    );
+    return rows[0].n;
+  }
   const { rows } = await testPool().query<{ count: number }>(
     `SELECT count FROM "rate_limit_counters" WHERE key = $1 AND "windowStart" = $2::timestamp`,
     [key, utc(currentWindowStart(windowSeconds))],

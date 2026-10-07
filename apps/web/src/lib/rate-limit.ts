@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { accountDailyEmailKey, accountDailyEmailLimit, hitRateLimit, peekRateLimit, undoRateLimitHit } from "@seatwise/db";
 import { emailLimitReason, tooManyAttemptsMessage, type EmailLimitReason } from "./limit-messages";
+import { clientNetworks } from "./client-address";
 
 // TS-98: limits for the public, unauthenticated guest RSVP link -- the one part of the API anyone
 // on the internet can call without signing in. Generous enough that no real guest (or a household
@@ -64,10 +65,29 @@ export const EMAIL_VERIFICATION_LIMITS = {
 // address. Counted only when an email really goes out, and given back otherwise. Past it a sign-up
 // still makes the account (without its email); "Resend link" works again tomorrow. This replaces
 // the separate 20-a-day counts for sign-up confirmations and resends.
+// TS-203: "a day" is now the last 24 hours, rolling (see packages/db/src/queries/rate-limit.ts) --
+// at midnight UTC it used to start again, so twice the limit fitted in a couple of hours. And an
+// IPv6 source is also counted by its /48 (perWiderNetworkDay): a free tunnel hands out a /48, which
+// is 65,536 /64s, each of which had its own 10. Roomier than one /64's, since a /48 can be a whole
+// office or campus.
 export const ACCOUNT_EMAIL_LIMITS = {
   perAddressDay: { limit: 10, windowSeconds: 86_400 },
+  perWiderNetworkDay: { limit: 30, windowSeconds: 86_400 },
 };
 export const accountEmailAddressKey = (address: string) => `account-email:addr:day:${address}`;
+export const accountEmailWiderNetworkKey = (network: string) => `account-email:net48:day:${network}`;
+
+/**
+ * TS-203: every per-network count one account email (sign-up confirmation, "Resend link", password
+ * reset) goes on: the address (an IPv4 address, or an IPv6 /64), and for IPv6 its /48 too.
+ */
+export function accountEmailCounters(req: { headers: Headers }): { key: string; limit: number; windowSeconds: number }[] {
+  const { address, wider } = clientNetworks(req);
+  return [
+    { key: accountEmailAddressKey(address), ...ACCOUNT_EMAIL_LIMITS.perAddressDay },
+    ...(wider ? [{ key: accountEmailWiderNetworkKey(wider), ...ACCOUNT_EMAIL_LIMITS.perWiderNetworkDay }] : []),
+  ];
+}
 
 // TS-142: "forgot password" -- requests per address and per email (the per-email cap is what keeps
 // one inbox from being flooded), and attempts to use a link per address. Links are 64 random hex
@@ -163,24 +183,26 @@ export const TOO_MANY_SIGN_INS =
 export async function over429(
   key: string,
   { limit, windowSeconds }: { limit: number; windowSeconds: number },
-  message: string
+  message: LimitMessage
 ): Promise<NextResponse | null> {
   const result = await peekRateLimit(key, limit, windowSeconds);
   if (result.allowed) return null;
   return NextResponse.json(
-    { error: message },
+    { error: typeof message === "function" ? message(result.retryAfterSeconds) : message },
     { status: 429, headers: { "Retry-After": String(result.retryAfterSeconds) } }
   );
 }
 
 // TS-73: moved to ./client-address so it can be unit-tested without a database; re-exported here
 // so every existing caller keeps importing it from this module.
-export { clientAddress } from "./client-address";
+export { clientAddress, clientNetworks } from "./client-address";
 
 // TS-177: the refusal messages live in ./limit-messages (unit-testable without a database).
 export {
   ACCOUNT_DAILY_EMAIL_LIMIT_REACHED,
   NEW_ACCOUNT_DAILY_EMAIL_LIMIT_REACHED,
+  ACCOUNT_SHARE_OF_EMAIL_REACHED,
+  RECIPIENT_LIMITED_MESSAGE,
   emailSendRefusedMessage,
   RSVP_LINK_TOO_MANY_SUBMITS,
   TOO_MANY_INVITES,
@@ -195,10 +217,14 @@ export {
 // counted per link from anywhere, say, isn't "from here").
 // TS-186: a refused request is given back, as sign-in does -- so tries made while refused don't
 // keep the limit going for longer.
+// TS-203: `message` can be worked out from the wait (seconds until another try fits), so a daily
+// limit can say how long it really is.
+type LimitMessage = string | ((retryAfterSeconds: number) => string);
+
 export async function rateLimitOr429(
   key: string,
   limits: { limit: number; windowSeconds: number },
-  message?: string
+  message?: LimitMessage
 ): Promise<NextResponse | null> {
   return (await countOr429(key, limits, message)).limited;
 }
@@ -210,7 +236,7 @@ export async function rateLimitOr429(
 export async function countOr429(
   key: string,
   { limit, windowSeconds }: { limit: number; windowSeconds: number },
-  message?: string
+  message?: LimitMessage
 ): Promise<{ limited: NextResponse | null; giveBack: () => Promise<void> }> {
   const result = await hitRateLimit(key, limit, windowSeconds);
   let counted = true;
@@ -223,7 +249,12 @@ export async function countOr429(
   await giveBack();
   return {
     limited: NextResponse.json(
-      { error: message ?? tooManyAttemptsMessage(windowSeconds) },
+      {
+        error:
+          typeof message === "function"
+            ? message(result.retryAfterSeconds)
+            : (message ?? tooManyAttemptsMessage(windowSeconds, result.retryAfterSeconds)),
+      },
       { status: 429, headers: { "Retry-After": String(result.retryAfterSeconds) } }
     ),
     giveBack,
@@ -249,9 +280,11 @@ export const EMAIL_SEND_LIMITS: Record<"invites" | "rsvpEmails", readonly { limi
 
 // TS-177: refused, with which limit it was (see emailSendRefusedMessage for the words).
 // TS-186: allowed comes with `release`, which gives the counts back from the windows they were made in.
+// TS-203: refused comes with how long until it would fit (the longest of the refusing windows), so
+// the message can say it.
 export type EmailSendReservation =
   | { allowed: true; release: () => Promise<void> }
-  | { allowed: false; reason: EmailLimitReason };
+  | { allowed: false; reason: EmailLimitReason; retryAfterSeconds: number };
 
 async function emailSendCounters(kind: keyof typeof EMAIL_SEND_LIMITS, userId: string) {
   const { limit, windowSeconds, newAccount } = await accountDailyEmailLimit(userId);
@@ -287,7 +320,11 @@ export async function reserveEmailSend(kind: keyof typeof EMAIL_SEND_LIMITS, use
   };
   if (results.every((r) => r.allowed)) return { allowed: true, release };
   await release();
-  return { allowed: false, reason: emailLimitReason(counters.filter((_, i) => !results[i].allowed)) };
+  return {
+    allowed: false,
+    reason: emailLimitReason(counters.filter((_, i) => !results[i].allowed)),
+    retryAfterSeconds: Math.max(1, ...results.filter((r) => !r.allowed).map((r) => r.retryAfterSeconds)),
+  };
 }
 
 /**

@@ -105,6 +105,10 @@ export class CollaboratorsTabPage extends BasePage {
   emailNotificationsCheckbox() {
     return this.page.getByRole("checkbox", { name: /^Also send email notifications for this wedding/ });
   }
+  /** TS-213: your own "Email me about this wedding" switch -- in the owner's settings, or on a collaborator's own row. */
+  myEmailsCheckbox() {
+    return this.page.getByRole("checkbox", { name: "Email me about this wedding", exact: true });
+  }
   /** Replaces a settings field's value and leaves the field, which is what saves it. (Blur rather
    * than Tab: in a date input, Tab only moves between its month/day/year parts.) */
   async setAndLeave(field: ReturnType<CollaboratorsTabPage["weddingNameInput"]>, value: string): Promise<void> {

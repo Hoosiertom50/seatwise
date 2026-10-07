@@ -207,9 +207,20 @@ test("the 24-hour ceiling defaults to 240 everyday emails, with 60 more kept for
   // TS-186: resets have their own budget (not counted in the everyday one), and unconfirmed
   // accounts' resets a tenth of the everyday allowance.
   // TS-194: about 300 in all over any 24 hours (Tom's decision).
-  assert.deepEqual(dailyEmailLimits({}), { everyday: 240, resets: 60, confirmations: 60, unconfirmedResets: 24 });
-  assert.deepEqual(dailyEmailLimits({ EMAIL_DAILY_LIMIT: "100" }), { everyday: 100, resets: 60, confirmations: 25, unconfirmedResets: 10 });
-  assert.deepEqual(dailyEmailLimits({ EMAIL_DAILY_LIMIT: "nonsense" }), { everyday: 240, resets: 60, confirmations: 60, unconfirmedResets: 24 });
+  // TS-203: no account may use more than a quarter of the everyday allowance; a fifth of it is kept
+  // for invites and RSVP links; 15 of the resets are kept for locked-out accounts.
+  const defaults = { everyday: 240, resets: 60, confirmations: 60, unconfirmedResets: 24, accountShare: 60, plannerFloor: 48, lockedOutResets: 15 };
+  assert.deepEqual(dailyEmailLimits({}), defaults);
+  assert.deepEqual(dailyEmailLimits({ EMAIL_DAILY_LIMIT: "100" }), {
+    everyday: 100,
+    resets: 60,
+    confirmations: 25,
+    unconfirmedResets: 10,
+    accountShare: 25,
+    plannerFloor: 20,
+    lockedOutResets: 15,
+  });
+  assert.deepEqual(dailyEmailLimits({ EMAIL_DAILY_LIMIT: "nonsense" }), defaults);
   assert.equal(dailyEmailLimits({ EMAIL_DAILY_LIMIT: "2" }).confirmations, 1);
   assert.equal(dailyEmailLimits({ EMAIL_DAILY_LIMIT: "2" }).unconfirmedResets, 1);
 });
@@ -285,13 +296,31 @@ test("confirmed accounts' resets stop at their own 60, and never use the everyda
   const env = { ...GMAIL, EMAIL_DAILY_LIMIT: "3" };
   resetsToday = 59;
   await quietly(async () => {
-    assert.equal(await sendEmail("a@example.invalid", "Reset", "t", env, { essential: true }), "sent");
-    assert.equal(await sendEmail("b@example.invalid", "Reset", "t", env, { essential: true }), "limited");
+    // TS-203: the last 15 are for locked-out accounts.
+    assert.equal(await sendEmail("a@example.invalid", "Reset", "t", env, { essential: true, lockedOut: true }), "sent");
+    assert.equal(await sendEmail("b@example.invalid", "Reset", "t", env, { essential: true, lockedOut: true }), "limited");
     // The everyday allowance is all still there.
     for (let i = 0; i < 3; i++) assert.equal(await sendEmail(`g${i}@example.invalid`, "RSVP", "t", env), "sent", `RSVP ${i}`);
   });
   assert.equal(resetsToday, 60, "the refused reset was taken back off the count");
   assert.equal(sentToday, 3);
+});
+
+test("TS-203: the last 15 resets are kept for accounts locked out by wrong passwords", async () => {
+  setEmailSenderForTests(async () => {});
+  resetsToday = 44;
+  await quietly(async () => {
+    assert.equal(await sendEmail("a@example.invalid", "Reset", "t", GMAIL, { essential: true }), "sent");
+    // 45 used: an ordinary reset stops here...
+    assert.equal(await sendEmail("b@example.invalid", "Reset", "t", GMAIL, { essential: true }), "limited");
+    assert.equal(resetsToday, 45, "the refused one was given back");
+    // ...while one for a locked-out account still goes, up to 60.
+    for (let i = 0; i < 15; i++) {
+      assert.equal(await sendEmail(`l${i}@example.invalid`, "Reset", "t", GMAIL, { essential: true, lockedOut: true }), "sent", `locked ${i}`);
+    }
+    assert.equal(await sendEmail("x@example.invalid", "Reset", "t", GMAIL, { essential: true, lockedOut: true }), "limited");
+  });
+  assert.equal(resetsToday, 60);
 });
 
 test("unconfirmed accounts' resets stop at their share of the everyday allowance, and count in it", async () => {

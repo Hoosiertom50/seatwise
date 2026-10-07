@@ -162,6 +162,9 @@ export const notificationTypeEnum = z.enum([
   "STATUS_CHANGED",
   // TS-154
   "RSVP_RECEIVED",
+  // TS-213: a new comment thread, and a wedding handed to you.
+  "COMMENT_ADDED",
+  "OWNERSHIP_TRANSFERRED",
 ]);
 export type NotificationType = z.infer<typeof notificationTypeEnum>;
 
@@ -180,3 +183,8 @@ export const setEmailNotificationsSchema = z.object({
   emailNotificationsEnabled: z.boolean(),
 });
 export type SetEmailNotificationsInput = z.infer<typeof setEmailNotificationsSchema>;
+
+// TS-213: one member's own "Email me about this wedding" switch (anyone with access, for themselves).
+export const setMyEmailNotificationsSchema = z.object({
+  myEmailNotificationsEnabled: z.boolean(),
+});

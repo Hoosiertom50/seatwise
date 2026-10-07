@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { transferWeddingOwnership, OwnershipTransferError } from "@seatwise/db";
+import { notifyWeddingCollaborators, transferWeddingOwnership, OwnershipTransferError } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
 import { errorResponse, zodErrorResponse, concurrentChangeResponse } from "@/lib/api-response";
 import { requireAccess } from "@/lib/access";
@@ -24,6 +24,18 @@ export async function POST(req: NextRequest, { params }: Params) {
 
   try {
     const result = await transferWeddingOwnership(weddingId, user.id, parsed.data.collaboratorId);
+    // TS-213 (Tom's decision): the new owner is told -- in the app, and by email unless they've
+    // turned this wedding's emails off. Best effort: the hand-off is already saved.
+    await notifyWeddingCollaborators(
+      weddingId,
+      user.id,
+      "OWNERSHIP_TRANSFERRED",
+      `${user.name} handed "${access.wedding.name}" to you — you're now its owner.`,
+      {
+        onlyUserIds: [result.newOwnerUserId],
+        emailMessage: "A wedding has been handed to you on Seatwise — you're now its owner. Open Seatwise to see it.",
+      }
+    );
     return NextResponse.json({ ok: true, newOwnerName: result.newOwnerName });
   } catch (err) {
     if (err instanceof OwnershipTransferError) return errorResponse(err.message, 409);

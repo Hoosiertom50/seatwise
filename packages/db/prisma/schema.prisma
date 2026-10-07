@@ -79,6 +79,9 @@ model Wedding {
   // FR-10.2: email delivery is opt-out per wedding — this flips it off entirely for this
   // wedding's notifications; the in-app notification itself always still fires.
   emailNotificationsEnabled Boolean @default(true)
+  // TS-213: the owner's own "Email me about this wedding" switch (collaborators keep theirs on
+  // their wedding_collaborators row). Moves with the wedding on a hand-off.
+  ownerEmailNotificationsEnabled Boolean @default(true)
   // FR-3.4
   sideMixing SideMixingSetting @default(BALANCED_MIX)
   // FR-1.3a: each wedding names its own two sides (e.g. "Bride"/"Groom", or any other pair) --
@@ -156,6 +159,9 @@ model WeddingCollaborator {
   permissionLevel CollaboratorPermission @default(VIEW)
   invitedByUserId String?
   createdAt       DateTime               @default(now())
+  // TS-213: this member's own "Email me about this wedding" switch -- off means in-app
+  // notifications only, for this wedding.
+  emailNotificationsEnabled Boolean @default(true)
 
   @@unique([weddingId, userId])
   @@index([userId])
@@ -188,6 +194,10 @@ model WeddingInvite {
   expiresAt       DateTime
   acceptedAt      DateTime?
   createdAt       DateTime               @default(now())
+  // TS-203: when the invite email went out to the invited address. Accepting an invite whose
+  // email went out confirms the account's address (the link only reached that inbox); one whose
+  // email failed -- the owner copied the link and sent it some other way -- doesn't.
+  emailedAt       DateTime?
 
   @@index([weddingId])
   @@index([email])
@@ -337,6 +347,9 @@ enum NotificationType {
   GUEST_REMOVED
   ATTENDANCE_CHANGED
   STATUS_CHANGED
+  // TS-213
+  COMMENT_ADDED
+  OWNERSHIP_TRANSFERRED
 }
 
 model Notification {

@@ -1,11 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { signupSchema } from "@seatwise/shared";
-import { createUser, emailDelivered, findUserByEmail, hitRateLimit, undoRateLimitHit } from "@seatwise/db";
+import { createUser, emailDelivered, emailMayHaveGone, findUserByEmail, hitRateLimit, undoRateLimitHit } from "@seatwise/db";
 import { hashPassword, signToken, setAuthCookie, wantsBearerToken } from "@/lib/auth";
 import { errorResponse, readJson, zodErrorResponse } from "@/lib/api-response";
 import {
-  accountEmailAddressKey,
-  ACCOUNT_EMAIL_LIMITS,
+  accountEmailCounters,
   clientAddress,
   rateLimitOr429,
   SIGNUP_LIMITS,
@@ -52,16 +51,19 @@ export async function POST(req: NextRequest) {
   // network) -- just without the email; the banner offers "Resend link" for later.
   // TS-194: one count per network address (10 a day) for every email an outsider can trigger --
   // it replaces the separate count of sign-up confirmations (see ACCOUNT_EMAIL_LIMITS).
-  const emailCounters = [{ key: accountEmailAddressKey(address), ...ACCOUNT_EMAIL_LIMITS.perAddressDay }];
+  // TS-203: rolling over 24 hours, and for IPv6 the /48 as well (see accountEmailCounters).
+  const emailCounters = accountEmailCounters(req);
   const hits = await Promise.all(emailCounters.map(({ key, limit, windowSeconds }) => hitRateLimit(key, limit, windowSeconds)));
   const giveBack = () =>
     Promise.all(emailCounters.map(({ key, windowSeconds }, i) => undoRateLimitHit(key, windowSeconds, hits[i].windowStart)));
   const mayEmail = hits.every((h) => h.allowed);
   // TS-178: the email also has to fit in the confirmations' own share of the day's email (see
   // sendEmail's `confirmation`); past it, the same happens -- account made, no email.
-  const verificationEmailSent = mayEmail ? emailDelivered(await sendVerificationEmail(user)) : false;
+  const result = mayEmail ? await sendVerificationEmail(user) : null;
+  const verificationEmailSent = result !== null && emailDelivered(result);
   // TS-178 / TS-186: nothing went out (refused, or not sent), so it doesn't use up either allowance.
-  if (!verificationEmailSent) await giveBack();
+  // TS-203: unless it may have gone out after all ("uncertain").
+  if (result === null || !emailMayHaveGone(result)) await giveBack();
 
   const response = NextResponse.json(
     {

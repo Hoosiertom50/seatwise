@@ -18,7 +18,19 @@ import { hitRateLimitCount, hitRollingCount, ROLLING_BUCKET_SECONDS, undoRateLim
 // Sending never throws: a failed email must never block the action that triggered it.
 
 // TS-171: "recipient-limited" -- this address has already had its share of Seatwise email today.
-export type EmailResult = "sent" | "logged" | "not-configured" | "failed" | "limited" | "recipient-limited";
+// TS-203: "account-limited" -- the account it's charged to has had its share of Seatwise's whole
+// allowance (ACCOUNT_SHARE_OF_EVERYDAY) for the last 24 hours. "uncertain" -- the mail server
+// stopped answering after the message may already have been handed over, so it may well have
+// gone out: it stays counted, and a link in it is kept working (see isAmbiguousSendError).
+export type EmailResult =
+  | "sent"
+  | "logged"
+  | "not-configured"
+  | "failed"
+  | "limited"
+  | "recipient-limited"
+  | "account-limited"
+  | "uncertain";
 
 type EmailEnv = Record<string, string | undefined>;
 
@@ -61,6 +73,33 @@ export function emailDelivered(result: EmailResult): boolean {
   return result === "sent" || result === "logged";
 }
 
+/**
+ * TS-203: whether the email may have gone out -- delivered, or "uncertain" (the server went quiet
+ * after it may have been handed over). Such an email keeps its counts, and anything it carries
+ * (a reset link) is kept working, so the person isn't sent a link that no longer works.
+ */
+export function emailMayHaveGone(result: EmailResult): boolean {
+  return emailDelivered(result) || result === "uncertain";
+}
+
+/**
+ * TS-203: a send that failed in a way that leaves it unclear whether the message went out. The
+ * SMTP client reports a quiet server (no answer within socketTimeout) or a dropped connection the
+ * same way whatever stage it was at -- including after the whole message was sent, waiting for
+ * the server's "accepted". Gmail may have sent those. A connection that never opened ("Connection
+ * timeout", "Greeting never received", refused, DNS) or a server's clear refusal (a reply code) is
+ * a plain failure.
+ */
+export function isAmbiguousSendError(err: unknown): boolean {
+  const e = err as { code?: string; message?: string; responseCode?: number } | null;
+  if (!e || typeof e !== "object") return false;
+  if (typeof e.responseCode === "number") return false;
+  const message = String(e.message ?? "");
+  if (e.code === "ETIMEDOUT") return !/connection timeout|greeting never received/i.test(message);
+  if (e.code === "ECONNECTION") return /closed unexpectedly/i.test(message);
+  return false;
+}
+
 type Sender = (config: EmailTransportConfig, message: { to: string; subject: string; text: string }) => Promise<void>;
 
 let smtpTransport: ReturnType<typeof nodemailer.createTransport> | undefined;
@@ -68,7 +107,12 @@ let resendClient: Resend | undefined;
 
 const realSender: Sender = async (config, message) => {
   if (config.kind === "smtp") {
+    // TS-203: one shared, pooled transport for the whole server -- connections (and the Gmail
+    // sign-in on each) are kept and reused, instead of a new sign-in for every email. Several
+    // notifications set off by one change go out over a few connections at once.
     smtpTransport ??= nodemailer.createTransport({
+      pool: true,
+      maxConnections: 3,
       host: config.host,
       port: config.port,
       secure: config.secure,
@@ -117,12 +161,27 @@ export const CONFIRMATION_SHARE_OF_EVERYDAY = 0.25;
 // can sign up with any address), held to this smaller share of the everyday allowance -- so resets
 // asked for on such accounts can't crowd out invites and RSVP emails either.
 export const UNCONFIRMED_RESET_SHARE_OF_EVERYDAY = 0.1;
+// TS-203: no one account -- with every kind of email it sends, and every email its weddings' guests
+// set off, together -- may use more than this share of the everyday allowance in any 24 hours. Each
+// of its own limits was fine alone, but together they let one account (or three new ones) use up
+// all of it, and then nobody's invites, RSVP links or confirmations went out.
+export const ACCOUNT_SHARE_OF_EVERYDAY = 0.25;
+// TS-203: this much of the everyday allowance is kept for invites and RSVP links (emails a planner
+// sends to a guest or a new collaborator) -- notifications, sign-up confirmations and unconfirmed
+// accounts' resets stop short of it, so they can never leave planners unable to reach their guests.
+export const PLANNER_EMAIL_FLOOR_SHARE_OF_EVERYDAY = 0.2;
+// TS-203: this many of the resets' own budget are kept for accounts locked out by wrong passwords
+// (the person most needing a reset) -- other resets stop short of them.
+export const LOCKED_OUT_RESETS_RESERVED = 15;
 
 export function dailyEmailLimits(env: EmailEnv = process.env): {
   everyday: number;
   resets: number;
   confirmations: number;
   unconfirmedResets: number;
+  accountShare: number;
+  plannerFloor: number;
+  lockedOutResets: number;
 } {
   const configured = Number(env.EMAIL_DAILY_LIMIT);
   const asked = Number.isInteger(configured) && configured > 0 ? configured : EVERYDAY_EMAILS_PER_24_HOURS;
@@ -133,6 +192,9 @@ export function dailyEmailLimits(env: EmailEnv = process.env): {
     resets: RESET_EMAILS_PER_24_HOURS,
     confirmations: Math.max(1, Math.floor(everyday * CONFIRMATION_SHARE_OF_EVERYDAY)),
     unconfirmedResets: Math.max(1, Math.floor(everyday * UNCONFIRMED_RESET_SHARE_OF_EVERYDAY)),
+    accountShare: Math.max(1, Math.floor(everyday * ACCOUNT_SHARE_OF_EVERYDAY)),
+    plannerFloor: Math.floor(everyday * PLANNER_EMAIL_FLOOR_SHARE_OF_EVERYDAY),
+    lockedOutResets: Math.min(LOCKED_OUT_RESETS_RESERVED, RESET_EMAILS_PER_24_HOURS - 1),
   };
 }
 
@@ -170,12 +232,28 @@ export function setResetEmailCountersForTests(fakes?: { confirmed: DailyCounter;
   unconfirmedResetCounter = fakes?.unconfirmed ?? realUnconfirmedResetCounter;
 }
 
+// TS-203: each account's share of the everyday allowance (ACCOUNT_SHARE_OF_EVERYDAY) -- real sends
+// only, like the rest of the site-wide counts.
+export const accountShareKey = (accountId: string) => `email:global:24h:account:${accountId}`;
+const realAccountShareCounter = (accountId: string) => rollingCounterFor(accountShareKey(accountId));
+let accountShareCounter: (accountId: string) => DailyCounter = realAccountShareCounter;
+
+/** Tests only: replace the per-account share counter (pass nothing to restore it). */
+export function setAccountShareCounterForTests(fake?: (accountId: string) => DailyCounter): void {
+  accountShareCounter = fake ?? realAccountShareCounter;
+}
+
 // TS-171: at most a few emails a day to any one address, however they're asked for and by however
 // many accounts -- so nobody can use Seatwise to fill a stranger's inbox. Confirmed accounts'
 // password resets have their own per-address limits (see the forgot-password route), and
-// notifications only go to confirmed members of a wedding who can turn them off, so neither counts
-// here. Unlike the site-wide ceiling this also counts with the "log" transport, so it behaves the
-// same locally and in CI.
+// notifications only go to confirmed members of a wedding, so neither counts here.
+// TS-213: those members can now each turn notification emails off for themselves (the "Email me
+// about this wedding" switch on the Collaborators tab), and every notification email says why it
+// came and how to stop it. Unlike the site-wide ceiling this also counts with the "log" transport,
+// so it behaves the same locally and in CI.
+// TS-203: "a day" is the last 24 hours, rolling (see hitRateLimitCount), and one account may use
+// only EMAILS_PER_RECIPIENT_PER_SENDER of an address's planner-sent emails -- so a stranger's
+// account can't use them all up and leave the address's real planner unable to reach them.
 //
 // TS-194: split by who can ask for the email. Emails a planner sends (invites, RSVP links) have
 // their own count, so a stranger asking for confirmation emails can't use up a guest's invites.
@@ -186,6 +264,7 @@ export function setResetEmailCountersForTests(fakes?: { confirmed: DailyCounter;
 export const EMAILS_PER_RECIPIENT_PER_DAY = 5;
 export const ANONYMOUS_EMAILS_PER_RECIPIENT_PER_DAY = 3;
 export const UNCONFIRMED_RESETS_PER_RECIPIENT_PER_DAY = 3;
+export const EMAILS_PER_RECIPIENT_PER_SENDER = 3;
 export type RecipientCount = "planner" | "anonymous" | "unconfirmed-reset";
 const RECIPIENT_LIMITS: Record<RecipientCount, number> = {
   planner: EMAILS_PER_RECIPIENT_PER_DAY,
@@ -217,6 +296,10 @@ export function recipientCountKey(kind: RecipientCount, to: string): string {
   if (kind === "unconfirmed-reset") return `email:to:reset:day:${address}`;
   return `email:to:day:${address}`;
 }
+/** TS-203: the key for one account's share of an address's planner-sent emails. */
+export function senderRecipientCountKey(accountId: string, to: string): string {
+  return `email:to:sender:day:${accountId}:${recipientCountAddress(to)}`;
+}
 
 /** TS-178: an address as the logs show it -- "v***@gmail.com" -- so logs don't collect people's addresses. */
 export function maskEmailAddress(address: string): string {
@@ -241,12 +324,31 @@ export function setRecipientEmailCounterForTests(fake?: RecipientCounter): void 
   recipientCounter = fake ?? realRecipientCounter;
 }
 
+// TS-203: one account's share of an address's planner-sent emails (counted in every mode, like the
+// per-address count).
+const realSenderRecipientCounter = (accountId: string, to: string): DailyCounter => {
+  const key = senderRecipientCountKey(accountId, to);
+  return {
+    hit: () => hitRateLimitCount(key, DAILY_WINDOW_SECONDS),
+    undo: (windowStart) => undoRateLimitHit(key, DAILY_WINDOW_SECONDS, windowStart),
+  };
+};
+let senderRecipientCounter: (accountId: string, to: string) => DailyCounter = realSenderRecipientCounter;
+
+/** Tests only: replace the per-sender, per-recipient counter (pass nothing to restore it). */
+export function setSenderRecipientCounterForTests(fake?: (accountId: string, to: string) => DailyCounter): void {
+  senderRecipientCounter = fake ?? realSenderRecipientCounter;
+}
+
 // TS-171: every email one signed-in account can make Seatwise send in a day, of every kind
 // (invites, RSVP emails, notifications its actions set off), counted together. Without it, the
 // separate per-kind limits added up to more than the whole day's allowance, so one account could
 // stop email for everyone.
 // TS-194 (Tom's decision): a new account -- in its first 7 days -- gets 20 a day instead of 100, so
 // a batch of fresh accounts can't spend the site's allowance between them.
+// TS-203: "a day" is the last 24 hours, rolling -- it used to start again at midnight UTC, so twice
+// the allowance fitted in a couple of hours. And whatever this allows, real sends are also held to
+// the account's share of Seatwise's everyday allowance (ACCOUNT_SHARE_OF_EVERYDAY).
 export const ACCOUNT_EMAILS_PER_DAY = { limit: 100, windowSeconds: DAILY_WINDOW_SECONDS } as const;
 export const NEW_ACCOUNT_EMAILS_PER_DAY = { limit: 20, windowSeconds: DAILY_WINDOW_SECONDS } as const;
 export const NEW_ACCOUNT_DAYS = 7;
@@ -286,6 +388,8 @@ export async function sendEmail(
     toWeddingMember = false,
     confirmation = false,
     unconfirmedReset = false,
+    account,
+    lockedOut = false,
   }: {
     /**
      * A password reset for an account that has confirmed its address: counted only against the
@@ -304,6 +408,15 @@ export async function sendEmail(
      * allowance. TS-194: and its own per-address count.
      */
     unconfirmedReset?: boolean;
+    /**
+     * TS-203: the account this email is charged to -- whoever sent it, or for an email a guest set
+     * off, the wedding's owner. Held to that account's share of the everyday allowance (real sends
+     * only), and, for an email a planner sends to someone, to the account's share of what that
+     * address may receive (EMAILS_PER_RECIPIENT_PER_SENDER).
+     */
+    account?: string;
+    /** TS-203: a reset for an account locked out by wrong passwords -- may use the resets kept for that. */
+    lockedOut?: boolean;
   } = {}
 ): Promise<EmailResult> {
   // TS-178: addresses are masked in every log line here.
@@ -345,8 +458,19 @@ export async function sendEmail(
       if (toThisAddress.count > RECIPIENT_LIMITS[recipientKind]) {
         // Taken back, so refused attempts don't pile up on the count.
         await giveBack();
-        console.warn(`[email] not sent to ${shown}: this address has had its ${recipientKind} emails from Seatwise today.`);
+        console.warn(`[email] not sent to ${shown}: this address has had its ${recipientKind} emails from Seatwise in the last 24 hours.`);
         return "recipient-limited";
+      }
+      // TS-203: and this account's share of them.
+      if (recipientKind === "planner" && account) {
+        const fromThisAccount = senderRecipientCounter(account, recipient);
+        const counts = await fromThisAccount.hit();
+        counted.push(() => fromThisAccount.undo(counts.windowStart));
+        if (counts.count > EMAILS_PER_RECIPIENT_PER_SENDER) {
+          await giveBack();
+          console.warn(`[email] not sent to ${shown}: this account has sent this address its share of emails in the last 24 hours.`);
+          return "recipient-limited";
+        }
       }
     }
     if (config.kind === "log") {
@@ -371,14 +495,32 @@ export async function sendEmail(
       return false;
     };
     // TS-186: a confirmed account's reset counts only against the resets' own budget.
+    // TS-203: and stops short of the resets kept for locked-out accounts, unless it's for one.
     if (essential) {
-      if (!(await fits(resetCounter, limits.resets, "allowance for password-reset emails"))) return "limited";
+      const resetLimit = lockedOut ? limits.resets : limits.resets - limits.lockedOutResets;
+      if (!(await fits(resetCounter, resetLimit, "allowance for password-reset emails"))) return "limited";
     } else {
       if (confirmation && !(await fits(confirmationCounter, limits.confirmations, "share for email confirmations"))) return "limited";
       if (unconfirmedReset && !(await fits(unconfirmedResetCounter, limits.unconfirmedResets, "share for unconfirmed accounts' resets"))) {
         return "limited";
       }
-      if (!(await fits(dailyCounter, limits.everyday, "limit for emails"))) return "limited";
+      // TS-203: the account's share of the everyday allowance, counted before the allowance itself
+      // (and refused as the account's limit, not Seatwise's).
+      if (account) {
+        const share = accountShareCounter(account);
+        const counts = await share.hit();
+        counted.push(() => share.undo(counts.windowStart));
+        if (counts.count > limits.accountShare) {
+          await giveBack();
+          console.warn(`[email] not sent to ${shown}: the account's share of ${limits.accountShare} emails in the last 24 hours has been used.`);
+          return "account-limited";
+        }
+      }
+      // TS-203: only invites and RSVP links (planner-sent, to someone outside the wedding) may use
+      // the last part of the everyday allowance.
+      const plannerEmail = recipientKind === "planner";
+      const everydayLimit = plannerEmail ? limits.everyday : limits.everyday - limits.plannerFloor;
+      if (!(await fits(dailyCounter, everydayLimit, "limit for emails"))) return "limited";
     }
   } catch (err) {
     await giveBack();
@@ -391,6 +533,9 @@ export async function sendEmail(
   } catch (err) {
     // Never log the password or the message body -- just who and why.
     console.error(`[email] failed to send to ${shown} via ${config.kind}: ${errorText(err)}`);
+    // TS-203: the server went quiet after it may have taken the message -- it may well have gone
+    // out, so it stays counted (and the caller keeps any link in it working).
+    if (isAmbiguousSendError(err)) return "uncertain";
     // TS-178: nothing went out, so it doesn't use up the allowance or the address's share.
     await giveBack();
     return "failed";

@@ -204,6 +204,22 @@ export async function createComment(
     } catch (err) {
       console.error("Saved, but notifying the wedding's members failed:", err);
     }
+  } else {
+    // TS-213 (Tom's decision): a new comment thread notifies everyone else too (in the app, and by
+    // email unless they've turned emails off) -- before, only replies did, so a question asked in a
+    // new thread could go unseen.
+    try {
+      await notifyWeddingCollaborators(
+        weddingId,
+        authorUserId,
+        "COMMENT_ADDED",
+        `New comment on "${targetLabel}": ${input.body.slice(0, 120)}`,
+        // TS-168: as for replies, the email points to the app rather than carrying the comment.
+        { emailMessage: `There's a new comment on "${targetLabel}" — open Seatwise to read it.` }
+      );
+    } catch (err) {
+      console.error("Saved, but notifying the wedding's members failed:", err);
+    }
   }
 
   const { rows } = await pool.query(`${SELECT_COMMENT} WHERE c.id = $1`, [id]);
