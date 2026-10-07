@@ -27,6 +27,7 @@ import {
   useUpAccountEmailAllowance,
 } from "../support/testDatabase.js";
 import { waitUntilSafelyInsideUtcDay } from "../support/utcDay.js";
+import { patchWedding } from "../data/api.js";
 
 type RsvpEmail = { emailed: boolean; emailFailed: boolean; emailLimited: boolean; recipientLimited: boolean };
 type RsvpLink = { url: string; emailed: boolean; emailFailed: boolean; recentlyEmailed?: boolean };
@@ -104,11 +105,11 @@ defineQualityTest(
     });
 
     await test.step("A wedding's name can't hold a phone number", async () => {
-      const refused = await context.request.patch(`/api/v1/weddings/${w}`, { data: { name: "Call 1 800 555 0199 now" } });
+      const refused = await patchWedding(context.request, w, { data: { name: "Call 1 800 555 0199 now" } });
       expect(refused.status()).toBe(422);
       expect(JSON.stringify(await refused.json())).toContain("phone number");
       const allowed = tagTestName(`Ana & Bo 2026 ${uniqueToken(testInfo.workerIndex)}`);
-      expect((await context.request.patch(`/api/v1/weddings/${w}`, { data: { name: allowed } })).ok()).toBe(true);
+      expect((await patchWedding(context.request, w, { data: { name: allowed } })).ok()).toBe(true);
     });
   },
 );

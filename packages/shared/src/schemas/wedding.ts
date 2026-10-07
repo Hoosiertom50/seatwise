@@ -126,9 +126,10 @@ export type CreateWeddingInput = z.infer<typeof createWeddingSchema>;
 // stored one (see sideLabelsClash).
 // TS-214: expectedRevision is the settingsRevision the change is based on -- a save made from an
 // older copy is refused (409, with the latest settings) instead of putting back another tab's change.
+// Required (Copilot review): a save without it used to skip the check altogether.
 export const updateWeddingSchema = weddingBaseSchema
   .partial()
-  .extend({ expectedRevision: expectedRevisionField })
+  .extend({ expectedRevision: expectedRevisionField.unwrap() })
   .superRefine(checkSideLabels);
 export type UpdateWeddingInput = z.infer<typeof updateWeddingSchema>;
 

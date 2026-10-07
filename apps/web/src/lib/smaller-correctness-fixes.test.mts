@@ -161,3 +161,10 @@ test("money limits are said in plain dollars, never cents", () => {
   assert.equal(setBudgetSchema.safeParse({ budgetCents: 1_000_000_000 }).success, true);
   assert.doesNotMatch(budget.error!.issues[0].message, /\d{5,}/);
 });
+
+// TS-214 (Copilot review on PR #102): a wedding-settings save must say which version it's based on
+// -- without it, it used to skip the "changed since you opened them" check altogether.
+test("a wedding-settings save without the version it's based on is refused", () => {
+  assert.equal(updateWeddingSchema.safeParse({ venueName: "The Old Barn" }).success, false);
+  assert.equal(updateWeddingSchema.safeParse({ venueName: "The Old Barn", expectedRevision: 3 }).success, true);
+});

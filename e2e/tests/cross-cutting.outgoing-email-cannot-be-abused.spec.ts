@@ -14,6 +14,7 @@ import { expect, defineQualityTest, test } from "../fixtures/index.js";
 import { uniqueToken } from "../data/ids.js";
 import { SignupPage } from "../pages/SignupPage.js";
 import { ageTestAccount } from "../support/testDatabase.js";
+import { patchWedding } from "../data/api.js";
 
 defineQualityTest(
   {
@@ -91,7 +92,7 @@ defineQualityTest(
     });
 
     await test.step("A wedding name that reads as a web address is refused", async () => {
-      const res = await context.request.patch(`/api/v1/weddings/${w}`, {
+      const res = await patchWedding(context.request, w, {
         data: { name: "Claim your gift at evil.com" },
       });
       expect(res.status()).toBe(422);

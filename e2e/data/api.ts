@@ -8,7 +8,21 @@
  * its own.
  */
 
-import type { APIRequestContext } from "@playwright/test";
+import type { APIRequestContext, APIResponse } from "@playwright/test";
+
+/**
+ * TS-214: saves wedding settings (PATCH .../weddings/:weddingId) the way the app does -- with the
+ * settingsRevision the change is based on, read first. A save without it is refused (Copilot review).
+ */
+export async function patchWedding(
+  request: APIRequestContext,
+  weddingId: string,
+  options: { data: Record<string, unknown> },
+): Promise<APIResponse> {
+  const current = await request.get(`/api/v1/weddings/${weddingId}`);
+  const revision = current.ok() ? ((await current.json()) as { wedding: { settingsRevision?: number } }).wedding.settingsRevision : undefined;
+  return request.patch(`/api/v1/weddings/${weddingId}`, { data: { expectedRevision: revision ?? 0, ...options.data } });
+}
 
 export class UnsupportedCleanupError extends Error {
   constructor(message: string) {
@@ -632,7 +646,7 @@ export class WeddingDataSetup {
       sideLabel2?: string;
     },
   ): Promise<void> {
-    const res = await this.request.patch(`/api/v1/weddings/${weddingId}`, { data: input });
+    const res = await patchWedding(this.request, weddingId, { data: input });
     await assertOk(res, `updateWedding(${weddingId}, ${JSON.stringify(input)})`);
   }
 

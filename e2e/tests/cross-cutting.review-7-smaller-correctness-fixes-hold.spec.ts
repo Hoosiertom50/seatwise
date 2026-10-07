@@ -14,6 +14,7 @@ import { CollaboratorsTabPage } from "../pages/CollaboratorsTabPage.js";
 import { BudgetTabPage } from "../pages/BudgetTabPage.js";
 import { VendorViewPage } from "../pages/VendorViewPage.js";
 import { TimelineTabPage } from "../pages/TimelineTabPage.js";
+import { patchWedding } from "../data/api.js";
 
 
 defineQualityTest(
@@ -103,7 +104,7 @@ defineQualityTest(
     });
 
     await test.step("A cutoff after the wedding date asks too", async () => {
-      expect((await context.request.patch(`/api/v1/weddings/${w}`, { data: { eventDate: "2030-06-01" } })).ok()).toBe(true);
+      expect((await patchWedding(context.request, w, { data: { eventDate: "2030-06-01" } })).ok()).toBe(true);
       await settings.goto(w);
       await settings.setAndLeave(settings.rsvpCutoffInput(), "2030-07-01");
       await expect(question).toContainText("after the wedding date");

@@ -100,7 +100,10 @@ export async function POST(req: NextRequest, { params }: Params) {
     // TS-203: an email that may have gone out after all (the mail server went quiet) stays counted.
     emailWentOut = emailMayHaveGone(sent);
     // TS-203: so accepting it confirms the invitee's address (see acceptInvite). Not when the
-    // owner is handed the link to send some other way.
+    // owner is handed the link to send some other way -- and that includes an email that only may
+    // have gone out (Copilot review): the owner gets the link then too, and a link they pass on by
+    // some other route proves nothing about the invitee's inbox. So an unconfirmed invitee who did
+    // get that email confirms their address first (the link in their sign-up email), as before.
     if (emailed) {
       await markInviteEmailed(invite.id).catch((err) => console.error("Couldn't record that an invite was emailed:", err));
     }

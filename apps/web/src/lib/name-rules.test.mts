@@ -51,7 +51,7 @@ test("new passwords are capped at 72 bytes, counting multi-byte letters", () => 
 
 // TS-171: a wedding's name can't carry a phone number.
 test("wedding names with 7 or more digits in a row (ignoring spaces, hyphens, periods and commas) are refused", () => {
-  const name = (v: string) => updateWeddingSchema.safeParse({ name: v });
+  const name = (v: string) => updateWeddingSchema.safeParse({ expectedRevision: 0, name: v });
   for (const v of [
     "Your account is suspended. Call 1 800 555 0199 now!",
     "Call 800-555-0199",
@@ -155,7 +155,7 @@ test("phone numbers are caught whatever separates the digits; years, dates and r
   for (const v of ["Ana & Bo 2026", "Room 101 & 102", "Est. 2026", "10-5-26", "Party of 12 on 10-5-26", "Ana & Bo, 2026, Table 12"]) {
     assert.equal(looksLikePhoneNumber(v), false, v);
   }
-  assert.equal(updateWeddingSchema.safeParse({ name: "Call 800, 555, 1234" }).success, false);
+  assert.equal(updateWeddingSchema.safeParse({ expectedRevision: 0, name: "Call 800, 555, 1234" }).success, false);
 });
 
 // Look-alike letters, written by code point so they can be seen in the source: Cyrillic а (0x430),

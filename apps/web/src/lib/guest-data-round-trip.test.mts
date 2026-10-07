@@ -69,10 +69,10 @@ test("side names equal to 'Both' or to each other (any case) are refused, creati
   assert.equal(createWeddingSchema.safeParse({ ...base, sideLabel1: "Alex", sideLabel2: "Jordan" }).success, true);
   // The defaults (Bride / Groom) are fine.
   assert.equal(createWeddingSchema.safeParse(base).success, true);
-  assert.equal(failsWith(updateWeddingSchema.safeParse({ sideLabel1: "both" })), true);
-  assert.equal(failsWith(updateWeddingSchema.safeParse({ sideLabel1: "Sam", sideLabel2: "SAM" })), true);
-  assert.equal(updateWeddingSchema.safeParse({ sideLabel1: "Sam" }).success, true);
-  assert.equal(updateWeddingSchema.safeParse({ venueName: "The Barn" }).success, true);
+  assert.equal(failsWith(updateWeddingSchema.safeParse({ expectedRevision: 0, sideLabel1: "both" })), true);
+  assert.equal(failsWith(updateWeddingSchema.safeParse({ expectedRevision: 0, sideLabel1: "Sam", sideLabel2: "SAM" })), true);
+  assert.equal(updateWeddingSchema.safeParse({ expectedRevision: 0, sideLabel1: "Sam" }).success, true);
+  assert.equal(updateWeddingSchema.safeParse({ expectedRevision: 0, venueName: "The Barn" }).success, true);
   // The route checks one name against the other, stored one.
   assert.equal(sideLabelsClash("Groom", "groom"), true);
   assert.equal(sideLabelsClash("Bothwell", "Groom"), false);

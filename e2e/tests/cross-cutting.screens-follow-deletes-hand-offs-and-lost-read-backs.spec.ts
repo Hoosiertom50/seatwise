@@ -18,6 +18,7 @@ import { CollaboratorsTabPage } from "../pages/CollaboratorsTabPage.js";
 import { DayOfTabPage } from "../pages/DayOfTabPage.js";
 import { TablesTabPage } from "../pages/TablesTabPage.js";
 import { WeddingDetailPage } from "../pages/WeddingDetailPage.js";
+import { patchWedding } from "../data/api.js";
 
 const GUEST_PATCH = /\/api\/v1\/weddings\/[^/]+\/guests\/[^/]+$/;
 
@@ -124,7 +125,7 @@ defineQualityTest(
       await expect(settings.peopleHeading()).toBeVisible();
 
       await test.step("The owner sets the venue, then hands the wedding over", async () => {
-        const venue = await context.request.patch(`/api/v1/weddings/${w}`, { data: { venueName: "The Old Barn" } });
+        const venue = await patchWedding(context.request, w, { data: { venueName: "The Old Barn" } });
         expect(venue.status(), await venue.text()).toBe(200);
         const collaborator = (await weddingData.listCollaborators(w)).find((c) => c.userEmail === newOwner.email)!;
         const res = await context.request.post(`/api/v1/weddings/${w}/transfer-ownership`, { data: { collaboratorId: collaborator.id } });

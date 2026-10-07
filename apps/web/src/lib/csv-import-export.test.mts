@@ -174,7 +174,7 @@ test("every free-text field refuses a NUL character", () => {
   }
   assert.equal(createVendorSchema.safeParse({ ...vendor, category: "OTHER", categoryOther: nul }).success, false);
   for (const field of ["venueName", "note", "sideLabel1", "sideLabel2"]) {
-    assert.equal(updateWeddingSchema.safeParse({ [field]: nul }).success, false, field);
+    assert.equal(updateWeddingSchema.safeParse({ expectedRevision: 0, [field]: nul }).success, false, field);
   }
   assert.equal(createTimelineEntrySchema.safeParse({ time: "16:30", description: nul }).success, false);
   assert.equal(submitGuestRsvpSchema.safeParse({ rsvpStatus: "CONFIRMED", notes: nul }).success, false);

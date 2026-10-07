@@ -9,6 +9,7 @@ import { CollaboratorsTabPage } from "../pages/CollaboratorsTabPage.js";
 import { DashboardPage } from "../pages/DashboardPage.js";
 import { uniqueToken } from "../data/ids.js";
 import { signUpFreshAccountInNewContext } from "../support/auth.js";
+import { patchWedding } from "../data/api.js";
 
 defineQualityTest(
   {
@@ -24,7 +25,7 @@ defineQualityTest(
   async ({ managedWedding, weddingData, context, browser }, testInfo) => {
     const w = managedWedding.id;
     const note = `Owner-only note ${uniqueToken(testInfo.workerIndex)}: budget is tight, keep it quiet`;
-    const saved = await context.request.patch(`/api/v1/weddings/${w}`, { data: { note } });
+    const saved = await patchWedding(context.request, w, { data: { note } });
     expect(saved.ok(), await saved.text()).toBe(true);
     const viewer = await signUpFreshAccountInNewContext(browser, testInfo.workerIndex, "viewer");
 
