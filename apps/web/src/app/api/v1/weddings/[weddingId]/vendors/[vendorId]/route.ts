@@ -7,7 +7,7 @@ import {
   VendorConflictError,
 } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
-import { errorResponse, zodErrorResponse, readJson } from "@/lib/api-response";
+import { errorResponse, zodErrorResponse, readJson, weddingDeletedResponse } from "@/lib/api-response";
 import { requireAccess } from "@/lib/access";
 
 type Params = { params: Promise<{ weddingId: string; vendorId: string }> };
@@ -29,7 +29,7 @@ export async function PATCH(req: NextRequest, { params }: Params) {
 
   const { expectedRevision, ...data } = parsed.data;
   try {
-    const updated = await updateVendorForWedding(vendorId, weddingId, data, expectedRevision);
+    const updated = await updateVendorForWedding(vendorId, weddingId, data, expectedRevision, access.actor);
     if (!updated) return errorResponse("Vendor not found", 404);
   } catch (err) {
     // FR-7.7, extended to vendors: someone else's edit landed on this vendor first -- refuse the
@@ -37,6 +37,9 @@ export async function PATCH(req: NextRequest, { params }: Params) {
     if (err instanceof VendorConflictError) {
       return NextResponse.json({ error: err.message, vendor: err.vendor }, { status: 409 });
     }
+    // TS-204: access dropped while it waited (403), or the wedding was deleted (404) -- nothing saved.
+    const refused = weddingDeletedResponse(err);
+    if (refused) return refused;
     throw err;
   }
 
@@ -52,7 +55,15 @@ export async function DELETE(req: NextRequest, { params }: Params) {
   const access = await requireAccess(weddingId, user.id, "EDIT");
   if ("error" in access) return access.error;
 
-  const deleted = await deleteVendorForWedding(vendorId, weddingId);
+  let deleted: boolean;
+  try {
+    deleted = await deleteVendorForWedding(vendorId, weddingId, access.actor);
+  } catch (err) {
+    // TS-204: access dropped while it waited (403), or the wedding was deleted (404) -- nothing saved.
+    const refused = weddingDeletedResponse(err);
+    if (refused) return refused;
+    throw err;
+  }
   if (!deleted) return errorResponse("Vendor not found", 404);
 
   return NextResponse.json({ ok: true });

@@ -44,7 +44,9 @@ export async function PATCH(req: NextRequest, { params }: Params) {
       planVersionId,
       weddingId,
       parsed.data.label,
-      parsed.data.expectedRevision
+      parsed.data.expectedRevision,
+      // TS-204: read again under the plan's lock.
+      access.actor
     );
     if (!planVersion) return errorResponse("Plan version not found", 404);
     return NextResponse.json({ planVersion });

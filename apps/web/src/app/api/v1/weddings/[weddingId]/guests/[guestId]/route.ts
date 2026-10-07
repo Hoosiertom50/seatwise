@@ -88,7 +88,7 @@ export async function PATCH(req: NextRequest, { params }: Params) {
 
   let updated: Awaited<ReturnType<typeof updateGuestForWedding>>;
   try {
-    updated = await updateGuestForWedding(guestId, weddingId, rest, expectedRevision, user.id);
+    updated = await updateGuestForWedding(guestId, weddingId, rest, expectedRevision, user.id, access.actor);
     if (!updated) return errorResponse("Guest not found", 404);
   } catch (err) {
     // FR-7.7, extended to guests: someone else's edit landed on this guest first -- refuse the
@@ -186,7 +186,7 @@ export async function DELETE(req: NextRequest, { params }: Params) {
 
   let deleted: boolean;
   try {
-    deleted = await deleteGuestForWedding(guestId, weddingId, user.id);
+    deleted = await deleteGuestForWedding(guestId, weddingId, user.id, access.actor);
   } catch (err) {
     // TS-187: lost a race with another change (nothing saved) -- 409, not a server error.
     const conflict = concurrentChangeResponse(err);

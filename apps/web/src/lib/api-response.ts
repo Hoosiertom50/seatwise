@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import type { ZodError } from "zod";
-import { AccessChangedError, PlanSourceChangedError, isWeddingDeletedError } from "@seatwise/db";
+import { AccessChangedError, PlanSourceChangedError, WeddingCapError, isWeddingDeletedError } from "@seatwise/db";
 import { BODY_TOO_LARGE_MESSAGE, declaresBodyTooLarge, isNonJsonBody, readBodyTextWithin } from "./json-body";
 
 export function errorResponse(
@@ -75,6 +75,13 @@ export const WEDDING_DELETED_MESSAGE = "This wedding was deleted — nothing was
 // while the wedding was being deleted: the delete wins, and the database refuses the new row
 // (23503 on its wedding) -- answered 404 "This wedding was deleted", not a server error. Returns
 // null for anything else.
+// TS-204: also the person's access dropping while the change waited (403, nothing saved) -- every
+// change now re-reads it under its lock, so every route's error handling has to say so.
+// TS-205: and a change that would take the wedding past one of its caps (422, with the plain
+// message, e.g. "A wedding can have up to 300 tables...").
 export function weddingDeletedResponse(err: unknown) {
-  return isWeddingDeletedError(err) ? errorResponse(WEDDING_DELETED_MESSAGE, 404) : null;
+  if (isWeddingDeletedError(err)) return errorResponse(WEDDING_DELETED_MESSAGE, 404);
+  if (err instanceof AccessChangedError) return errorResponse(err.message, 403);
+  if (err instanceof WeddingCapError) return errorResponse(err.message, 422);
+  return null;
 }

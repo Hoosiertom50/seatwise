@@ -52,7 +52,7 @@ export async function POST(req: NextRequest, { params }: Params) {
     guest = await createGuest(weddingId, {
       ...parsed.data,
       ...(parsed.data.rsvpStatus === "DECLINED" && !explicitAttendance ? { dayOfAttendance: "NOT_ATTENDING" as const } : {}),
-    });
+    }, access.actor);
   } catch (err) {
     // TS-195: the wedding was deleted while this was being saved -- 404, not a server error.
     const gone = weddingDeletedResponse(err);

@@ -1,6 +1,8 @@
 import { randomUUID } from "crypto";
 import { pool, beginTransaction } from "../pool";
 import { lockCurrentPlan, lockRestrictedLists } from "./seat-checks";
+import { inWeddingChange, lockWeddingRow, recheckActorAccess, type ActorAccess } from "./wedding-lock";
+import { assertWeddingHasRoom } from "./wedding-caps";
 
 export type RelationshipType =
   | "MUST_SIT_TOGETHER"
@@ -114,7 +116,9 @@ async function findRuleChainConflict(
 
 export async function createRelationship(
   weddingId: string,
-  input: { guestAId: string; guestBId: string; type: RelationshipType }
+  input: { guestAId: string; guestBId: string; type: RelationshipType },
+  /** TS-204: the access the request was let in with -- read again under the wedding's lock. */
+  actor?: ActorAccess
 ): Promise<RelationshipRow> {
   if (input.guestAId === input.guestBId) {
     throw new RelationshipConflictError("A guest can't have a relationship with themselves.");
@@ -132,9 +136,14 @@ export async function createRelationship(
     // Restricted table's list save takes -- so a new rule and a new list can't each pass their
     // checks against the other's old state. That also puts two new rules for the same wedding
     // one after the other, so the rule-chain check below always sees every other rule.
+    // TS-205: the wedding's lock before them (the usual order), so the cap below counts rules
+    // added at the same moment in turn; TS-204: then the person's access, read again.
+    await lockWeddingRow(client, weddingId);
+    if (actor) await recheckActorAccess(client, weddingId, actor);
     await lockCurrentPlan(client, weddingId);
     await lockRestrictedLists(client, weddingId);
     await client.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [`relationship:${weddingId}:${guestAId}:${guestBId}`]);
+    await assertWeddingHasRoom(client, weddingId, "relationships", 1);
 
     // FR-0.1: a hard rule can never be left violated. Two guests can't simultaneously be
     // required to sit together and forbidden from sitting together — block that outright.
@@ -267,11 +276,15 @@ export async function listRelationshipsForWedding(weddingId: string): Promise<Re
 // seats can be re-checked -- a flag the rule caused clears once it's gone.
 export async function deleteRelationshipForWedding(
   id: string,
-  weddingId: string
+  weddingId: string,
+  /** TS-204: the access the request was let in with -- read again as the rule is removed. */
+  actor?: ActorAccess
 ): Promise<{ guestAId: string; guestBId: string } | null> {
-  const { rows } = await pool.query(
-    `DELETE FROM "guest_relationships" WHERE id = $1 AND "weddingId" = $2 RETURNING "guestAId", "guestBId"`,
-    [id, weddingId]
-  );
-  return rows[0] ?? null;
+  return inWeddingChange(weddingId, actor, async (client) => {
+    const { rows } = await client.query(
+      `DELETE FROM "guest_relationships" WHERE id = $1 AND "weddingId" = $2 RETURNING "guestAId", "guestBId"`,
+      [id, weddingId]
+    );
+    return rows[0] ?? null;
+  });
 }

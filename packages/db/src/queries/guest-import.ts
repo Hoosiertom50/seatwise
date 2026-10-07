@@ -2,6 +2,7 @@ import { randomUUID } from "crypto";
 import { pool, beginTransaction } from "../pool";
 import { encryptText, decryptText } from "../crypto";
 import { recheckActorAccess, WeddingDeletedError, type ActorAccess } from "./wedding-lock";
+import { assertWeddingHasRoom } from "./wedding-caps";
 import {
   lockCurrentPlan,
   lockRestrictedLists,
@@ -511,6 +512,8 @@ export async function commitGuestImport(
     }
 
     if (inserts.length > 0) {
+      // TS-205: the wedding's guest cap, counted under the wedding's lock held since the start.
+      await assertWeddingHasRoom(client, weddingId, "guests", inserts.length);
       await client.query(
         `INSERT INTO "guests"
            (id, "weddingId", "firstName", "lastName", "partyName", headcount, tier, "rsvpStatus",

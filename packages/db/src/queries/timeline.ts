@@ -1,5 +1,8 @@
 import { randomUUID } from "crypto";
+import type { PoolClient } from "pg";
 import { pool, beginTransaction } from "../pool";
+import { inWeddingChange, recheckActorAccess, type ActorAccess } from "./wedding-lock";
+import { assertWeddingHasRoom } from "./wedding-caps";
 
 // TS-18 (FR-13.1/FR-13.2): a per-wedding, chronological run-of-show -- its own record, entirely
 // independent of guests/tables/rules/seating plans. Always listed by (time, sortOrder): time is
@@ -67,18 +70,33 @@ export interface CreateTimelineEntryData {
 
 // FR-13.1: a brand-new entry is appended after any existing entries that already share its exact
 // time, rather than defaulting to 0 and landing arbitrarily among them.
+// TS-204: in one transaction under the wedding's lock, with the person's access read again;
+// TS-205: and refused past the wedding's cap on timeline entries (see wedding-caps.ts).
 export async function createTimelineEntry(
   weddingId: string,
-  input: CreateTimelineEntryData
+  input: CreateTimelineEntryData,
+  actor?: ActorAccess
 ): Promise<TimelineEntryRow> {
+  return inWeddingChange(
+    weddingId,
+    actor,
+    async (client) => {
+      await assertWeddingHasRoom(client, weddingId, "timelineEntries", 1);
+      return insertTimelineEntry(client, weddingId, input);
+    },
+    { lockWedding: true }
+  );
+}
+
+async function insertTimelineEntry(client: PoolClient, weddingId: string, input: CreateTimelineEntryData): Promise<TimelineEntryRow> {
   const id = randomUUID();
-  const { rows: maxRows } = await pool.query(
+  const { rows: maxRows } = await client.query(
     `SELECT COALESCE(MAX("sortOrder"), -1) AS "maxSortOrder" FROM "timeline_entries" WHERE "weddingId" = $1 AND time = $2`,
     [weddingId, input.time]
   );
   const sortOrder = maxRows[0].maxSortOrder + 1;
 
-  const { rows } = await pool.query(
+  const { rows } = await client.query(
     `INSERT INTO "timeline_entries" (id, "weddingId", time, description, "sortOrder", "updatedAt")
      VALUES ($1, $2, $3, $4, $5, now())
      RETURNING ${COLUMNS}`,
@@ -91,7 +109,9 @@ export async function updateTimelineEntry(
   id: string,
   weddingId: string,
   input: Partial<CreateTimelineEntryData>,
-  expectedRevision?: number
+  expectedRevision?: number,
+  /** TS-204: the access the edit was let in with -- read again under the entry's lock. */
+  actor?: ActorAccess
 ): Promise<TimelineEntryRow | null> {
   const fields: string[] = [];
   const values: unknown[] = [];
@@ -117,6 +137,8 @@ export async function updateTimelineEntry(
       `SELECT ${COLUMNS} FROM "timeline_entries" WHERE id = $1 AND "weddingId" = $2 FOR NO KEY UPDATE`,
       [id, weddingId]
     );
+    // TS-204: the person's access read again under the lock above.
+    if (actor) await recheckActorAccess(client, weddingId, actor);
     if (!current[0]) {
       await client.query("ROLLBACK").catch(() => {});
       return null;
@@ -151,12 +173,12 @@ export async function updateTimelineEntry(
   }
 }
 
-export async function deleteTimelineEntry(id: string, weddingId: string): Promise<boolean> {
-  const { rowCount } = await pool.query(
-    `DELETE FROM "timeline_entries" WHERE id = $1 AND "weddingId" = $2`,
-    [id, weddingId]
-  );
-  return (rowCount ?? 0) > 0;
+export async function deleteTimelineEntry(id: string, weddingId: string, actor?: ActorAccess): Promise<boolean> {
+  // TS-204: with the person's access read again as it's removed (see inWeddingChange).
+  return inWeddingChange(weddingId, actor, async (client) => {
+    const { rowCount } = await client.query(`DELETE FROM "timeline_entries" WHERE id = $1 AND "weddingId" = $2`, [id, weddingId]);
+    return (rowCount ?? 0) > 0;
+  });
 }
 
 // FR-13.2: "reordered" -- swaps this entry's sortOrder with whichever neighbor sharing its exact
@@ -165,7 +187,9 @@ export async function deleteTimelineEntry(id: string, weddingId: string): Promis
 export async function reorderTimelineEntry(
   id: string,
   weddingId: string,
-  direction: "UP" | "DOWN"
+  direction: "UP" | "DOWN",
+  /** TS-204: the access the request was let in with -- read again under the group's lock. */
+  actor?: ActorAccess
 ): Promise<TimelineEntryRow | null> {
   const client = await pool.connect();
   try {
@@ -186,6 +210,8 @@ export async function reorderTimelineEntry(
        ORDER BY ${ENTRY_ORDER} FOR NO KEY UPDATE`,
       [weddingId, entryRows[0].time]
     );
+    // TS-204: the person's access read again under the lock above.
+    if (actor) await recheckActorAccess(client, weddingId, actor);
     const index = group.findIndex((g) => g.id === id);
     // TS-174: its time was changed (or it was removed) between the two reads above -- before, this
     // fell through to a TypeError and a server error.

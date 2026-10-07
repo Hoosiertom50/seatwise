@@ -16,11 +16,13 @@ import {
   createPlanVersionWithAssignments,
   getPlanVersionDetail,
   getWeddingById,
+  type UserRow,
 } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
 import { errorResponse, zodErrorResponse, concurrentChangeResponse, readJson } from "@/lib/api-response";
-import { requireAccess, canManageApproval, actorAccessFor } from "@/lib/access";
+import { requireAccess, mayManageApproval, approvalActor, type GrantedAccess } from "@/lib/access";
 import { SAVED_AS_DRAFT_BECAUSE_APPROVED, MADE_CURRENT_BECAUSE_NO_CURRENT_PLAN } from "@/lib/plan-approval-text";
+import { limitedWeddingWork } from "@/lib/rate-limit";
 
 type Params = { params: Promise<{ weddingId: string }> };
 
@@ -31,6 +33,12 @@ export async function POST(req: NextRequest, { params }: Params) {
   const { weddingId } = await params;
   const access = await requireAccess(weddingId, user.id, "EDIT");
   if ("error" in access) return access.error;
+
+  // TS-205: an hourly limit per account (each Generate stores a whole new plan version).
+  return limitedWeddingWork("generate", user.id, () => generatePlan(req, weddingId, user, access));
+}
+
+async function generatePlan(req: NextRequest, weddingId: string, user: UserRow, access: GrantedAccess): Promise<Response> {
 
   // FR-5.6: an empty/absent body defaults every field to unset, which the schema treats as
   // makeCurrent's own default (true) below -- existing callers that generate with no body at all
@@ -122,7 +130,8 @@ export async function POST(req: NextRequest, { params }: Params) {
   // TS-179 (Tom's decision): someone who can't undo an approval can still generate, but if the
   // current plan is approved the result is saved as a comparison draft and the approved plan stays
   // current. The plan's status is checked again as the version is saved, under the wedding lock.
-  const mayReplaceApproved = await canManageApproval(weddingId, user.id, access.accessLevel);
+  // TS-204: from the same access reading the save re-checks under the wedding lock.
+  const mayReplaceApproved = mayManageApproval(access);
 
   let planVersionId: string;
   let savedAsDraftBecauseApproved: boolean;
@@ -142,7 +151,7 @@ export async function POST(req: NextRequest, { params }: Params) {
       makeCurrent,
       mayReplaceApproved,
       // TS-195: read again under the wedding lock -- refused if it dropped while this was worked out.
-      actorAccess: await actorAccessFor(weddingId, user.id, access.accessLevel),
+      actorAccess: approvalActor(access),
     }));
   } catch (err) {
     const conflict = concurrentChangeResponse(err);

@@ -10,7 +10,7 @@ import {
 } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
 import { errorResponse, zodErrorResponse, concurrentChangeResponse, readJson } from "@/lib/api-response";
-import { requireAccess, canManageApproval, actorAccessFor } from "@/lib/access";
+import { requireAccess, mayManageApproval as mayManageApprovalFor, approvalActor } from "@/lib/access";
 
 type Params = { params: Promise<{ weddingId: string; planVersionId: string }> };
 
@@ -41,7 +41,8 @@ export async function POST(req: NextRequest, { params }: Params) {
   // the same people who can approve -- before, any Edit collaborator could withdraw it.
   // TS-179: these are also passed to setPlanVersionStatus, which checks them again under the lock
   // against the plan's real status -- the read below is only for a quick, friendly refusal.
-  const mayManageApproval = await canManageApproval(weddingId, user.id, access.accessLevel);
+  // TS-204: from the same access reading the change re-checks under its lock (not read again).
+  const mayManageApproval = mayManageApprovalFor(access);
   const mayMoveDraftAndReview = access.accessLevel === "OWNER" || access.accessLevel === "EDIT";
   // TS-189: a request that names the copy it was made from (expectedRevision) is judged entirely
   // under the plan's lock, stale copy first -- so someone acting on a plan that changed since they
@@ -85,7 +86,7 @@ export async function POST(req: NextRequest, { params }: Params) {
         mayMoveDraftAndReview,
         sawApproved,
         // TS-195: what these were worked out from, read again under the plan's lock.
-        judgedAccess: await actorAccessFor(weddingId, user.id, access.accessLevel),
+        judgedAccess: approvalActor(access),
       }
     );
     if (!planVersion) return errorResponse("Plan version not found", 404);

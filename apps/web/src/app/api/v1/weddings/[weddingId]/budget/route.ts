@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { setBudgetSchema } from "@seatwise/shared";
 import { getBudgetSummaryForWedding, setBudgetForWedding, BudgetConflictError } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
-import { errorResponse, zodErrorResponse, readJson } from "@/lib/api-response";
+import { errorResponse, zodErrorResponse, readJson, weddingDeletedResponse } from "@/lib/api-response";
 import { requireAccess } from "@/lib/access";
 
 type Params = { params: Promise<{ weddingId: string }> };
@@ -37,13 +37,16 @@ export async function PATCH(req: NextRequest, { params }: Params) {
   if (!parsed.success) return zodErrorResponse(parsed.error);
 
   try {
-    await setBudgetForWedding(weddingId, parsed.data.budgetCents, parsed.data.expectedRevision);
+    await setBudgetForWedding(weddingId, parsed.data.budgetCents, parsed.data.expectedRevision, access.actor);
   } catch (err) {
     // TS-92: stale save -- refused, with the current figure so the UI can show the latest.
     if (err instanceof BudgetConflictError) {
       const summary = await getBudgetSummaryForWedding(weddingId);
       return NextResponse.json({ error: err.message, summary }, { status: 409 });
     }
+    // TS-204: access dropped while it waited (403), or the wedding was deleted (404) -- nothing saved.
+    const refused = weddingDeletedResponse(err);
+    if (refused) return refused;
     throw err;
   }
   const summary = await getBudgetSummaryForWedding(weddingId);

@@ -13,7 +13,8 @@ import {
   HISTORY_CREATED_AT,
   SEAT_ORDER,
 } from "./seat-checks";
-import { recheckActorAccess, isWeddingDeletedError, WeddingDeletedError, type ActorAccess } from "./wedding-lock";
+import { lockWeddingRow, recheckActorAccess, isWeddingDeletedError, WeddingDeletedError, type ActorAccess } from "./wedding-lock";
+import { pruneOldPlanVersions } from "./wedding-caps";
 import { RULE_WEIGHT_CONFIG, RULE_WEIGHT_CONFIG_VERSION, compareTableLabels } from "@seatwise/shared";
 
 // TS-3 (FR-0.2 AC2): a soft-rule warning must name "the applied weighting-configuration version"
@@ -411,6 +412,10 @@ export async function createPlanVersionWithAssignments(
       [randomUUID(), planVersionId, description]
     );
 
+    // TS-205: at most WEDDING_CAPS.planVersionsKept versions are kept -- the oldest that are
+    // neither approved nor current go, under the wedding's lock held since the start.
+    await pruneOldPlanVersions(client, weddingId);
+
     await client.query("COMMIT");
     return { planVersionId, savedAsDraftBecauseApproved, madeCurrentBecauseNoCurrentPlan };
   } catch (err) {
@@ -619,6 +624,12 @@ export async function setPlanVersionStatus(
   const client = await pool.connect();
   try {
     await beginTransaction(client);
+    // TS-204: the wedding's lock first (TS-195's order: wedding -> plan -> re-check). A level or
+    // role change, a removal and a hand-off all take this lock too, so one made at the same moment
+    // as this approval now waits for it, or it waits for them and the re-check below sees the new
+    // access. Before, only the plan row was locked and an approval could land after the person had
+    // been made View, a Collaborator, or had handed the wedding off.
+    await lockWeddingRow(client, weddingId);
     const { rows } = await client.query(
       // TS-187: NO KEY UPDATE -- see resyncSeatsAtTable in seat-checks.ts.
       `SELECT status, "isComplete", revision, "isCurrent" FROM "plan_versions" WHERE id = $1 AND "weddingId" = $2 FOR NO KEY UPDATE`,
@@ -893,7 +904,9 @@ export async function moveGuestAssignment(
   guestId: string,
   targetTableId: string,
   actorUserId: string,
-  expectedRevision?: number
+  expectedRevision?: number,
+  /** TS-204: the access the request was let in with -- read again under the plan's lock. */
+  actorAccess?: ActorAccess
 ): Promise<ManualMoveResult> {
   if (!(await isCurrentVersion(planVersionId, weddingId))) {
     // TS-197: with the plan that is current now, so the screen can switch to it.
@@ -1096,6 +1109,9 @@ export async function moveGuestAssignment(
   try {
     await beginTransaction(client);
     await checkPlanVersionRevision(client, planVersionId, weddingId, expectedRevision, (currentPlan) => new ManualMoveError(SUPERSEDED_EDIT_MESSAGE, currentPlan));
+    // TS-204: the person's access read again under the plan's lock -- lowered or removed while
+    // this waited: refused, nothing saved.
+    if (actorAccess) await recheckActorAccess(client, weddingId, actorAccess);
     // TS-165: the tables this move can affect, as things stand before it.
     const unitIds = unit.map((member) => member.id);
     // TS-169: attendance checked again inside the transaction -- a guest who declined by link a
@@ -1249,7 +1265,9 @@ export async function unassignGuestFromPlan(
   weddingId: string,
   guestId: string,
   actorUserId: string,
-  expectedRevision?: number
+  expectedRevision?: number,
+  /** TS-204: the access the request was let in with -- read again under the plan's lock. */
+  actorAccess?: ActorAccess
 ): Promise<ManualMoveResult> {
   if (!(await isCurrentVersion(planVersionId, weddingId))) {
     // TS-197: with the plan that is current now, so the screen can switch to it.
@@ -1272,6 +1290,9 @@ export async function unassignGuestFromPlan(
   try {
     await beginTransaction(client);
     await checkPlanVersionRevision(client, planVersionId, weddingId, expectedRevision, (currentPlan) => new ManualMoveError(SUPERSEDED_EDIT_MESSAGE, currentPlan));
+    // TS-204: the person's access read again under the plan's lock -- lowered or removed while
+    // this waited: refused, nothing saved.
+    if (actorAccess) await recheckActorAccess(client, weddingId, actorAccess);
     // TS-165: re-check the table(s) they leave, and their rule partners' tables.
     const affected = await tablesAffectedBy(client, weddingId, planVersionId, unit.map((member) => member.id));
     let seatsFreed = 0;
@@ -1362,7 +1383,8 @@ export async function setGuestAttendance(
   // TS-167: null when the guest did it themselves (declining or re-confirming through their link).
   actorUserId: string | null,
   // TS-167: the RSVP route sends its own notification about the response, so it skips this one.
-  { notify = true }: { notify?: boolean } = {}
+  // TS-204: actorAccess -- the access a planner's request was let in with, read again under the locks.
+  { notify = true, actorAccess }: { notify?: boolean; actorAccess?: ActorAccess } = {}
 ): Promise<PlanVersionDetail | null> {
   const { rows: guestRows } = await pool.query(
     `SELECT id, ("firstName" || ' ' || "lastName") AS name, "dayOfAttendance"
@@ -1397,6 +1419,10 @@ export async function setGuestAttendance(
     // list below -- so the lists' lock comes next, in the usual order (plan, lists, then rows).
     const plannerReturning = attendance === "ATTENDING" && actorUserId !== null;
     if (plannerReturning) await lockRestrictedLists(client, weddingId);
+    // TS-204: the person's access read again under the plan's lock -- lowered or removed while
+    // this waited: refused, nothing saved.
+    if (actorAccess) await recheckActorAccess(client, weddingId, actorAccess);
+
     const { rows: lockedGuest } = await client.query(
       `SELECT "dayOfAttendance" FROM "guests" WHERE id = $1 FOR NO KEY UPDATE`,
       [guestId]
@@ -1467,7 +1493,9 @@ export async function swapGuestAssignments(
   guestAId: string,
   guestBId: string,
   actorUserId: string,
-  expectedRevision?: number
+  expectedRevision?: number,
+  /** TS-204: the access the request was let in with -- read again under the plan's lock. */
+  actorAccess?: ActorAccess
 ): Promise<ManualMoveResult> {
   if (!(await isCurrentVersion(planVersionId, weddingId))) {
     // TS-197: with the plan that is current now, so the screen can switch to it.
@@ -1701,6 +1729,9 @@ export async function swapGuestAssignments(
   try {
     await beginTransaction(client);
     await checkPlanVersionRevision(client, planVersionId, weddingId, expectedRevision, (currentPlan) => new SwapError(SUPERSEDED_EDIT_MESSAGE, currentPlan));
+    // TS-204: the person's access read again under the plan's lock -- lowered or removed while
+    // this waited: refused, nothing saved.
+    if (actorAccess) await recheckActorAccess(client, weddingId, actorAccess);
     // TS-181: each group is seated at its new table now (see SEAT_ORDER).
     for (const member of unitB) {
       await client.query(
@@ -2052,6 +2083,9 @@ export async function restorePlanVersion(
       [randomUUID(), newVersionId, description, actorUserId]
     );
 
+    // TS-205: as Generate -- the oldest versions that are neither approved nor current go past the cap.
+    await pruneOldPlanVersions(client, weddingId);
+
     await client.query("COMMIT");
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});
@@ -2080,13 +2114,19 @@ export async function setPlanVersionLabel(
   id: string,
   weddingId: string,
   label: string,
-  expectedRevision?: number
+  expectedRevision?: number,
+  /** TS-204: the access the request was let in with -- read again under the plan's lock. */
+  actorAccess?: ActorAccess
 ): Promise<PlanVersionDetail | null> {
   const trimmed = label.trim();
   const client = await pool.connect();
   try {
     await beginTransaction(client);
     await checkPlanVersionRevision(client, id, weddingId, expectedRevision);
+    // TS-204: the person's access read again under the plan's lock -- lowered or removed while
+    // this waited: refused, nothing saved.
+    if (actorAccess) await recheckActorAccess(client, weddingId, actorAccess);
+
     const { rows } = await client.query(
       `UPDATE "plan_versions" SET label = $1, revision = revision + 1 WHERE id = $2 AND "weddingId" = $3 RETURNING id`,
       [trimmed.length > 0 ? trimmed : null, id, weddingId]

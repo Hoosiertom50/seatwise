@@ -1,7 +1,8 @@
 import { randomUUID } from "crypto";
 import { pool, beginTransaction } from "../pool";
 import { compareTableLabels, cutToLimit } from "@seatwise/shared";
-import { lockWeddingRow } from "./wedding-lock";
+import { lockWeddingRow, recheckActorAccess, type ActorAccess } from "./wedding-lock";
+import { assertWeddingHasRoom } from "./wedding-caps";
 
 // TS-19 (FR-14.1/FR-14.2): a template is a reusable snapshot of a wedding's table layout plus its
 // "rule-shape" (the wedding's Side-Mixing setting). It deliberately never stores anything
@@ -73,12 +74,16 @@ const TEMPLATE_TABLE_COLUMNS = `id, "templateId", label, capacity, "isRestricted
 export async function createTemplateFromWedding(
   ownerId: string,
   weddingId: string,
-  name: string
+  name: string,
+  /** TS-204: the access the request was let in with -- read again before the wedding is copied. */
+  actor?: ActorAccess
 ): Promise<SeatingTemplateDetail> {
   const templateId = randomUUID();
   const client = await pool.connect();
   try {
     await beginTransaction(client);
+    // TS-204: the person's access read again first -- removed a moment ago: nothing copied.
+    if (actor) await recheckActorAccess(client, weddingId, actor);
 
     const { rows: weddingRows } = await client.query(
       `SELECT "sideMixing" FROM "weddings" WHERE id = $1`,
@@ -215,12 +220,17 @@ function uniqueLabel(label: string, taken: Set<string>): string {
 async function insertLayoutTables(
   client: import("pg").PoolClient,
   weddingId: string,
-  tables: LayoutTable[]
+  tables: LayoutTable[],
+  actor?: ActorAccess
 ): Promise<number> {
   // TS-195: the wedding's lock first (FOR NO KEY UPDATE), so a template added in two tabs at once,
   // or alongside a quick-create, takes turns -- each reads the labels the other just saved, and no
   // two tables end up with the same name. Also stops here, as "this wedding was deleted", if it was.
   await lockWeddingRow(client, weddingId);
+  // TS-204: the person's access read again under that lock; TS-205: and the wedding's table cap --
+  // before, adding a template saved from the same wedding doubled its tables every time.
+  if (actor) await recheckActorAccess(client, weddingId, actor);
+  await assertWeddingHasRoom(client, weddingId, "tables", tables.length);
   const { rows: existing } = await client.query<{ label: string }>(
     `SELECT label FROM "seating_tables" WHERE "weddingId" = $1`,
     [weddingId]
@@ -249,7 +259,9 @@ async function insertLayoutTables(
 export async function addTemplateTablesToWedding(
   weddingId: string,
   templateId: string,
-  userId: string
+  userId: string,
+  /** TS-204: the access the request was let in with -- read again under the wedding's lock. */
+  actor?: ActorAccess
 ): Promise<number> {
   const client = await pool.connect();
   try {
@@ -263,7 +275,7 @@ export async function addTemplateTablesToWedding(
       `SELECT ${LAYOUT_COLUMNS} FROM "seating_template_tables" WHERE "templateId" = $1 ORDER BY "sortOrder"`,
       [templateId]
     );
-    const added = await insertLayoutTables(client, weddingId, rows);
+    const added = await insertLayoutTables(client, weddingId, rows, actor);
     await client.query("COMMIT");
     return added;
   } catch (err) {

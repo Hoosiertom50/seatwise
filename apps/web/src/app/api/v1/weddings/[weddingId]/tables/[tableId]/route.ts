@@ -36,7 +36,7 @@ export async function PATCH(req: NextRequest, { params }: Params) {
   // with fewer seats than its required guests need.
   let newlyFlagged: NewlyFlaggedSeat[];
   try {
-    const result = await updateSeatingTableForWedding(tableId, weddingId, data, expectedRevision, requiredGuestIds);
+    const result = await updateSeatingTableForWedding(tableId, weddingId, data, expectedRevision, requiredGuestIds, access.actor);
     if (!result) return errorResponse("Table not found", 404);
     newlyFlagged = result.newlyFlagged;
   } catch (err) {
@@ -94,7 +94,7 @@ export async function DELETE(req: NextRequest, { params }: Params) {
   const confirmedSeatedCount = seatedParam !== null && /^\d{1,6}$/.test(seatedParam) ? Number(seatedParam) : undefined;
   let result: Awaited<ReturnType<typeof removeSeatingTable>>;
   try {
-    result = await removeSeatingTable(tableId, weddingId, user.id, confirmed, confirmedSeatedCount);
+    result = await removeSeatingTable(tableId, weddingId, user.id, confirmed, confirmedSeatedCount, access.actor);
   } catch (err) {
     // TS-187: lost a race with another change (nothing saved) -- 409, not a server error.
     const conflict = concurrentChangeResponse(err);

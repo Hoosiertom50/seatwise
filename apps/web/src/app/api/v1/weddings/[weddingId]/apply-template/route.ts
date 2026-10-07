@@ -26,7 +26,7 @@ export async function POST(req: NextRequest, { params }: Params) {
   if (!parsed.success) return zodErrorResponse(parsed.error);
 
   try {
-    const addedCount = await addTemplateTablesToWedding(weddingId, parsed.data.templateId, user.id);
+    const addedCount = await addTemplateTablesToWedding(weddingId, parsed.data.templateId, user.id, access.actor);
     const tables = await listSeatingTablesForWedding(weddingId);
     return NextResponse.json({ addedCount, tables }, { status: 201 });
   } catch (err) {

@@ -54,3 +54,19 @@ export function emailSendRefusedMessage(kind: EmailKind, reason: EmailLimitReaso
   if (reason === "day") return kind === "invites" ? TODAYS_INVITES_REACHED : ACCOUNT_DAILY_EMAIL_LIMIT_REACHED;
   return kind === "invites" ? TOO_MANY_INVITES : TOO_MANY_EMAILS;
 }
+
+// TS-205: the hourly limits on heavy work inside a wedding, per account (WEDDING_WORK_LIMITS in
+// ./rate-limit). Each says what there was a lot of, and that it's about an hour's wait.
+export type WeddingWorkKind = "generate" | "restore" | "importCommit" | "saveTemplate" | "comment";
+
+const WEDDING_WORK_WHAT: Record<WeddingWorkKind, string> = {
+  generate: "made a lot of seating plans",
+  restore: "restored a lot of plan versions",
+  importCommit: "imported a lot of guest lists",
+  saveTemplate: "saved a lot of templates",
+  comment: "posted a lot of comments",
+};
+
+export function tooMuchWeddingWorkMessage(kind: WeddingWorkKind): string {
+  return `You've ${WEDDING_WORK_WHAT[kind]} in the last hour — please wait a while and try again.`;
+}

@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { guestImportRequestSchema } from "@seatwise/shared";
-import { commitGuestImport, GuestImportError, listGuestsByWedding, GuestImportConflictError } from "@seatwise/db";
+import { commitGuestImport, GuestImportError, listGuestsByWedding, GuestImportConflictError, type UserRow } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
 import { errorResponse, zodErrorResponse, concurrentChangeResponse, readJson } from "@/lib/api-response";
-import { requireAccess, actorAccessFor } from "@/lib/access";
+import { requireAccess, type GrantedAccess } from "@/lib/access";
+import { limitedWeddingWork } from "@/lib/rate-limit";
 
 type Params = { params: Promise<{ weddingId: string }> };
 
@@ -17,6 +18,12 @@ export async function POST(req: NextRequest, { params }: Params) {
   const { weddingId } = await params;
   const access = await requireAccess(weddingId, user.id, "EDIT");
   if ("error" in access) return access.error;
+
+  // TS-205: an hourly limit per account on imports.
+  return limitedWeddingWork("importCommit", user.id, () => commitImport(req, weddingId, user, access));
+}
+
+async function commitImport(req: NextRequest, weddingId: string, user: UserRow, access: GrantedAccess): Promise<Response> {
 
   // TS-204: readJson refuses a non-JSON or oversized body (413), even one sent without a Content-Length.
   const json = await readJson(req);
@@ -35,7 +42,7 @@ export async function POST(req: NextRequest, { params }: Params) {
       // TS-180: write guests changed since the export only when the planner ticked to overwrite.
       parsed.data.overwriteChanged ?? false,
       // TS-195: read again under the import's lock -- refused if it dropped meanwhile.
-      await actorAccessFor(weddingId, user.id, access.accessLevel)
+      access.actor
     );
     const guests = await listGuestsByWedding(weddingId);
     return NextResponse.json({ result, guests });

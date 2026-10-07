@@ -33,7 +33,9 @@ export async function POST(req: NextRequest, { params }: Params) {
       parsed.data.guestAId,
       parsed.data.guestBId,
       user.id,
-      parsed.data.expectedRevision
+      parsed.data.expectedRevision,
+      // TS-204: read again under the plan's lock.
+      access.actor
     );
     return NextResponse.json({ planVersion, warnings });
   } catch (err) {

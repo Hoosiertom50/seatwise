@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { saveWeddingAsTemplateSchema } from "@seatwise/shared";
-import { createTemplateFromWedding } from "@seatwise/db";
+import { createTemplateFromWedding, type UserRow } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
-import { errorResponse, zodErrorResponse, readJson } from "@/lib/api-response";
-import { requireAccess } from "@/lib/access";
+import { errorResponse, zodErrorResponse, readJson, weddingDeletedResponse } from "@/lib/api-response";
+import { requireAccess, type GrantedAccess } from "@/lib/access";
+import { limitedWeddingWork } from "@/lib/rate-limit";
 
 type Params = { params: Promise<{ weddingId: string }> };
 
@@ -19,6 +20,12 @@ export async function POST(req: NextRequest, { params }: Params) {
   const access = await requireAccess(weddingId, user.id, "EDIT");
   if ("error" in access) return access.error;
 
+  // TS-205: an hourly limit per account on saving templates.
+  return limitedWeddingWork("saveTemplate", user.id, () => saveTemplate(req, weddingId, user, access));
+}
+
+async function saveTemplate(req: NextRequest, weddingId: string, user: UserRow, access: GrantedAccess): Promise<Response> {
+
   // TS-204: readJson refuses a non-JSON or oversized body (413), even one sent without a Content-Length.
   const json = await readJson(req);
   if (!json.ok) return json.response;
@@ -26,6 +33,14 @@ export async function POST(req: NextRequest, { params }: Params) {
   const parsed = saveWeddingAsTemplateSchema.safeParse(body);
   if (!parsed.success) return zodErrorResponse(parsed.error);
 
-  const template = await createTemplateFromWedding(user.id, weddingId, parsed.data.name);
+  let template: Awaited<ReturnType<typeof createTemplateFromWedding>>;
+  try {
+    template = await createTemplateFromWedding(user.id, weddingId, parsed.data.name, access.actor);
+  } catch (err) {
+    // TS-204: access dropped while it waited (403), or the wedding was deleted (404) -- nothing saved.
+    const refused = weddingDeletedResponse(err);
+    if (refused) return refused;
+    throw err;
+  }
   return NextResponse.json({ template }, { status: 201 });
 }

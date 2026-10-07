@@ -29,7 +29,7 @@ export async function PUT(req: NextRequest, { params }: Params) {
     // TS-120: someone already seated here who's no longer on the list is flagged, never unseated.
     // TS-173: so is someone put on the list while seated at another table (re-checked in the same
     // transaction as the save).
-    const { table, newlyFlagged } = await setRequiredGuestsForTable(tableId, weddingId, parsed.data.guestIds);
+    const { table, newlyFlagged } = await setRequiredGuestsForTable(tableId, weddingId, parsed.data.guestIds, access.actor);
     // TS-177: "this table" only for a guest actually seated at this one.
     const warnings = newlyFlagged.map(({ name, reason, tableId: flaggedAt }) =>
       reason === "restricted" && flaggedAt === tableId

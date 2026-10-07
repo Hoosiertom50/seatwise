@@ -1,6 +1,7 @@
 import { randomUUID } from "crypto";
 import { pool } from "../pool";
 import { notifyWeddingCollaborators } from "./notifications";
+import { inWeddingChange, type ActorAccess } from "./wedding-lock";
 
 export class CommentError extends Error {
   constructor(
@@ -88,7 +89,9 @@ function commentTargetGoneError(err: unknown): CommentError | null {
 export async function createComment(
   weddingId: string,
   authorUserId: string,
-  input: CreateCommentInput
+  input: CreateCommentInput,
+  /** TS-204: the access the request was let in with -- read again as the comment is saved. */
+  actor?: ActorAccess
 ): Promise<CommentRow> {
   let targetLabel: string;
   let guestId: string | null = null;
@@ -169,10 +172,12 @@ export async function createComment(
 
   const id = randomUUID();
   try {
-    await pool.query(
-      `INSERT INTO "comments" (id, "weddingId", "targetType", "guestId", "tableId", "timelineEntryId", "targetLabel", body, "authorUserId", "parentCommentId")
+    // TS-204: saved with the person's access read again in the same transaction (see inWeddingChange).
+    await inWeddingChange(weddingId, actor, (client) =>
+      client.query(
+        `INSERT INTO "comments" (id, "weddingId", "targetType", "guestId", "tableId", "timelineEntryId", "targetLabel", body, "authorUserId", "parentCommentId")
        VALUES ($1, $2, $3::"CommentTargetType", $4, $5, $6, $7, $8, $9, $10)`,
-      [
+        [
         id,
         weddingId,
         input.targetType,
@@ -183,7 +188,8 @@ export async function createComment(
         input.body,
         authorUserId,
         input.parentCommentId ?? null,
-      ]
+        ]
+      )
     );
   } catch (err) {
     // TS-195: what the comment is about was removed between the check above and saving it -- the
@@ -223,7 +229,9 @@ export async function resolveComment(
   weddingId: string,
   commentId: string,
   requesterId: string,
-  requesterCanEdit: boolean
+  requesterCanEdit: boolean,
+  /** TS-204: the access the request was let in with -- read again as the thread is resolved. */
+  actor?: ActorAccess
 ): Promise<CommentRow> {
   const { rows } = await pool.query(
     `SELECT "authorUserId" FROM "comments" WHERE id = $1 AND "weddingId" = $2`,
@@ -234,9 +242,8 @@ export async function resolveComment(
   if (comment.authorUserId !== requesterId && !requesterCanEdit) {
     throw new CommentError("Only the original commenter or an editor can resolve this comment.", "FORBIDDEN");
   }
-  await pool.query(
-    `UPDATE "comments" SET "resolvedAt" = now(), "resolvedByUserId" = $1 WHERE id = $2`,
-    [requesterId, commentId]
+  await inWeddingChange(weddingId, actor, (client) =>
+    client.query(`UPDATE "comments" SET "resolvedAt" = now(), "resolvedByUserId" = $1 WHERE id = $2`, [requesterId, commentId])
   );
 
   const { rows: updatedRows } = await pool.query(`${SELECT_COMMENT} WHERE c.id = $1`, [commentId]);

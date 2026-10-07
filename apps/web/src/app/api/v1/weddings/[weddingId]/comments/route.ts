@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createCommentSchema } from "@seatwise/shared";
-import { listCommentsForWedding, createComment, CommentError } from "@seatwise/db";
+import { listCommentsForWedding, createComment, CommentError, type UserRow } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
 import { errorResponse, zodErrorResponse, weddingDeletedResponse, readJson } from "@/lib/api-response";
-import { requireAccess } from "@/lib/access";
+import { requireAccess, type GrantedAccess } from "@/lib/access";
+import { limitedWeddingWork } from "@/lib/rate-limit";
 
 type Params = { params: Promise<{ weddingId: string }> };
 
@@ -29,6 +30,12 @@ export async function POST(req: NextRequest, { params }: Params) {
   const access = await requireAccess(weddingId, user.id, "COMMENT");
   if ("error" in access) return access.error;
 
+  // TS-205: an hourly limit per account on comments (each can notify and email everyone).
+  return limitedWeddingWork("comment", user.id, () => postComment(req, weddingId, user, access));
+}
+
+async function postComment(req: NextRequest, weddingId: string, user: UserRow, access: GrantedAccess): Promise<Response> {
+
   // TS-204: readJson refuses a non-JSON or oversized body (413), even one sent without a Content-Length.
   const json = await readJson(req);
   if (!json.ok) return json.response;
@@ -37,7 +44,7 @@ export async function POST(req: NextRequest, { params }: Params) {
   if (!parsed.success) return zodErrorResponse(parsed.error);
 
   try {
-    const comment = await createComment(weddingId, user.id, parsed.data);
+    const comment = await createComment(weddingId, user.id, parsed.data, access.actor);
     return NextResponse.json({ comment }, { status: 201 });
   } catch (err) {
     if (err instanceof CommentError) {

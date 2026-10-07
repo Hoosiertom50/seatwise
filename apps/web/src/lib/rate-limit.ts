@@ -1,6 +1,12 @@
 import { NextResponse } from "next/server";
 import { accountDailyEmailKey, accountDailyEmailLimit, hitRateLimit, peekRateLimit, undoRateLimitHit } from "@seatwise/db";
-import { emailLimitReason, tooManyAttemptsMessage, type EmailLimitReason } from "./limit-messages";
+import {
+  emailLimitReason,
+  tooManyAttemptsMessage,
+  tooMuchWeddingWorkMessage,
+  type EmailLimitReason,
+  type WeddingWorkKind,
+} from "./limit-messages";
 
 // TS-98: limits for the public, unauthenticated guest RSVP link -- the one part of the API anyone
 // on the internet can call without signing in. Generous enough that no real guest (or a household
@@ -321,4 +327,50 @@ export const RSVP_RESEND_COOLDOWN_SECONDS = 3600;
  */
 export function rsvpLinkCooldownKey(guestId: string, email: string, linkHash: string): string {
   return `email:rsvp-link:${guestId}:${email.trim().toLowerCase()}:${linkHash.slice(0, 16)}`;
+}
+
+// TS-205: per-account hourly limits on the heavy things a signed-in person can do over and over
+// inside a wedding -- each Generate or Restore stores a whole new plan version, an import writes
+// up to thousands of guests, a template copies every table, and comments can email everyone.
+// Before, only creating and copying weddings were limited. Far above what planning takes (a
+// planner trying ideas generates a few dozen times in an hour at most). A refused request, or one
+// that then saves nothing, is given back (countOr429's giveBack).
+export const WEDDING_WORK_LIMITS: Record<WeddingWorkKind, { limit: number; windowSeconds: number }> = {
+  generate: { limit: 60, windowSeconds: 3600 },
+  restore: { limit: 60, windowSeconds: 3600 },
+  importCommit: { limit: 30, windowSeconds: 3600 },
+  saveTemplate: { limit: 20, windowSeconds: 3600 },
+  comment: { limit: 120, windowSeconds: 3600 },
+};
+export const weddingWorkKey = (kind: WeddingWorkKind, userId: string) => `wedding-work:${kind}:hour:${userId}`;
+
+/**
+ * TS-205: counts one `kind` of work for this account; `limited` is a ready 429 (with the plain
+ * message) when it's over the hourly limit. Call `giveBack` if the request then saves nothing.
+ */
+export function countWeddingWork(kind: WeddingWorkKind, userId: string) {
+  return countOr429(weddingWorkKey(kind, userId), WEDDING_WORK_LIMITS[kind], tooMuchWeddingWorkMessage(kind));
+}
+
+/**
+ * TS-205: runs `work` counted against this account's hourly limit for `kind` -- refused (429,
+ * with the plain message) when over it, and given back when the work doesn't succeed (any answer
+ * that isn't 2xx, or an error), so a refused or failed try never uses the limit up.
+ */
+export async function limitedWeddingWork(
+  kind: WeddingWorkKind,
+  userId: string,
+  work: () => Promise<Response>
+): Promise<Response> {
+  const { limited, giveBack } = await countWeddingWork(kind, userId);
+  if (limited) return limited;
+  let response: Response;
+  try {
+    response = await work();
+  } catch (err) {
+    await giveBack();
+    throw err;
+  }
+  if (!response.ok) await giveBack();
+  return response;
 }

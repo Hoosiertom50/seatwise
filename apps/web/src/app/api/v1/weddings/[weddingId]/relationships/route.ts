@@ -50,7 +50,7 @@ export async function POST(req: NextRequest, { params }: Params) {
   if (!guestA || !guestB) return errorResponse("Both guests must belong to this wedding", 404);
 
   try {
-    const relationship = await createRelationship(weddingId, parsed.data);
+    const relationship = await createRelationship(weddingId, parsed.data, access.actor);
     // TS-150: a new rule is checked against how people are seated right now -- two guests who
     // must not sit together but already do (or must, but don't) are flagged Needs Reassignment.
     // TS-177: the rule is saved by now -- a failed re-check mustn't make it look unsaved.

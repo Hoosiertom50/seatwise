@@ -35,7 +35,7 @@ export async function POST(req: NextRequest, { params }: Params) {
   if (!parsed.success) return zodErrorResponse(parsed.error);
 
   try {
-    const table = await createSeatingTable(weddingId, parsed.data);
+    const table = await createSeatingTable(weddingId, parsed.data, access.actor);
     return NextResponse.json({ table }, { status: 201 });
   } catch (err) {
     // TS-195: the wedding was deleted while this was being saved -- 404, not a server error.

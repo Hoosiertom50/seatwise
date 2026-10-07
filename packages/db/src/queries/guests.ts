@@ -1,4 +1,5 @@
 import { randomUUID } from "crypto";
+import type { PoolClient } from "pg";
 import { isRsvpCutoffPast } from "@seatwise/shared";
 import { pool, beginTransaction } from "../pool";
 import { encryptText, decryptText } from "../crypto";
@@ -15,7 +16,8 @@ import {
   type TableSeatingFlagReason,
 } from "./seat-checks";
 import { hashLinkToken, isPlainStoredLinkToken, newLinkToken, readStoredLinkToken } from "../link-tokens";
-import { lockWeddingRow } from "./wedding-lock";
+import { inWeddingChange, lockWeddingRow, recheckActorAccess, type ActorAccess } from "./wedding-lock";
+import { assertWeddingHasRoom } from "./wedding-caps";
 import { AttendanceError } from "./plan-versions";
 
 export interface GuestRow {
@@ -112,9 +114,23 @@ export interface CreateGuestData {
 // NFR-9.3b: `notes` is where free-text dietary/accessibility details actually end up, so it's the
 // one guest field encrypted at rest (see crypto.ts) — encrypted on the way in here, decrypted on
 // the way back out in every read below.
-export async function createGuest(weddingId: string, input: CreateGuestData): Promise<GuestRow> {
+// TS-204: the person's access is read again as the guest is saved (see inWeddingChange).
+// TS-205: and the wedding's guest cap checked under the wedding's lock (see wedding-caps.ts).
+export async function createGuest(weddingId: string, input: CreateGuestData, actor?: ActorAccess): Promise<GuestRow> {
+  return inWeddingChange(
+    weddingId,
+    actor,
+    async (q) => {
+      await assertWeddingHasRoom(q, weddingId, "guests", 1);
+      return insertGuest(q, weddingId, input);
+    },
+    { lockWedding: true }
+  );
+}
+
+async function insertGuest(q: PoolClient, weddingId: string, input: CreateGuestData): Promise<GuestRow> {
   const id = randomUUID();
-  const { rows } = await pool.query(
+  const { rows } = await q.query(
     `INSERT INTO "guests"
        (id, "weddingId", "firstName", "lastName", "partyName", headcount, tier, "rsvpStatus", "requiresAccessibleTable", "isLocked", "dayOfAttendance", notes, side, "ageCategory", email, "plusOneNames", "updatedAt")
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, now())
@@ -197,7 +213,9 @@ export async function updateGuestForWedding(
   input: Partial<CreateGuestData>,
   expectedRevision?: number,
   /** TS-195: who made the edit, for the plan's history of an attendance change. */
-  actorUserId: string | null = null
+  actorUserId: string | null = null,
+  /** TS-204: the access the edit was let in with -- read again under the edit's first lock. */
+  actor?: ActorAccess
 ): Promise<GuestUpdateResult | null> {
   const columnMap: Record<string, string> = {
     firstName: `"firstName"`,
@@ -250,6 +268,9 @@ export async function updateGuestForWedding(
     let planVersionId: string | null = null;
     if (mayChangeAttendance || checksLists) planVersionId = await lockCurrentPlan(client, weddingId);
     if (checksLists) await lockRestrictedLists(client, weddingId);
+    // TS-204: the person's access read again, under the locks above -- lowered or removed while
+    // this waited: refused, nothing saved.
+    if (actor) await recheckActorAccess(client, weddingId, actor);
     const { rows } = await client.query<{
       revision: number;
       headcount: number;
@@ -352,7 +373,13 @@ export async function updateGuestForWedding(
   }
 }
 
-export async function deleteGuestForWedding(id: string, weddingId: string, actorUserId?: string): Promise<boolean> {
+export async function deleteGuestForWedding(
+  id: string,
+  weddingId: string,
+  actorUserId?: string,
+  /** TS-204: the access the delete was let in with -- read again under its first lock. */
+  actor?: ActorAccess
+): Promise<boolean> {
   // TS-165: their seat and seating rules go with them, which can clear flags on other guests -- a
   // must-sit-together partner now seated alone, a table that now has room. Re-check those tables
   // in the same transaction (the caller already recounts completeness).
@@ -361,6 +388,8 @@ export async function deleteGuestForWedding(id: string, weddingId: string, actor
     await beginTransaction(client);
     // TS-173: the current plan's row first, then the guest's (see lockCurrentPlan).
     const planVersionId = await lockCurrentPlan(client, weddingId);
+    // TS-204: the person's access read again under that lock.
+    if (actor) await recheckActorAccess(client, weddingId, actor);
     const affected = planVersionId ? await tablesAffectedBy(client, weddingId, planVersionId, [id]) : [];
     // TS-169: whether they had a seat, and their name, for the plan's history (read before the delete).
     const { rows: seated } = planVersionId
@@ -438,21 +467,27 @@ export async function getGuestByRsvpToken(token: string): Promise<GuestRsvpLooku
 // FR-12.4: idempotent -- most guests, especially bulk-imported ones, may never need a link at
 // all, so a token is only ever generated the first time someone asks for one. Returns null only
 // if the guest doesn't exist (belongs to a different wedding, or was deleted).
-export async function ensureGuestRsvpToken(guestId: string, weddingId: string): Promise<string | null> {
+export async function ensureGuestRsvpToken(guestId: string, weddingId: string, actor?: ActorAccess): Promise<string | null> {
+  // TS-204: with the person's access read again as the link is made (see inWeddingChange) -- a
+  // link is a way into the wedding's RSVP, so someone removed a moment ago mustn't get one.
+  return inWeddingChange(weddingId, actor, (q) => ensureGuestRsvpTokenIn(q, guestId, weddingId));
+}
+
+async function ensureGuestRsvpTokenIn(q: PoolClient, guestId: string, weddingId: string): Promise<string | null> {
   // TS-153: one statement, so an automatic RSVP email and a click on "RSVP link" at the same moment
   // both get the same link -- before, the second could replace the one just emailed.
   // TS-160: looked up by its hash; the encrypted copy is what lets this show the same link again.
   const fresh = newLinkToken();
-  const { rows } = await pool.query(
+  const { rows } = await q.query(
     `UPDATE "guests" SET "rsvpToken" = COALESCE("rsvpToken", $3), "rsvpTokenHash" = COALESCE("rsvpTokenHash", $4)
      WHERE id = $1 AND "weddingId" = $2
      RETURNING "rsvpToken"`,
     [guestId, weddingId, fresh.encrypted, fresh.hash]
   );
-  const stored: string | null = rows[0]?.rsvpToken ?? null;
+  const stored = (rows[0]?.rsvpToken as string | null | undefined) ?? null;
   if (stored && isPlainStoredLinkToken(stored)) {
     // A link made before TS-160: keep it working, but stop storing it in plain text.
-    await pool.query(`UPDATE "guests" SET "rsvpToken" = $1 WHERE id = $2 AND "rsvpToken" = $3`, [
+    await q.query(`UPDATE "guests" SET "rsvpToken" = $1 WHERE id = $2 AND "rsvpToken" = $3`, [
       encryptText(stored),
       guestId,
       stored,
@@ -472,13 +507,16 @@ export async function guestHasRsvpLink(guestId: string, weddingId: string): Prom
 
 // FR-12.4: "regenerate" -- always issues a fresh token, invalidating whatever link was out there
 // before (e.g. a planner suspects a link was shared somewhere it shouldn't have been).
-export async function regenerateGuestRsvpToken(guestId: string, weddingId: string): Promise<string | null> {
-  const fresh = newLinkToken();
-  const { rowCount } = await pool.query(
+export async function regenerateGuestRsvpToken(guestId: string, weddingId: string, actor?: ActorAccess): Promise<string | null> {
+  // TS-204: with the person's access read again as the new link is made (see inWeddingChange).
+  return inWeddingChange(weddingId, actor, async (q) => {
+    const fresh = newLinkToken();
+    const { rowCount } = await q.query(
     `UPDATE "guests" SET "rsvpToken" = $1, "rsvpTokenHash" = $2 WHERE id = $3 AND "weddingId" = $4`,
-    [fresh.encrypted, fresh.hash, guestId, weddingId]
-  );
-  return (rowCount ?? 0) > 0 ? fresh.token : null;
+      [fresh.encrypted, fresh.hash, guestId, weddingId]
+    );
+    return (rowCount ?? 0) > 0 ? fresh.token : null;
+  });
 }
 
 // FR-12.1/FR-12.2/FR-12.3: thrown instead of applying a guest's own RSVP submission when their

@@ -6,6 +6,7 @@ import {
   regenerateGuestRsvpToken,
   releaseCooldown,
   sendEmailNotification,
+  type ActorAccess,
 } from "@seatwise/db";
 import { isRsvpCutoffPast, type RsvpEmailOutcomeDTO } from "@seatwise/shared";
 import { releaseEmailSend, reserveEmailSend, RSVP_RESEND_COOLDOWN_SECONDS, rsvpLinkCooldownKey } from "./rate-limit";
@@ -23,7 +24,9 @@ export async function sendGuestRsvpLink(
   guest: { id: string; firstName: string; email: string | null },
   wedding: { id: string; name: string; rsvpCutoffDate: string | null },
   sender: { id: string; emailVerifiedAt: Date | null },
-  { regenerate = false }: { regenerate?: boolean } = {}
+  // TS-204: `actor` -- the access the "RSVP link" request was let in with, read again as the link
+  // is made (a removed collaborator's request that was waiting doesn't get a link, or an email).
+  { regenerate = false, actor }: { regenerate?: boolean; actor?: ActorAccess } = {}
 ): Promise<{
   url: string;
   emailed: boolean;
@@ -40,8 +43,8 @@ export async function sendGuestRsvpLink(
   // link is changed (see ./app-url).
   const appUrl = appBaseUrl();
   const token = regenerate
-    ? await regenerateGuestRsvpToken(guest.id, wedding.id)
-    : await ensureGuestRsvpToken(guest.id, wedding.id);
+    ? await regenerateGuestRsvpToken(guest.id, wedding.id, actor)
+    : await ensureGuestRsvpToken(guest.id, wedding.id, actor);
   if (!token) return null;
 
   const url = `${appUrl}/rsvp/${token}`;

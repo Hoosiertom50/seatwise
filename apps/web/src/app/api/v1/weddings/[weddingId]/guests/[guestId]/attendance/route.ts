@@ -36,7 +36,9 @@ export async function POST(req: NextRequest, { params }: Params) {
       weddingId,
       guestId,
       parsed.data.attendance,
-      user.id
+      user.id,
+      // TS-204: read again under the change's locks.
+      { actorAccess: access.actor }
     );
     // TS-175: the guest too -- the change bumps their revision (TS-165), and a screen that kept the
     // old one got a false "edited elsewhere" on its next edit of them.
