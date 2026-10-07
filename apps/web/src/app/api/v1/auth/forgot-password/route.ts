@@ -12,12 +12,15 @@ import {
   emailDelivered,
   lastPasswordResetAt,
   newestResetMayGo,
+  newestResetWaitSeconds,
+  claimNewestResetSlot,
 } from "@seatwise/db";
 import { readJson, zodErrorResponse } from "@/lib/api-response";
 import {
   accountEmailCounters,
   accountSignInLocked,
   clientAddress,
+  confirmedResetNetworkCounters,
   countOr429,
   PASSWORD_RESET_LIMITS,
   tooManyAttemptsMessage,
@@ -75,11 +78,19 @@ export async function POST(req: NextRequest) {
   // anything is counted.
   const appUrl = appBaseUrl();
 
+  // TS-178: only an account that has confirmed its address is treated as the address's owner.
+  // Anyone can sign up with someone else's address, so for an unconfirmed account a reset is an
+  // everyday email (from its own share of the day, and within the address's daily share), and the
+  // name typed at sign-up isn't put in front of whoever owns the inbox.
+  const confirmed = user.emailVerifiedAt !== null;
+
   // TS-186: whether this network address has any account emails left today is checked first,
   // without counting anything -- so a source that has used up its own allowance can't go on using
   // up the per-email limits below (and with them the owner's resets for the day).
   // TS-203: the address's /48 too, for IPv6 (see accountEmailCounters).
-  const networkCounters = accountEmailCounters(req);
+  // TS-230: and for a confirmed account, the network's count of those resets (5 a day per IPv4 /24
+  // or IPv6 /48), so a few networks can't use up the confirmed accounts' shared reset budget.
+  const networkCounters = [...accountEmailCounters(req), ...(confirmed ? confirmedResetNetworkCounters(req) : [])];
   for (const { key, limit, windowSeconds } of networkCounters) {
     const ownAllowance = await peekRateLimit(key, limit, windowSeconds);
     if (!ownAllowance.allowed) {
@@ -98,19 +109,46 @@ export async function POST(req: NextRequest) {
   // can't be flooded either. The 15-minute limit, and "already sent" while a link still works,
   // hold either way.
   const locked = await accountSignInLocked(email);
-  const perEmailDay = locked ? PASSWORD_RESET_LIMITS.requestsPerEmailDayWhileLocked : PASSWORD_RESET_LIMITS.requestsPerEmailDay;
+  // TS-230: a confirmed account's resets come out of a budget shared by every confirmed account, so
+  // it may draw only 3 a day (unless it's locked out, when the higher limit still applies).
+  const perEmailDay = locked
+    ? PASSWORD_RESET_LIMITS.requestsPerEmailDayWhileLocked
+    : confirmed
+      ? PASSWORD_RESET_LIMITS.requestsPerConfirmedEmailDay
+      : PASSWORD_RESET_LIMITS.requestsPerEmailDay;
   // TS-219: once the day's counts for this address are full, the newest reset still goes out if
   // none has gone to the account for a few hours (NEWEST_RESET_AFTER_SECONDS) -- so whoever signed up
   // with someone else's address can't use those counts up and keep the address's owner from the
   // reset that lets them take the account back. It isn't counted on them then.
-  const mayGoAnyway = newestResetMayGo(await lastPasswordResetAt(user.id));
+  // TS-230: only for an account that hasn't confirmed its address -- the case it was meant for. For a
+  // confirmed one it let an outsider's own accounts draw more from the shared reset budget.
+  // TS-228: the quiet spell alone was checked separately from the reset, so requests sent at the same
+  // moment could all pass it; now only the one that claims the account's slot may go past the counts
+  // (given back below if nothing is sent).
+  let mayGoAnyway = false;
+  // TS-232: how long until the newest-reset rule would let one go, for the wait the 429 gives.
+  let newestResetWait: number | null = null;
+  if (!confirmed) {
+    const lastResetAt = await lastPasswordResetAt(user.id);
+    if (newestResetMayGo(lastResetAt)) {
+      const slot = await claimNewestResetSlot(user.id);
+      if (slot.claimed) {
+        mayGoAnyway = true;
+        counted.push(slot.release);
+      } else {
+        newestResetWait = slot.retryAfterSeconds;
+      }
+    } else {
+      newestResetWait = newestResetWaitSeconds(lastResetAt);
+    }
+  }
   let overForEmail = await count(`pw-reset:email:${emailKey}`, PASSWORD_RESET_LIMITS.requestsPerEmail);
   if (!overForEmail) {
     const day = await countOr429(`pw-reset:email:day:${emailKey}`, perEmailDay);
     if (!day.limited) counted.push(day.giveBack);
     else if (!mayGoAnyway) {
       await giveBackAll();
-      overForEmail = day.limited;
+      overForEmail = sooner(day.limited, newestResetWait, perEmailDay.windowSeconds);
     }
   }
   // TS-171: counted with sign-ups and "Resend link" from the same address -- only when an email
@@ -120,11 +158,6 @@ export async function POST(req: NextRequest) {
   }
   if (overForEmail) return overForEmail;
 
-  // TS-178: only an account that has confirmed its address is treated as the address's owner.
-  // Anyone can sign up with someone else's address, so for an unconfirmed account a reset is an
-  // everyday email (from its own share of the day, and within the address's daily share), and the
-  // name typed at sign-up isn't put in front of whoever owns the inbox.
-  const confirmed = user.emailVerifiedAt !== null;
   let token: string;
   try {
     token = await createPasswordResetToken(user.id);
@@ -149,8 +182,16 @@ export async function POST(req: NextRequest) {
     confirmed ? { essential: true, lockedOut: locked } : { unconfirmedReset: true, newestReset: mayGoAnyway }
   );
   // TS-153: older links are cancelled only once this one has gone out.
-  if (emailDelivered(result)) await retireOlderResetTokens(user.id, token);
-  else if (result === "uncertain") {
+  if (emailDelivered(result)) {
+    // TS-232: the email has gone, so a failure here (the database busy) is logged and the answer is
+    // still "sent" -- it used to be "Something went wrong" with the link already in the inbox. The
+    // older links then simply run out within the hour.
+    try {
+      await retireOlderResetTokens(user.id, token);
+    } catch (err) {
+      console.error(`[forgot-password] reset sent, but older links weren't cancelled: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  } else if (result === "uncertain") {
     // TS-203: the mail server went quiet after it may have taken the email -- it may well arrive,
     // so its link is kept working (and the counts stay). Older links are kept too, in case it didn't.
   } else {
@@ -164,4 +205,19 @@ export async function POST(req: NextRequest) {
     }
   }
   return NextResponse.json(resetOutcome(true, result));
+}
+
+/**
+ * TS-232: the daily count's refusal, or -- when the newest-reset rule (TS-219) will let a reset go
+ * sooner than the count frees up -- the same refusal with that shorter wait, in the message and in
+ * Retry-After. It used to say "about 19 hours" when one could go in about 2.
+ */
+function sooner(dayRefusal: NextResponse, newestResetWait: number | null, windowSeconds: number): NextResponse {
+  const dayWait = Number(dayRefusal.headers.get("Retry-After"));
+  if (newestResetWait === null || !(newestResetWait < dayWait)) return dayRefusal;
+  const wait = Math.max(1, newestResetWait);
+  return NextResponse.json(
+    { error: tooManyAttemptsMessage(windowSeconds, wait) },
+    { status: 429, headers: { "Retry-After": String(wait) } }
+  );
 }

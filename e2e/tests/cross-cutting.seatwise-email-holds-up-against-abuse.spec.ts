@@ -10,8 +10,8 @@
  *   signed up with someone else's address can't use resends to block the owner's reset). A
  *   confirmed account's reset isn't.
  * - While an account is locked by the sign-in limits, the email's daily reset limit is higher (12
- *   instead of 6, TS-186) -- so someone else can't lock the owner out and use up their resets, yet
- *   the inbox still can't be flooded.
+ *   instead of 6, TS-186; TS-230: instead of 3 for a confirmed account) -- so someone else can't
+ *   lock the owner out and use up their resets, yet the inbox still can't be flooded.
  * - TS-219: those daily counts only refuse a reset while one has gone to the account in the last 3
  *   hours; after that the newest still goes (see cross-cutting.strangers-cannot-use-up-limits-meant-for-others),
  *   so the steps here first record a recent reset.
@@ -57,7 +57,8 @@ const ANONYMOUS_EMAILS_PER_ADDRESS_PER_DAY = 3;
 const UNCONFIRMED_RESETS_PER_ADDRESS_PER_DAY = 3;
 const WEDDINGS_PER_DAY = 10;
 const EMAILS_PER_ADDRESS_PER_DAY = 5;
-const PASSWORD_RESETS_PER_EMAIL_PER_DAY = 6;
+// TS-230: a confirmed account's daily reset limit (an unconfirmed one's is 6).
+const PASSWORD_RESETS_PER_CONFIRMED_EMAIL_PER_DAY = 3;
 const PASSWORD_RESETS_PER_EMAIL_PER_DAY_WHILE_LOCKED = 12;
 const SIGN_IN_FAILURES_PER_ACCOUNT = 100;
 const RESENDS_PER_ACCOUNT_15_MINUTES = 3;
@@ -168,9 +169,9 @@ defineQualityTest(
     id: "cross-cutting.seatwise-email-holds-up-against-abuse.password-resets-for-unconfirmed-and-locked-accounts",
     title: "an unconfirmed account's password reset is held to its own daily count for the address -- which resends can't use up -- a confirmed one's isn't, and a locked account gets a higher -- but still limited -- daily reset limit",
     objective:
-      "Confirms that a reset for an account that hasn't confirmed its address isn't sent once that address has had its 3 such resets today, one of them recently (TS-219) (saying so, and the refused request counts against nothing); that once the account is confirmed a reset to the same address goes out; that (TS-194) for another unconfirmed account whose address has used up both the emails anyone can ask for (3) and the planner-sent ones (5), a reset still goes out -- so whoever signed up with someone else's address can't block the owner taking it back; and that an email at its daily reset limit of 6, one of them recent, is refused (and not counted) -- until the account is locked by wrong passwords, when the limit is 12: refused at 12, sent at 6.",
+      "Confirms that a reset for an account that hasn't confirmed its address isn't sent once that address has had its 3 such resets today, one of them recently (TS-219) (saying so, and the refused request counts against nothing); that once the account is confirmed a reset to the same address goes out; that (TS-194) for another unconfirmed account whose address has used up both the emails anyone can ask for (3) and the planner-sent ones (5), a reset still goes out -- so whoever signed up with someone else's address can't block the owner taking it back; and that a confirmed account's email at its daily reset limit of 3 (TS-230), one of them recent, is refused (and not counted) -- until the account is locked by wrong passwords, when the limit is 12: refused at 12, sent at 3.",
     expectedOutcome:
-      "Unconfirmed, address at 3 resets: 200 with sent false and 'This email address has had as many emails from Seatwise as it can in the last 24 hours — please try again within about a day.', no usable reset link, both per-email reset counts 0. Confirmed: 200 sent true. Second unconfirmed account with the other counts full: 200 sent true, its reset count 1. Second account at 6 resets today: 429, count still 6. After locking it (sign-in refused with 429): at 12, 429 and still 12; at 6, 200 sent true and the count 7.",
+      "Unconfirmed, address at 3 resets: 200 with sent false and 'This email address has had as many emails from Seatwise as it can in the last 24 hours — please try again within about a day.', no usable reset link, both per-email reset counts 0. Confirmed: 200 sent true. Second unconfirmed account with the other counts full: 200 sent true, its reset count 1. Confirmed account at 3 resets today: 429, count still 3. After locking it (sign-in refused with 429): at 12, 429 and still 12; at 3, 200 sent true and the count 4.",
     requirementIds: ["REQ-NON-FUNCTIONAL"],
     tags: ["@mutating", "@feature:authentication", "@risk:high", "@suite:regression"],
   },
@@ -222,12 +223,12 @@ defineQualityTest(
       });
 
       await test.step("At the daily reset limit a reset is refused -- until the account is locked, when a higher limit applies", async () => {
-        await setPasswordResetCount(locked.email, "per-email-day", PASSWORD_RESETS_PER_EMAIL_PER_DAY);
+        await setPasswordResetCount(locked.email, "per-email-day", PASSWORD_RESETS_PER_CONFIRMED_EMAIL_PER_DAY);
         // TS-219: one of them went out recently (its link has since run out).
         await plantPasswordResetToken(locked.email, { expired: true });
         expect((await reset(locked.email)).status()).toBe(429);
         // TS-186: the refused request isn't counted.
-        expect(await passwordResetCount(locked.email, "per-email-day")).toBe(PASSWORD_RESETS_PER_EMAIL_PER_DAY);
+        expect(await passwordResetCount(locked.email, "per-email-day")).toBe(PASSWORD_RESETS_PER_CONFIRMED_EMAIL_PER_DAY);
 
         await setSignInFailuresForAccount(locked.email, SIGN_IN_FAILURES_PER_ACCOUNT);
         const signIn = await visitor.post("/api/v1/auth/login", { data: { email: locked.email, password: "not-the-password" } });
@@ -237,11 +238,11 @@ defineQualityTest(
         expect((await reset(locked.email)).status()).toBe(429);
         expect(await passwordResetCount(locked.email, "per-email-day")).toBe(PASSWORD_RESETS_PER_EMAIL_PER_DAY_WHILE_LOCKED);
 
-        await setPasswordResetCount(locked.email, "per-email-day", PASSWORD_RESETS_PER_EMAIL_PER_DAY);
+        await setPasswordResetCount(locked.email, "per-email-day", PASSWORD_RESETS_PER_CONFIRMED_EMAIL_PER_DAY);
         const res = await reset(locked.email);
         expect(res.status()).toBe(200);
         expect(((await res.json()) as { sent: boolean }).sent).toBe(true);
-        expect(await passwordResetCount(locked.email, "per-email-day")).toBe(PASSWORD_RESETS_PER_EMAIL_PER_DAY + 1);
+        expect(await passwordResetCount(locked.email, "per-email-day")).toBe(PASSWORD_RESETS_PER_CONFIRMED_EMAIL_PER_DAY + 1);
       });
     } finally {
       await visitor.dispose();

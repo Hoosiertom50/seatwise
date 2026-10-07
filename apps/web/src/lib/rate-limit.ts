@@ -195,12 +195,61 @@ export const PASSWORD_RESET_LIMITS = {
   // TS-168: daily ceilings -- reset emails share a reserved part of the daily email allowance.
   requestsPerAddressDay: { limit: 100, windowSeconds: 86_400 },
   requestsPerEmailDay: { limit: 6, windowSeconds: 86_400 },
+  // TS-230: for an account that has confirmed its address, the same daily count stops at 3 -- each of
+  // those resets comes out of the confirmed accounts' shared reset budget (45 for everyone not locked
+  // out, see dailyEmailLimits), and at 6 a handful of an outsider's own accounts could use it all up,
+  // leaving every real user who forgot their password refused for about a day.
+  requestsPerConfirmedEmailDay: { limit: 3, windowSeconds: 86_400 },
   // TS-186: while the account is locked by the sign-in limits, the same daily count may go this
   // high instead -- so someone who locked the owner out can't also leave them no reset, yet one
   // inbox still can't be flooded without end.
   requestsPerEmailDayWhileLocked: { limit: 12, windowSeconds: 86_400 },
   resetsPerAddress: { limit: 100, windowSeconds: 900 },
+  // TS-230: confirmed accounts' resets from one network in 24 hours -- an IPv4 /24, or an IPv6 /48
+  // (a free tunnel hands out a whole /48). Like the shared budget they protect, they count only
+  // where email really goes out (Gmail or Resend), never with the "log" transport used locally and
+  // in CI. Getting the budget's 45 now takes at least 9 such networks in a day.
+  confirmedPerIpv4BlockDay: { limit: 5, windowSeconds: 86_400 },
+  confirmedPerIpv6NetworkDay: { limit: 5, windowSeconds: 86_400 },
 };
+export const confirmedResetIpv4BlockKey = (block: string) => `pw-reset:confirmed:net24:day:${block}`;
+export const confirmedResetIpv6NetworkKey = (network: string) => `pw-reset:confirmed:net48:day:${network}`;
+
+/** TS-230: the per-network counts a confirmed account's reset goes on (none with the "log" transport). */
+export function confirmedResetNetworkCounters(
+  req: { headers: Headers },
+  env: Record<string, string | undefined> = process.env
+): NetworkCounter[] {
+  const transport = resolveEmailTransport(env).kind;
+  if (transport !== "smtp" && transport !== "resend") return [];
+  const { address, wider } = clientNetworks(req);
+  const block = rateLimitIpv4Block(address);
+  return [
+    ...(block ? [{ key: confirmedResetIpv4BlockKey(block), ...PASSWORD_RESET_LIMITS.confirmedPerIpv4BlockDay }] : []),
+    ...(wider ? [{ key: confirmedResetIpv6NetworkKey(wider), ...PASSWORD_RESET_LIMITS.confirmedPerIpv6NetworkDay }] : []),
+  ];
+}
+
+type LimitHit = Awaited<ReturnType<typeof hitRateLimit>>;
+
+/**
+ * TS-232: counts one hit against every limit at once. Every count settles before anything is
+ * decided; if one failed (the database busy), the ones that landed are given back before the error
+ * goes on -- they used to stay counted (for a sign-in, as a wrong password) although nothing happened.
+ */
+async function hitEveryLimit(limits: { key: string; limit: number; windowSeconds: number }[]): Promise<LimitHit[]> {
+  const settled = await Promise.allSettled(limits.map(({ key, limit, windowSeconds }) => hitRateLimit(key, limit, windowSeconds)));
+  const failed = settled.find((r): r is PromiseRejectedResult => r.status === "rejected");
+  if (failed) {
+    await Promise.all(
+      settled.map((r, i) =>
+        r.status === "fulfilled" ? undoRateLimitHit(limits[i].key, limits[i].windowSeconds, r.value.windowStart).catch(() => {}) : null
+      )
+    );
+    throw failed.reason;
+  }
+  return settled.map((r) => (r as PromiseFulfilledResult<LimitHit>).value);
+}
 
 // TS-186: wrong passwords when deleting the account (the person is already signed in), per
 // account. Counted with the sign-in counter for this account from this network address -- but not
@@ -269,7 +318,8 @@ export function signInFailureLimits(
 export async function countSignInAttempt(
   limits: { key: string; limit: number; windowSeconds: number }[]
 ): Promise<{ allowed: boolean; retryAfterSeconds: number; giveBack: () => Promise<void> }> {
-  const results = await Promise.all(limits.map(({ key, limit, windowSeconds }) => hitRateLimit(key, limit, windowSeconds)));
+  // TS-232: all or nothing, if the database fails part-way.
+  const results = await hitEveryLimit(limits);
   return {
     allowed: results.every((r) => r.allowed),
     retryAfterSeconds: Math.max(0, ...results.filter((r) => !r.allowed).map((r) => r.retryAfterSeconds)),
@@ -416,7 +466,8 @@ async function emailSendCounters(kind: keyof typeof EMAIL_SEND_LIMITS, userId: s
  */
 export async function reserveEmailSend(kind: keyof typeof EMAIL_SEND_LIMITS, userId: string): Promise<EmailSendReservation> {
   const counters = await emailSendCounters(kind, userId);
-  const results = await Promise.all(counters.map(({ key, limit, windowSeconds }) => hitRateLimit(key, limit, windowSeconds)));
+  // TS-232: all or nothing, if the database fails part-way.
+  const results = await hitEveryLimit(counters);
   let counted = true;
   const release = async () => {
     if (!counted) return;
