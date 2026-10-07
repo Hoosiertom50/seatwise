@@ -234,8 +234,21 @@ export function CollaboratorsTab({
   // what the other tab had changed. This tab's own saves go one at a time, each with the revision
   // the previous one returned, so two quick saves here never refuse each other.
   const settingsRevision = useRef(wedding?.settingsRevision ?? 0);
+  // TS-214: the wedding copy the boxes were last filled from. When the page replaces the wedding
+  // with a newer one from outside (e.g. after an access change or a hand-off), the revision used to
+  // move on while the boxes kept the old values -- so a later save from here quietly put the old
+  // values back. Now the boxes nobody is typing in take the new values first (as after a conflict).
+  // This tab's own saves and showFreshSettings move the revision on before they change the wedding,
+  // so they never land here.
+  const boxesFrom = useRef<WeddingDTO | null>(wedding);
   useEffect(() => {
-    if (wedding && wedding.settingsRevision > settingsRevision.current) settingsRevision.current = wedding.settingsRevision;
+    if (!wedding) return;
+    const old = boxesFrom.current;
+    boxesFrom.current = wedding;
+    if (wedding.settingsRevision <= settingsRevision.current) return;
+    settingsRevision.current = wedding.settingsRevision;
+    // A different wedding is filled in full by the effect above.
+    if (old && old.id === wedding.id) refillUntouchedBoxes(old, wedding);
   }, [wedding]);
   const settingsSaves = useRef<Promise<unknown>>(Promise.resolve());
   function saveSettings(change: Partial<WeddingDTO>): Promise<WeddingDTO> {
@@ -280,7 +293,11 @@ export function CollaboratorsTab({
           }
         : w
     );
-    if (!old) return;
+    if (old) refillUntouchedBoxes(old, fresh);
+  }
+  // TS-214: each settings box still showing the old saved value takes the new one; a box with
+  // typing in it keeps the typing.
+  function refillUntouchedBoxes(old: WeddingDTO, fresh: WeddingDTO) {
     const refill = (set: React.Dispatch<React.SetStateAction<string>>, was: string, now: string) =>
       set((cur) => (cur === was ? now : cur));
     refill(setWeddingName, old.name, fresh.name);

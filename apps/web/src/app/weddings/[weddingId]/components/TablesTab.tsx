@@ -143,15 +143,34 @@ export function TablesTab({
   }, [tables]);
   function patchTable<T extends { table: SeatingTableDTO }>(id: string, body: Record<string, unknown>): Promise<T> {
     return queueTableSave(async () => {
+      const sentRevision = tableRevisions.current.get(id);
       const res = await api.patch<T>(`/api/v1/weddings/${weddingId}/tables/${id}`, {
         ...body,
-        expectedRevision: tableRevisions.current.get(id),
+        expectedRevision: sentRevision,
       });
       // TS-209: a saved change whose table couldn't be read back comes without it (and with a
-      // warning) -- the table as it was here, with this change, stands in for it until the next load.
+      // warning). The tables are read again for it, so the next save is sent with the table's new
+      // revision (the old one got it refused as "edited elsewhere").
       if (!res.table) {
+        const reread = await api
+          .get<{ tables: SeatingTableDTO[] }>(`/api/v1/weddings/${weddingId}/tables`)
+          .then((r) => r.tables.find((t) => t.id === id) ?? null)
+          .catch(() => null);
+        if (reread) {
+          tableRevisions.current.set(id, reread.revision);
+          return { ...res, table: reread } as T;
+        }
+        // Couldn't read it either: the table as it was here, with this change's own table fields
+        // (not the required-guest list or the "save anyway" flags), stands in for it until the next
+        // load, and the save moved its revision on by one (only a change to the table's own fields
+        // does -- a required-guest list alone doesn't).
         const known = tablesRef.current.find((t) => t.id === id);
-        return known ? ({ ...res, table: { ...known, ...body } } as T) : res;
+        if (!known) return res;
+        const tableFields = Object.fromEntries(Object.entries(body).filter(([k]) => k in known));
+        const revision =
+          sentRevision !== undefined && Object.keys(tableFields).length > 0 ? sentRevision + 1 : sentRevision ?? known.revision;
+        tableRevisions.current.set(id, revision);
+        return { ...res, table: { ...known, ...tableFields, revision } } as T;
       }
       tableRevisions.current.set(id, res.table.revision);
       return res;

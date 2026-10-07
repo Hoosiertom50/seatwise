@@ -88,7 +88,11 @@ export async function fetchWithRetry(path: string, init: RequestInit, timeoutMs 
 
 // TS-177: the PATCH routes whose 409 hands back the fresh record under the same key their success
 // answer uses -- so a retried save that turns out to have landed can be answered as a success.
-const CONFLICT_RECORD_KEYS: { pattern: RegExp; key: string; extra?: Record<string, unknown> }[] = [
+const CONFLICT_RECORD_KEYS: { pattern: RegExp; key: string; extra?: Record<string, unknown>; textLike?: boolean }[] = [
+  // TS-214: the wedding's own settings (name, date, venue, note, side names, RSVP cutoff) -- its
+  // 409 sends the latest settings under `wedding`, as a save does. Text is compared the way the
+  // server stores it (a blank box is saved as nothing, line breaks as "\n").
+  { pattern: /^\/api\/v1\/weddings\/[^/]+$/, key: "wedding", textLike: true },
   { pattern: /^\/api\/v1\/weddings\/[^/]+\/guests\/[^/]+$/, key: "guest", extra: { warnings: [] } },
   { pattern: /^\/api\/v1\/weddings\/[^/]+\/tables\/[^/]+$/, key: "table", extra: { ok: true, warnings: [] } },
   { pattern: /^\/api\/v1\/weddings\/[^/]+\/vendors\/[^/]+$/, key: "vendor" },
@@ -101,6 +105,13 @@ function sameValue(a: unknown, b: unknown): boolean {
   if (a === b) return true;
   if (a === null || b === null || typeof a !== "object" || typeof b !== "object") return false;
   return JSON.stringify(a) === JSON.stringify(b);
+}
+
+// TS-214: a settings value as stored -- "" and null both mean "none", and "\r\n" is kept as "\n".
+function storedText(v: unknown): unknown {
+  if (typeof v !== "string") return v ?? null;
+  const text = v.replace(/\r\n/g, "\n");
+  return text === "" ? null : text;
 }
 
 /**
@@ -129,7 +140,9 @@ export function resolveRetriedPatchConflict(
   const fields = Object.keys(sent).filter((k) => k !== "expectedRevision");
   if (fields.length === 0) return null;
   const record = fresh as Record<string, unknown>;
-  if (!fields.every((k) => k in record && sameValue(sent[k], record[k]))) return null;
+  const same = (k: string) =>
+    route.textLike ? sameValue(storedText(sent[k]), storedText(record[k])) : sameValue(sent[k], record[k]);
+  if (!fields.every((k) => k in record && same(k))) return null;
   return { ...route.extra, [route.key]: fresh };
 }
 
