@@ -221,6 +221,15 @@ export class WeddingDetailPage extends BasePage {
     return this.page.locator(":focus");
   }
 
+  /** TS-206: the page-level "Couldn't save <field>: <reason>" notes, shown near the tabs for a save
+   * that failed after its tab was closed. */
+  unsavedNotes() {
+    return this.page.getByTestId("unsaved-note");
+  }
+  async dismissUnsavedNote(text: string | RegExp): Promise<void> {
+    await this.unsavedNotes().filter({ hasText: text }).getByRole("button", { name: /^Dismiss: / }).click();
+  }
+
   /** TS-166: the page's own "Back to dashboard" link. */
   backToDashboardLink() {
     return this.page.getByRole("link", { name: /Back to dashboard/ }).first();

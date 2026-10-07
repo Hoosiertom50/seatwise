@@ -139,3 +139,29 @@ export async function rewriteRequestJson(
     clear: () => page.unroute(urlPattern, handler),
   };
 }
+
+/** TS-206: holds every `method` request to a URL matching `urlPattern` for `ms`, then refuses it
+ * with `status` and the app's standard `{ error }` body -- for a save that fails only after the
+ * page has moved on (e.g. its tab was closed meanwhile). */
+export async function delayThenFailRequests(
+  page: Page,
+  urlPattern: string | RegExp,
+  method: string,
+  ms: number,
+  fault: { status: number; error: string },
+): Promise<FaultHandle> {
+  let hits = 0;
+  const handler = async (route: Route) => {
+    if (route.request().method() !== method) return route.fallback();
+    hits++;
+    await new Promise((resolve) => setTimeout(resolve, ms));
+    return route.fulfill({ status: fault.status, contentType: "application/json", body: JSON.stringify({ error: fault.error }) });
+  };
+  await page.route(urlPattern, handler);
+  return {
+    get hits() {
+      return hits;
+    },
+    clear: () => page.unroute(urlPattern, handler),
+  };
+}

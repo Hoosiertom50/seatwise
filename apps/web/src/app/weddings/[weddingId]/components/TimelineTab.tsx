@@ -13,6 +13,17 @@ import { FIELD_LIMITS } from "@seatwise/shared";
 // day-of events -- its own record, entirely independent of guests/tables/rules/seating plans.
 // Entries are always listed by (time, sortOrder) from the server, so this component never sorts
 // client-side; "reorder" only ever moves an entry among others sharing its exact same time.
+// TS-212: after the edit box swaps back to the row (Save, Cancel), or opens, focus goes to a stable
+// control by id -- it used to drop to the page, so the next Tab started from the top. Only if focus
+// was lost (someone who has clicked elsewhere keeps their place).
+function focusIfLost(id: string) {
+  setTimeout(() => {
+    const active = document.activeElement;
+    if (active && active !== document.body && active.isConnected) return;
+    document.getElementById(id)?.focus();
+  }, 0);
+}
+
 export function TimelineTab({ weddingId, canEdit }: { weddingId: string; canEdit: boolean }) {
   const [entries, setEntries] = useState<TimelineEntryDTO[]>([]);
   const [loading, setLoading] = useState(true);
@@ -85,6 +96,7 @@ export function TimelineTab({ weddingId, canEdit }: { weddingId: string; canEdit
     setEditingId(entry.id);
     setEditTime(entry.time);
     setEditDescription(entry.description);
+    focusIfLost(`timeline-${entry.id}-edit-time`);
   }
 
   async function onSaveEdit(entryId: string) {
@@ -108,6 +120,8 @@ export function TimelineTab({ weddingId, canEdit }: { weddingId: string; canEdit
           .sort((a, b) => a.time.localeCompare(b.time) || a.sortOrder - b.sortOrder)
       );
       setEditingId(null);
+      // TS-212: back to this entry's Edit button (wherever the new time put it).
+      focusIfLost(`timeline-${entryId}-edit`);
     } catch (err) {
       // TS-92: someone else changed this entry first. Show their version and say plainly that
       // this edit was not saved -- the edit box closes so the stale text can't be mistaken for
@@ -120,6 +134,7 @@ export function TimelineTab({ weddingId, canEdit }: { weddingId: string; canEdit
             .sort((a, b) => a.time.localeCompare(b.time) || a.sortOrder - b.sortOrder)
         );
         setEditingId(null);
+        focusIfLost(`timeline-${entryId}-edit`);
       }
       setError(apiErrorMessage(err, [], "Couldn't save that change."));
     } finally {
@@ -284,6 +299,7 @@ export function TimelineTab({ weddingId, canEdit }: { weddingId: string; canEdit
                 {editingId === entry.id ? (
                   <div className="flex flex-1 flex-wrap items-center gap-2">
                     <input
+                      id={`timeline-${entry.id}-edit-time`}
                       type="time"
                       aria-label="Edit time"
                       className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm"
@@ -305,7 +321,10 @@ export function TimelineTab({ weddingId, canEdit }: { weddingId: string; canEdit
                       Save
                     </button>
                     <button
-                      onClick={() => setEditingId(null)}
+                      onClick={() => {
+                        setEditingId(null);
+                        focusIfLost(`timeline-${entry.id}-edit`);
+                      }}
                       className="rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800"
                     >
                       Cancel
@@ -345,6 +364,7 @@ export function TimelineTab({ weddingId, canEdit }: { weddingId: string; canEdit
                           ↓
                         </button>
                         <button
+                          id={`timeline-${entry.id}-edit`}
                           onClick={() => startEdit(entry)}
                           aria-label={`Edit ${entry.description}`}
                           className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800"

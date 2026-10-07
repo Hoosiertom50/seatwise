@@ -53,7 +53,7 @@ defineQualityTest(
       await comments.resolve("Band starts late");
       await expect(comments.resolvedBadge("Band starts late")).toBeVisible();
       await expect(
-        comments.threadByBody("Band starts late").first().getByRole("button", { name: "Resolve", exact: true }),
+        comments.resolveButton("Band starts late"),
       ).toHaveCount(0);
       await expect.poll(async () => (await listComments()).find((c) => c.body === "Band starts late")?.resolvedAt).toBeTruthy();
     });

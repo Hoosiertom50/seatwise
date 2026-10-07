@@ -311,23 +311,36 @@ export class BudgetTabPage extends BasePage {
   }
 
   // Not row-scoped, deliberately: once Edit is clicked, BudgetTab.tsx replaces that row's own
-  // display with these inputs (matched by aria-label, since none has a visible <label>) -- exactly
-  // one row can be in edit mode at a time (a single `editingId` in component state), so a
-  // page-wide lookup is unambiguous, same reasoning as TimelineTabPage's edit* locators.
+  // display with these inputs -- exactly one row can be in edit mode at a time (a single
+  // `editingId` in component state), so a page-wide lookup is unambiguous, same reasoning as
+  // TimelineTabPage's edit* locators. TS-212: the boxes now have visible labels ("Vendor name",
+  // "Cost ($)"...) that repeat the Add form's, so they're found by their ids
+  // (vendor-<id>-edit-<field>) rather than by label.
+  private editField(field: string) {
+    return this.page.locator(`[id^="vendor-"][id$="-edit-${field}"]`);
+  }
   private editNameInput() {
-    return this.page.getByLabel("Edit vendor name", { exact: true });
+    return this.editField("name");
   }
   private editCategorySelect() {
-    return this.page.getByLabel("Edit category", { exact: true });
+    return this.editField("category");
   }
   private editCategoryOtherInput() {
-    return this.page.getByLabel("Edit category label", { exact: true });
+    return this.editField("category-label");
   }
   private editCostInput() {
-    return this.page.getByLabel("Edit cost", { exact: true });
+    return this.editField("cost");
   }
   private editContractNotesInput() {
-    return this.page.getByLabel("Edit contract notes", { exact: true });
+    return this.editField("notes");
+  }
+  /** TS-212: the open edit box's visible label for a field (e.g. "Cost ($)"), as a screen reader reads it. */
+  editFieldByVisibleLabel(label: string) {
+    return this.page.locator("li").getByLabel(label, { exact: true });
+  }
+  /** TS-212: a vendor's Edit button (named "Edit <vendor>"). */
+  editButtonLocator(nameContains: string) {
+    return this.editButton(nameContains);
   }
   private saveEditButton() {
     return this.page.getByRole("button", { name: "Save", exact: true });

@@ -682,6 +682,16 @@ export function PlanTab({
     }
   }
 
+  // TS-212: after the nickname box closes (Save, Cancel), focus goes to the button that opens it
+  // again -- it used to drop to the page. Only if focus was lost.
+  function focusNicknameButtonIfLost() {
+    setTimeout(() => {
+      const active = document.activeElement;
+      if (active && active !== document.body && active.isConnected) return;
+      document.getElementById("plan-nickname-button")?.focus();
+    }, 0);
+  }
+
   async function onSaveLabel() {
     if (!detail) return;
     setError(null);
@@ -704,6 +714,8 @@ export function PlanTab({
       detailRef.current = res.planVersion;
       setDetail(res.planVersion);
       setLabelVersionId(null);
+      // TS-212: the box goes away -- focus goes to the nickname button that replaces it.
+      focusNicknameButtonIfLost();
     } catch (err) {
       const fresh = conflictPlanVersion(err);
       // TS-182: the queue's copy too (see onSetStatus). TS-197: only if that version is still open.
@@ -902,7 +914,9 @@ export function PlanTab({
             .
           </p>
           {showScoreDetail && (
-            <pre className="mt-3 overflow-x-auto rounded bg-neutral-50 dark:bg-neutral-900 p-3 text-xs text-neutral-600 dark:text-neutral-300">
+            // TS-212: a scrolling box is a Tab stop in Chrome 130+ and Firefox -- named, so it isn't a
+            // silent one.
+            <pre role="region" aria-label="Scoring weights" tabIndex={0} className="mt-3 overflow-x-auto rounded bg-neutral-50 dark:bg-neutral-900 p-3 text-xs text-neutral-600 dark:text-neutral-300">
               {JSON.stringify(RULE_WEIGHT_CONFIG, null, 2)}
             </pre>
           )}
@@ -1007,7 +1021,13 @@ export function PlanTab({
                     moved, {comparison.summary.addedCount} added, {comparison.summary.removedCount} removed,{" "}
                     {comparison.summary.unchangedCount} unchanged
                   </p>
-                  <div className="max-h-96 overflow-y-auto rounded-md border border-neutral-200 dark:border-neutral-700">
+                  {/* TS-212: scrolls by keyboard too, as a named region (it was an unnamed Tab stop). */}
+                  <div
+                    role="region"
+                    aria-label="Version comparison"
+                    tabIndex={0}
+                    className="max-h-96 overflow-y-auto rounded-md border border-neutral-200 dark:border-neutral-700"
+                  >
                     <table className="w-full text-left text-sm">
                       <thead className="sticky top-0 bg-neutral-50 dark:bg-neutral-900">
                         <tr>
@@ -1086,7 +1106,10 @@ export function PlanTab({
                   {savingLabel ? "Saving..." : "Save"}
                 </button>
                 <button
-                  onClick={() => setLabelVersionId(null)}
+                  onClick={() => {
+                    setLabelVersionId(null);
+                    focusNicknameButtonIfLost();
+                  }}
                   disabled={savingLabel}
                   className="min-h-11 rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-xs font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50"
                 >
@@ -1095,6 +1118,7 @@ export function PlanTab({
               </span>
             ) : (
               <button
+                id="plan-nickname-button"
                 onClick={() => {
                   setLabelInput(detail.label ?? "");
                   setLabelVersionId(detail.id);
@@ -1239,7 +1263,8 @@ export function PlanTab({
                       onClick={() => onSetStatus("APPROVED")}
                       disabled={statusUpdating || versionChanging || !detail.isComplete}
                       title={!detail.isComplete ? "Every guest must be seated, with nobody flagged Needs Reassignment, before a plan can be approved." : undefined}
-                      className="rounded-md bg-green-700 dark:bg-green-600 min-h-11 px-3 py-1.5 text-sm font-medium text-white hover:bg-green-800 dark:hover:bg-green-500 disabled:opacity-50"
+                      // TS-212: green-700 in dark mode too -- white on green-600 was under 4.5:1.
+                      className="rounded-md bg-green-700 min-h-11 px-3 py-1.5 text-sm font-medium text-white hover:bg-green-800 disabled:opacity-50"
                     >
                       Approve
                     </button>
@@ -1281,9 +1306,12 @@ export function PlanTab({
           {/* TS-197: what the last Generate said about this plan, under a heading that says what it
               is (who couldn't be seated, and why) -- kept until the next Generate or another
               version is opened. A move's warnings are shown once, below, not copied in here. */}
+          {/* TS-212: these three status regions are always on the page and only their contents
+              change -- a status box inserted already holding its text is skipped by some screen
+              readers. */}
+          <div role="status">
           {generateWarnings && (
             <div
-              role="status"
               data-testid="plan-generate-warnings"
               className="mb-6 rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950 p-4"
             >
@@ -1297,8 +1325,10 @@ export function PlanTab({
           )}
 
           {/* TS-197: a restore's own notes, under their own heading. */}
+          </div>
+          <div role="status">
           {restoreWarnings.length > 0 && (
-            <div role="status" className="mb-6 rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950 p-4">
+            <div className="mb-6 rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950 p-4">
               <p className="mb-2 text-sm font-medium text-amber-800 dark:text-amber-300">Restored, but note:</p>
               <ul className="list-inside list-disc text-sm text-amber-700 dark:text-amber-400">
                 {restoreWarnings.map((w, i) => (
@@ -1308,8 +1338,10 @@ export function PlanTab({
             </div>
           )}
 
+          </div>
+          <div role="status">
           {moveWarnings.length > 0 && (
-            <div role="status" className="mb-6 rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950 p-4">
+            <div className="mb-6 rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950 p-4">
               <p className="mb-2 text-sm font-medium text-amber-800 dark:text-amber-300">
                 That move was made, but note:
               </p>
@@ -1320,6 +1352,7 @@ export function PlanTab({
               </ul>
             </div>
           )}
+          </div>
 
           {!canEditThisVersion && (
             <p className="mb-4 text-sm text-neutral-500 dark:text-neutral-400">
@@ -1789,6 +1822,10 @@ function PlanFloorPlan({
         // TS-199: named, so the seating floor plan can be found as one area (e.g. its Tab order).
         role="group"
         aria-label="Seating floor plan"
+        // TS-212: Chrome 130+ and Firefox make a scrolling box a Tab stop of its own. With guests to
+        // Tab to it isn't needed (focusing one scrolls it into view); view-only, it's how the room
+        // scrolls by keyboard, and it's named.
+        tabIndex={canEditThisVersion ? -1 : 0}
         style={{ width: "100%", height, maxWidth: width }}
         className="relative overflow-auto rounded-lg border border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-900"
       >
@@ -1812,19 +1849,10 @@ function PlanFloorPlan({
               onDrop={(e) => onTableDrop(e, t.id)}
               // TS-90: while a guest is picked up, every table is a place to put them -- by tap,
               // click, or keyboard (Tab to it, then Enter/Space).
+              // TS-212: the table itself is no longer a button while picking (that hid its guest chips
+              // from screen readers, and put buttons inside a button). A click anywhere on it still
+              // moves the guest; for the keyboard and screen readers, a "Move here" button does.
               onClick={isTarget ? () => void moveTo(pickedGuestId, t.id) : undefined}
-              onKeyDown={
-                isTarget
-                  ? (e) => {
-                      if (e.target !== e.currentTarget || (e.key !== "Enter" && e.key !== " ")) return;
-                      e.preventDefault();
-                      void moveTo(pickedGuestId, t.id);
-                    }
-                  : undefined
-              }
-              {...(isTarget
-                ? { role: "button", tabIndex: 0, "aria-label": `Move ${guestName(pickedGuestId)} to ${t.label}` }
-                : {})}
               style={{
                 left: t.positionX ?? 40,
                 top: t.positionY ?? 40,
@@ -1840,7 +1868,22 @@ function PlanFloorPlan({
               <p className="mb-1 truncate font-medium" title={t.label}>
                 {t.label}
               </p>
-              <div className="flex max-h-36 flex-col gap-1 overflow-y-auto">
+              {isTarget && (
+                <button
+                  type="button"
+                  aria-label={`Move ${guestName(pickedGuestId)} to ${t.label}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void moveTo(pickedGuestId, t.id);
+                  }}
+                  className="mb-1 self-start rounded border border-blue-400 px-1.5 py-0.5 text-xs text-blue-800 dark:text-blue-300 hover:bg-blue-50 dark:hover:bg-blue-950"
+                >
+                  Move here
+                </button>
+              )}
+              {/* TS-212: not a Tab stop of its own -- the chips inside are, and the list view shows
+                  every guest at every table. */}
+              <div tabIndex={-1} className="flex max-h-36 flex-col gap-1 overflow-y-auto">
                 {tableGuests.length === 0 && <span className="text-neutral-500 dark:text-neutral-400">Empty</span>}
                 {tableGuests.map((g) =>
                   <GuestChip
