@@ -257,8 +257,10 @@ export function GuestDetailsEditor({
       <div className="flex gap-2 sm:col-span-2">
         <button
           type="submit"
-          disabled={saving}
-          className="rounded-md bg-neutral-900 dark:bg-neutral-100 px-3 py-1 text-sm font-medium text-white dark:text-neutral-900 hover:bg-neutral-700 dark:hover:bg-neutral-300 disabled:opacity-50"
+          // TS-225: aria-disabled (not disabled) while saving, so Save keeps keyboard focus when a
+          // save is refused -- a disabled button dropped it to the page. onSubmit ignores it meanwhile.
+          aria-disabled={saving || undefined}
+          className="rounded-md bg-neutral-900 dark:bg-neutral-100 px-3 py-1 text-sm font-medium text-white dark:text-neutral-900 hover:bg-neutral-700 dark:hover:bg-neutral-300 aria-disabled:opacity-50"
         >
           {saving ? "Saving..." : "Save details"}
         </button>

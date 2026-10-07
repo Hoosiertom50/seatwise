@@ -211,7 +211,8 @@ export class WeddingGuestsPage extends BasePage {
   importPreviewRow(fullName: string) {
     return this.page.locator("li").filter({ hasText: /^Row \d+/ }).filter({ hasText: fullName });
   }
-  /** TS-198: a preview row by its row number -- for a row with an error, which may show no name. */
+  /** TS-198: a preview row by its row number -- for a row with an error, which may show no name.
+   * TS-225: the spreadsheet's numbering (the header is row 1, so the first guest is row 2). */
   importPreviewRowNumber(rowNumber: number) {
     return this.page.locator("li").filter({ hasText: new RegExp(`^Row ${rowNumber}(?!\\d)`) });
   }

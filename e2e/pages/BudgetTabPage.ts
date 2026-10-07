@@ -302,6 +302,11 @@ export class BudgetTabPage extends BasePage {
     return this.vendorRow(nameContains).locator("p:not([role=status])").nth(2);
   }
 
+  /** TS-223: the row's "Arrives ..." line (only shown when an arrival time is set). */
+  vendorArrivalText(nameContains: string) {
+    return this.vendorRow(nameContains).getByText(/^Arrives /);
+  }
+
   /** The row's own cost text -- "No cost set" or a formatted dollar amount. */
   vendorCostText(nameContains: string) {
     return this.vendorRow(nameContains).locator("span.font-medium");

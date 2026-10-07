@@ -48,7 +48,13 @@ export function parseGuestSideCode(raw: string): { side: "BRIDE" | "GROOM" | "BO
   return { error: `Side code "${raw.trim()}" isn't one of BRIDE, GROOM or BOTH — leave the export's Side code column as it was.` };
 }
 
-/** TS-210: a row whose Side name and Side code say different sides. */
-export function sideMismatchMessage(sideCell: string, code: string): string {
-  return `Side "${sideCell.trim()}" and Side code "${code}" don't agree — the side names may have been renamed since this file was exported. Change the Side cell to match, or clear the Side code cell to use the Side cell.`;
+/**
+ * TS-210: a row whose Side name and Side code say different sides.
+ * TS-222: a warning now, not an error -- the Side code wins (it doesn't change when the sides are
+ * renamed). Re-importing an untouched export after renaming Bride/Groom to Groom/Partner used to
+ * refuse every row on the renamed side, and the old advice (clear the Side code) moved those
+ * guests to the other side. `sideName` is what the code's side is called now.
+ */
+export function sideMismatchMessage(sideCell: string, code: string, sideName: string): string {
+  return `Side "${sideCell.trim()}" doesn't match Side code "${code}" — the side names may have been renamed since this file was exported, so the Side code is used (${sideName}). To put this guest on another side, change the Side code cell.`;
 }

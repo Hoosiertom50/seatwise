@@ -28,6 +28,7 @@ import {
   decodeCsvFile,
   CsvEncodingError,
   type CsvTextEncoding,
+  spreadsheetRowNumber,
   GUEST_TIER_LABELS,
   RSVP_STATUS_LABELS,
 } from "@seatwise/shared";
@@ -1354,7 +1355,7 @@ export function GuestsTab({
                           : ""
                   }`}
                 >
-                  <span className="w-12 shrink-0 text-neutral-500 dark:text-neutral-400">Row {r.rowNumber}</span>
+                  <span className="w-12 shrink-0 text-neutral-500 dark:text-neutral-400">Row {spreadsheetRowNumber(r.rowNumber)}</span>
                   <span
                     className={`shrink-0 rounded px-1.5 py-0.5 text-xs font-medium ${
                       r.kind === "error"
@@ -1380,6 +1381,10 @@ export function GuestsTab({
                       {r.preview.firstName} {r.preview.lastName}
                       {r.kind === "update" ? " (updating existing guest)" : r.kind === "unchanged" ? " (no changes)" : ""}
                     </span>
+                  )}
+                  {/* TS-222: e.g. a Side name that disagrees with the Side code -- the row still imports. */}
+                  {r.kind !== "error" && r.warning && (
+                    <span className="basis-full text-amber-800 dark:text-amber-300">{r.warning}</span>
                   )}
                 </li>
               ))}

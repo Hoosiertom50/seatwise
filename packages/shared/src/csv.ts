@@ -130,8 +130,20 @@ export function parseCsv(text: string): { headers: string[]; rows: string[][] } 
     rows.pop();
   }
 
-  const headers = (rows.shift() ?? []).map((h) => h.trim());
+  // TS-222: headers are unescaped like cells. The import re-sends the mapped columns through toCsv,
+  // which makes a "+1" header "'+1" -- the server then didn't find the mapped "+1" column and
+  // silently imported every row without it.
+  const headers = (rows.shift() ?? []).map((h) => fromSpreadsheetSafe(h.trim()));
   return { headers, rows: rows.map((r) => r.map(fromSpreadsheetSafe)) };
+}
+
+/**
+ * TS-225: the row number a planner sees in their spreadsheet for an import's data row (data row 1 is
+ * the spreadsheet's row 2, under the header). The preview and the "older Mac format" message used
+ * to show data row numbers, one less than the unclosed-quote message and the spreadsheet.
+ */
+export function spreadsheetRowNumber(dataRowNumber: number): number {
+  return dataRowNumber + 1;
 }
 
 /** TS-180: the first header name used by two columns (blank headers aside), or null. */

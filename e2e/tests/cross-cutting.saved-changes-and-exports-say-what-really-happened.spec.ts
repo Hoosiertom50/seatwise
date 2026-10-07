@@ -145,7 +145,7 @@ defineQualityTest(
     objective:
       "Uploads, on the Guests tab, a UTF-8 file with the byte-order mark and one stray byte after 'Lee', and confirms the preview reads 'Zoë Núñez' correctly and shows only the stray-byte row as an error (couldn't be read); then uploads the same file without the byte-order mark and confirms it is refused with the 'save it as CSV UTF-8' message.",
     expectedOutcome:
-      "With the mark: the preview has a row for 'Zoë Núñez' and row 1 says the Last name has characters that couldn't be read; the summary shows 1 with errors. Without the mark: an alert saying part of the file is in a different text format and to save it as 'CSV UTF-8', and no column mapping.",
+      "With the mark: the preview has a row for 'Zoë Núñez' and row 2 (the spreadsheet's numbering) says the Last name has characters that couldn't be read; the summary shows 1 with errors. Without the mark: an alert saying part of the file is in a different text format and to save it as 'CSV UTF-8', and no column mapping.",
     requirementIds: ["REQ-GUEST-LIST-MANAGEMENT"],
     tags: ["@mutating", "@feature:guests", "@risk:high", "@suite:regression"],
   },
@@ -161,7 +161,7 @@ defineQualityTest(
       await guests.goto(managedWedding.id);
       await guests.importGuestsFileBytesAndPreview(body(true));
       await expect(guests.importPreviewRow("Zoë Núñez")).toBeVisible();
-      await expect(guests.importPreviewRowNumber(1)).toContainText("couldn't be read");
+      await expect(guests.importPreviewRowNumber(2)).toContainText("couldn't be read");
       await expect(guests.importPreviewErrorCountText()).toBeVisible();
       await expect(guests.importPreviewSummary()).toContainText("1 new");
       await guests.cancelImport();

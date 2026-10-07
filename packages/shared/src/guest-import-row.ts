@@ -12,7 +12,7 @@ import {
   hasMixedScriptWord,
   NO_MIXED_SCRIPT_MESSAGE,
 } from "./validation";
-import { parseGuestSide, parseGuestSideCode, sideMismatchMessage } from "./guest-side";
+import { parseGuestSide, parseGuestSideCode, sideMismatchMessage, guestSideLabel } from "./guest-side";
 import { hasForbiddenControlCharacter, CONTROL_CHARACTER_MESSAGE, LINE_BREAK_MESSAGE } from "./safe-text";
 import { hasUnreadableCharacters, unreadableCellMessage } from "./text-decode";
 import { sameImportText, type GuestImportCurrentValues } from "./guest-import-compare";
@@ -67,6 +67,10 @@ export type GuestImportKeptField = "firstName" | "lastName" | "partyName" | "not
  * (or a household literally called "CLEAR", or a note holding the U+FFFD mark) used to make an
  * untouched export impossible to re-import. `keptAsIs` lists those fields, so the commit can tell
  * if one of them changed in the meantime.
+ *
+ * TS-222: `warnings` are things the planner should know that don't stop the row (a Side name that
+ * disagrees with the Side code). (A mapped column the file doesn't have is refused by the Guests tab
+ * before the file is sent -- see prepareImportCsv.)
  */
 export function parseGuestImportRow(
   cells: string[],
@@ -74,8 +78,9 @@ export function parseGuestImportRow(
   mapping: GuestImportMapping,
   sideLabels: { sideLabel1: string; sideLabel2: string },
   current?: GuestImportCurrentValues
-): { errors: string[]; data: GuestImportRowPreview; keptAsIs: GuestImportKeptField[] } {
+): { errors: string[]; warnings: string[]; data: GuestImportRowPreview; keptAsIs: GuestImportKeptField[] } {
   const errors: string[] = [];
+  const warnings: string[] = [];
   const data: GuestImportRowPreview = {};
   const keptAsIs: GuestImportKeptField[] = [];
 
@@ -191,7 +196,7 @@ export function parseGuestImportRow(
   // TS-177: the wedding's own side names (what the Guests tab tells planners to use) as well as
   // "Both" and the stored BRIDE / GROOM -- see parseGuestSide.
   // TS-210: the export's Side code (the stored side) comes first -- it doesn't change when the side
-  // names are renamed. A Side cell that says a different side is an error, not a silent swap.
+  // names are renamed. TS-222: a Side cell that says a different side is a warning; the code is used.
   const sideRaw = cellFor("side");
   const sideCodeRaw = cellFor("sideCode");
   let codeSide: "BRIDE" | "GROOM" | "BOTH" | undefined;
@@ -205,8 +210,12 @@ export function parseGuestImportRow(
     if (codeSide !== undefined) {
       // A Side name that's no longer one of the wedding's (renamed since the export) is fine: the
       // code says which side it was.
-      if (!("error" in side) && side.side !== codeSide) errors.push(sideMismatchMessage(sideRaw, codeSide));
-      else data.side = codeSide;
+      if (!("error" in side) && side.side !== codeSide) {
+        warnings.push(
+          sideMismatchMessage(sideRaw, codeSide, guestSideLabel(codeSide, sideLabels.sideLabel1, sideLabels.sideLabel2))
+        );
+      }
+      data.side = codeSide;
     } else if ("error" in side) errors.push(side.error);
     else data.side = side.side;
   } else if (codeSide !== undefined) {
@@ -243,7 +252,7 @@ export function parseGuestImportRow(
     const kept = keptAsIs.indexOf("plusOneNames");
     if (kept !== -1) keptAsIs.splice(kept, 1);
   }
-  return { errors, data: cleared, keptAsIs };
+  return { errors, warnings, data: cleared, keptAsIs };
 }
 
 /**

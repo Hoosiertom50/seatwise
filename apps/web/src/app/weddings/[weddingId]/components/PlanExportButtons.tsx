@@ -28,6 +28,7 @@ export function PlanExportButtons({
   const warning = unseatedExportWarning(unseatedCount);
 
   async function onExport(kind: (typeof EXPORTS)[number]["kind"], fileName: string) {
+    if (busy !== null) return;
     setError(null);
     setBusy(kind);
     try {
@@ -51,8 +52,10 @@ export function PlanExportButtons({
             key={kind}
             type="button"
             onClick={() => onExport(kind, fileName)}
-            disabled={busy !== null}
-            className="rounded-md border border-neutral-300 dark:border-neutral-600 min-h-11 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50"
+            // TS-225: aria-disabled (not disabled) while a PDF is made, so the button keeps keyboard
+            // focus -- a disabled button dropped it to the page. onExport ignores clicks meanwhile.
+            aria-disabled={busy !== null || undefined}
+            className="rounded-md border border-neutral-300 dark:border-neutral-600 min-h-11 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800 aria-disabled:opacity-50"
           >
             {busy === kind ? "Preparing..." : label}
           </button>

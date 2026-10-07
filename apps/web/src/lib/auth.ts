@@ -72,9 +72,26 @@ export const AUTH_COOKIE_NAME = "seatwise_token";
 // guessing from the build mode. In CI that's http://localhost:3000, so this resolves to `false`
 // there; a real deployment sets APP_URL to its own https:// origin, so this resolves to `true`.
 let warnedNoAppUrl = false;
+
+// TS-223: "Log out on all devices" from a tab whose own session had already ended.
+export const ALREADY_SIGNED_OUT_EVERYWHERE_MESSAGE =
+  "You're already signed out here — sign in again, then use Log out on all devices.";
+
+/** TS-225: whether an address is https:// (any capitals); something that isn't an address at all
+ * (only possible locally, where APP_URL is used as typed) isn't. */
+export function secureScheme(address: string): boolean {
+  try {
+    return new URL(address).protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
 export function isSecureCookieContext(): boolean {
   try {
-    return appBaseUrl().startsWith("https://");
+    // TS-225: the scheme as a browser reads it -- "HTTPS://..." used to fail a startsWith check and
+    // leave the cookie without Secure.
+    return secureScheme(appBaseUrl());
   } catch (err) {
     // TS-149 / TS-178: a production build without a proper APP_URL -- say so loudly in the logs,
     // and keep the cookie Secure (the safe choice for a real site) rather than failing every sign-in.

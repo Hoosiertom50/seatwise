@@ -202,7 +202,7 @@ defineQualityTest(
       const lost = `firstName,lastName\r\nAnna,M�ller-${suffix}\r\n`;
       await weddingGuestsPage.importGuestsFileBytesAndPreview(Buffer.from(lost, "utf-8"));
       await expect(weddingGuestsPage.importPreviewErrorCountText()).toBeVisible();
-      await expect(weddingGuestsPage.importPreviewRowNumber(1)).toContainText(UNREADABLE_CELL_MESSAGE);
+      await expect(weddingGuestsPage.importPreviewRowNumber(2)).toContainText(UNREADABLE_CELL_MESSAGE);
 
       const mapping = { firstName: "firstName", lastName: "lastName" };
       const res = await context.request.post(`/api/v1/weddings/${w}/guests/import/preview`, { data: { csv: lost, mapping } });
