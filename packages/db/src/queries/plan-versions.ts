@@ -247,6 +247,9 @@ export interface PlanVersionAssignmentRow {
 export interface PlanVersionDetail extends PlanVersionRow {
   assignments: PlanVersionAssignmentRow[];
   unassignedGuestIds: string[];
+  /** TS-207: the unassigned guests' names, so a screen whose guest list is older (a walk-in added
+   * on another phone a moment ago) can still name them instead of showing an id. */
+  unassignedGuests: { id: string; name: string }[];
   warnings: string[];
   modifiedSinceApproval: ModifiedSinceApproval;
 }
@@ -406,10 +409,11 @@ export async function createPlanVersionWithAssignments(
         ? `Generated version ${versionNumber}: seated ${seated} guest(s)` +
           (unassigned > 0 ? `, ${unassigned} left unassigned.` : ".")
         : `Generated version ${versionNumber}: no guests could be seated.`) + draftSuffix;
+    // TS-214: credited to whoever generated it, so the activity log shows "by …" like every other change.
     await client.query(
-      `INSERT INTO "change_history_entries" (id, "planVersionId", action, description)
-       VALUES ($1, $2, 'GENERATE', $3)`,
-      [randomUUID(), planVersionId, description]
+      `INSERT INTO "change_history_entries" (id, "planVersionId", action, description, "actorUserId")
+       VALUES ($1, $2, 'GENERATE', $3, $4)`,
+      [randomUUID(), planVersionId, description, input.actorAccess?.userId ?? null]
     );
 
     // TS-205: at most WEDDING_CAPS.planVersionsKept versions are kept -- the oldest that are
@@ -615,8 +619,10 @@ export async function setPlanVersionStatus(
   } = {}
 ): Promise<PlanVersionDetail | null> {
   if (!(await isCurrentVersion(id, weddingId))) {
+    // TS-208: with the plan that's current now, so the Seating plan tab can open it.
     throw new PlanVersionStatusError(
-      "Only the current plan version's status can be changed — this one has been superseded."
+      "Only the current plan version's status can be changed — this one has been superseded.",
+      await getCurrentPlanDetail(weddingId)
     );
   }
 
@@ -658,8 +664,12 @@ export async function setPlanVersionStatus(
     if (permissions.judgedAccess) await recheckActorAccess(client, weddingId, permissions.judgedAccess);
     // TS-165: re-checked under the lock (a Generate could have replaced this version a moment ago).
     if (!current.isCurrent) {
+      // TS-208: the transaction ends first, then the plan that's current now goes back with the
+      // refusal (read on this same connection, see checkPlanVersionRevision).
+      await client.query("ROLLBACK").catch(() => {});
       throw new PlanVersionStatusError(
-        "Only the current plan version's status can be changed — this one has been superseded."
+        "Only the current plan version's status can be changed — this one has been superseded.",
+        await getCurrentPlanDetail(weddingId, client)
       );
     }
     // TS-179: the permission rules, against the status as it is under the lock.
@@ -863,11 +873,14 @@ export async function getPlanVersionDetail(
   // FR-8.1: a guest marked Not Attending doesn't occupy a seat and isn't counted as
   // "unassigned" — they've been excluded from the plan entirely, not left pending.
   const { rows: allGuests } = await q.query(
-    `SELECT id FROM "guests" WHERE "weddingId" = $1 AND "dayOfAttendance" = 'ATTENDING'`,
+    `SELECT id, ("firstName" || ' ' || "lastName") AS name FROM "guests" WHERE "weddingId" = $1 AND "dayOfAttendance" = 'ATTENDING'`,
     [weddingId]
   );
   const assignedIds = new Set(assignments.map((a) => a.guestId));
-  const unassignedGuestIds = allGuests.map((g) => g.id).filter((id) => !assignedIds.has(id));
+  const unassignedGuests = allGuests
+    .filter((g) => !assignedIds.has(g.id))
+    .map((g) => ({ id: g.id as string, name: g.name as string }));
+  const unassignedGuestIds = unassignedGuests.map((g) => g.id);
   // TS-189: an older version's stored "complete" dates from when it was last current -- worked out
   // again against today's guest list (see listPlanVersionsForWedding).
   const attendingIds = new Set(allGuests.map((g) => g.id as string));
@@ -884,6 +897,7 @@ export async function getPlanVersionDetail(
     unassignedGuestCount: unassignedGuestIds.length,
     assignments,
     unassignedGuestIds,
+    unassignedGuests,
     warnings: [],
     modifiedSinceApproval,
   };
@@ -985,7 +999,9 @@ export async function moveGuestAssignment(
     }
   }
   const root = find(guestId);
-  const unit = allGuests.filter((g) => find(g.id) === root);
+  // TS-209: in id order, so a group's seats are always written (and locked) in the same order -- a
+  // link reset touching the same guests the other way round could otherwise deadlock with a move.
+  const unit = allGuests.filter((g) => find(g.id) === root).sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   // TS-197: they declined between the first check and this read -- say so, rather than "moving"
   // nobody and calling it done.
   if (unit.length === 0) throw new ManualMoveError(`${guest.name} is marked Not Attending, so they can't be seated.`);
@@ -1105,6 +1121,7 @@ export async function moveGuestAssignment(
     }
   }
 
+  let planVersion!: PlanVersionDetail;
   const client = await pool.connect();
   try {
     await beginTransaction(client);
@@ -1184,6 +1201,11 @@ export async function moveGuestAssignment(
       [randomUUID(), planVersionId, description, actorUserId]
     );
 
+    // TS-209: read back on this transaction's own connection, before COMMIT -- read after it, a
+    // failure answered an error (or "nothing was saved") for a change that was saved.
+    const readBack = await getPlanVersionDetail(planVersionId, weddingId, client);
+    if (!readBack) throw new ManualMoveError("Plan version not found after move.");
+    planVersion = readBack;
     await client.query("COMMIT");
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});
@@ -1192,8 +1214,6 @@ export async function moveGuestAssignment(
     client.release();
   }
 
-  const planVersion = await getPlanVersionDetail(planVersionId, weddingId);
-  if (!planVersion) throw new ManualMoveError("Plan version not found after move.");
   // TS-197: the move's warnings come back once, as `warnings` -- they're no longer copied into the
   // plan's own list too (the Seating plan tab showed them twice).
 
@@ -1251,7 +1271,8 @@ async function findMustSitTogetherUnit(
     if (parent.has(r.guestAId) && parent.has(r.guestBId)) union(r.guestAId, r.guestBId);
   }
   const root = find(guestId);
-  return allGuests.filter((g) => find(g.id) === root);
+  // TS-209: in id order, like moveGuestAssignment's group (the same lock order every time).
+  return allGuests.filter((g) => find(g.id) === root).sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 }
 
 // FR-7.5: undo/redo needs a way to put a guest (and their must-sit-together unit) back to
@@ -1267,7 +1288,11 @@ export async function unassignGuestFromPlan(
   actorUserId: string,
   expectedRevision?: number,
   /** TS-204: the access the request was let in with -- read again under the plan's lock. */
-  actorAccess?: ActorAccess
+  actorAccess?: ActorAccess,
+  /** TS-208: only these members of the group lose their seat (undo of seating a guest whose
+   * must-sit-together partner was already at that table -- the partner keeps their seat). Must
+   * include `guestId`. Omitted: the whole group, as before. */
+  onlyGuestIds?: string[]
 ): Promise<ManualMoveResult> {
   if (!(await isCurrentVersion(planVersionId, weddingId))) {
     // TS-197: with the plan that is current now, so the screen can switch to it.
@@ -1279,13 +1304,18 @@ export async function unassignGuestFromPlan(
   );
   if (!guestRows[0]) throw new ManualMoveError("Guest not found.");
 
-  const unit = await findMustSitTogetherUnit(weddingId, guestId);
+  const group = await findMustSitTogetherUnit(weddingId, guestId);
+  // TS-208: just the members asked for (always including this guest), never anyone outside the group.
+  const unit = onlyGuestIds
+    ? group.filter((member) => member.id === guestId || onlyGuestIds.includes(member.id))
+    : group;
   // TS-197: they're marked Not Attending (their seat was freed then) -- say so instead of an
   // "unassign" that did nothing and reported success.
   if (unit.length === 0) {
     throw new ManualMoveError("That guest is marked Not Attending, so they don't have a seat to take away.");
   }
 
+  let planVersion!: PlanVersionDetail;
   const client = await pool.connect();
   try {
     await beginTransaction(client);
@@ -1339,6 +1369,11 @@ export async function unassignGuestFromPlan(
       [randomUUID(), planVersionId, description, actorUserId]
     );
 
+    // TS-209: read back on this transaction's own connection, before COMMIT -- read after it, a
+    // failure answered an error (or "nothing was saved") for a change that was saved.
+    const readBack = await getPlanVersionDetail(planVersionId, weddingId, client);
+    if (!readBack) throw new ManualMoveError("Plan version not found after unassign.");
+    planVersion = readBack;
     await client.query("COMMIT");
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});
@@ -1347,8 +1382,6 @@ export async function unassignGuestFromPlan(
     client.release();
   }
 
-  const planVersion = await getPlanVersionDetail(planVersionId, weddingId);
-  if (!planVersion) throw new ManualMoveError("Plan version not found after unassign.");
   planVersion.warnings = [];
 
   if (planVersion.status === "APPROVED") {
@@ -1456,7 +1489,14 @@ export async function setGuestAttendance(
     client.release();
   }
 
-  const detail = currentPlanVersionId ? await getPlanVersionDetail(currentPlanVersionId, weddingId) : null;
+  // TS-209: the change is saved -- a failed read-back is logged, not answered as an error (or as
+  // "nothing was saved").
+  let detail: PlanVersionDetail | null = null;
+  try {
+    detail = currentPlanVersionId ? await getPlanVersionDetail(currentPlanVersionId, weddingId) : null;
+  } catch (err) {
+    console.error("Attendance saved, but reading the plan back failed:", err);
+  }
 
   // FR-10.2: attendance changes are only notification-worthy once the plan has been approved.
   if (notify && detail?.status === "APPROVED") {
@@ -1725,6 +1765,7 @@ export async function swapGuestAssignments(
     }
   }
 
+  let planVersion!: PlanVersionDetail;
   const client = await pool.connect();
   try {
     await beginTransaction(client);
@@ -1765,6 +1806,11 @@ export async function swapGuestAssignments(
       [randomUUID(), planVersionId, description, actorUserId]
     );
 
+    // TS-209: read back on this transaction's own connection, before COMMIT -- read after it, a
+    // failure answered an error (or "nothing was saved") for a change that was saved.
+    const readBack = await getPlanVersionDetail(planVersionId, weddingId, client);
+    if (!readBack) throw new SwapError("Plan version not found after swap.");
+    planVersion = readBack;
     await client.query("COMMIT");
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});
@@ -1773,8 +1819,6 @@ export async function swapGuestAssignments(
     client.release();
   }
 
-  const planVersion = await getPlanVersionDetail(planVersionId, weddingId);
-  if (!planVersion) throw new SwapError("Plan version not found after swap.");
   // TS-197: the warnings come back once, as `warnings` (see moveGuestAssignment).
 
   // FR-10.2: same "only once approved" gating as a plain move.
@@ -1811,7 +1855,7 @@ export async function swapGuestAssignments(
 // wedding lock, so attendance can't change between working out the seats and saving them.
 async function computeRestorePlacement(sourceVersionId: string, weddingId: string, q: Pick<typeof pool, "query"> = pool) {
   const { rows: sourceRows } = await q.query(
-    `SELECT id, "versionNumber" FROM "plan_versions" WHERE id = $1 AND "weddingId" = $2`,
+    `SELECT id, "versionNumber", "createdAt" FROM "plan_versions" WHERE id = $1 AND "weddingId" = $2`,
     [sourceVersionId, weddingId]
   );
   const source = sourceRows[0];
@@ -1829,7 +1873,7 @@ async function computeRestorePlacement(sourceVersionId: string, weddingId: strin
   );
 
   const { rows: guests } = await q.query(
-    `SELECT id, ("firstName" || ' ' || "lastName") AS name, headcount, "requiresAccessibleTable"
+    `SELECT id, ("firstName" || ' ' || "lastName") AS name, headcount, "requiresAccessibleTable", "createdAt"
      FROM "guests" WHERE "weddingId" = $1 AND "dayOfAttendance" = 'ATTENDING'`,
     [weddingId]
   );
@@ -1943,6 +1987,23 @@ async function computeRestorePlacement(sourceVersionId: string, weddingId: strin
     runningOccupants.set(table.id, [...occupantsHere, guest.id]);
   }
 
+  // TS-208: attending guests the source version has no seat for at all. Removing a table removes
+  // every version's seats at it (they cascade), so a guest whose table was deleted is simply
+  // missing from the source -- the "their table no longer exists" check above can't see them, and
+  // they used to be left unassigned with no reason given. Each now gets one.
+  const seatedInSource = new Set(sourceAssignments.map((a) => a.guestId as string));
+  for (const guest of guests) {
+    if (seatedInSource.has(guest.id)) continue;
+    droppedGuests.push({
+      guestId: guest.id,
+      guestName: guest.name,
+      reason:
+        new Date(guest.createdAt).getTime() > new Date(source.createdAt).getTime()
+          ? `they were added to the guest list after version ${source.versionNumber} was made`
+          : `version ${source.versionNumber} has no seat for them (they weren't seated in it, or their table has since been removed)`,
+    });
+  }
+
   const keptIds = new Set(kept.map((k) => k.guestId));
   const tableByKeptGuest = new Map(kept.map((k) => [k.guestId, k.tableId]));
 
@@ -2020,6 +2081,7 @@ export async function restorePlanVersion(
   // then left current and the restored version is saved as a comparison draft beside it.
   options: { mayReplaceApproved?: boolean; /** TS-195: read again under the wedding lock. */ actorAccess?: ActorAccess } = {}
 ): Promise<ManualMoveResult & { savedAsDraftBecauseApproved: boolean }> {
+  let planVersion!: PlanVersionDetail;
   const client = await pool.connect();
   let newVersionId: string;
   let savedAsDraftBecauseApproved = false;
@@ -2073,8 +2135,10 @@ export async function restorePlanVersion(
 
     const description =
       `Restored from version ${result.sourceVersionNumber}` +
-      (result.droppedGuests.length > 0
-        ? ` (${result.droppedGuests.length} guest(s) left Unassigned — data has changed since then)`
+      // TS-208: everyone the new version leaves unseated (it used to count only those dropped by a
+      // check, missing anyone whose table had since been removed).
+      (result.unassignedGuestIds.length > 0
+        ? ` (${result.unassignedGuestIds.length} guest(s) left Unassigned — data has changed since then)`
         : "") +
       (savedAsDraftBecauseApproved ? " (saved as a comparison draft — the approved plan stays current)" : "");
     await client.query(
@@ -2086,6 +2150,11 @@ export async function restorePlanVersion(
     // TS-205: as Generate -- the oldest versions that are neither approved nor current go past the cap.
     await pruneOldPlanVersions(client, weddingId);
 
+    // TS-209: read back on this transaction's own connection, before COMMIT -- read after it, a
+    // failure answered an error (or "nothing was saved") for a change that was saved.
+    const readBack = await getPlanVersionDetail(newVersionId, weddingId, client);
+    if (!readBack) throw new RestoreError("Plan version not found after restore.");
+    planVersion = readBack;
     await client.query("COMMIT");
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});
@@ -2096,8 +2165,6 @@ export async function restorePlanVersion(
     client.release();
   }
 
-  const planVersion = await getPlanVersionDetail(newVersionId, weddingId);
-  if (!planVersion) throw new RestoreError("Plan version not found after restore.");
   const warnings = [...result.warnings];
   for (const d of result.droppedGuests) {
     warnings.push(`${d.guestName} was left Unassigned — ${d.reason}.`);

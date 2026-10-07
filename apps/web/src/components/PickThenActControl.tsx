@@ -21,6 +21,7 @@ export function PickThenActControl({
   onAct,
   selectClassName,
   buttonClassName,
+  fallbackFocusId,
 }: {
   /** Stable per guest -- used to find the list again after the move. */
   id: string;
@@ -39,6 +40,9 @@ export function PickThenActControl({
   onAct: (value: string) => unknown;
   selectClassName?: string;
   buttonClassName?: string;
+  /** TS-208: where focus goes after acting when this list can't take it back (it's turned off --
+   * e.g. every other table is full -- or gone), e.g. the guest's attendance button. */
+  fallbackFocusId?: string;
 }) {
   const [picked, setPicked] = useState("");
   // A pick that is no longer offered (the table filled up, or was removed) counts as no pick.
@@ -55,11 +59,23 @@ export function PickThenActControl({
       // unless the planner has already moved on to another control.
       // Checked again a moment later too: the row is often drawn again just after the move, and
       // Safari leaves focus on the list itself (it doesn't focus a clicked button).
+      let sentToFallback = false;
       const restore = () => {
         const active = document.activeElement;
         const lost = !active || active === document.body || !active.isConnected;
-        const stillHere = active instanceof HTMLElement && (active.id === `${id}-act` || active.id === id);
-        if (lost || stillHere) document.getElementById(id)?.focus();
+        const stillHere =
+          active instanceof HTMLElement &&
+          (active.id === `${id}-act` || active.id === id || (sentToFallback && active.id === fallbackFocusId));
+        if (!lost && !stillHere) return;
+        const list = document.getElementById(id);
+        // TS-208: a turned-off list (or one that's gone) can't take focus -- it used to drop to the
+        // page. The fallback gets it instead (and gives it back on the later check if the list has
+        // come back on by then).
+        if (list && !(list as HTMLSelectElement).disabled) list.focus();
+        else if (fallbackFocusId) {
+          document.getElementById(fallbackFocusId)?.focus();
+          sentToFallback = true;
+        }
       };
       setTimeout(restore, 0);
       setTimeout(restore, 150);

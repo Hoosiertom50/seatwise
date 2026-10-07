@@ -66,7 +66,36 @@ export function concurrentChangeResponse(err: unknown) {
       409
     );
   }
-  return null;
+  // TS-209: the database was too busy -- see databaseBusyResponse.
+  return databaseBusyResponse(err);
+}
+
+export const DATABASE_BUSY_MESSAGE = "Seatwise was too busy to finish — nothing was saved. Try again in a minute.";
+export const DATABASE_BUSY_RETRY_AFTER_SECONDS = 60;
+
+/** TS-209: whether the error is the database running out of time or connections (see below). */
+export function isDatabaseBusyError(err: unknown): boolean {
+  const code = (err as { code?: string } | null)?.code;
+  // 57014: a statement hit the time limit. 25P02: a statement in a transaction that had already
+  // failed (it follows one of these). 25P03: the transaction sat idle too long and was ended.
+  if (code === "57014" || code === "25P02" || code === "25P03") return true;
+  // No free connection within CONNECTION_TIMEOUT_MS (packages/db pool.ts) -- the driver's own
+  // errors, which carry no code.
+  const message = err instanceof Error ? err.message : "";
+  return /timeout exceeded when trying to connect|Connection terminated due to connection timeout/i.test(message);
+}
+
+/**
+ * TS-209: a statement time-out, an aborted transaction or no free database connection -- answered
+ * 503 with Retry-After and a message that says nothing was saved, rather than a bare "Something
+ * went wrong". Only for a request whose changes were rolled back: a route whose change already
+ * committed answers success with a warning instead (see SAVED_BUT_NOT_RECHECKED). Null otherwise.
+ */
+export function databaseBusyResponse(err: unknown) {
+  if (!isDatabaseBusyError(err)) return null;
+  const res = errorResponse(DATABASE_BUSY_MESSAGE, 503);
+  res.headers.set("Retry-After", String(DATABASE_BUSY_RETRY_AFTER_SECONDS));
+  return res;
 }
 
 export const WEDDING_DELETED_MESSAGE = "This wedding was deleted — nothing was saved.";

@@ -17,6 +17,9 @@ export const guestImportFieldEnum = z.enum([
   "requiresAccessibleTable",
   "dayOfAttendance",
   "side",
+  // TS-210: the export's "Side code" column (BRIDE / GROOM / BOTH, whatever the sides are called) --
+  // preferred to the Side names, which can be renamed between the export and the re-import.
+  "sideCode",
   "ageCategory",
   "notes",
   // TS-180: the export's "Plus-ones" column (who's coming with the guest).
@@ -41,6 +44,10 @@ export const guestImportRequestSchema = z.object({
   // TS-180: on commit, the planner ticked "Overwrite guests changed since the export" -- rows the
   // preview showed as conflicts are then written like any other update. Without it they're skipped.
   overwriteChanged: z.boolean().optional(),
+  // TS-209: on commit, a key the browser made for this preview. Sending the same import again (its
+  // first answer was lost) with the same key gets the first import's answer back -- it isn't
+  // imported twice.
+  importKey: z.string().uuid().optional(),
 });
 export type GuestImportRequest = z.infer<typeof guestImportRequestSchema>;
 
@@ -104,4 +111,7 @@ export interface GuestImportCommitResult {
   // this import (an edited side/tier/household/requires-accessible-table field no longer fits a
   // hard rule at their current table).
   warnings: string[];
+  // TS-209: this answer is the one an earlier try of the same import (same importKey) got -- it
+  // wasn't imported again.
+  repeated?: boolean;
 }

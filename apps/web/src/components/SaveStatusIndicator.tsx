@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useSyncExternalStore } from "react";
-import { saveStatusStore } from "@/lib/save-status";
+import { saveStatusStore, saveStatusView } from "@/lib/save-status";
 
 function subscribeOnline(listener: () => void) {
   window.addEventListener("online", listener);
@@ -21,7 +21,7 @@ function subscribeOnline(listener: () => void) {
 // optimistic change back), so "Not saved" means "redo it" -- there is no queued change here to
 // resend. Requests that got no response at all are already retried automatically by api-client
 // before this ever shows a failure.
-export function SaveStatusIndicator() {
+export function SaveStatusIndicator({ unsavedCount = 0 }: { unsavedCount?: number } = {}) {
   const status = useSyncExternalStore(
     saveStatusStore.subscribe,
     saveStatusStore.getSnapshot,
@@ -40,27 +40,27 @@ export function SaveStatusIndicator() {
     return () => window.removeEventListener("beforeunload", onBeforeUnload);
   }, [status.pending]);
 
+  // TS-206: the wording is decided in save-status.ts -- never "All changes saved" while a field on
+  // the page is still unsaved, and nothing at all after Dismiss.
+  const view = saveStatusView(status, { online, unsavedCount });
   let tone = "text-neutral-500 dark:text-neutral-400";
   let content: React.ReactNode = null;
-  if (!online) {
+  if (view.kind === "offline") {
     tone = "text-amber-700 dark:text-amber-400";
     content = "Offline — changes can't be saved until you reconnect";
-  } else if (status.pending > 0) {
+  } else if (view.kind === "saving") {
     content = "Saving…";
-  } else if (status.lastError) {
+  } else if (view.kind === "error") {
     tone = "text-red-700 dark:text-red-400";
     content = (
       <>
-        {/* TS-177: no "Not saved:" in front of a message that already says what happened. */}
-        <span title={status.lastError}>
-          {/^not saved\b|\bwas(n't| not) saved\b|\bwere saved\b/i.test(status.lastError ?? "") ? status.lastError : `Not saved: ${status.lastError}`}
-        </span>
+        <span title={status.lastError ?? undefined}>{view.message}</span>
         <button onClick={saveStatusStore.dismissError} className="ml-2 underline hover:no-underline">
           Dismiss
         </button>
       </>
     );
-  } else if (status.lastSavedAt) {
+  } else if (view.kind === "saved") {
     tone = "text-green-700 dark:text-green-400";
     content = "All changes saved";
   }

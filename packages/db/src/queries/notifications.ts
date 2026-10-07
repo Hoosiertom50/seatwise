@@ -1,8 +1,8 @@
 import { randomUUID } from "crypto";
-import { accountDailyEmailKey, accountDailyEmailLimit, emailDelivered, sendEmail, type EmailResult } from "../email";
+import { accountDailyEmailKey, accountDailyEmailLimit, emailMayHaveGone, sendEmail, type EmailResult } from "../email";
 import { pool } from "../pool";
 import { claimCooldown, hitRateLimit, releaseCooldown, undoRateLimitHit } from "./rate-limit";
-import { emailSafeWeddingName, looksLikePhoneNumber, looksLikeWebAddress } from "@seatwise/shared";
+import { appBaseUrl, emailSafeWeddingName, looksLikePhoneNumber, looksLikeWebAddress } from "@seatwise/shared";
 
 // TS-163: how many notification emails one person's actions can set off (each recipient counts).
 // Generous for real planning -- approving a plan emails a handful of collaborators -- but a loop of
@@ -25,7 +25,13 @@ export const NOTIFICATION_EMAILS_PER_WEDDING_WITHOUT_ACTOR = [
 
 // TS-194 (Tom's decision): and a daily pool per wedding OWNER, across all their weddings -- so
 // creating more weddings doesn't multiply what guests' answers can send to one owner's planners.
+// TS-203: rolling over the last 24 hours (it used to start again at midnight UTC, so twice the pool
+// fitted in a couple of hours) -- and only 20 while the owner's account is in its first week, so a
+// few fresh accounts can't use guests' answers (their own guests' links, submitted in turn) to
+// spend Seatwise's email allowance. Every one of these also counts toward the owner's share of the
+// everyday allowance (ACCOUNT_SHARE_OF_EVERYDAY in ../email.ts).
 export const NOTIFICATION_EMAILS_PER_OWNER_WITHOUT_ACTOR = { limit: 60, windowSeconds: 86_400 } as const;
+export const NEW_OWNER_NOTIFICATION_EMAILS_WITHOUT_ACTOR = { limit: 20, windowSeconds: 86_400 } as const;
 export const ownerNotificationEmailKey = (ownerId: string) => `email:notify-owner:86400:${ownerId}`;
 
 // TS-186 (Tom's decision): a guest's changed RSVP answer is emailed to the planners at most this
@@ -83,6 +89,8 @@ async function notificationEmailCounters(actorUserId: string | null, weddingId: 
   // own pool counts -- not the owner's daily allowance (see NOTIFICATION_EMAILS_PER_WEDDING_WITHOUT_ACTOR).
   // The number of weddings one account can create in a day is capped (TS-178), and every email
   // still counts against the site's daily ceiling.
+  // TS-203: a new owner account's pool is smaller.
+  const { newAccount } = await accountDailyEmailLimit(ownerId);
   return [
     ...NOTIFICATION_EMAILS_PER_WEDDING_WITHOUT_ACTOR.map(({ limit, windowSeconds }) => ({
       key: `email:notify-wedding:${windowSeconds}:${weddingId}`,
@@ -90,8 +98,54 @@ async function notificationEmailCounters(actorUserId: string | null, weddingId: 
       windowSeconds,
     })),
     // TS-194: and the owner's pool across all their weddings.
-    { key: ownerNotificationEmailKey(ownerId), ...NOTIFICATION_EMAILS_PER_OWNER_WITHOUT_ACTOR },
+    {
+      key: ownerNotificationEmailKey(ownerId),
+      ...(newAccount ? NEW_OWNER_NOTIFICATION_EMAILS_WITHOUT_ACTOR : NOTIFICATION_EMAILS_PER_OWNER_WITHOUT_ACTOR),
+    },
   ];
+}
+
+/**
+ * TS-213: who of the people just notified in the app also gets the email -- someone who has
+ * confirmed their address (TS-168) and hasn't turned emails off for this wedding ("Email me about
+ * this wedding"). Pure, so it can be unit-tested.
+ */
+export function notificationEmailRecipients<T extends { emailVerifiedAt: Date | null; wantsEmail: boolean }>(notified: T[]): T[] {
+  return notified.filter((recipient) => recipient.emailVerifiedAt && recipient.wantsEmail);
+}
+
+/**
+ * TS-213: a notification email's text -- the update itself, then why it came and how to stop it.
+ * Before, it was the one line alone: no way into the app, no reason, no way to stop it, so the only
+ * way out was to mark it as spam -- and enough of that gets Seatwise's Gmail account suspended.
+ */
+export function notificationEmailBody({
+  text,
+  weddingName,
+  weddingUrl,
+}: {
+  text: string;
+  weddingName: string | null;
+  weddingUrl: string | null;
+}): string {
+  const wedding = weddingName ? `"${weddingName}"` : "a wedding";
+  return [
+    text,
+    "",
+    "—",
+    ...(weddingUrl ? [`Open the wedding in Seatwise: ${weddingUrl}`] : []),
+    `You're getting this because you're a member of ${wedding} on Seatwise.`,
+    `To stop these emails: open the wedding → Collaborators → your row, and turn off "Email me about this wedding". You'll still see updates in the app.`,
+  ].join("\n");
+}
+
+/** TS-213: the wedding's page, for the email's link -- left out when the site's own address isn't set up. */
+function weddingPageUrl(weddingId: string): string | null {
+  try {
+    return `${appBaseUrl()}/weddings/${weddingId}`;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -142,7 +196,8 @@ export async function sendEmailNotification(
   toEmail: string,
   subject: string,
   body: string,
-  options: { toWeddingMember?: boolean } = {}
+  // TS-203: `account` -- who the email is charged to (see sendEmail).
+  options: { toWeddingMember?: boolean; account?: string } = {}
 ): Promise<EmailResult> {
   return sendEmail(toEmail, subject, body, process.env, options);
 }
@@ -161,12 +216,16 @@ export async function notifyWeddingCollaborators(
     | "GUEST_ADDED"
     | "GUEST_REMOVED"
     | "ATTENDANCE_CHANGED"
-    | "STATUS_CHANGED",
+    | "STATUS_CHANGED"
+    // TS-213
+    | "COMMENT_ADDED"
+    | "OWNERSHIP_TRANSFERRED",
   message: string,
   {
     emailOncePer,
     emailAtMost,
     emailMessage,
+    onlyUserIds,
   }: {
     /**
      * TS-163: for events nobody signed in caused (a guest's RSVP): email at most once per
@@ -179,6 +238,8 @@ export async function notifyWeddingCollaborators(
     emailAtMost?: { key: string; limit: number; windowSeconds: number };
     /** TS-168: what the email says, when it should say less than the in-app notification. */
     emailMessage?: string;
+    /** TS-213: only these members (still the owner or a collaborator) -- e.g. the new owner after a hand-off. */
+    onlyUserIds?: string[];
   } = {}
 ): Promise<void> {
   // TS-194: best effort, always. This runs after the change it's about has been saved, so a failure
@@ -186,7 +247,7 @@ export async function notifyWeddingCollaborators(
   // caller and turn a saved change into an error. Each recipient is tried on their own, too, so one
   // failure doesn't stop the others hearing about it.
   try {
-    await notifyEveryone(weddingId, actorUserId, type, message, { emailOncePer, emailAtMost, emailMessage });
+    await notifyEveryone(weddingId, actorUserId, type, message, { emailOncePer, emailAtMost, emailMessage, onlyUserIds });
   } catch (err) {
     console.error(`[notify] ${type} for wedding ${weddingId} wasn't fully sent: ${errorCode(err)}`);
   }
@@ -206,10 +267,12 @@ async function notifyEveryone(
     emailOncePer,
     emailAtMost,
     emailMessage,
+    onlyUserIds,
   }: {
     emailOncePer?: { key: string; windowSeconds: number };
     emailAtMost?: { key: string; limit: number; windowSeconds: number };
     emailMessage?: string;
+    onlyUserIds?: string[];
   }
 ): Promise<void> {
   const { rows: weddingRows } = await pool.query(
@@ -219,14 +282,18 @@ async function notifyEveryone(
   const wedding = weddingRows[0];
   if (!wedding) return;
 
-  const { rows: recipients } = await pool.query(
-    `SELECT id, email, "emailVerifiedAt" FROM "users" WHERE id = $1
+  // TS-213: with each member's own "Email me about this wedding" switch (`wantsEmail`) -- the
+  // owner's is on the wedding, a collaborator's on their access row.
+  const { rows: everyone } = await pool.query<{ id: string; email: string; emailVerifiedAt: Date | null; wantsEmail: boolean }>(
+    `SELECT u.id, u.email, u."emailVerifiedAt", w."ownerEmailNotificationsEnabled" AS "wantsEmail"
+       FROM "users" u JOIN "weddings" w ON w."ownerId" = u.id WHERE w.id = $1
      UNION
-     SELECT u.id, u.email, u."emailVerifiedAt" FROM "users" u
+     SELECT u.id, u.email, u."emailVerifiedAt", wc."emailNotificationsEnabled" AS "wantsEmail" FROM "users" u
      JOIN "wedding_collaborators" wc ON wc."userId" = u.id
-     WHERE wc."weddingId" = $2`,
-    [wedding.ownerId, weddingId]
+     WHERE wc."weddingId" = $1`,
+    [weddingId]
   );
+  const recipients = onlyUserIds ? everyone.filter((r) => onlyUserIds.includes(r.id)) : everyone;
 
   const notified: typeof recipients = [];
   for (const recipient of recipients) {
@@ -255,7 +322,8 @@ async function notifyEveryone(
   if (!wedding.emailNotificationsEnabled) return;
   // TS-168: only to an address its owner has confirmed (TS-164) -- otherwise anyone could sign
   // up with a stranger's address and have Seatwise email them every time a guest responded.
-  const toEmail = notified.filter((recipient) => recipient.emailVerifiedAt);
+  // TS-213: and not to anyone who has turned these emails off for this wedding.
+  const toEmail = notificationEmailRecipients(notified);
   if (toEmail.length === 0) return;
 
   // TS-186: checked only once there's someone to email, and given back if nobody was emailed --
@@ -266,39 +334,82 @@ async function notifyEveryone(
   try {
     const counters = await notificationEmailCounters(actorUserId, weddingId, wedding.ownerId);
     const weddingName = emailSafeWeddingName(wedding.name);
-    for (const recipient of toEmail) {
-      try {
-        // TS-194: checked again right before each email -- someone removed from the wedding, or
-        // whose account was deleted or changed address, since the list above isn't emailed.
-        const { rows: still } = await pool.query<{ email: string }>(
-          `SELECT u.email FROM "users" u
-            WHERE u.id = $1 AND u."emailVerifiedAt" IS NOT NULL
-              AND (EXISTS (SELECT 1 FROM "weddings" WHERE id = $2 AND "ownerId" = u.id)
-                OR EXISTS (SELECT 1 FROM "wedding_collaborators" WHERE "weddingId" = $2 AND "userId" = u.id))`,
-          [recipient.id, weddingId]
-        );
-        if (!still[0]) continue;
-        const reservation = await reserveNotificationEmail(counters);
-        if (!reservation.allowed) break;
-        const result = await sendEmailNotification(
-          still[0].email,
-          weddingName ? `Seatwise: ${weddingName}` : "Seatwise: a wedding update",
-          emailSafeNotificationText(emailMessage ?? message),
-          // TS-171: a confirmed member of this wedding, so not held to the per-address daily cap.
-          { toWeddingMember: true }
-        );
-        // TS-178: nothing went out (failed, held back by the day's limit, or no email service), so it
-        // doesn't use up the sender's or the wedding's allowance.
-        if (emailDelivered(result)) anyEmailed = true;
-        else await reservation.giveBack();
-      } catch (err) {
-        // TS-194: one recipient's failure is logged; the others are still emailed.
-        console.error(`[notify] couldn't email a ${type} notification: ${errorCode(err)}`);
-      }
-    }
+    // TS-213: the update, then why it came and how to stop it.
+    const body = notificationEmailBody({
+      text: emailSafeNotificationText(emailMessage ?? message),
+      weddingName,
+      weddingUrl: weddingPageUrl(weddingId),
+    });
+    // TS-203: charged to whoever caused it -- or for a guest's answer, the wedding's owner -- so it
+    // counts toward that account's share of Seatwise's email.
+    const account = actorUserId ?? wedding.ownerId;
+    // TS-203: everyone is emailed at the same time (over the shared, pooled mail connection), not
+    // one after another -- a guest's RSVP used to wait for each planner's email in turn.
+    await Promise.all(
+      toEmail.map(async (recipient) => {
+        try {
+          // TS-194: checked again right before each email -- someone removed from the wedding, or
+          // whose account was deleted or changed address, since the list above isn't emailed.
+          // TS-213: nor someone who has just turned these emails off.
+          const { rows: still } = await pool.query<{ email: string }>(
+            `SELECT u.email FROM "users" u
+              WHERE u.id = $1 AND u."emailVerifiedAt" IS NOT NULL
+                AND (EXISTS (SELECT 1 FROM "weddings" WHERE id = $2 AND "ownerId" = u.id AND "ownerEmailNotificationsEnabled")
+                  OR EXISTS (SELECT 1 FROM "wedding_collaborators" WHERE "weddingId" = $2 AND "userId" = u.id AND "emailNotificationsEnabled"))`,
+            [recipient.id, weddingId]
+          );
+          if (!still[0]) return;
+          const reservation = await reserveNotificationEmail(counters);
+          if (!reservation.allowed) return;
+          const result = await sendEmailNotification(
+            still[0].email,
+            weddingName ? `Seatwise: ${weddingName}` : "Seatwise: a wedding update",
+            body,
+            // TS-171: a confirmed member of this wedding, so not held to the per-address daily cap.
+            { toWeddingMember: true, account }
+          );
+          // TS-178: nothing went out (failed, held back by the day's limit, or no email service), so it
+          // doesn't use up the sender's or the wedding's allowance. TS-203: unless it may have gone
+          // out after all ("uncertain"), when it stays counted.
+          if (emailMayHaveGone(result)) anyEmailed = true;
+          else await reservation.giveBack();
+        } catch (err) {
+          // TS-194: one recipient's failure is logged; the others are still emailed.
+          console.error(`[notify] couldn't email a ${type} notification: ${errorCode(err)}`);
+        }
+      })
+    );
   } finally {
     if (!anyEmailed) await gate.release();
   }
+}
+
+/**
+ * TS-213: a member's own "Email me about this wedding" switch -- the owner's is on the wedding, a
+ * collaborator's on their access row. null when they have no access to the wedding.
+ */
+export async function getMyEmailNotifications(weddingId: string, userId: string): Promise<boolean | null> {
+  const { rows } = await pool.query<{ enabled: boolean }>(
+    `SELECT "ownerEmailNotificationsEnabled" AS enabled FROM "weddings" WHERE id = $1 AND "ownerId" = $2
+     UNION ALL
+     SELECT "emailNotificationsEnabled" AS enabled FROM "wedding_collaborators" WHERE "weddingId" = $1 AND "userId" = $2`,
+    [weddingId, userId]
+  );
+  return rows[0]?.enabled ?? null;
+}
+
+/** TS-213: sets that switch. False when they have no access to the wedding (nothing changed). */
+export async function setMyEmailNotifications(weddingId: string, userId: string, enabled: boolean): Promise<boolean> {
+  const { rowCount: asOwner } = await pool.query(
+    `UPDATE "weddings" SET "ownerEmailNotificationsEnabled" = $3 WHERE id = $1 AND "ownerId" = $2`,
+    [weddingId, userId, enabled]
+  );
+  if (asOwner) return true;
+  const { rowCount } = await pool.query(
+    `UPDATE "wedding_collaborators" SET "emailNotificationsEnabled" = $3 WHERE "weddingId" = $1 AND "userId" = $2`,
+    [weddingId, userId, enabled]
+  );
+  return (rowCount ?? 0) > 0;
 }
 
 export async function listNotificationsForUser(

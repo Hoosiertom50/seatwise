@@ -2,6 +2,7 @@ import { randomUUID } from "crypto";
 import { pool } from "../pool";
 import { notifyWeddingCollaborators } from "./notifications";
 import { inWeddingChange, type ActorAccess } from "./wedding-lock";
+import { shortenWithEllipsis, timelineTimeLabel } from "@seatwise/shared";
 
 export class CommentError extends Error {
   constructor(
@@ -59,15 +60,6 @@ export async function listCommentsForWedding(weddingId: string): Promise<Comment
     [weddingId]
   );
   return rows;
-}
-
-// TS-180: "16:30" as "4:30 PM" -- the same as the web app's formatClockTime (lib/display-format).
-function clockTime12(hhmm: string): string {
-  const [h, m] = hhmm.split(":").map(Number);
-  if (!Number.isInteger(h) || !Number.isInteger(m)) return hhmm;
-  const period = h < 12 ? "AM" : "PM";
-  const h12 = h % 12 === 0 ? 12 : h % 12;
-  return `${h12}:${String(m).padStart(2, "0")} ${period}`;
 }
 
 // TS-195: the CommentError for a comment the database refused because its guest, table, timeline
@@ -160,23 +152,31 @@ export async function createComment(
     if (!input.timelineEntryId)
       throw new CommentError("timelineEntryId is required for a timeline comment.", "INVALID_TARGET");
     const { rows } = await pool.query(
-      `SELECT time, description FROM "timeline_entries" WHERE id = $1 AND "weddingId" = $2`,
+      `SELECT time, "nextDay", description FROM "timeline_entries" WHERE id = $1 AND "weddingId" = $2`,
       [input.timelineEntryId, weddingId]
     );
     const entry = rows[0];
     if (!entry) throw new CommentError("Timeline entry not found.", "NOT_FOUND");
     timelineEntryId = input.timelineEntryId;
     // TS-180: the time as the app shows it (4:30 PM), not the stored 24-hour "16:30".
-    targetLabel = `Timeline: ${clockTime12(entry.time)} ${entry.description}`;
+    // TS-214: with "(next day)" for an entry after midnight.
+    targetLabel = `Timeline: ${timelineTimeLabel(entry.time, entry.nextDay)} ${entry.description}`;
   }
 
   const id = randomUUID();
+  let created: CommentRow;
   try {
     // TS-204: saved with the person's access read again in the same transaction (see inWeddingChange).
-    await inWeddingChange(weddingId, actor, (client) =>
-      client.query(
+    // TS-209: the saved comment comes back from the insert itself -- it used to be read again at the
+    // end, and a failure there answered an error for a comment that was saved.
+    const { rows: inserted } = await inWeddingChange(weddingId, actor, (client) =>
+      client.query<CommentRow>(
         `INSERT INTO "comments" (id, "weddingId", "targetType", "guestId", "tableId", "timelineEntryId", "targetLabel", body, "authorUserId", "parentCommentId")
-       VALUES ($1, $2, $3::"CommentTargetType", $4, $5, $6, $7, $8, $9, $10)`,
+       VALUES ($1, $2, $3::"CommentTargetType", $4, $5, $6, $7, $8, $9, $10)
+       RETURNING id, "weddingId", "targetType", "guestId", "tableId", "timelineEntryId", "targetLabel",
+         false AS "targetRemoved", body, "authorUserId",
+         COALESCE((SELECT name FROM "users" WHERE id = $9), 'Former member') AS "authorName", "parentCommentId",
+         "resolvedAt", "resolvedByUserId", NULL::text AS "resolvedByName", "createdAt"`,
         [
         id,
         weddingId,
@@ -191,6 +191,7 @@ export async function createComment(
         ]
       )
     );
+    created = inserted[0];
   } catch (err) {
     // TS-195: what the comment is about was removed between the check above and saving it -- the
     // database refused the comment (nothing saved). Said in words, not a server error.
@@ -208,7 +209,8 @@ export async function createComment(
         weddingId,
         authorUserId,
         "COMMENT_REPLY",
-        `New reply on "${targetLabel}": ${input.body.slice(0, 120)}`,
+        // TS-214: cut between whole characters, with "…" -- slice could split an emoji in half.
+        `New reply on "${targetLabel}": ${shortenWithEllipsis(input.body, 120)}`,
         // TS-168: the email doesn't carry the comment itself (text anyone with Comment access typed,
         // arriving as if from Seatwise) -- it points to the app, where the reply is shown.
         { emailMessage: `There's a new reply on "${targetLabel}" — open Seatwise to read it.` }
@@ -216,10 +218,25 @@ export async function createComment(
     } catch (err) {
       console.error("Saved, but notifying the wedding's members failed:", err);
     }
+  } else {
+    // TS-213 (Tom's decision): a new comment thread notifies everyone else too (in the app, and by
+    // email unless they've turned emails off) -- before, only replies did, so a question asked in a
+    // new thread could go unseen.
+    try {
+      await notifyWeddingCollaborators(
+        weddingId,
+        authorUserId,
+        "COMMENT_ADDED",
+        `New comment on "${targetLabel}": ${input.body.slice(0, 120)}`,
+        // TS-168: as for replies, the email points to the app rather than carrying the comment.
+        { emailMessage: `There's a new comment on "${targetLabel}" — open Seatwise to read it.` }
+      );
+    } catch (err) {
+      console.error("Saved, but notifying the wedding's members failed:", err);
+    }
   }
 
-  const { rows } = await pool.query(`${SELECT_COMMENT} WHERE c.id = $1`, [id]);
-  return rows[0];
+  return created;
 }
 
 // FR-10.3: only the original commenter or someone with Edit access may resolve a thread. Returns

@@ -35,3 +35,20 @@ export function guestSideLabel(side: string, sideLabel1: string, sideLabel2: str
   if (side === "GROOM") return sideLabel2;
   return "Both";
 }
+
+/**
+ * TS-210: the export's "Side code" cell -- the stored side (BRIDE / GROOM / BOTH, any case), which
+ * stays the same when the wedding's side names are renamed. A guest file only carried the names
+ * before, so renaming "Bride"/"Groom" to "Groom"/"Partner" between the export and the re-import
+ * quietly moved every guest to the other side.
+ */
+export function parseGuestSideCode(raw: string): { side: "BRIDE" | "GROOM" | "BOTH" } | { error: string } {
+  const value = raw.trim().toUpperCase();
+  if (value === "BRIDE" || value === "GROOM" || value === "BOTH") return { side: value };
+  return { error: `Side code "${raw.trim()}" isn't one of BRIDE, GROOM or BOTH — leave the export's Side code column as it was.` };
+}
+
+/** TS-210: a row whose Side name and Side code say different sides. */
+export function sideMismatchMessage(sideCell: string, code: string): string {
+  return `Side "${sideCell.trim()}" and Side code "${code}" don't agree — the side names may have been renamed since this file was exported. Change the Side cell to match, or clear the Side code cell to use the Side cell.`;
+}

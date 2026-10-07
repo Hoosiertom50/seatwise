@@ -4,6 +4,7 @@ import { setRequiredGuestsForTable, RestrictedTableError } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
 import { errorResponse, zodErrorResponse, concurrentChangeResponse, readJson } from "@/lib/api-response";
 import { requireAccess } from "@/lib/access";
+import { SAVED_BUT_NOT_REFRESHED } from "@/lib/post-save";
 
 type Params = { params: Promise<{ weddingId: string; tableId: string }> };
 
@@ -36,6 +37,8 @@ export async function PUT(req: NextRequest, { params }: Params) {
         ? `${name} isn't on this table's required list any more — flagged as Needs Reassignment.`
         : `${name} can no longer sit where they are — flagged as Needs Reassignment.`
     );
+    // TS-209: saved, but the table couldn't be read back.
+    if (!table) warnings.push(SAVED_BUT_NOT_REFRESHED);
     return NextResponse.json({ table, warnings });
   } catch (err) {
     if (err instanceof RestrictedTableError) {

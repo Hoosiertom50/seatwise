@@ -88,10 +88,20 @@ export default defineConfig({
       testDir: "./playwright-framework/tests",
     },
 
+    // TS-215: the e2e helpers' own unit tests (tab-order rules, token redaction, test-address ids,
+    // artifact paths) -- plain functions, no database, app or browser. They have no @suite tag, so
+    // the tag-selected CI e2e runs never picked them up; CI's validate job runs this project.
+    {
+      name: "unit",
+      testDir: "./e2e/tests/unit",
+    },
+
     // Application E2E tests. Chromium is the required baseline browser (spec Section 5 defaults).
+    // TS-215: e2e/tests/unit belongs to the `unit` project above, not to the browser projects.
     {
       name: "chromium",
       testDir: "./e2e/tests",
+      testIgnore: "**/unit/**",
       use: {
         ...devices["Desktop Chrome"],
         launchOptions: {
@@ -111,11 +121,13 @@ export default defineConfig({
     {
       name: "firefox",
       testDir: "./e2e/tests",
+      testIgnore: "**/unit/**",
       use: { ...devices["Desktop Firefox"] },
     },
     {
       name: "webkit",
       testDir: "./e2e/tests",
+      testIgnore: "**/unit/**",
       use: { ...devices["Desktop Safari"] },
     },
 
@@ -131,6 +143,7 @@ export default defineConfig({
     {
       name: "edge",
       testDir: "./e2e/tests",
+      testIgnore: "**/unit/**",
       use: { ...devices["Desktop Edge"], channel: "msedge" },
     },
   ],

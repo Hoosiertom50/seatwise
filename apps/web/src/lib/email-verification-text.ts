@@ -30,10 +30,20 @@ export const EMAIL_NOT_SET_UP_MESSAGE =
 
 /** TS-177: why "Resend link" didn't send -- "a few minutes" only when that's when it could work. */
 export function emailNotSentMessage(result: EmailResult): string {
-  if (result === "recipient-limited") return "This address has had as many emails from Seatwise as it can today — please try again tomorrow.";
+  // TS-203: per-address counts roll over 24 hours too -- not "today"/"tomorrow" (which really meant
+  // midnight UTC, 8 pm Eastern).
+  if (result === "recipient-limited") {
+    return "This address has had as many emails from Seatwise as it can in the last 24 hours — please try again within about a day.";
+  }
   // TS-194: Seatwise's own email allowance now rolls over 24 hours, so room comes back during the
-  // day -- "in a few hours", not "tomorrow".
-  if (result === "limited") return "Seatwise has sent as many emails as it can for now — please try again in a few hours.";
+  // day. TS-203: after a burst it can take up to a day, not "a few hours" -- say what's true.
+  if (result === "limited" || result === "account-limited") {
+    return "Seatwise has sent as many emails as it can for now — room comes back as emails from the last 24 hours age out, so please try again later (within about a day).";
+  }
+  // TS-203: the mail server went quiet after it may have taken the email -- it may still arrive.
+  if (result === "uncertain") {
+    return "We may have sent the email — the email service stopped answering before it confirmed. Check your inbox (and spam) in a few minutes before asking again.";
+  }
   // TS-194: trying again won't help when the site has no email service set up -- say so.
   if (result === "not-configured") return EMAIL_NOT_SET_UP_MESSAGE;
   return "We couldn't send the email just now — please try again in a few minutes.";

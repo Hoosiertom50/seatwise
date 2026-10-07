@@ -13,8 +13,7 @@ import {
 } from "@seatwise/db";
 import { readJson, zodErrorResponse } from "@/lib/api-response";
 import {
-  accountEmailAddressKey,
-  ACCOUNT_EMAIL_LIMITS,
+  accountEmailCounters,
   accountSignInLocked,
   clientAddress,
   countOr429,
@@ -77,16 +76,16 @@ export async function POST(req: NextRequest) {
   // TS-186: whether this network address has any account emails left today is checked first,
   // without counting anything -- so a source that has used up its own allowance can't go on using
   // up the per-email limits below (and with them the owner's resets for the day).
-  const ownAllowance = await peekRateLimit(
-    accountEmailAddressKey(address),
-    ACCOUNT_EMAIL_LIMITS.perAddressDay.limit,
-    ACCOUNT_EMAIL_LIMITS.perAddressDay.windowSeconds
-  );
-  if (!ownAllowance.allowed) {
-    return NextResponse.json(
-      { error: tooManyAttemptsMessage(ACCOUNT_EMAIL_LIMITS.perAddressDay.windowSeconds) },
-      { status: 429, headers: { "Retry-After": String(ownAllowance.retryAfterSeconds) } }
-    );
+  // TS-203: the address's /48 too, for IPv6 (see accountEmailCounters).
+  const networkCounters = accountEmailCounters(req);
+  for (const { key, limit, windowSeconds } of networkCounters) {
+    const ownAllowance = await peekRateLimit(key, limit, windowSeconds);
+    if (!ownAllowance.allowed) {
+      return NextResponse.json(
+        { error: tooManyAttemptsMessage(windowSeconds, ownAllowance.retryAfterSeconds) },
+        { status: 429, headers: { "Retry-After": String(ownAllowance.retryAfterSeconds) } }
+      );
+    }
   }
 
   const emailKey = email.toLowerCase();
@@ -96,15 +95,16 @@ export async function POST(req: NextRequest) {
   // day's resets too, leaving them no way in until tomorrow. It's still a limit, so the inbox
   // can't be flooded either. The 15-minute limit, and "already sent" while a link still works,
   // hold either way.
-  const perEmailDay = (await accountSignInLocked(email))
-    ? PASSWORD_RESET_LIMITS.requestsPerEmailDayWhileLocked
-    : PASSWORD_RESET_LIMITS.requestsPerEmailDay;
-  const overForEmail =
+  const locked = await accountSignInLocked(email);
+  const perEmailDay = locked ? PASSWORD_RESET_LIMITS.requestsPerEmailDayWhileLocked : PASSWORD_RESET_LIMITS.requestsPerEmailDay;
+  let overForEmail =
     (await count(`pw-reset:email:${emailKey}`, PASSWORD_RESET_LIMITS.requestsPerEmail)) ??
-    (await count(`pw-reset:email:day:${emailKey}`, perEmailDay)) ??
-    // TS-171: counted with sign-ups and "Resend link" from the same address -- only when an email
-    // is really about to go out.
-    (await count(accountEmailAddressKey(address), ACCOUNT_EMAIL_LIMITS.perAddressDay));
+    (await count(`pw-reset:email:day:${emailKey}`, perEmailDay));
+  // TS-171: counted with sign-ups and "Resend link" from the same address -- only when an email
+  // is really about to go out.
+  for (const { key, limit, windowSeconds } of networkCounters) {
+    overForEmail ??= await count(key, { limit, windowSeconds });
+  }
   if (overForEmail) return overForEmail;
 
   // TS-178: only an account that has confirmed its address is treated as the address's owner.
@@ -130,15 +130,23 @@ export async function POST(req: NextRequest) {
     // TS-163 / TS-186: a confirmed account's reset comes out of the resets' own daily budget, so
     // it still goes out when the everyday limit is reached; an unconfirmed account's is an
     // everyday email, from its own smaller share.
-    confirmed ? { essential: true } : { unconfirmedReset: true }
+    // TS-203: a locked-out account may also use the resets kept for that.
+    confirmed ? { essential: true, lockedOut: locked } : { unconfirmedReset: true }
   );
   // TS-153: older links are cancelled only once this one has gone out.
   if (emailDelivered(result)) await retireOlderResetTokens(user.id, token);
-  else {
-    // TS-171: one that never went out is cancelled, so asking again isn't answered "already sent".
-    await discardPasswordResetToken(token);
-    // TS-178: and it doesn't use up the email's or the network address's allowance.
-    await giveBackAll();
+  else if (result === "uncertain") {
+    // TS-203: the mail server went quiet after it may have taken the email -- it may well arrive,
+    // so its link is kept working (and the counts stay). Older links are kept too, in case it didn't.
+  } else {
+    try {
+      // TS-171: one that never went out is cancelled, so asking again isn't answered "already sent".
+      await discardPasswordResetToken(token);
+    } finally {
+      // TS-178: and it doesn't use up the email's or the network address's allowance. TS-203:
+      // given back even if cancelling the link failed.
+      await giveBackAll();
+    }
   }
   return NextResponse.json(resetOutcome(true, result));
 }

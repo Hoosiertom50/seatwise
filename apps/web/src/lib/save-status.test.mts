@@ -40,7 +40,9 @@ test("a request with no answer gives up after the time limit", async () => {
 });
 
 // TS-175: a delete whose first try got no answer, retried and told "not found", did happen.
-test("a retried delete that finds nothing counts as deleted; a first-try 404 is still an error", async () => {
+// TS-209: so does a first try told the item itself is gone (someone else deleted it a moment
+// earlier) -- but not a 404 about the wedding, which is a real answer.
+test("a delete that finds the item already gone counts as deleted; a 404 about the wedding is still an error", async () => {
   const { api, ApiError } = await import("./api-client");
   const realFetch = globalThis.fetch;
   try {
@@ -54,7 +56,15 @@ test("a retried delete that finds nothing counts as deleted; a first-try 404 is 
     assert.equal(calls, 2);
 
     globalThis.fetch = (async () => new Response(JSON.stringify({ error: "Guest not found" }), { status: 404 })) as typeof fetch;
-    await assert.rejects(api.delete("/api/v1/weddings/w1/guests/g1"), (err) => err instanceof ApiError && err.status === 404);
+    assert.deepEqual(await api.delete("/api/v1/weddings/w1/guests/g1"), {});
+
+    for (const error of ["Wedding not found", "This wedding was deleted — nothing was saved."]) {
+      globalThis.fetch = (async () => new Response(JSON.stringify({ error }), { status: 404 })) as typeof fetch;
+      await assert.rejects(api.delete("/api/v1/weddings/w1/guests/g1"), (err) => err instanceof ApiError && err.status === 404);
+    }
+    // Other methods are unchanged: a 404 on an edit is still an error.
+    globalThis.fetch = (async () => new Response(JSON.stringify({ error: "Guest not found" }), { status: 404 })) as typeof fetch;
+    await assert.rejects(api.patch("/api/v1/weddings/w1/guests/g1", { notes: "x" }), (err) => err instanceof ApiError && err.status === 404);
   } finally {
     globalThis.fetch = realFetch;
   }

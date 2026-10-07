@@ -129,6 +129,7 @@ export async function createRelationship(
   // (say "must sit together" and "must not sit together") used to both pass the checks, leaving
   // contradictory hard rules that made every Generate fail.
   const id = randomUUID();
+  let created: RelationshipRow | null = null;
   const client = await pool.connect();
   try {
     await beginTransaction(client);
@@ -226,6 +227,9 @@ export async function createRelationship(
        VALUES ($1, $2, $3, $4, $5)`,
       [id, weddingId, guestAId, guestBId, input.type]
     );
+    // TS-209: read back in the same transaction -- read after it, a failure answered an error for a
+    // rule that was saved.
+    created = await getRelationshipById(id, weddingId, client);
     await client.query("COMMIT");
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});
@@ -238,13 +242,16 @@ export async function createRelationship(
     client.release();
   }
 
-  const created = await getRelationshipById(id, weddingId);
-  if (!created) throw new Error("Failed to load relationship after creating it");
-  return created;
+  // It was just inserted in this transaction, so it's there.
+  return created!;
 }
 
-async function getRelationshipById(id: string, weddingId: string): Promise<RelationshipRow | null> {
-  const { rows } = await pool.query(
+async function getRelationshipById(
+  id: string,
+  weddingId: string,
+  db: typeof pool | import("pg").PoolClient = pool
+): Promise<RelationshipRow | null> {
+  const { rows } = await db.query(
     `SELECT r.id, r."weddingId", r."guestAId", r."guestBId", r.type, r."createdAt",
             (ga."firstName" || ' ' || ga."lastName") AS "guestAName",
             (gb."firstName" || ' ' || gb."lastName") AS "guestBName"

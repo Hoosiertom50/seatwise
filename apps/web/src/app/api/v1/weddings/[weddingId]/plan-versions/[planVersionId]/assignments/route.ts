@@ -44,7 +44,9 @@ export async function POST(req: NextRequest, { params }: Params) {
             parsed.data.guestId,
             user.id,
             parsed.data.expectedRevision,
-            access.actor
+            access.actor,
+            // TS-208: undo of a seat whose must-sit-together partner was already there.
+            parsed.data.onlyGuestIds
           )
         : await moveGuestAssignment(
             planVersionId,

@@ -748,7 +748,7 @@ export async function setRequiredGuestsForTable(
   guestIds: string[],
   /** TS-204: the access the change was let in with -- read again under its first locks. */
   actor?: ActorAccess
-): Promise<{ table: SeatingTableRow; newlyFlagged: NewlyFlaggedSeat[] }> {
+): Promise<{ table: SeatingTableRow | null; newlyFlagged: NewlyFlaggedSeat[] }> {
   const client = await pool.connect();
   let newlyFlagged: NewlyFlaggedSeat[] = [];
   try {
@@ -795,9 +795,15 @@ export async function setRequiredGuestsForTable(
     client.release();
   }
 
-  const updated = await getSeatingTableForWedding(tableId, weddingId);
-  if (!updated) throw new RestrictedTableError("Table not found after update.");
-  return { table: updated, newlyFlagged };
+  // TS-209: the list is saved -- reading the table back can't turn that into an error (it answered
+  // "Table not found after update", or a server error, for a change that was saved). Null when it
+  // couldn't be read; the caller says the change is saved.
+  try {
+    return { table: await getSeatingTableForWedding(tableId, weddingId), newlyFlagged };
+  } catch (err) {
+    console.error("Required-guest list saved, but reading the table back failed:", err);
+    return { table: null, newlyFlagged };
+  }
 }
 
 // FR-4.6 / TS-120: after a table edit that can make its current seating invalid -- accessible

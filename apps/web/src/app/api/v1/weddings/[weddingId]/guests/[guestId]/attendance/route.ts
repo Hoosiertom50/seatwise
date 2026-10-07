@@ -32,6 +32,10 @@ export async function POST(req: NextRequest, { params }: Params) {
   if (!parsed.success) return zodErrorResponse(parsed.error);
 
   try {
+    // TS-207: whether the guest already had that attendance (changed on another screen, or by their
+    // own RSVP link) -- the screen then says so, instead of claiming it just made the change.
+    const before = await getGuestForWedding(guestId, weddingId);
+    const unchanged = before?.dayOfAttendance === parsed.data.attendance;
     const planVersion = await setGuestAttendance(
       weddingId,
       guestId,
@@ -42,8 +46,12 @@ export async function POST(req: NextRequest, { params }: Params) {
     );
     // TS-175: the guest too -- the change bumps their revision (TS-165), and a screen that kept the
     // old one got a false "edited elsewhere" on its next edit of them.
-    const guest = await getGuestForWedding(guestId, weddingId);
-    return NextResponse.json({ planVersion, guest: guest ? guestForViewer(guest, access.accessLevel) : null });
+    // TS-209: saved by now -- a failed read-back gives no guest, not an error (or "nothing was saved").
+    const guest = await getGuestForWedding(guestId, weddingId).catch((readErr) => {
+      console.error("Attendance saved, but reading the guest back failed:", readErr);
+      return null;
+    });
+    return NextResponse.json({ planVersion, guest: guest ? guestForViewer(guest, access.accessLevel) : null, unchanged });
   } catch (err) {
     if (err instanceof AttendanceError) {
       return errorResponse(err.message, 409);

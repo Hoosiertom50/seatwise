@@ -2,7 +2,16 @@ import { NextRequest, NextResponse } from "next/server";
 import { createInviteSchema } from "@seatwise/shared";
 import { inviteEmailText } from "@/lib/outgoing-email-text";
 import { confirmEmailFirstMessage } from "@/lib/email-verification";
-import { createInvite, listInvitesForWedding, sendEmailNotification, emailDelivered, InviteError, INVITE_TTL_DAYS } from "@seatwise/db";
+import {
+  createInvite,
+  listInvitesForWedding,
+  sendEmailNotification,
+  emailDelivered,
+  emailMayHaveGone,
+  InviteError,
+  INVITE_TTL_DAYS,
+  markInviteEmailed,
+} from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
 import { appBaseUrl } from "@/lib/app-url";
 import { errorResponse, zodErrorResponse, readJson } from "@/lib/api-response";
@@ -50,7 +59,9 @@ export async function POST(req: NextRequest, { params }: Params) {
   // TS-156: every invite sends an email, so invites are capped per sender.
   // TS-177: the message says which limit it was -- the account's daily allowance means tomorrow.
   const reservation = await reserveEmailSend("invites", user.id);
-  if (!reservation.allowed) return errorResponse(emailSendRefusedMessage("invites", reservation.reason), 429);
+  if (!reservation.allowed) {
+    return errorResponse(emailSendRefusedMessage("invites", reservation.reason, reservation.retryAfterSeconds), 429);
+  }
 
   // TS-194: the counts are given back -- from exactly the windows they were made in (the
   // reservation) -- whenever no email went out: not sent, no invite made, or anything else going
@@ -79,12 +90,20 @@ export async function POST(req: NextRequest, { params }: Params) {
       acceptUrl,
       expiresInDays: INVITE_TTL_DAYS,
     });
-    const sent = await sendEmailNotification(invite.email, subject, text);
+    // TS-203: charged to the sender's account (its share of Seatwise's email, and of what one
+    // address may receive).
+    const sent = await sendEmailNotification(invite.email, subject, text, { account: user.id });
     // TS-171 / TS-178: the invite was made but nothing went out (this address has had its share of
-    // email today, the day's limit was reached, or the send failed) -- it doesn't use up the
-    // sender's allowance (given back below); the owner gets the link to send instead.
+    // email, the day's limit was reached, or the send failed) -- it doesn't use up the sender's
+    // allowance (given back below); the owner gets the link to send instead.
     const emailed = emailDelivered(sent);
-    emailWentOut = emailed;
+    // TS-203: an email that may have gone out after all (the mail server went quiet) stays counted.
+    emailWentOut = emailMayHaveGone(sent);
+    // TS-203: so accepting it confirms the invitee's address (see acceptInvite). Not when the
+    // owner is handed the link to send some other way.
+    if (emailed) {
+      await markInviteEmailed(invite.id).catch((err) => console.error("Couldn't record that an invite was emailed:", err));
+    }
 
     // eslint-disable-next-line @typescript-eslint/no-unused-vars -- TS-176: the token is left out of the response on purpose.
     const { token: _token, ...invitePublic } = invite;

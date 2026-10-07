@@ -154,6 +154,20 @@ async function accountCheck(): Promise<"ACCOUNT_GONE" | "SIGNED_OUT" | "UNKNOWN"
 /** TS-204: a retried "Delete my account" whose answer was lost, and this device is signed out. */
 export const ACCOUNT_DELETE_UNCONFIRMED =
   "You were signed out before we could confirm whether your account was deleted. Sign in to check — if your account still exists, you can delete it from there.";
+// TS-209: the 404 answers that mean the wedding itself is gone or no longer open to this person
+// ("Wedding not found" from the access check, "This wedding was deleted" from a save) -- as opposed
+// to the one item a DELETE named (a guest, a vendor...) being gone already.
+const WEDDING_GONE_404 = /^(Wedding not found|This wedding was deleted)/;
+
+/** TS-209: whether a 404 answer is about the wedding rather than the item asked for. */
+export function isWeddingGone404(data: { error?: unknown } | null | undefined): boolean {
+  return typeof data?.error === "string" && WEDDING_GONE_404.test(data.error);
+}
+
+/** TS-209: a 404 about the item itself (deleted by someone else), not about the wedding. */
+export function isItemGoneError(err: unknown): boolean {
+  return err instanceof ApiError && err.status === 404 && !isWeddingGone404(err.data);
+}
 
 // TS-166: non-GET requests that don't save anything the planner made.
 const NOT_A_SAVE = [/\/guests\/import\/preview$/, /^\/api\/v1\/notifications(\/[^/]+\/read)?$/];
@@ -198,10 +212,17 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   // it wasn't deleted; no account (401) means it was.
   const retriedAccount401 =
     options.method === "DELETE" && retriedResponses.has(res) && res.status === 401 && path === ACCOUNT_PATH;
+  // TS-204: only "this account no longer exists" counts as deleted (see accountCheck).
   const accountState = retriedAccount401 ? await accountCheck() : null;
   const accountReallyGone = accountState === "ACCOUNT_GONE";
+  // TS-209: and a first try that finds the item already gone -- someone else deleted it a moment
+  // earlier. It used to come back on screen with "Couldn't delete". Not when it's the wedding that's
+  // gone (or no longer theirs): that 404 is a real answer the page must show.
+  const firstTryItemGone =
+    options.method === "DELETE" && res.status === 404 && path !== ACCOUNT_PATH && !isWeddingGone404(data);
   const alreadyGone =
-    options.method === "DELETE" && retriedResponses.has(res) && (res.status === 404 || accountReallyGone);
+    (options.method === "DELETE" && retriedResponses.has(res) && (res.status === 404 || accountReallyGone)) ||
+    firstTryItemGone;
   // TS-177: likewise a retried edit "refused" only because the first try already saved it.
   const alreadySaved =
     options.method === "PATCH" && res.status === 409 && retriedResponses.has(res)

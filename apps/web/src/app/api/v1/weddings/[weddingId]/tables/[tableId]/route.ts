@@ -11,6 +11,7 @@ import {
 import { getAuthUser } from "@/lib/session";
 import { errorResponse, zodErrorResponse, concurrentChangeResponse, readJson } from "@/lib/api-response";
 import { requireAccess } from "@/lib/access";
+import { SAVED_BUT_NOT_REFRESHED, afterSave } from "@/lib/post-save";
 
 type Params = { params: Promise<{ weddingId: string; tableId: string }> };
 
@@ -73,7 +74,8 @@ export async function PATCH(req: NextRequest, { params }: Params) {
           : `${name} can no longer sit where they are under the seating rules — flagged as Needs Reassignment.`;
   });
 
-  const table = await getSeatingTableForWedding(tableId, weddingId);
+  // TS-209: the change is saved -- reading the table back can't turn it into an error.
+  const table = await afterSave("reading the table back", () => getSeatingTableForWedding(tableId, weddingId), warnings, SAVED_BUT_NOT_REFRESHED, null);
   return NextResponse.json({ ok: true, table, warnings });
 }
 

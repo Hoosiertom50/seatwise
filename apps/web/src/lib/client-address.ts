@@ -10,13 +10,17 @@
 // or server is normally handed a whole /64 -- billions of addresses -- so keying on the full
 // address would give one source a fresh allowance for every address it picks.
 export function clientAddress(req: { headers: Headers }): string {
+  return rateLimitAddress(rawClientAddress(req));
+}
+
+function rawClientAddress(req: { headers: Headers }): string {
   const first = (value: string | null) => value?.split(",")[0]?.trim() || null;
-  const address =
+  return (
     first(req.headers.get("x-nf-client-connection-ip")) ??
     first(req.headers.get("x-forwarded-for")) ??
     first(req.headers.get("x-real-ip")) ??
-    "unknown";
-  return rateLimitAddress(address);
+    "unknown"
+  );
 }
 
 /**
@@ -32,6 +36,26 @@ export function rateLimitAddress(address: string): string {
     return [groups[6] >> 8, groups[6] & 255, groups[7] >> 8, groups[7] & 255].join(".");
   }
   return `${groups.slice(0, 4).map((g) => g.toString(16)).join(":")}::/64`;
+}
+
+/**
+ * TS-203: the wider network an address belongs to, for limits that a source with many /64s could
+ * otherwise multiply -- an IPv6 address's /48 ("2001:db8:1::/48"); null for IPv4 (and anything
+ * that isn't an IPv6 address). A free tunnel hands out a whole /48, which is 65,536 /64s, so a
+ * per-/64 limit alone gave one person 65,536 allowances. Such limits count both: the /64 (one home
+ * or server) and, more generously, the /48 it's in.
+ */
+export function rateLimitWiderNetwork(address: string): string | null {
+  const groups = ipv6Groups(address);
+  if (!groups) return null;
+  if (groups.slice(0, 5).every((g) => g === 0) && groups[5] === 0xffff) return null;
+  return `${groups.slice(0, 3).map((g) => g.toString(16)).join(":")}::/48`;
+}
+
+/** TS-203: clientAddress, plus the wider network (rateLimitWiderNetwork) it's in, if any. */
+export function clientNetworks(req: { headers: Headers }): { address: string; wider: string | null } {
+  const raw = rawClientAddress(req);
+  return { address: rateLimitAddress(raw), wider: rateLimitWiderNetwork(raw) };
 }
 
 /** The eight 16-bit groups of an IPv6 address, or null if `value` isn't one. */

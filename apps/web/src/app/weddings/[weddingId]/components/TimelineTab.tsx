@@ -8,30 +8,49 @@ import { useUnsavedChanges } from "@/lib/unsaved-changes";
 import { OPEN_EDIT_MESSAGE, REFRESH_FAILED_MESSAGE } from "@/lib/display-format";
 // TS-193: the same limits the server checks (packages/shared/src/field-limits.ts).
 import { FIELD_LIMITS } from "@seatwise/shared";
+// TS-214: entries after midnight ("next day") are listed after the wedding day's own.
+import { compareTimelineEntries, sameTimelineSlot, timelineTimeLabel, PICK_A_TIME_MESSAGE } from "@seatwise/shared";
 
 // TS-18 (Day-Of Timeline / Run-of-Show, FR-13.1/FR-13.2): a per-wedding, chronological schedule of
 // day-of events -- its own record, entirely independent of guests/tables/rules/seating plans.
-// Entries are always listed by (time, sortOrder) from the server, so this component never sorts
-// client-side; "reorder" only ever moves an entry among others sharing its exact same time.
+// Entries are always listed by (time, sortOrder) from the server; after a change here the list is
+// put in the same order with compareTimelineEntries. "Reorder" only ever moves an entry among others
+// sharing its exact same time (TS-214: on the same day).
+// TS-212: after the edit box swaps back to the row (Save, Cancel), or opens, focus goes to a stable
+// control by id -- it used to drop to the page, so the next Tab started from the top. Only if focus
+// was lost (someone who has clicked elsewhere keeps their place).
+function focusIfLost(id: string) {
+  setTimeout(() => {
+    const active = document.activeElement;
+    if (active && active !== document.body && active.isConnected) return;
+    document.getElementById(id)?.focus();
+  }, 0);
+}
+
 export function TimelineTab({ weddingId, canEdit }: { weddingId: string; canEdit: boolean }) {
   const [entries, setEntries] = useState<TimelineEntryDTO[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const [time, setTime] = useState("");
+  // TS-214: "After midnight (next day)".
+  const [nextDay, setNextDay] = useState(false);
   const [description, setDescription] = useState("");
   const [adding, setAdding] = useState(false);
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editTime, setEditTime] = useState("");
+  const [editNextDay, setEditNextDay] = useState(false);
   const [editDescription, setEditDescription] = useState("");
   // TS-159: tell the page this tab has input that leaving it would lose.
   // TS-166: a time picked for a new entry counts too.
   // TS-175: an open edit box counts only once something in it has changed.
   const editingEntry = entries.find((e) => e.id === editingId);
-  const editChanged = !!editingEntry && (editTime !== editingEntry.time || editDescription !== editingEntry.description);
+  const editChanged =
+    !!editingEntry &&
+    (editTime !== editingEntry.time || editNextDay !== editingEntry.nextDay || editDescription !== editingEntry.description);
   // TS-182: only while the forms are there (they're hidden without Edit access).
-  useUnsavedChanges("timeline", canEdit && !!(time || description.trim() || editChanged));
+  useUnsavedChanges("timeline", canEdit && !!(time || nextDay || description.trim() || editChanged));
   const [saving, setSaving] = useState(false);
   // TS-191: a reorder is on its way -- the arrows wait for it (quick presses used to send moves
   // based on an order that was about to change).
@@ -59,14 +78,15 @@ export function TimelineTab({ weddingId, canEdit }: { weddingId: string; canEdit
     try {
       const { entry } = await api.post<{ entry: TimelineEntryDTO }>(
         `/api/v1/weddings/${weddingId}/timeline-entries`,
-        { time, description }
+        { time, nextDay, description }
       );
       // TS-166: built from the list as it is now, so another change made meanwhile isn't lost.
       listChange.current++; // TS-199
       setEntries((cur) =>
-        [...cur, entry].sort((a, b) => a.time.localeCompare(b.time) || a.sortOrder - b.sortOrder)
+        [...cur, entry].sort(compareTimelineEntries)
       );
       setTime("");
+      setNextDay(false);
       setDescription("");
     } catch (err) {
       setError(apiErrorMessage(err, [], "Couldn't add that timeline entry."));
@@ -84,10 +104,18 @@ export function TimelineTab({ weddingId, canEdit }: { weddingId: string; canEdit
     setError(null);
     setEditingId(entry.id);
     setEditTime(entry.time);
+    setEditNextDay(entry.nextDay);
     setEditDescription(entry.description);
+    focusIfLost(`timeline-${entry.id}-edit-time`);
   }
 
   async function onSaveEdit(entryId: string) {
+    // TS-214: a cleared time box can't be saved -- said in the app's own 12-hour words (the server
+    // used to answer "HH:MM (24-hour)").
+    if (!editTime) {
+      setError(PICK_A_TIME_MESSAGE);
+      return;
+    }
     setSaving(true);
     setError(null);
     try {
@@ -95,6 +123,7 @@ export function TimelineTab({ weddingId, canEdit }: { weddingId: string; canEdit
         `/api/v1/weddings/${weddingId}/timeline-entries/${entryId}`,
         {
           time: editTime,
+          nextDay: editNextDay,
           description: editDescription,
           // TS-92: the version this edit is based on -- a stale one is refused, never overwrites.
           expectedRevision: entries.find((e) => e.id === entryId)?.revision,
@@ -105,9 +134,11 @@ export function TimelineTab({ weddingId, canEdit }: { weddingId: string; canEdit
       setEntries((cur) =>
         cur
           .map((e) => (e.id === entryId ? entry : e))
-          .sort((a, b) => a.time.localeCompare(b.time) || a.sortOrder - b.sortOrder)
+          .sort(compareTimelineEntries)
       );
       setEditingId(null);
+      // TS-212: back to this entry's Edit button (wherever the new time put it).
+      focusIfLost(`timeline-${entryId}-edit`);
     } catch (err) {
       // TS-92: someone else changed this entry first. Show their version and say plainly that
       // this edit was not saved -- the edit box closes so the stale text can't be mistaken for
@@ -117,9 +148,10 @@ export function TimelineTab({ weddingId, canEdit }: { weddingId: string; canEdit
         setEntries((cur) =>
           cur
             .map((e) => (e.id === entryId ? fresh : e))
-            .sort((a, b) => a.time.localeCompare(b.time) || a.sortOrder - b.sortOrder)
+            .sort(compareTimelineEntries)
         );
         setEditingId(null);
+        focusIfLost(`timeline-${entryId}-edit`);
       }
       setError(apiErrorMessage(err, [], "Couldn't save that change."));
     } finally {
@@ -133,12 +165,13 @@ export function TimelineTab({ weddingId, canEdit }: { weddingId: string; canEdit
     try {
       await api.delete(`/api/v1/weddings/${weddingId}/timeline-entries/${entryId}`);
       listChange.current++; // TS-199
-    } catch {
+    } catch (err) {
       if (removed)
         setEntries((cur) =>
-          [...cur, removed].sort((a, b) => a.time.localeCompare(b.time) || a.sortOrder - b.sortOrder)
+          [...cur, removed].sort(compareTimelineEntries)
         );
-      setError("Couldn't remove that timeline entry.");
+      // TS-209: the server's own reason. An entry already removed counts as removed (see api-client).
+      setError(apiErrorMessage(err, [], "Couldn't remove that timeline entry."));
     }
   }
 
@@ -204,13 +237,6 @@ export function TimelineTab({ weddingId, canEdit }: { weddingId: string; canEdit
     }
   }
 
-  function formatTime(hhmm: string): string {
-    const [h, m] = hhmm.split(":").map(Number);
-    const period = h < 12 ? "AM" : "PM";
-    const h12 = h % 12 === 0 ? 12 : h % 12;
-    return `${h12}:${String(m).padStart(2, "0")} ${period}`;
-  }
-
   if (loading) return <p className="text-sm text-neutral-500 dark:text-neutral-400">Loading timeline...</p>;
 
   return (
@@ -255,6 +281,16 @@ export function TimelineTab({ weddingId, canEdit }: { weddingId: string; canEdit
                 required
               />
             </div>
+            {/* TS-214: an entry after midnight is listed after the wedding day's own entries. */}
+            <label className="flex items-center gap-2 text-sm sm:col-span-2">
+              <input
+                id="entry-next-day"
+                type="checkbox"
+                checked={nextDay}
+                onChange={(e) => setNextDay(e.target.checked)}
+              />
+              After midnight (next day)
+            </label>
             <button
               type="submit"
               disabled={adding}
@@ -274,8 +310,9 @@ export function TimelineTab({ weddingId, canEdit }: { weddingId: string; canEdit
       ) : (
         <ul className="flex flex-col gap-2">
           {entries.map((entry, i) => {
-            const sameTimeAbove = i > 0 && entries[i - 1].time === entry.time;
-            const sameTimeBelow = i < entries.length - 1 && entries[i + 1].time === entry.time;
+            // TS-214: the same time on the same day (12:30 AM next day isn't "the same" as 12:30 AM).
+            const sameTimeAbove = i > 0 && sameTimelineSlot(entries[i - 1], entry);
+            const sameTimeBelow = i < entries.length - 1 && sameTimelineSlot(entries[i + 1], entry);
             return (
               <li
                 key={entry.id}
@@ -284,12 +321,23 @@ export function TimelineTab({ weddingId, canEdit }: { weddingId: string; canEdit
                 {editingId === entry.id ? (
                   <div className="flex flex-1 flex-wrap items-center gap-2">
                     <input
+                      id={`timeline-${entry.id}-edit-time`}
                       type="time"
                       aria-label="Edit time"
                       className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm"
                       value={editTime}
                       onChange={(e) => setEditTime(e.target.value)}
+                      required
                     />
+                    <label className="flex items-center gap-1 text-sm">
+                      <input
+                        type="checkbox"
+                        aria-label="Edit: after midnight (next day)"
+                        checked={editNextDay}
+                        onChange={(e) => setEditNextDay(e.target.checked)}
+                      />
+                      Next day
+                    </label>
                     <input
                       maxLength={FIELD_LIMITS.timelineDescription}
                       aria-label="Edit description"
@@ -305,7 +353,10 @@ export function TimelineTab({ weddingId, canEdit }: { weddingId: string; canEdit
                       Save
                     </button>
                     <button
-                      onClick={() => setEditingId(null)}
+                      onClick={() => {
+                        setEditingId(null);
+                        focusIfLost(`timeline-${entry.id}-edit`);
+                      }}
                       className="rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800"
                     >
                       Cancel
@@ -315,7 +366,7 @@ export function TimelineTab({ weddingId, canEdit }: { weddingId: string; canEdit
                   <>
                     {/* TS-199: a long description wraps instead of pushing the row off a phone screen. */}
                     <div className="min-w-0">
-                      <p className="font-medium">{formatTime(entry.time)}</p>
+                      <p className="font-medium">{timelineTimeLabel(entry.time, entry.nextDay)}</p>
                       <p className="break-words text-sm text-neutral-500 dark:text-neutral-400 [overflow-wrap:anywhere]">{entry.description}</p>
                     </div>
                     {canEdit && (
@@ -345,6 +396,7 @@ export function TimelineTab({ weddingId, canEdit }: { weddingId: string; canEdit
                           ↓
                         </button>
                         <button
+                          id={`timeline-${entry.id}-edit`}
                           onClick={() => startEdit(entry)}
                           aria-label={`Edit ${entry.description}`}
                           className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800"

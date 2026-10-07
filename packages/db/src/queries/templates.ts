@@ -1,7 +1,7 @@
 import { randomUUID } from "crypto";
 import { pool, beginTransaction } from "../pool";
 import { compareTableLabels, cutToLimit } from "@seatwise/shared";
-import { lockWeddingRow, recheckActorAccess, type ActorAccess } from "./wedding-lock";
+import { lockWeddingRow, recheckActorAccess, WeddingDeletedError, type ActorAccess } from "./wedding-lock";
 import { assertWeddingHasRoom } from "./wedding-caps";
 
 // TS-19 (FR-14.1/FR-14.2): a template is a reusable snapshot of a wedding's table layout plus its
@@ -77,7 +77,7 @@ export async function createTemplateFromWedding(
   name: string,
   /** TS-204: the access the request was let in with -- read again before the wedding is copied. */
   actor?: ActorAccess
-): Promise<SeatingTemplateDetail> {
+): Promise<SeatingTemplateDetail | null> {
   const templateId = randomUUID();
   const client = await pool.connect();
   try {
@@ -90,7 +90,8 @@ export async function createTemplateFromWedding(
       [weddingId]
     );
     const wedding = weddingRows[0];
-    if (!wedding) throw new TemplateNotFoundError("Wedding not found.");
+    // TS-209: said as the wedding being deleted (404), like every other save into a deleted wedding.
+    if (!wedding) throw new WeddingDeletedError();
 
     await client.query(
       `INSERT INTO "seating_templates" (id, "ownerId", name, "sourceWeddingId", "sideMixing", "updatedAt")
@@ -141,14 +142,24 @@ export async function createTemplateFromWedding(
     await client.query("COMMIT");
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});
+    // TS-209: the wedding was deleted while this was being saved -- its row is gone, so the
+    // template's link to it (seating_templates_sourceWeddingId_fkey) is refused. Said as such (404),
+    // not a server error.
+    const e = err as { code?: string; constraint?: string } | null;
+    if (e?.code === "23503" && /_sourceWeddingId_fkey$/.test(e.constraint ?? "")) throw new WeddingDeletedError();
     throw err;
   } finally {
     client.release();
   }
 
-  const created = await getTemplateForOwner(templateId, ownerId);
-  if (!created) throw new Error("Failed to load template after creating it");
-  return created;
+  // TS-209: the template is saved -- reading it back can't turn that into an error. Without it
+  // (deleted at once, or the read failed), the caller is told it's saved but couldn't be shown.
+  try {
+    return await getTemplateForOwner(templateId, ownerId);
+  } catch (err) {
+    console.error("Template saved, but reading it back failed:", err);
+    return null;
+  }
 }
 
 export async function listTemplatesForOwner(ownerId: string): Promise<SeatingTemplateRow[]> {

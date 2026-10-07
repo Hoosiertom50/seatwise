@@ -13,8 +13,15 @@ export async function GET(req: NextRequest, { params }: Params) {
 
   const { weddingId, planVersionId } = await params;
   try {
-    const { weddingName, tables } = await loadExportData(weddingId, planVersionId, user.id);
-    const pdfBytes = await buildSeatingChartPdf(weddingName, tables);
+    // TS-211: with the guests who aren't seated, and the date and time it was made (in the time zone
+    // the browser sends).
+    const { weddingName, tables, unseated, generatedAt } = await loadExportData(
+      weddingId,
+      planVersionId,
+      user.id,
+      req.nextUrl.searchParams.get("tz")
+    );
+    const pdfBytes = await buildSeatingChartPdf(weddingName, tables, { unseated, generatedAt });
     return new NextResponse(Buffer.from(pdfBytes), {
       status: 200,
       headers: {

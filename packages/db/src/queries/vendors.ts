@@ -4,6 +4,8 @@ import { pool, beginTransaction } from "../pool";
 import { inWeddingChange, recheckActorAccess, type ActorAccess } from "./wedding-lock";
 import { assertWeddingHasRoom } from "./wedding-caps";
 import { encryptText } from "../crypto";
+import { compareArrivals } from "@seatwise/shared";
+import { TIMELINE_ENTRY_ORDER } from "./timeline";
 import { hashLinkToken, isPlainStoredLinkToken, newLinkToken, readStoredLinkToken } from "../link-tokens";
 
 // TS-20 (FR-15.1/FR-15.2): a per-wedding vendor record, plus the wedding-wide budget figure it's
@@ -53,6 +55,11 @@ export class VendorConflictError extends Error {
     this.vendor = vendor;
   }
 }
+
+// TS-210: an edit whose "Other" label doesn't fit the vendor's category as it is stored -- a label on a
+// vendor that isn't "Other", or an "Other" vendor left with no label. The form always sends the
+// category with the label; a request that sent only one of them used to slip past the check.
+export class VendorCategoryOtherError extends Error {}
 
 const COLUMNS = `id, "weddingId", name, category, "categoryOther", "contactName", "contactEmail",
   "contactPhone", "costCents", "contractNotes", "arrivalTime", ("shareToken" IS NOT NULL) AS "shareLinkActive",
@@ -124,7 +131,7 @@ export async function updateVendorForWedding(
   expectedRevision?: number,
   /** TS-204: the access the edit was let in with -- read again under the vendor's lock. */
   actor?: ActorAccess
-): Promise<boolean> {
+): Promise<VendorRow | null> {
   const fields: string[] = [];
   const values: unknown[] = [];
   let i = 1;
@@ -174,7 +181,7 @@ export async function updateVendorForWedding(
     await beginTransaction(client);
     const { rows } = await client.query(
       // TS-187: NO KEY UPDATE -- the row's id and link don't change here.
-      `SELECT revision FROM "vendors" WHERE id = $1 AND "weddingId" = $2 FOR NO KEY UPDATE`,
+      `SELECT revision, category, "categoryOther" FROM "vendors" WHERE id = $1 AND "weddingId" = $2 FOR NO KEY UPDATE`,
       [id, weddingId]
     );
     // TS-204: the person's access read again under that lock.
@@ -182,7 +189,7 @@ export async function updateVendorForWedding(
     const current = rows[0];
     if (!current) {
       await client.query("ROLLBACK").catch(() => {});
-      return false;
+      return null;
     }
     if (expectedRevision !== undefined && current.revision !== expectedRevision) {
       // TS-187: the lock is let go before the fresh copy is read on another connection.
@@ -193,6 +200,16 @@ export async function updateVendorForWedding(
         fresh!
       );
     }
+    // TS-210: the label checked against the category the vendor will have (see VendorCategoryOtherError).
+    const category = input.category ?? current.category;
+    const label =
+      input.categoryOther !== undefined ? input.categoryOther : category === "OTHER" ? current.categoryOther : null;
+    if (category === "OTHER" && !label) {
+      throw new VendorCategoryOtherError("Give this vendor's category a label when it doesn't fit the list.");
+    }
+    if (category !== "OTHER" && input.categoryOther) {
+      throw new VendorCategoryOtherError('A category label is only used when the category is "Other".');
+    }
     if (fields.length > 0) {
       fields.push(`"updatedAt" = now()`, `revision = revision + 1`);
       values.push(id, weddingId);
@@ -201,8 +218,14 @@ export async function updateVendorForWedding(
         values
       );
     }
+    // TS-209: the vendor as this edit left it, read in the same transaction -- read afterwards, a
+    // delete in between gave back no vendor, and the Budget tab broke on it.
+    const { rows: saved } = await client.query<VendorRow>(
+      `SELECT ${COLUMNS} FROM "vendors" WHERE id = $1 AND "weddingId" = $2`,
+      [id, weddingId]
+    );
     await client.query("COMMIT");
-    return true;
+    return saved[0] ?? null;
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});
     throw err;
@@ -360,7 +383,7 @@ export interface VendorViewRow {
     arrivalTime: string | null;
   };
   otherVendors: { name: string; category: string; categoryOther: string | null; arrivalTime: string | null }[];
-  timeline: { time: string; description: string }[];
+  timeline: { time: string; nextDay: boolean; description: string }[];
 }
 
 // TS-114: everything the vendor's read-only page shows, and nothing else. Selected column by
@@ -380,12 +403,12 @@ export async function getVendorViewByToken(token: string): Promise<VendorViewRow
   const [{ rows: others }, { rows: timeline }] = await Promise.all([
     pool.query(
       `SELECT name, category, "categoryOther", "arrivalTime" FROM "vendors"
-       WHERE "weddingId" = $1 AND id <> $2
-       ORDER BY "arrivalTime" NULLS LAST, name`,
+       WHERE "weddingId" = $1 AND id <> $2`,
       [v.weddingId, v.id]
     ),
     pool.query(
-      `SELECT time, description FROM "timeline_entries" WHERE "weddingId" = $1 ORDER BY time, "sortOrder", "createdAt", id`, // TS-174: the planner's order (timeline.ts)
+      // TS-174: the planner's order (timeline.ts). TS-214: after-midnight entries last.
+      `SELECT time, "nextDay", description FROM "timeline_entries" WHERE "weddingId" = $1 ORDER BY ${TIMELINE_ENTRY_ORDER}`,
       [v.weddingId]
     ),
   ]);
@@ -400,7 +423,9 @@ export async function getVendorViewByToken(token: string): Promise<VendorViewRow
       contactPhone: v.contactPhone,
       arrivalTime: v.arrivalTime,
     },
-    otherVendors: others,
+    // TS-214: by arrival, with early-morning arrivals (before 5:00 AM) after the day's own -- see
+    // compareArrivals. Sorted here, not in SQL, so the rule lives in one place.
+    otherVendors: [...others].sort(compareArrivals),
     timeline,
   };
 }

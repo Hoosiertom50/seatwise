@@ -1,6 +1,6 @@
 import { randomUUID } from "crypto";
 import type { PoolClient } from "pg";
-import { isRsvpCutoffPast } from "@seatwise/shared";
+import { isRsvpCutoffPast, plusOnesForParty } from "@seatwise/shared";
 import { pool, beginTransaction } from "../pool";
 import { encryptText, decryptText } from "../crypto";
 import {
@@ -153,7 +153,8 @@ async function insertGuest(q: PoolClient, weddingId: string, input: CreateGuestD
       input.side ?? "BOTH",
       input.ageCategory ?? "ADULT",
       input.email ?? null,
-      input.plusOneNames ?? null,
+      // TS-202: a party of one has no plus-ones.
+      plusOnesForParty(input.headcount ?? 1, input.plusOneNames),
     ]
   );
   return { ...decryptGuestNotes(rows[0]), requiredTableId: null };
@@ -304,6 +305,15 @@ export async function updateGuestForWedding(
         `UPDATE "guests" SET ${fields.join(", ")} WHERE id = $${i++} AND "weddingId" = $${i}`,
         values
       );
+      // TS-202: an edit that leaves the guest a party of one leaves them no plus-ones (the names
+      // used to stay -- shown on the Guests tab, hidden from the export and printouts). Part of the
+      // same edit, so the revision isn't moved on twice.
+      if (input.headcount !== undefined || input.plusOneNames !== undefined) {
+        await client.query(
+          `UPDATE "guests" SET "plusOneNames" = NULL WHERE id = $1 AND headcount <= 1 AND "plusOneNames" IS NOT NULL`,
+          [id]
+        );
+      }
     }
 
     // TS-195: the attendance this edit leaves them at, from the row as it is under the lock.

@@ -12,7 +12,7 @@ import {
   hasMixedScriptWord,
   NO_MIXED_SCRIPT_MESSAGE,
 } from "./validation";
-import { parseGuestSide } from "./guest-side";
+import { parseGuestSide, parseGuestSideCode, sideMismatchMessage } from "./guest-side";
 import { hasForbiddenControlCharacter, CONTROL_CHARACTER_MESSAGE, LINE_BREAK_MESSAGE } from "./safe-text";
 import { hasUnreadableCharacters, unreadableCellMessage } from "./text-decode";
 import { sameImportText, type GuestImportCurrentValues } from "./guest-import-compare";
@@ -141,7 +141,8 @@ export function parseGuestImportRow(
 
   const headcountRaw = cellFor("headcount");
   if (headcountRaw !== undefined && headcountRaw !== "") {
-    const value = Number(headcountRaw);
+    // TS-210: digits only -- Number() also read "0x10" as 16, "1e1" as 10 and "0b11" as 3.
+    const value = /^\d+$/.test(headcountRaw) ? Number(headcountRaw) : NaN;
     if (!Number.isInteger(value) || value < 1 || value > 20) {
       errors.push(`Headcount must be a whole number between 1 and 20 (got "${headcountRaw}").`);
     } else {
@@ -189,11 +190,27 @@ export function parseGuestImportRow(
 
   // TS-177: the wedding's own side names (what the Guests tab tells planners to use) as well as
   // "Both" and the stored BRIDE / GROOM -- see parseGuestSide.
+  // TS-210: the export's Side code (the stored side) comes first -- it doesn't change when the side
+  // names are renamed. A Side cell that says a different side is an error, not a silent swap.
   const sideRaw = cellFor("side");
+  const sideCodeRaw = cellFor("sideCode");
+  let codeSide: "BRIDE" | "GROOM" | "BOTH" | undefined;
+  if (sideCodeRaw !== undefined && sideCodeRaw !== "") {
+    const code = parseGuestSideCode(sideCodeRaw);
+    if ("error" in code) errors.push(code.error);
+    else codeSide = code.side;
+  }
   if (sideRaw !== undefined && sideRaw !== "") {
     const side = parseGuestSide(sideRaw, sideLabels.sideLabel1, sideLabels.sideLabel2);
-    if ("error" in side) errors.push(side.error);
+    if (codeSide !== undefined) {
+      // A Side name that's no longer one of the wedding's (renamed since the export) is fine: the
+      // code says which side it was.
+      if (!("error" in side) && side.side !== codeSide) errors.push(sideMismatchMessage(sideRaw, codeSide));
+      else data.side = codeSide;
+    } else if ("error" in side) errors.push(side.error);
     else data.side = side.side;
+  } else if (codeSide !== undefined) {
+    data.side = codeSide;
   }
 
   const ageCategoryRaw = cellFor("ageCategory");
@@ -219,5 +236,35 @@ export function parseGuestImportRow(
     else if (checkFreeText("Plus-ones", plusOneNames, 500, errors)) data.plusOneNames = plusOneNames.replace(/\r\n/g, "\n");
   }
 
-  return { errors, data, keptAsIs };
+  // TS-202: a row that leaves the guest a party of one leaves them no plus-ones (the preview shows
+  // what the import will really do). Names taken as they were are then not kept after all.
+  const cleared = withoutPlusOnesForPartyOfOne(data, current);
+  if (cleared !== data) {
+    const kept = keptAsIs.indexOf("plusOneNames");
+    if (kept !== -1) keptAsIs.splice(kept, 1);
+  }
+  return { errors, data: cleared, keptAsIs };
+}
+
+/**
+ * TS-202: an import row that leaves its guest a party of one (a new guest with no headcount or a
+ * headcount of 1, or a row that lowers it to 1) leaves them no plus-ones -- the file's "Plus-ones"
+ * cell, or the names they had, are cleared. `current` is the guest the row updates, as they are. A
+ * row that changes neither the party size nor the plus-ones leaves an older guest's names alone, so
+ * re-importing an untouched export still changes nothing.
+ */
+export function withoutPlusOnesForPartyOfOne<T extends { headcount?: number; plusOneNames?: string | null }>(
+  p: T,
+  current?: { headcount: number; plusOneNames: string | null }
+): T {
+  if (current) {
+    const changesHeadcount = p.headcount !== undefined && p.headcount !== current.headcount;
+    const changesPlusOnes = "plusOneNames" in p && !sameImportText(p.plusOneNames, current.plusOneNames);
+    if (!changesHeadcount && !changesPlusOnes) return p;
+  }
+  const headcount = p.headcount ?? current?.headcount ?? 1;
+  if (headcount > 1) return p;
+  const plusOnes = "plusOneNames" in p ? p.plusOneNames : current?.plusOneNames;
+  if (!plusOnes) return p;
+  return { ...p, plusOneNames: null };
 }

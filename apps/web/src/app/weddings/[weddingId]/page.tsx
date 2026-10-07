@@ -23,6 +23,7 @@ import { NotificationsBell } from "@/components/NotificationsBell";
 import { EmailVerificationNotice } from "@/components/EmailVerificationNotice";
 import { SaveStatusIndicator } from "@/components/SaveStatusIndicator";
 import { saveStatusStore } from "@/lib/save-status";
+import { mergeRefreshedGuests, guestIdFromFieldId } from "@/lib/guest-refresh";
 
 type Tab =
   | "guests"
@@ -53,6 +54,9 @@ const TABS: { value: Tab; label: string }[] = [
   { value: "collaborators", label: "Collaborators" },
 ];
 
+// TS-207: the tabs that show (or pick from) the guest list -- it's kept fresh while one is open.
+const GUEST_TABS: ReadonlySet<Tab> = new Set<Tab>(["guests", "rules", "tables", "plan", "dayof", "comments"]);
+
 type AccessLevel = "OWNER" | "EDIT" | "COMMENT" | "VIEW";
 
 // TS-170: what pendingHref holds when the browser's Back button was pressed.
@@ -78,23 +82,40 @@ export default function WeddingDetailPage() {
   // TS-159: a tab change waiting on "you have unsaved changes" -- see goToTab.
   // TS-170: the browser's Back button with unsaved input asks first, like the links do.
   const unsaved = useUnsavedChangesProvider({
-    onBackRequested: () => {
-      // TS-199: Back while typing in a box that saves when you leave it (a guest's name, notes or
-      // email; a wedding setting) -- leaving it saves it, so the box is left (which saves it) and
-      // Back carries on without asking. Anything else unsaved still asks, as before.
+    onBackRequested: () => void onBack(),
+  });
+  // TS-199: Back while typing in a box that saves when you leave it (a guest's name, notes or
+  // email; a wedding setting; a list changed with the keyboard) -- the box is left, which saves it.
+  // TS-206: and Back then waits for that save (and any other still on its way) and only leaves once
+  // they have all saved. It used to leave straight away, so a refused name ("J0hn") or a dropped
+  // connection lost the typing and the reason without a word. If one fails, the page stays: the row
+  // shows why with the typing still in its box (focus goes back to it), and if anything is still
+  // unsaved the usual question is asked. Anything else unsaved asks, as before.
+  const backInProgress = useRef(false);
+  async function onBack() {
+    if (backInProgress.current) return;
+    backInProgress.current = true;
+    try {
       const active = document.activeElement;
       rememberOpener();
-      if (active instanceof HTMLElement && active.hasAttribute("data-blur-save")) {
-        active.blur();
-        if (!unsaved.hasUnsaved()) {
-          questionOpener.current = null;
-          unsaved.goBackPastPage(() => router.replace("/dashboard"));
-          return;
-        }
+      if (active instanceof HTMLElement && active.hasAttribute("data-blur-save")) active.blur();
+      const allSaved = unsaved.isSaving() ? await unsaved.waitForSaves() : true;
+      if (allSaved && !unsaved.hasUnsaved()) {
+        questionOpener.current = null;
+        unsaved.goBackPastPage(() => router.replace("/dashboard"));
+        return;
       }
-      setPendingHref(BACK);
-    },
-  });
+      if (unsaved.hasUnsaved()) setPendingHref(BACK);
+      else {
+        // Failed, but nothing is held as unsaved (e.g. someone else changed the guest and the row
+        // now shows their copy): just stay, back in the box, with the row's message showing.
+        restoreFocus(questionOpener.current);
+        questionOpener.current = null;
+      }
+    } finally {
+      backInProgress.current = false;
+    }
+  }
   const [pendingTab, setPendingTab] = useState<Tab | null>(null);
   // TS-166: leaving the wedding page itself ("Back to dashboard") asks the same question; the
   // browser's own prompt only covers closing or reloading the page, not links inside the app.
@@ -191,6 +212,51 @@ export default function WeddingDetailPage() {
     restoreFocus(questionOpener.current);
     questionOpener.current = null;
   }
+  // TS-207: the guest list used to be fetched once, with the page, and never again -- RSVP answers,
+  // a walk-in added on another phone, another planner's edits and imports only showed after a
+  // reload (and editing such a guest was refused as "changed since you loaded it"). It's fetched
+  // again on the 4-second check below and whenever a tab that uses it opens, and merged in guest by
+  // guest (only newer copies -- see guest-refresh.ts). Skipped while anything on the page is
+  // unsaved or a save is on its way, and a row whose box has focus is never touched.
+  const guestsRef = useRef<GuestDTO[]>([]);
+  useEffect(() => {
+    guestsRef.current = guests;
+  }, [guests]);
+  const guestFetches = useRef({ sent: 0, answered: 0 });
+  const refreshGuestsRef = useRef<() => Promise<void>>(async () => {});
+  useEffect(() => {
+    const quiet = () => !unsaved.hasUnsaved() && saveStatusStore.getSnapshot().pending === 0;
+    const focusedGuestIds = () => {
+      const id = guestIdFromFieldId(document.activeElement?.id);
+      return new Set(id ? [id] : []);
+    };
+    refreshGuestsRef.current = async () => {
+      if (!quiet()) return;
+      const request = ++guestFetches.current.sent;
+      const idsAtFetchStart = new Set(guestsRef.current.map((g) => g.id));
+      const res = await api.get<{ guests: GuestDTO[] }>(`/api/v1/weddings/${weddingId}/guests`);
+      // An older answer arriving after a newer one is dropped; so is one that lands while something
+      // has just become unsaved (a box being typed in), since merging could redraw that row.
+      if (request < guestFetches.current.answered || !quiet()) return;
+      guestFetches.current.answered = request;
+      setGuests((cur) =>
+        mergeRefreshedGuests(cur, res.guests, {
+          idsAtFetchStart,
+          protectedIds: focusedGuestIds(),
+          compare: (a, b) => a.lastName.localeCompare(b.lastName),
+        })
+      );
+    };
+  });
+  const tabRef = useRef<Tab>(tab);
+  useEffect(() => {
+    tabRef.current = tab;
+    // TS-207: a tab that uses the guest list gets a fresh one as it opens (not on the page's first
+    // load, which has just fetched it).
+    if (!loading && GUEST_TABS.has(tab)) refreshGuestsRef.current().catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- TS-207: only when the tab changes.
+  }, [tab]);
+
   const [startCounts, setStartCounts] = useState<GettingStartedCounts | null>(null);
   // FR-1.6: "a change [to a collaborator's access] takes effect within five seconds, even for a
   // wedding already open in the user's browser." accessLevelRef lets the poll below compare
@@ -253,6 +319,9 @@ export default function WeddingDetailPage() {
     let lastSent = 0;
     let lastAnswered = 0;
     const interval = setInterval(async () => {
+      // TS-207: the guest list too, while a tab that shows it is open (best effort -- the next
+      // tick tries again).
+      if (GUEST_TABS.has(tabRef.current)) refreshGuestsRef.current().catch(() => {});
       const check = ++lastSent;
       try {
         const res = await api.get<{ wedding: WeddingDTO; accessLevel: AccessLevel; role: string | null }>(
@@ -284,7 +353,9 @@ export default function WeddingDetailPage() {
         if (err instanceof ApiError && err.status === 404) {
           lastAnswered = check;
           setAccessRevoked(true);
-          setAccessNotice("Your access to this wedding has been removed.");
+          // TS-214: a 404 is the same answer for a deleted wedding and for removed access, so the
+          // message covers both -- it used to say "access removed" when the owner deleted the wedding.
+          setAccessNotice("This wedding is no longer available (it may have been deleted, or your access was removed).");
           clearInterval(interval);
           // TS-166: cancelled if the planner leaves first (e.g. "Go now", then opens another
           // wedding) -- it used to fire anyway and pull them back to the dashboard.
@@ -352,7 +423,7 @@ export default function WeddingDetailPage() {
           &larr; Back to dashboard
         </Link>
         <div className="flex items-center gap-4">
-          <SaveStatusIndicator />
+          <SaveStatusIndicator unsavedCount={unsaved.unsavedCount} />
           <NotificationsBell onLeave={requestLeavePage} />
         </div>
       </div>
@@ -437,6 +508,14 @@ export default function WeddingDetailPage() {
         <div
           role="alertdialog"
           aria-labelledby="unsaved-question"
+          // TS-212: Escape means Stay, as in every other question in the app.
+          onKeyDown={(e) => {
+            if (e.key === "Escape") {
+              e.preventDefault();
+              e.stopPropagation();
+              stayOnTab();
+            }
+          }}
           className="mb-6 flex flex-wrap items-center gap-3 rounded-md bg-amber-50 dark:bg-amber-950 px-4 py-3 text-sm text-amber-900 dark:text-amber-200"
         >
           <span id="unsaved-question" className="flex-1">
@@ -459,6 +538,36 @@ export default function WeddingDetailPage() {
           </button>
         </div>
       )}
+
+      {/* TS-206: a save that failed after its tab was closed -- the tab (and the typing) is gone, so
+          the reason is kept here, near the tabs, until it is dismissed. The region is always on the
+          page so screen readers announce a note when it appears (TS-212). */}
+      <div role="status" aria-live="polite" className={unsaved.notes.length ? "mb-6 flex flex-col gap-2" : ""}>
+        {unsaved.notes.map((note) => (
+          <div
+            key={note.id}
+            data-testid="unsaved-note"
+            className="flex items-center justify-between gap-3 rounded-md bg-red-50 dark:bg-red-950 px-3 py-2 text-sm text-red-800 dark:text-red-300"
+          >
+            <span className="break-words [overflow-wrap:anywhere]">{note.text}</span>
+            <button
+              type="button"
+              id={`unsaved-note-${note.id}-dismiss`}
+              aria-label={`Dismiss: ${note.text}`}
+              onClick={() => {
+                // Focus moves to the next note, or the open tab -- not the top of the page.
+                const others = unsaved.notes.filter((n) => n.id !== note.id);
+                unsaved.dismissNote(note.id);
+                const nextId = others.length ? `unsaved-note-${others[0].id}-dismiss` : `tab-${tab}`;
+                setTimeout(() => document.getElementById(nextId)?.focus(), 0);
+              }}
+              className="shrink-0 underline hover:no-underline"
+            >
+              Dismiss
+            </button>
+          </div>
+        ))}
+      </div>
 
       <unsaved.Provider value={unsaved.registry}>
       <div id="wedding-tabpanel" role="tabpanel" aria-labelledby={`tab-${tab}`}>

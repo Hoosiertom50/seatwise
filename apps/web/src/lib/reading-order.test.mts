@@ -40,3 +40,25 @@ test("the list it was given is left alone", () => {
   inReadingOrder(boxes, (b) => b);
   assert.deepEqual(boxes.map((b) => b.id), ["b", "a"]);
 });
+
+// TS-212: rows are grouped from each row's first (highest) table, not rounded onto a fixed grid.
+test("tables at 59 and 61 are one row, read left to right", () => {
+  const boxes: Box[] = [
+    { id: "right-higher", x: 600, y: 59 },
+    { id: "left-lower", x: 40, y: 61 },
+  ];
+  assert.deepEqual(ids(boxes), ["left-lower", "right-higher"]);
+});
+
+test("the review's example: A at (600, 55) and B at (40, 65) read B then A", () => {
+  assert.deepEqual(ids([{ id: "A", x: 600, y: 55 }, { id: "B", x: 40, y: 65 }]), ["B", "A"]);
+});
+
+test("a table more than 40 below its row's first table starts a new row", () => {
+  const boxes: Box[] = [
+    { id: "row1-right", x: 600, y: 0 },
+    { id: "row1-left", x: 40, y: 40 },
+    { id: "row2-left", x: 10, y: 41 },
+  ];
+  assert.deepEqual(ids(boxes), ["row1-left", "row1-right", "row2-left"]);
+});

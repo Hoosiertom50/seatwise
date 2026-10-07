@@ -2,10 +2,13 @@ import { NextRequest, NextResponse } from "next/server";
 import { updateWeddingSchema, sideLabelsClash, SIDE_LABELS_MESSAGE } from "@seatwise/shared";
 import { getWeddingById, updateWeddingForOwner, deleteWeddingForOwner } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
-import { errorResponse, zodErrorResponse, readJson } from "@/lib/api-response";
+import { errorResponse, zodErrorResponse, readJson, databaseBusyResponse } from "@/lib/api-response";
 import { requireAccess, weddingForViewer } from "@/lib/access";
 
 type Params = { params: Promise<{ weddingId: string }> };
+
+const SETTINGS_CONFLICT_MESSAGE =
+  "This wedding's settings changed since you opened them (maybe in another tab) — showing the latest. Your change wasn't saved; make it again if it's still needed.";
 
 export async function GET(req: NextRequest, { params }: Params) {
   const user = await getAuthUser(req);
@@ -50,7 +53,16 @@ export async function PATCH(req: NextRequest, { params }: Params) {
     return errorResponse(SIDE_LABELS_MESSAGE, 422, { [sideLabel1 !== undefined ? "sideLabel1" : "sideLabel2"]: [SIDE_LABELS_MESSAGE] });
   }
 
-  const saved = await updateWeddingForOwner(weddingId, user.id, parsed.data);
+  const { expectedRevision, ...changes } = parsed.data;
+  const saved = await updateWeddingForOwner(weddingId, user.id, changes, expectedRevision);
+  // TS-214: the settings changed since this copy was loaded (another tab, most likely) -- nothing
+  // was saved; the latest settings come back so the screen can show them.
+  if (saved === "CONFLICT") {
+    return NextResponse.json(
+      { error: SETTINGS_CONFLICT_MESSAGE, wedding: await getWeddingById(weddingId) },
+      { status: 409 }
+    );
+  }
   // TS-195: the other side was renamed to this same name a moment ago (another tab) -- checked
   // again as it saves; nothing was saved.
   if (saved === "SIDE_LABELS_CLASH") {
@@ -75,7 +87,20 @@ export async function DELETE(req: NextRequest, { params }: Params) {
   const access = await requireAccess(weddingId, user.id, "OWNER");
   if ("error" in access) return access.error;
 
-  const deleted = await deleteWeddingForOwner(weddingId, user.id);
+  // TS-209: a delete that lost a race with another change (a deadlock the database broke, or the
+  // plan replaced while it waited) deleted nothing -- "try again" (409), not a server error.
+  let deleted: boolean;
+  try {
+    deleted = await deleteWeddingForOwner(weddingId, user.id);
+  } catch (err) {
+    const code = (err as { code?: string } | null)?.code;
+    if (code === "40P01" || code === "40001") {
+      return errorResponse("Someone was changing this wedding at the same moment, so it wasn't deleted. Please try again.", 409);
+    }
+    const busy = databaseBusyResponse(err);
+    if (busy) return busy;
+    throw err;
+  }
   if (!deleted) return errorResponse("Wedding not found", 404);
 
   return NextResponse.json({ ok: true });

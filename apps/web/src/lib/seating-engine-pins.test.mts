@@ -161,16 +161,23 @@ test("someone at a locked table who now needs an accessible seat is moved, with 
 });
 
 // TS-188: before, B was moved onto A's locked table. A locked table takes nobody new, so B (who
-// can't sit apart from A) is left unseated with a warning instead.
-test("guests at two different locked tables who must sit together: the first keeps their seat, the other is left unseated", () => {
-  const result = generateSeatingPlan(
-    [guest("A", { currentTableId: "L1" }), guest("B", { currentTableId: "L2" })],
-    [{ guestAId: "A", guestBId: "B", type: "MUST_SIT_TOGETHER" }],
-    [table("L1", { isLocked: true }), table("L2", { isLocked: true }), table("T1")]
-  );
-  assert.equal(tableOf(result, "A"), "L1");
-  assert.equal(tableOf(result, "B"), null);
-  assert.match(result.warnings.join("\n"), /Couldn't seat guest B — they must sit with A, but A's table "L1" is locked/);
+// can't sit apart from A) is left unseated with a warning instead. TS-201: which of them keeps
+// their seat no longer depends on guest-list order (the lower table id wins), and the warning
+// names B's own locked table too.
+test("guests at two different locked tables who must sit together: the same one keeps their seat in either order, and the other is told about both tables", () => {
+  for (const order of [["A", "B"], ["B", "A"]]) {
+    const all = { A: guest("A", { currentTableId: "L1" }), B: guest("B", { currentTableId: "L2" }) };
+    const result = generateSeatingPlan(
+      order.map((id) => all[id as "A" | "B"]),
+      [{ guestAId: "A", guestBId: "B", type: "MUST_SIT_TOGETHER" }],
+      [table("L1", { isLocked: true }), table("L2", { isLocked: true }), table("T1")]
+    );
+    assert.equal(tableOf(result, "A"), "L1");
+    assert.equal(tableOf(result, "B"), null);
+    assert.deepEqual(result.warnings, [
+      `Couldn't seat guest B — they sat at the locked table "L2", but they must sit with A, who is at the locked table "L1". Unlock "L1" or move them together.`,
+    ]);
+  }
 });
 
 // TS-181: pins are placed in passes -- required, then guests' own locks, then people kept at a
@@ -285,18 +292,19 @@ test("a locked guest moved to stay with their must-sit partner is told so", () =
   );
 });
 
-test("someone at a locked table moved to their locked partner's table is told so, not called locked", () => {
+// TS-201 (Tom's decision, "locked table wins"): before, A was moved off the locked table to sit
+// with B. Now A stays at the locked table and B is left unseated, told about both tables.
+test("someone at a locked table stays there; their partner locked to another table is left unseated and told why", () => {
   const result = generateSeatingPlan(
     [guest("A", { currentTableId: "L" }), guest("B", { isLocked: true, currentTableId: "T2" })],
     [{ guestAId: "A", guestBId: "B", type: "MUST_SIT_TOGETHER" }],
     [table("L", { isLocked: true }), table("T2")]
   );
-  assert.equal(tableOf(result, "A"), "T2");
-  assert.equal(tableOf(result, "B"), "T2");
-  assert.match(
-    result.warnings.join("\n"),
-    /Guest A sat at the locked table "L", but they must sit with B, so they were seated at "T2" instead\./
-  );
+  assert.equal(tableOf(result, "A"), "L");
+  assert.equal(tableOf(result, "B"), null);
+  assert.deepEqual(result.warnings, [
+    `Couldn't seat guest B — they're locked to "T2", but they must sit with A, who is at the locked table "L". Unlock "L" or move them together.`,
+  ]);
 });
 
 // TS-188: the reason given when nobody can be seated says what's really wrong.

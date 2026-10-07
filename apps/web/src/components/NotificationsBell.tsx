@@ -15,6 +15,9 @@ const TYPE_LABELS: Record<string, string> = {
   ATTENDANCE_CHANGED: "Attendance",
   STATUS_CHANGED: "Status change",
   RSVP_RECEIVED: "RSVP",
+  // TS-213
+  COMMENT_ADDED: "Comment",
+  OWNERSHIP_TRANSFERRED: "Now yours",
 };
 
 // TS-13/FR-10.2: a lightweight bell + dropdown, polled rather than pushed (no websocket in this
@@ -119,6 +122,7 @@ export function NotificationsBell({
     <div ref={ref} className="relative">
       <button
         ref={buttonRef}
+        id="notifications-bell"
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
         aria-label={`Notifications${unreadCount > 0 ? ` (${unreadCount} unread)` : ""}`}
@@ -126,7 +130,8 @@ export function NotificationsBell({
       >
         🔔
         {unreadCount > 0 && (
-          <span className="absolute -right-1 -top-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-red-600 dark:bg-red-500 px-1 text-xs font-medium text-white">
+          // TS-212: red-600 in dark mode too -- white on red-500 was under 4.5:1.
+          <span className="absolute -right-1 -top-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-red-600 px-1 text-xs font-medium text-white">
             {unreadCount > 9 ? "9+" : unreadCount}
           </span>
         )}
@@ -165,9 +170,11 @@ export function NotificationsBell({
                 >
                   <div className="flex w-full items-center justify-between gap-2">
                     <span className="text-xs font-medium text-neutral-500 dark:text-neutral-400">
+                      {/* TS-212: unread was only a dot and a colour -- a screen reader now hears it. */}
+                      {!n.isRead && <span className="sr-only">Unread: </span>}
                       {TYPE_LABELS[n.type] ?? n.type} · {n.weddingName}
                     </span>
-                    {!n.isRead && <span className="h-2 w-2 shrink-0 rounded-full bg-blue-600 dark:bg-blue-500" />}
+                    {!n.isRead && <span aria-hidden="true" className="h-2 w-2 shrink-0 rounded-full bg-blue-600 dark:bg-blue-500" />}
                   </div>
                   <span className="text-sm text-neutral-800 dark:text-neutral-200">{n.message}</span>
                   <span className="text-xs text-neutral-500 dark:text-neutral-400">
@@ -181,7 +188,15 @@ export function NotificationsBell({
             <Link
               href="/dashboard"
               onClick={(e) => {
-                if (onLeave && !onLeave("/dashboard")) e.preventDefault();
+                if (!onLeave) return;
+                // TS-212: when leaving has to be asked about first, the list closes so it does not
+                // cover the question (on a phone it hid Stay and Leave entirely), and focus moves to
+                // the bell, so Stay brings it back there rather than to the top of the page.
+                buttonRef.current?.focus();
+                if (!onLeave("/dashboard")) {
+                  e.preventDefault();
+                  setOpen(false);
+                }
               }}
               className="text-xs text-neutral-500 dark:text-neutral-400 hover:underline"
             >

@@ -2,7 +2,8 @@
  * TS-46 (REQ-DAY-OF-TIMELINE) — page object for the wedding detail page's Timeline tab
  * (apps/web/src/app/weddings/[weddingId]/components/TimelineTab.tsx): a per-wedding chronological
  * run-of-show, entirely independent of guests/tables/rules/seating plans. Entries are always
- * listed by (time, sortOrder) from the server -- this component never sorts client-side -- so a
+ * listed by (time, sortOrder) from the server (TS-214: next-day entries last; after a change the
+ * component re-sorts the same way) -- so a
  * test drives ordering entirely through what's added/edited/reordered, never a client re-sort.
  * Selectors are kept private per the framework's raw-selector-in-test lint rule.
  */
@@ -148,9 +149,11 @@ export class TimelineTabPage extends BasePage {
    * (`onAdd`'s own state reset, confirming its `.then()` has actually run) before returning -- so
    * a caller can immediately call `addEntry` again without racing this submission's own async
    * completion against the next one's form fill. */
-  async addEntry(time: string, description: string): Promise<void> {
+  // TS-214: `nextDay` ticks "After midnight (next day)".
+  async addEntry(time: string, description: string, nextDay = false): Promise<void> {
     await this.addTimeInput().fill(time);
     await this.addDescriptionInput().fill(description);
+    if (nextDay) await this.page.getByLabel("After midnight (next day)", { exact: true }).check();
     await Promise.all([
       this.page.waitForResponse(
         (res) => res.request().method() === "POST" && this.isTimelineEntriesCollectionRequest(res.url()),

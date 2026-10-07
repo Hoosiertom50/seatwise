@@ -58,8 +58,10 @@ async function tabOrderOf(page: Page, testInfo: TestInfo, where: string): Promis
   // Safari's own setting: by default its Tab key moves only between typing boxes and lists, and
   // skips links and buttons (Option+Tab reaches them) -- so in WebKit "every control is reached"
   // doesn't apply; the reading order of the stops it does make is still checked.
-  const reachable =
-    testInfo.project.name === "webkit" ? walkProblems.filter((p) => !p.startsWith("Tab never reached")) : walkProblems;
+  // TS-215: that's a macOS setting, so only on macOS -- CI runs WebKit on Linux, where Tab reaches
+  // every control, and there a skipped control is a real finding.
+  const safariTabSetting = testInfo.project.name === "webkit" && process.platform === "darwin";
+  const reachable = safariTabSetting ? walkProblems.filter((p) => !p.startsWith("Tab never reached")) : walkProblems;
   return { stopCount: stops.length, problems: [...reachable, ...problems] };
 }
 
@@ -77,7 +79,7 @@ defineQualityTest(
     objective:
       "Confirms that pressing Tab from the first control of the sign-in page and of the sign-up page visits every control in reading order -- each step to the right on the same line or lower on the page -- at 1280px and at 375px.",
     expectedOutcome:
-      "For /login and /signup at 1280x800 and 375x812: Tab reaches at least one control, the walk ends by leaving the page or coming back to its first control, it stops on exactly the visible controls (in WebKit only the typing boxes and lists Safari's Tab reaches by default), and no step goes back up the page or back to the left on the same line.",
+      "For /login and /signup at 1280x800 and 375x812: Tab reaches at least one control, the walk ends by leaving the page or coming back to its first control, it stops on exactly the visible controls (in WebKit on macOS only the typing boxes and lists Safari's Tab reaches by default), and no step goes back up the page or back to the left on the same line.",
     requirementIds: ["REQ-NON-FUNCTIONAL"],
     tags: ["@readonly", "@feature:non-functional", "@accessibility", "@risk:normal", "@suite:regression"],
   },
@@ -112,7 +114,7 @@ defineQualityTest(
     objective:
       "Confirms that with a wedding holding guests, a table, a seating plan, a timeline entry, a vendor, a comment and a pending invite, pressing Tab from the first control visits every visible control, once, in reading order on the dashboard, the Account page and the Guests, Seating rules, Tables, Seating plan, Day-of mode, Timeline, Budget, Comments and Collaborators tabs, and with a table's edit form open, the add-guest form's More details open, and the unsaved-changes question showing -- at 1280px and at 375px.",
     expectedOutcome:
-      "For each of those 11 pages and 3 open-form states at 1280x800 and 375x812: Tab reaches at least one control, the walk ends by leaving the page or coming back to its first control, it stops on exactly the visible controls (in WebKit only the typing boxes and lists Safari's Tab reaches by default), and no step goes back up the page or back to the left on the same line (controls in a sticky header may come first).",
+      "For each of those 11 pages and 3 open-form states at 1280x800 and 375x812: Tab reaches at least one control, the walk ends by leaving the page or coming back to its first control, it stops on exactly the visible controls (in WebKit on macOS only the typing boxes and lists Safari's Tab reaches by default), and no step goes back up the page or back to the left on the same line (controls in a sticky header may come first).",
     requirementIds: ["REQ-NON-FUNCTIONAL"],
     tags: ["@mutating", "@feature:non-functional", "@accessibility", "@risk:normal", "@suite:regression"],
   },

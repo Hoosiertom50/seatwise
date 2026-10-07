@@ -113,7 +113,8 @@ export class WeddingDetailPage extends BasePage {
 
   /** FR-1.6's full-revocation message -- must only ever appear when access really was removed. */
   accessRemovedMessage() {
-    return this.page.getByText("Your access to this wedding has been removed.");
+    // TS-214: worded for a deleted wedding as well as removed access (the page can't tell them apart).
+    return this.page.getByText("This wedding is no longer available (it may have been deleted, or your access was removed).");
   }
 
   /** TS-136: any delete control on the page by its accessible name ("Remove Jane Smith",
@@ -219,6 +220,15 @@ export class WeddingDetailPage extends BasePage {
   /** TS-191: whichever element has keyboard focus, for checking where focus went back to. */
   focusedElement() {
     return this.page.locator(":focus");
+  }
+
+  /** TS-206: the page-level "Couldn't save <field>: <reason>" notes, shown near the tabs for a save
+   * that failed after its tab was closed. */
+  unsavedNotes() {
+    return this.page.getByTestId("unsaved-note");
+  }
+  async dismissUnsavedNote(text: string | RegExp): Promise<void> {
+    await this.unsavedNotes().filter({ hasText: text }).getByRole("button", { name: /^Dismiss: / }).click();
   }
 
   /** TS-166: the page's own "Back to dashboard" link. */

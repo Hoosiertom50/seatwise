@@ -20,6 +20,7 @@ import {
   changedImportFields,
   importRowChangesNothing,
   parseGuestImportRow,
+  withoutPlusOnesForPartyOfOne,
   type GuestImportKeptField,
   type GuestImportCurrentValues,
   type GuestImportMapping,
@@ -55,6 +56,19 @@ export class GuestImportConflictError extends Error {
     );
     this.guestNames = guestNames;
   }
+}
+
+/** TS-209: the answer an earlier try of this import (same key) got, marked as a repeat -- or null. */
+async function earlierImportResult(
+  db: typeof pool | import("pg").PoolClient,
+  weddingId: string,
+  importKey: string
+): Promise<GuestImportCommitResult | null> {
+  const { rows } = await db.query<{ result: GuestImportCommitResult }>(
+    `SELECT result FROM "guest_import_results" WHERE "weddingId" = $1 AND "importKey" = $2`,
+    [weddingId, importKey]
+  );
+  return rows[0] ? { ...rows[0].result, repeated: true } : null;
 }
 
 /** TS-152: the most guests one import can add or update. */
@@ -271,8 +285,16 @@ export async function commitGuestImport(
   /** TS-180: also write rows for guests changed since the file was exported (the planner ticked to overwrite). */
   overwriteChanged = false,
   /** TS-195: the access the person was let in with -- read again under the wedding lock. */
-  actorAccess?: ActorAccess
+  actorAccess?: ActorAccess,
+  /** TS-209: the browser's key for this import -- the same key again gets the first answer back. */
+  importKey?: string
 ): Promise<GuestImportCommitResult> {
+  // TS-209: this import already went in (only its answer was lost) -- answer the same again rather
+  // than importing it a second time. Checked again under the wedding lock below.
+  if (importKey) {
+    const earlier = await earlierImportResult(pool, weddingId, importKey);
+    if (earlier) return earlier;
+  }
   const { preview, unknownGuestIds, keptAsIsByRow } = await classifyRows(weddingId, csv, mapping);
   // TS-190: a guest the preview showed (so their ID is in expectedRevisions) but who is gone now
   // was deleted since the preview -- say so, rather than "No guest with ID ... exists".
@@ -313,6 +335,14 @@ export async function commitGuestImport(
     // (removed or lowered while the import waited: nothing saved).
     if (!weddingLocked[0]) throw new WeddingDeletedError();
     if (actorAccess) await recheckActorAccess(client, weddingId, actorAccess);
+    // TS-209: under the wedding lock, so two tries of one import can't both get past this.
+    if (importKey) {
+      const earlier = await earlierImportResult(client, weddingId, importKey);
+      if (earlier) {
+        await client.query("ROLLBACK");
+        return earlier;
+      }
+    }
     const planVersionId: string | undefined = (await lockCurrentPlan(client, weddingId)) ?? undefined;
     // TS-187: then the Restricted tables' lists (a party that grows is checked against them below),
     // before any guest's row -- the same order a list save takes them in.
@@ -454,6 +484,9 @@ export async function commitGuestImport(
       // TS-190: and only what really changes is written (see changedImportFields).
       const currentValues = isUpdateRow(row) ? currentValuesById.get(row.guestId!) : undefined;
       if (currentValues) p = changedImportFields(p, currentValues);
+      // TS-202: checked again against the guest as they are now (under the lock) -- a party of one
+      // keeps no plus-ones.
+      p = withoutPlusOnesForPartyOfOne(p, currentValues);
       if (row.kind === "new") {
         inserts.push(p);
         createdCount++;
@@ -684,8 +717,21 @@ export async function commitGuestImport(
       }
     }
 
+    const result: GuestImportCommitResult = { createdCount, updatedCount, skippedCount, unchangedCount, warnings: reassignmentWarnings };
+    // TS-209: kept with the import itself (same transaction), for a repeat of it -- and the wedding's
+    // answers from more than a day ago are cleared.
+    if (importKey) {
+      await client.query(
+        `DELETE FROM "guest_import_results" WHERE "weddingId" = $1 AND "createdAt" < now() - interval '1 day'`,
+        [weddingId]
+      );
+      await client.query(
+        `INSERT INTO "guest_import_results" ("weddingId", "importKey", result) VALUES ($1, $2, $3::jsonb)`,
+        [weddingId, importKey, JSON.stringify(result)]
+      );
+    }
     await client.query("COMMIT");
-    return { createdCount, updatedCount, skippedCount, unchangedCount, warnings: reassignmentWarnings };
+    return result;
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});
     throw err;

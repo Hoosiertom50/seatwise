@@ -5,6 +5,8 @@ import { getAuthUser } from "@/lib/session";
 import { errorResponse, zodErrorResponse, concurrentChangeResponse, readJson } from "@/lib/api-response";
 import { requireAccess, type GrantedAccess } from "@/lib/access";
 import { limitedWeddingWork } from "@/lib/rate-limit";
+import { guestForViewer } from "@/lib/guest-privacy";
+import { SAVED_BUT_NOT_REFRESHED, afterSave } from "@/lib/post-save";
 
 type Params = { params: Promise<{ weddingId: string }> };
 
@@ -32,8 +34,9 @@ async function commitImport(req: NextRequest, weddingId: string, user: UserRow, 
   const parsed = guestImportRequestSchema.safeParse(body);
   if (!parsed.success) return zodErrorResponse(parsed.error);
 
+  let result: Awaited<ReturnType<typeof commitGuestImport>>;
   try {
-    const result = await commitGuestImport(
+    result = await commitGuestImport(
       weddingId,
       parsed.data.csv,
       parsed.data.mapping,
@@ -42,21 +45,36 @@ async function commitImport(req: NextRequest, weddingId: string, user: UserRow, 
       // TS-180: write guests changed since the export only when the planner ticked to overwrite.
       parsed.data.overwriteChanged ?? false,
       // TS-195: read again under the import's lock -- refused if it dropped meanwhile.
-      access.actor
+      // TS-204: the request's one access reading (requireAccess).
+      access.actor,
+      // TS-209: the same import sent again (its answer was lost) gets its first answer back.
+      parsed.data.importKey
     );
-    const guests = await listGuestsByWedding(weddingId);
-    return NextResponse.json({ result, guests });
   } catch (err) {
     // TS-92: a guest in the file was edited by someone else since the preview -- nothing saved.
     if (err instanceof GuestImportConflictError) {
       return errorResponse(err.message, 409);
     }
+    // TS-209: with the rows that still have errors, so the screen can list them (it said "N rows
+    // still have errors" and showed none).
     if (err instanceof GuestImportError) {
-      return errorResponse(err.message, 422);
+      return NextResponse.json({ error: err.message, ...(err.rows ? { rows: err.rows } : {}) }, { status: 422 });
     }
     // TS-187: lost a race with another change (nothing saved) -- 409, not a server error.
     const conflict = concurrentChangeResponse(err);
     if (conflict) return conflict;
     throw err;
   }
+  // TS-209: the import is saved -- reading the list back can't turn it into an error (the screen
+  // said it failed, and importing again added every new guest twice). Without the list, the screen
+  // loads it itself.
+  const warnings: string[] = [];
+  const guests = await afterSave(
+    "reading the guest list back after an import",
+    async () => (await listGuestsByWedding(weddingId)).map((g) => guestForViewer(g, access.accessLevel)),
+    warnings,
+    SAVED_BUT_NOT_REFRESHED,
+    null
+  );
+  return NextResponse.json({ result, guests, warnings });
 }

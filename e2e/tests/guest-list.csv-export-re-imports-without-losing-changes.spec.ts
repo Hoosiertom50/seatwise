@@ -53,7 +53,7 @@ defineQualityTest(
     objective:
       "Confirms that for a wedding whose sides are named 'Groom' (first) and 'Bride' (second), the guest CSV export starts with a byte-order mark, is marked no-store, writes Side as Groom/Bride/Both and adds Plus-ones and Version columns; that committing that export back by Guest ID leaves every guest's side and plus-ones as they were; and that an older file's stored values BRIDE / GROOM are still read as those stored sides.",
     expectedOutcome:
-      "The response starts with bytes EF BB BF and has Cache-Control no-store. The last three headers are 'Plus-ones', 'Version' and 'Age category'. The BRIDE guest's Side cell is 'Groom', the GROOM guest's 'Bride', the BOTH guest's 'Both' with Plus-ones 'Jamie Lee' and Version equal to their revision. After the re-import the sides are still BRIDE, GROOM, BOTH and the plus-ones still 'Jamie Lee'. A preview of 'BRIDE' and 'GROOM' cells reads BRIDE and GROOM.",
+      "The response starts with bytes EF BB BF and has Cache-Control no-store. The last four headers are 'Plus-ones', 'Version', 'Age category' and 'Side code'. The BRIDE guest's Side cell is 'Groom', the GROOM guest's 'Bride', the BOTH guest's 'Both' with Plus-ones 'Jamie Lee' and Version equal to their revision. After the re-import the sides are still BRIDE, GROOM, BOTH and the plus-ones still 'Jamie Lee'. A preview of 'BRIDE' and 'GROOM' cells reads BRIDE and GROOM.",
     requirementIds: ["REQ-GUEST-LIST-MANAGEMENT"],
     tags: ["@mutating", "@feature:guests", "@risk:high", "@suite:regression"],
   },
@@ -76,8 +76,8 @@ defineQualityTest(
       exported = bytes.toString("utf-8");
 
       const { header, rows } = exportRows(exported);
-      // TS-190: Age category comes after them.
-      expect(header.slice(-3)).toEqual(["Plus-ones", "Version", "Age category"]);
+      // TS-190: Age category comes after them. TS-210: then the stored side, "Side code".
+      expect(header.slice(-4)).toEqual(["Plus-ones", "Version", "Age category", "Side code"]);
       const cell = (guestId: string, column: string) => rows.find((r) => r[0] === guestId)![header.indexOf(column)];
       expect(cell(first.id, "Side")).toBe("Groom");
       expect(cell(second.id, "Side")).toBe("Bride");

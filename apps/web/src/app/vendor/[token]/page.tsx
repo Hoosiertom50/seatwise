@@ -4,7 +4,9 @@ import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { api, ApiError } from "@/lib/api-client";
 import type { VendorViewDTO } from "@seatwise/shared";
-import { formatClockTime, formatDate, vendorCategoryLabel } from "@/lib/display-format";
+import { formatDate, vendorCategoryLabel } from "@/lib/display-format";
+// TS-214: "(next day)" for timeline entries after midnight and early-morning arrivals.
+import { arrivalTimeLabel, timelineTimeLabel } from "@seatwise/shared";
 
 // TS-114: a vendor's read-only page, opened from the private link the planner shares -- no account
 // or sign-in. Shows the wedding's date and venue, the whole day-of timeline, this vendor's own
@@ -85,7 +87,7 @@ export default function VendorViewPage() {
             {vendor.name} ({vendorCategoryLabel(vendor.category, vendor.categoryOther)})
           </dd>
           <dt className="text-neutral-500 dark:text-neutral-400">Arrival</dt>
-          <dd>{vendor.arrivalTime ? formatClockTime(vendor.arrivalTime) : "Not set yet"}</dd>
+          <dd>{vendor.arrivalTime ? arrivalTimeLabel(vendor.arrivalTime) : "Not set yet"}</dd>
           {vendor.contactName && (
             <>
               <dt className="text-neutral-500 dark:text-neutral-400">Contact</dt>
@@ -121,7 +123,7 @@ export default function VendorViewPage() {
           <ol className="flex flex-col gap-2">
             {timeline.map((e, i) => (
               <li key={i} className="flex gap-3 rounded-md border border-neutral-200 dark:border-neutral-700 px-3 py-2 text-sm">
-                <span className="w-20 shrink-0 font-medium">{formatClockTime(e.time)}</span>
+                <span className="w-20 shrink-0 font-medium">{timelineTimeLabel(e.time, e.nextDay)}</span>
                 <span className="min-w-0 break-words [overflow-wrap:anywhere]">{e.description}</span>
               </li>
             ))}
@@ -142,7 +144,7 @@ export default function VendorViewPage() {
                 <span className="min-w-0 break-words [overflow-wrap:anywhere]">
                   {o.name} <span className="text-neutral-500 dark:text-neutral-400">({vendorCategoryLabel(o.category, o.categoryOther)})</span>
                 </span>
-                <span className="shrink-0">{o.arrivalTime ? `Arrives ${formatClockTime(o.arrivalTime)}` : "Arrival not set"}</span>
+                <span className="shrink-0">{o.arrivalTime ? `Arrives ${arrivalTimeLabel(o.arrivalTime)}` : "Arrival not set"}</span>
               </li>
             ))}
           </ul>

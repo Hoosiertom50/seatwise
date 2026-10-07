@@ -115,6 +115,31 @@ export async function delayResponses(
   };
 }
 
+/** TS-209: lets the first `times` `method` requests to a URL matching `urlPattern` reach the real
+ * server (so whatever they change is saved), then drops their answers the way a lost connection
+ * would -- the page sees no response at all. For proving a retry of a request that did land. */
+export async function loseResponses(
+  page: Page,
+  urlPattern: string | RegExp,
+  method: string,
+  times = 1,
+): Promise<FaultHandle> {
+  let hits = 0;
+  const handler = async (route: Route) => {
+    if (route.request().method() !== method || hits >= times) return route.fallback();
+    hits++;
+    await route.fetch();
+    return route.abort("connectionfailed");
+  };
+  await page.route(urlPattern, handler);
+  return {
+    get hits() {
+      return hits;
+    },
+    clear: () => page.unroute(urlPattern, handler),
+  };
+}
+
 /** TS-197: sends every `method` request to a URL matching `urlPattern` on to the real server with
  * its JSON body changed by `change` -- for a request the page can't be made to send as it stands
  * (e.g. a Generate asking for a comparison draft before any plan exists). */
@@ -130,6 +155,32 @@ export async function rewriteRequestJson(
     hits++;
     const body = (route.request().postDataJSON() ?? {}) as Record<string, unknown>;
     return route.fallback({ postData: JSON.stringify(change(body)) });
+  };
+  await page.route(urlPattern, handler);
+  return {
+    get hits() {
+      return hits;
+    },
+    clear: () => page.unroute(urlPattern, handler),
+  };
+}
+
+/** TS-206: holds every `method` request to a URL matching `urlPattern` for `ms`, then refuses it
+ * with `status` and the app's standard `{ error }` body -- for a save that fails only after the
+ * page has moved on (e.g. its tab was closed meanwhile). */
+export async function delayThenFailRequests(
+  page: Page,
+  urlPattern: string | RegExp,
+  method: string,
+  ms: number,
+  fault: { status: number; error: string },
+): Promise<FaultHandle> {
+  let hits = 0;
+  const handler = async (route: Route) => {
+    if (route.request().method() !== method) return route.fallback();
+    hits++;
+    await new Promise((resolve) => setTimeout(resolve, ms));
+    return route.fulfill({ status: fault.status, contentType: "application/json", body: JSON.stringify({ error: fault.error }) });
   };
   await page.route(urlPattern, handler);
   return {
