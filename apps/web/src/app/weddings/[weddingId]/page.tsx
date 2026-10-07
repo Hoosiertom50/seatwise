@@ -284,7 +284,9 @@ export default function WeddingDetailPage() {
         if (err instanceof ApiError && err.status === 404) {
           lastAnswered = check;
           setAccessRevoked(true);
-          setAccessNotice("Your access to this wedding has been removed.");
+          // TS-214: a 404 is the same answer for a deleted wedding and for removed access, so the
+          // message covers both -- it used to say "access removed" when the owner deleted the wedding.
+          setAccessNotice("This wedding is no longer available (it may have been deleted, or your access was removed).");
           clearInterval(interval);
           // TS-166: cancelled if the planner leaves first (e.g. "Go now", then opens another
           // wedding) -- it used to fire anyway and pull them back to the dashboard.

@@ -405,10 +405,11 @@ export async function createPlanVersionWithAssignments(
         ? `Generated version ${versionNumber}: seated ${seated} guest(s)` +
           (unassigned > 0 ? `, ${unassigned} left unassigned.` : ".")
         : `Generated version ${versionNumber}: no guests could be seated.`) + draftSuffix;
+    // TS-214: credited to whoever generated it, so the activity log shows "by …" like every other change.
     await client.query(
-      `INSERT INTO "change_history_entries" (id, "planVersionId", action, description)
-       VALUES ($1, $2, 'GENERATE', $3)`,
-      [randomUUID(), planVersionId, description]
+      `INSERT INTO "change_history_entries" (id, "planVersionId", action, description, "actorUserId")
+       VALUES ($1, $2, 'GENERATE', $3, $4)`,
+      [randomUUID(), planVersionId, description, input.actorAccess?.userId ?? null]
     );
 
     await client.query("COMMIT");

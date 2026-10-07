@@ -1,6 +1,8 @@
 import { randomUUID } from "crypto";
 import { pool, beginTransaction } from "../pool";
 import { encryptText } from "../crypto";
+import { compareArrivals } from "@seatwise/shared";
+import { TIMELINE_ENTRY_ORDER } from "./timeline";
 import { hashLinkToken, isPlainStoredLinkToken, newLinkToken, readStoredLinkToken } from "../link-tokens";
 
 // TS-20 (FR-15.1/FR-15.2): a per-wedding vendor record, plus the wedding-wide budget figure it's
@@ -313,7 +315,7 @@ export interface VendorViewRow {
     arrivalTime: string | null;
   };
   otherVendors: { name: string; category: string; categoryOther: string | null; arrivalTime: string | null }[];
-  timeline: { time: string; description: string }[];
+  timeline: { time: string; nextDay: boolean; description: string }[];
 }
 
 // TS-114: everything the vendor's read-only page shows, and nothing else. Selected column by
@@ -333,12 +335,12 @@ export async function getVendorViewByToken(token: string): Promise<VendorViewRow
   const [{ rows: others }, { rows: timeline }] = await Promise.all([
     pool.query(
       `SELECT name, category, "categoryOther", "arrivalTime" FROM "vendors"
-       WHERE "weddingId" = $1 AND id <> $2
-       ORDER BY "arrivalTime" NULLS LAST, name`,
+       WHERE "weddingId" = $1 AND id <> $2`,
       [v.weddingId, v.id]
     ),
     pool.query(
-      `SELECT time, description FROM "timeline_entries" WHERE "weddingId" = $1 ORDER BY time, "sortOrder", "createdAt", id`, // TS-174: the planner's order (timeline.ts)
+      // TS-174: the planner's order (timeline.ts). TS-214: after-midnight entries last.
+      `SELECT time, "nextDay", description FROM "timeline_entries" WHERE "weddingId" = $1 ORDER BY ${TIMELINE_ENTRY_ORDER}`,
       [v.weddingId]
     ),
   ]);
@@ -353,7 +355,9 @@ export async function getVendorViewByToken(token: string): Promise<VendorViewRow
       contactPhone: v.contactPhone,
       arrivalTime: v.arrivalTime,
     },
-    otherVendors: others,
+    // TS-214: by arrival, with early-morning arrivals (before 5:00 AM) after the day's own -- see
+    // compareArrivals. Sorted here, not in SQL, so the rule lives in one place.
+    otherVendors: [...others].sort(compareArrivals),
     timeline,
   };
 }

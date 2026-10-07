@@ -48,11 +48,12 @@ export type FieldLimitName = keyof typeof FIELD_LIMITS;
  * followed by an extension ("ext. 12", "ext 12" or "x12").
  *
  * TS-200: written so checking it takes time in step with the length, however long the value. It
- * used to be `^[0-9+().\-\s]*(\s*(ext\.?|x)\s*[0-9]+)?$` -- spaces could belong to either the
- * first part or the extension's leading `\s*`, so a long run of spaces followed by a wrong
- * character was tried every possible way (time growing with the square of the length). Spaces
- * before "ext"/"x" already fit the first part, so that `\s*` is gone: it accepts exactly the same
- * values (field-limits.test.mts compares the two on random values).
+ * used to be `^[0-9+().\-\s]*(\s*(ext\.?|x)\s*[0-9]+)?\s*$` (TS-198's version) -- spaces could
+ * belong to either the first part or the extension's leading `\s*`, so a long run of spaces
+ * followed by a wrong character was tried every possible way (time growing with the square of the
+ * length). Spaces before "ext"/"x" already fit the first part, so that `\s*` is gone.
+ * TS-214: the two are meant to accept the same values; long-input.test.mts checks that on 200,000
+ * random values up to 40 characters long -- a strong check, not a proof.
  */
 // TS-198: spaces after an extension ("ext. 12 ") are fine too -- the server trims them, and the
 // box's HTML pattern below, which sees the untrimmed value, accepts them as well.

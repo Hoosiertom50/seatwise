@@ -113,7 +113,8 @@ export class WeddingDetailPage extends BasePage {
 
   /** FR-1.6's full-revocation message -- must only ever appear when access really was removed. */
   accessRemovedMessage() {
-    return this.page.getByText("Your access to this wedding has been removed.");
+    // TS-214: worded for a deleted wedding as well as removed access (the page can't tell them apart).
+    return this.page.getByText("This wedding is no longer available (it may have been deleted, or your access was removed).");
   }
 
   /** TS-136: any delete control on the page by its accessible name ("Remove Jane Smith",

@@ -127,9 +127,9 @@ defineQualityTest(
     id: "guest-list.what-planners-are-told-matches-what-happened.counts-show-invitations-and-people",
     title: "the Guests tab and the dashboard both count invitations and people, the same way",
     objective:
-      "Confirms that with one guest of headcount 2 and one of headcount 1, the Guests tab's heading and the wedding's dashboard row both read '2 invitations · 3 people', and that with a single one-person guest they read '1 invitation · 1 person'.",
+      "Confirms that with one guest of headcount 2 and one of headcount 1, the Guests tab's heading and the wedding's dashboard row both read '2 invitations · 3 people invited · 3 attending' (TS-214: invited and attending), and that with a single one-person guest they read '1 invitation · 1 person invited · 1 attending'.",
     expectedOutcome:
-      "Guests tab heading: 'Guests (1 invitation · 1 person)', then 'Guests (2 invitations · 3 people)'. Dashboard row: contains '2 invitations · 3 people'.",
+      "Guests tab heading: 'Guests (1 invitation · 1 person invited · 1 attending)', then 'Guests (2 invitations · 3 people invited · 3 attending)'. Dashboard row: contains '2 invitations · 3 people invited · 3 attending'.",
     requirementIds: ["REQ-GUEST-LIST-MANAGEMENT", "REQ-PLANNER-PORTFOLIO"],
     tags: ["@mutating", "@feature:guests", "@feature:portfolio", "@risk:normal", "@suite:regression"],
   },
@@ -140,18 +140,18 @@ defineQualityTest(
     await test.step("One one-person guest: singular words", async () => {
       await weddingGuestsPage.goto(w);
       await weddingGuestsPage.openGuestsTab();
-      await expect(weddingGuestsPage.guestListHeading()).toHaveText("Guests (1 invitation · 1 person)");
+      await expect(weddingGuestsPage.guestListHeading()).toHaveText("Guests (1 invitation · 1 person invited · 1 attending)");
     });
 
     await test.step("Add a guest bringing two: both places read 2 invitations · 3 people", async () => {
       await weddingData.createGuest(w, { ...uniquePersonName(testInfo.workerIndex), headcount: 2 });
       await weddingGuestsPage.goto(w);
       await weddingGuestsPage.openGuestsTab();
-      await expect(weddingGuestsPage.guestListHeading()).toHaveText("Guests (2 invitations · 3 people)");
+      await expect(weddingGuestsPage.guestListHeading()).toHaveText("Guests (2 invitations · 3 people invited · 3 attending)");
 
       const dashboard = new DashboardPage(page);
       await dashboard.goto();
-      await expect(dashboard.weddingLink(managedWedding.name)).toContainText("2 invitations · 3 people");
+      await expect(dashboard.weddingLink(managedWedding.name)).toContainText("2 invitations · 3 people invited · 3 attending");
     });
   },
 );

@@ -2,8 +2,17 @@
 // a household or a single person) and people (everyone they bring, i.e. the sum of headcounts).
 // The dashboard showed one and the Guests tab the other under the same word, so the same wedding
 // had two different "guest" counts. Both places now show both, the same way.
-export function formatGuestCounts(invitations: number, people: number): string {
-  return `${invitations} invitation${invitations === 1 ? "" : "s"} · ${people} ${people === 1 ? "person" : "people"}`;
+// TS-214: "people" counted everyone invited, declined and not-attending guests included, while the
+// Tables tab's "Attending" left them out -- so the two numbers disagreed with no word why. It now
+// says "invited", and (where it's known) how many of them are attending, the same count as Tables.
+export function formatGuestCounts(invitations: number, people: number, attending?: number): string {
+  const base = `${invitations} invitation${invitations === 1 ? "" : "s"} · ${people} ${people === 1 ? "person" : "people"} invited`;
+  return attending === undefined ? base : `${base} · ${attending} attending`;
+}
+
+/** TS-214: everyone coming, as the Tables tab counts them -- the headcounts of guests marked Attending. */
+export function attendingPeople(guests: { headcount: number; dayOfAttendance: string }[]): number {
+  return guests.reduce((sum, g) => sum + (g.dayOfAttendance === "ATTENDING" ? g.headcount : 0), 0);
 }
 
 /**

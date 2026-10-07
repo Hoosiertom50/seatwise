@@ -15,6 +15,8 @@ import type {
 import { useUnsavedChanges } from "@/lib/unsaved-changes";
 // TS-193: the same limits the server checks (packages/shared/src/field-limits.ts).
 import { FIELD_LIMITS, CONTACT_PHONE_HTML_PATTERN, CONTACT_PHONE_MESSAGE } from "@seatwise/shared";
+// TS-214: the most a cost or the budget can be, with the server's own plain-dollar messages.
+import { MAX_BUDGET_CENTS, BUDGET_TOO_HIGH_MESSAGE, MAX_VENDOR_COST_CENTS, VENDOR_COST_TOO_HIGH_MESSAGE } from "@seatwise/shared";
 
 // TS-20 (FR-15.1/FR-15.2): a per-wedding vendor list plus the wedding's overall budget figure and
 // a running total/remaining against it. Money is always handled here in whole dollars for
@@ -55,10 +57,14 @@ function dollarsStringToCents(value: string): number | null {
 }
 
 /** TS-175: why an amount box can't be saved as typed, or null when it can (blank is fine). */
-function amountProblem(value: string, what: string): string | null {
+// TS-214: and over the most the server takes, in the same plain-dollar words the server uses --
+// checked before sending, so the planner never sees a number of cents.
+function amountProblem(value: string, what: string, maxCents: number, tooHighMessage: string): string | null {
   const cleaned = value.replace(/[$,\s]/g, "");
-  if (!cleaned || /^(\d+(\.\d{0,2})?|\.\d{1,2})$/.test(cleaned)) return null;
-  return `${what} must be an amount in dollars, like 1500 or 1,500.50.`;
+  if (!cleaned) return null;
+  if (!/^(\d+(\.\d{0,2})?|\.\d{1,2})$/.test(cleaned)) return `${what} must be an amount in dollars, like 1500 or 1,500.50.`;
+  const cents = dollarsStringToCents(value);
+  return cents !== null && cents > maxCents ? tooHighMessage : null;
 }
 
 function formatCents(cents: number): string {
@@ -213,7 +219,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
   async function onSaveBudget(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
-    const problem = amountProblem(budgetInput, "The budget");
+    const problem = amountProblem(budgetInput, "The budget", MAX_BUDGET_CENTS, BUDGET_TOO_HIGH_MESSAGE);
     if (problem) return setError(problem);
     setSavingBudget(true);
     try {
@@ -232,7 +238,8 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
         setSummary(fresh);
         setBudgetInput(centsToDollarsString(fresh.budgetCents));
       }
-      setError(err instanceof ApiError ? err.message : "Couldn't save that budget figure.");
+      // TS-214: a refused figure says why (the field's own reason), not "Validation failed".
+      setError(fresh ? (err as ApiError).message : apiErrorMessage(err, ["budgetCents"], "Couldn't save that budget figure."));
     } finally {
       setSavingBudget(false);
     }
@@ -241,7 +248,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
   async function onAdd(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
-    const problem = amountProblem(cost, "Cost");
+    const problem = amountProblem(cost, "Cost", MAX_VENDOR_COST_CENTS, VENDOR_COST_TOO_HIGH_MESSAGE);
     if (problem) return setError(problem);
     setAdding(true);
     try {
@@ -297,7 +304,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
 
   async function onSaveEdit(vendorId: string) {
     setError(null);
-    const problem = amountProblem(editCostText, "Cost");
+    const problem = amountProblem(editCostText, "Cost", MAX_VENDOR_COST_CENTS, VENDOR_COST_TOO_HIGH_MESSAGE);
     if (problem) return setError(problem);
     setSaving(true);
     const loaded = vendors.find((v) => v.id === vendorId);
@@ -803,15 +810,19 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
                         </button>
                         {v.shareLinkActive && (
                           <>
-                            <button
-                              onClick={() => onShareLink(v.id, true)}
+                            {/* TS-214: asks first, like Turn off link -- the old link stops working
+                                straight away, and the vendor may already be using it. */}
+                            <ConfirmDeleteButton
+                              id={`vendor-${v.id}-new-link`}
+                              label="New link"
+                              ariaLabel={`New link for ${v.name}`}
+                              question={`Make a new link for ${v.name}? The link they have now stops working right away.`}
+                              confirmLabel="Yes, make a new link"
+                              busyLabel="Making…"
                               disabled={shareBusy.has(v.id)}
-                              aria-label={`New link for ${v.name}`}
-                              title="Makes a new link; the old one stops working."
+                              onConfirm={() => onShareLink(v.id, true)}
                               className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50"
-                            >
-                              New link
-                            </button>
+                            />
                             <ConfirmDeleteButton
                               id={`vendor-${v.id}-link-off`}
                               label="Turn off link"

@@ -14,6 +14,11 @@ export interface WeddingRow {
   guestCount: number;
   // TS-177: everyone the guests bring (the sum of headcounts) -- guestCount counts invitations.
   peopleCount: number;
+  // TS-214: the people actually coming (headcounts of guests marked Attending) -- the same count as
+  // the Tables tab's "Attending".
+  attendingCount: number;
+  // TS-214: bumped on every settings save; a save based on an older one is refused.
+  settingsRevision: number;
   emailNotificationsEnabled: boolean;
   // FR-3.4
   sideMixing: string;
@@ -40,13 +45,16 @@ export interface WeddingSummaryRow extends WeddingRow {
 const SELECT_WITH_GUEST_COUNT = `
   SELECT w.id, w."ownerId", w.name, w."eventDate"::text AS "eventDate", w."venueName", w.note,
          w.status, w."emailNotificationsEnabled", w."sideMixing", w."sideLabel1", w."sideLabel2",
-         w."rsvpCutoffDate"::text AS "rsvpCutoffDate",
+         w."rsvpCutoffDate"::text AS "rsvpCutoffDate", w."settingsRevision",
          w."createdAt", w."updatedAt",
          COALESCE(g.count, 0)::int AS "guestCount",
-         COALESCE(g.people, 0)::int AS "peopleCount"
+         COALESCE(g.people, 0)::int AS "peopleCount",
+         COALESCE(g.attending, 0)::int AS "attendingCount"
   FROM "weddings" w
   LEFT JOIN (
-    SELECT "weddingId", COUNT(*) AS count, SUM(headcount) AS people FROM "guests" GROUP BY "weddingId"
+    SELECT "weddingId", COUNT(*) AS count, SUM(headcount) AS people,
+           SUM(headcount) FILTER (WHERE "dayOfAttendance" = 'ATTENDING') AS attending
+    FROM "guests" GROUP BY "weddingId"
   ) g ON g."weddingId" = w.id
 `;
 
@@ -62,16 +70,19 @@ const SELECT_WITH_GUEST_COUNT = `
 const SELECT_WITH_SUMMARY = `
   SELECT w.id, w."ownerId", w.name, w."eventDate"::text AS "eventDate", w."venueName", w.note,
          w.status, w."emailNotificationsEnabled", w."sideMixing", w."sideLabel1", w."sideLabel2",
-         w."rsvpCutoffDate"::text AS "rsvpCutoffDate",
+         w."rsvpCutoffDate"::text AS "rsvpCutoffDate", w."settingsRevision",
          w."createdAt", w."updatedAt",
          COALESCE(g.count, 0)::int AS "guestCount",
          COALESCE(g.people, 0)::int AS "peopleCount",
+         COALESCE(g.attending, 0)::int AS "attendingCount",
          cpv.status AS "planStatus",
          COALESCE(unassigned.count, 0)::int AS "unassignedCount",
          COALESCE(reassign.count, 0)::int AS "needsReassignmentCount"
   FROM "weddings" w
   LEFT JOIN (
-    SELECT "weddingId", COUNT(*) AS count, SUM(headcount) AS people FROM "guests" GROUP BY "weddingId"
+    SELECT "weddingId", COUNT(*) AS count, SUM(headcount) AS people,
+           SUM(headcount) FILTER (WHERE "dayOfAttendance" = 'ATTENDING') AS attending
+    FROM "guests" GROUP BY "weddingId"
   ) g ON g."weddingId" = w.id
   LEFT JOIN LATERAL (
     SELECT id, status FROM "plan_versions" pv
@@ -163,7 +174,7 @@ export async function createWedding(
        VALUES ($1, $2, $3, $4, $5, $6, COALESCE($7::"SideMixingSetting", 'BALANCED_MIX'), COALESCE($8, 'Bride'), COALESCE($9, 'Groom'), $10, now())
        RETURNING id, "ownerId", name, "eventDate"::text AS "eventDate", "venueName", note, status,
                  "emailNotificationsEnabled", "sideMixing", "sideLabel1", "sideLabel2",
-                 "rsvpCutoffDate"::text AS "rsvpCutoffDate", "createdAt", "updatedAt"`,
+                 "rsvpCutoffDate"::text AS "rsvpCutoffDate", "settingsRevision", "createdAt", "updatedAt"`,
       [
         id,
         ownerId,
@@ -205,7 +216,7 @@ export async function createWedding(
     }
 
     await client.query("COMMIT");
-    return { ...wedding, guestCount: 0, peopleCount: 0 };
+    return { ...wedding, guestCount: 0, peopleCount: 0, attendingCount: 0 };
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});
     throw err;
@@ -288,8 +299,10 @@ export async function updateWeddingForOwner(
     sideLabel1: string;
     sideLabel2: string;
     rsvpCutoffDate: string | null;
-  }>
-): Promise<"UPDATED" | "NOT_FOUND" | "SIDE_LABELS_CLASH"> {
+  }>,
+  // TS-214: the settingsRevision the change is based on -- left out, the save isn't checked.
+  expectedRevision?: number
+): Promise<"UPDATED" | "NOT_FOUND" | "SIDE_LABELS_CLASH" | "CONFLICT"> {
   const fields: string[] = [];
   const values: unknown[] = [];
   let i = 1;
@@ -327,7 +340,8 @@ export async function updateWeddingForOwner(
     fields.push(`"rsvpCutoffDate" = $${i++}`);
     values.push(input.rsvpCutoffDate);
   }
-  fields.push(`"updatedAt" = now()`);
+  // TS-214: every settings save moves the revision on.
+  fields.push(`"updatedAt" = now()`, `"settingsRevision" = "settingsRevision" + 1`);
   values.push(id, ownerId);
   // TS-195: a side name saved on its own must differ from the other one as it is when this saves
   // -- checked in the UPDATE itself, against the row as Postgres writes it. Before, the route
@@ -342,14 +356,27 @@ export async function updateWeddingForOwner(
     clashCheck = ` AND lower(btrim("sideLabel1")) <> lower(btrim($${values.length + 1}::text))`;
     values.push(input.sideLabel2);
   }
+  // TS-214: compare-and-set -- the save only lands on the settings it was based on (like the TS-92
+  // budget). Checked in the UPDATE itself, so of two saves at once the second waits and is refused.
+  let revisionCheck = "";
+  if (expectedRevision !== undefined) {
+    revisionCheck = ` AND "settingsRevision" = $${values.length + 1}`;
+    values.push(expectedRevision);
+  }
   const { rowCount } = await pool.query(
-    `UPDATE "weddings" SET ${fields.join(", ")} WHERE id = $${i++} AND "ownerId" = $${i}${clashCheck}`,
+    `UPDATE "weddings" SET ${fields.join(", ")} WHERE id = $${i++} AND "ownerId" = $${i}${clashCheck}${revisionCheck}`,
     values
   );
   if ((rowCount ?? 0) > 0) return "UPDATED";
-  if (!clashCheck) return "NOT_FOUND";
-  const { rows } = await pool.query(`SELECT 1 FROM "weddings" WHERE id = $1 AND "ownerId" = $2`, [id, ownerId]);
-  return rows[0] ? "SIDE_LABELS_CLASH" : "NOT_FOUND";
+  if (!clashCheck && !revisionCheck) return "NOT_FOUND";
+  const { rows } = await pool.query(`SELECT "settingsRevision" FROM "weddings" WHERE id = $1 AND "ownerId" = $2`, [
+    id,
+    ownerId,
+  ]);
+  if (!rows[0]) return "NOT_FOUND";
+  // A changed revision is reported first: the other change may be the very one behind a clash.
+  if (expectedRevision !== undefined && rows[0].settingsRevision !== expectedRevision) return "CONFLICT";
+  return clashCheck ? "SIDE_LABELS_CLASH" : "CONFLICT";
 }
 
 export async function deleteWeddingForOwner(id: string, ownerId: string): Promise<boolean> {

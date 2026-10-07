@@ -1,12 +1,12 @@
 "use client";
 
-import { formatClockTime, formatDateTime } from "@/lib/display-format";
+import { formatDateTime } from "@/lib/display-format";
 import { useEffect, useMemo, useState, useRef } from "react";
 import { api, ApiError } from "@/lib/api-client";
 import type { CommentDTO, GuestDTO, SeatingTableDTO, TimelineEntryDTO } from "@seatwise/shared";
 import { useUnsavedChanges } from "@/lib/unsaved-changes";
 // TS-193: the same limits the server checks (packages/shared/src/field-limits.ts).
-import { FIELD_LIMITS } from "@seatwise/shared";
+import { FIELD_LIMITS, timelineTimeLabel } from "@seatwise/shared";
 
 // TS-13 (Collaboration & Notifications, FR-10.3): comments attached to a guest or table. A
 // dedicated tab (rather than inline per-row) keeps this tractable — pick a target, see its
@@ -237,7 +237,8 @@ export function CommentsTab({
                 {targetType === "TIMELINE_ENTRY" &&
                   timelineEntries.map((e) => (
                     <option key={e.id} value={e.id}>
-                      {formatClockTime(e.time)} — {e.description}
+                      {/* TS-214: "(next day)" for an entry after midnight. */}
+                      {timelineTimeLabel(e.time, e.nextDay)} — {e.description}
                     </option>
                   ))}
               </select>

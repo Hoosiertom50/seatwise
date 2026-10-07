@@ -217,9 +217,21 @@ export class GuestRow {
     await this.sideSelect().selectOption(side);
   }
 
-  /** TS-117: "New link" -- issues a fresh RSVP token, invalidating the old one. */
+  /** TS-117: "New link" -- issues a fresh RSVP token, invalidating the old one. TS-214: it asks
+   * first; this answers "Yes, make a new link". */
   async requestNewRsvpLink(): Promise<void> {
-    await this.root.getByRole("button", { name: "New link", exact: true }).click();
+    await this.newRsvpLinkButton().click();
+    await new ConfirmDelete(this.root).confirm();
+  }
+
+  /** TS-214: the "New link" trigger (opens its "Are you sure?" question). */
+  newRsvpLinkButton(): Locator {
+    return this.root.getByRole("button", { name: "New link", exact: true });
+  }
+
+  /** TS-214: the open "Make a new RSVP link…?" question. */
+  newLinkQuestion(): ConfirmDelete {
+    return new ConfirmDelete(this.root);
   }
 
   /** TS-117: the line the row shows after an RSVP-link action: "Link copied…", "Emailed to …", or

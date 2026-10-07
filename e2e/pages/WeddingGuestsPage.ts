@@ -274,7 +274,7 @@ export class WeddingGuestsPage extends BasePage {
     return new GuestRow(li);
   }
 
-  /** TS-177: the guest list's heading, "Guests (N invitations · N people)". */
+  /** TS-177: the guest list's heading, "Guests (N invitations · N people invited · N attending)" (TS-214). */
   guestListHeading() {
     return this.page.getByRole("heading", { name: /^Guests \(/ });
   }

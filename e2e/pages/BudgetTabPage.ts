@@ -238,12 +238,20 @@ export class BudgetTabPage extends BasePage {
   newLinkButton(vendorName: string) {
     return this.page.getByRole("button", { name: `New link for ${vendorName}`, exact: true });
   }
+  /** TS-214: the "Make a new link…?" question New link opens, scoped to the vendor's row. */
+  newLinkQuestion(vendorName: string): ConfirmDelete {
+    return new ConfirmDelete(this.vendorRow(vendorName));
+  }
   /** Clicks Share link (or New link) and returns the link the row then shows. */
   async getShareLink(vendorName: string, fresh = false): Promise<string> {
     const button = fresh ? this.newLinkButton(vendorName) : this.shareLinkButton(vendorName);
     const [response] = await Promise.all([
       this.page.waitForResponse((r) => r.request().method() === "POST" && /\/share-link$/.test(new URL(r.url()).pathname)),
-      button.click(),
+      (async () => {
+        await button.click();
+        // TS-214: New link asks first ("Yes, make a new link").
+        if (fresh) await new ConfirmDelete(this.vendorRow(vendorName)).confirm();
+      })(),
     ]);
     // TS-176: the link comes from the server's answer, and the row is waited on until it shows
     // that link -- reading the row straight after the answer sometimes caught the old link before

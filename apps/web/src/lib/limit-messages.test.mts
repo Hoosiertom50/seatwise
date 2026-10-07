@@ -51,9 +51,10 @@ test("an import's Side accepts the wedding's own side names, Both, and Bride/Gro
   assert.deepEqual(parseGuestSide("Groom", "Groom", "Bride"), { side: "BRIDE" });
 });
 
-test("guest counts show invitations and people, singular and plural", () => {
-  assert.equal(formatGuestCounts(12, 30), "12 invitations · 30 people");
-  assert.equal(formatGuestCounts(1, 1), "1 invitation · 1 person");
-  assert.equal(formatGuestCounts(0, 0), "0 invitations · 0 people");
-  assert.equal(formatGuestCounts(1, 2), "1 invitation · 2 people");
+test("guest counts show invitations and people invited, singular and plural", () => {
+  // TS-214: "invited" -- declined and not-attending guests are in this number.
+  assert.equal(formatGuestCounts(12, 30), "12 invitations · 30 people invited");
+  assert.equal(formatGuestCounts(1, 1), "1 invitation · 1 person invited");
+  assert.equal(formatGuestCounts(0, 0), "0 invitations · 0 people invited");
+  assert.equal(formatGuestCounts(1, 2), "1 invitation · 2 people invited");
 });

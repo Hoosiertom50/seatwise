@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError, apiErrorMessage } from "@/lib/api-client";
 import { useSerialTasks } from "@/lib/serial-tasks";
+// TS-214: the server's own guest order (last name, first name, then id).
+import { compareGuestNames } from "@/lib/guest-name-order";
 import { useUnsavedChanges } from "@/lib/unsaved-changes";
 import { PickThenActControl } from "@/components/PickThenActControl";
 import type {
@@ -221,7 +223,7 @@ export function DayOfTab({
 
   const filteredGuests = useMemo(() => {
     const q = search.trim().toLowerCase();
-    const sorted = [...guests].sort((a, b) => a.lastName.localeCompare(b.lastName));
+    const sorted = [...guests].sort(compareGuestNames);
     if (!q) return sorted;
     return sorted.filter((g) =>
       `${g.firstName} ${g.lastName} ${g.partyName ?? ""}`.toLowerCase().includes(q)
@@ -255,11 +257,13 @@ export function DayOfTab({
     return map;
   }, [guests, relationships]);
 
-  // TS-197: the tables a seated guest can be moved to -- the ones the server would accept for their
+  // TS-197: the tables a seated guest can be moved to -- the ones that pass the server's main checks for their
   // whole must-sit-together group: enough free seats for everyone (headcount, not counting the
   // group's own seats), accessible if anyone in the group needs it, and not a Restricted table
   // unless everyone is on its list (a guest on a Restricted table's list can only go there).
   // Before, only the one guest's party size was checked, so a table could be offered and refused.
+  // TS-214: these are the main checks, not all of them ("must not sit together" rules are only checked
+  // by the server) -- a table offered here can still be refused, and the refusal is shown.
   function moveChoicesFor(guest: GuestDTO): { table: SeatingTableDTO; free: number }[] {
     const fromTableId = tableIdByGuestId.get(guest.id);
     if (!fromTableId) return [];
@@ -437,8 +441,9 @@ export function DayOfTab({
           dayOfAttendance: "ATTENDING",
         });
         progress.added = guest;
-        guestsRef.current = [...guestsRef.current, guest];
-        setGuests((cur) => [...cur, guest]);
+        // TS-214: put in its place in the list (it used to go on the end until a reload).
+        guestsRef.current = [...guestsRef.current, guest].sort(compareGuestNames);
+        setGuests((cur) => [...cur, guest].sort(compareGuestNames));
         setWalkInFirst("");
         setWalkInLast("");
         if (!detailRef.current) return null;
@@ -596,7 +601,8 @@ export function DayOfTab({
           const seatedAt = tableLabelByGuestId.get(g.id);
           const notAttending = g.dayOfAttendance === "NOT_ATTENDING";
           // TS-191: the other tables with enough free seats for this guest's party.
-          // TS-197: ...and for their whole must-sit-together group, by every rule the server checks.
+          // TS-197: ...and for their whole must-sit-together group, by the seat, accessible and Restricted
+          // checks (TS-214: not every rule the server has -- the server still has the final say).
           const moveChoices = seatedAt ? moveChoicesFor(g) : [];
           return (
             <li
