@@ -43,6 +43,15 @@ const INVISIBLE = new RegExp(
  * .env line pasted as the value) dropped, surrounding quotes and spaces removed, lower case.
  */
 export function normalizeSecretForCheck(value: string): string {
+  return unwrapSecret(value).toLowerCase();
+}
+
+/**
+ * The secret as it would be used once copy-paste extras are taken off (invisible characters, an
+ * `export`/`NAME=` prefix, surrounding quotes) -- letter case kept, since a real key is
+ * case-sensitive (Copilot review: an upper- and lower-case version of a key are different keys).
+ */
+export function unwrapSecret(value: string): string {
   let v = value.replace(INVISIBLE, "").trim();
   // An environment variable's name: capitals with an underscore (JWT_SECRET=, ENCRYPTION_KEY=).
   // Never matches a random hex or base64 value, whose trailing "=" padding must stay.
@@ -52,7 +61,7 @@ export function normalizeSecretForCheck(value: string): string {
     if (!m) break;
     v = m[2];
   }
-  return v.trim().toLowerCase();
+  return v.trim();
 }
 
 /** TS-204: letters and digits only, so "Replace_With a long-random-secret" matches the list too. */
@@ -79,8 +88,9 @@ export function isPlaceholderSecret(value: string): boolean {
   return CONTAINED_PLACEHOLDERS.some((p) => compact.includes(p));
 }
 
-/** TS-204: true when two secrets are the same value (read the way normalizeSecretForCheck reads them). */
+/** TS-204: true when two secrets are the same value once copy-paste extras are taken off
+ * (unwrapSecret) -- compared with letter case kept, as the keys themselves are. */
 export function sameSecret(a: string | undefined, b: string | undefined): boolean {
   if (!a || !b) return false;
-  return normalizeSecretForCheck(a) === normalizeSecretForCheck(b);
+  return unwrapSecret(a) === unwrapSecret(b);
 }

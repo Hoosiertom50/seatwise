@@ -90,3 +90,11 @@ test("TS-204: JWT_SECRET may not be the same as ENCRYPTION_KEY in production", (
   assert.equal(jwtSecretProblem(GOOD, "production", undefined), null);
   assert.equal(jwtSecretProblem(GOOD, "development", GOOD), null);
 });
+
+// Copilot review on PR #102: keys are case-sensitive -- an upper- and lower-case version of the same
+// characters are two different keys, so they aren't refused as "the same".
+test("JWT_SECRET and ENCRYPTION_KEY that differ only in letter case are different keys", () => {
+  const mixed = "Ab3dEf9hIjK2mNoPqR5tUvWxYz7aBcDeFgH1jKlMnOp";
+  assert.equal(jwtSecretProblem(mixed, "production", mixed.toLowerCase()), null);
+  assert.match(jwtSecretProblem(mixed, "production", `'${mixed}'`) ?? "", /same as ENCRYPTION_KEY/);
+});
