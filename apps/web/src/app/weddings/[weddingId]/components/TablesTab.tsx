@@ -136,12 +136,23 @@ export function TablesTab({
       if (known === undefined || t.revision > known) tableRevisions.current.set(t.id, t.revision);
     }
   }, [tables]);
+  // TS-209: the list as it is now, for patchTable below.
+  const tablesRef = useRef(tables);
+  useEffect(() => {
+    tablesRef.current = tables;
+  }, [tables]);
   function patchTable<T extends { table: SeatingTableDTO }>(id: string, body: Record<string, unknown>): Promise<T> {
     return queueTableSave(async () => {
       const res = await api.patch<T>(`/api/v1/weddings/${weddingId}/tables/${id}`, {
         ...body,
         expectedRevision: tableRevisions.current.get(id),
       });
+      // TS-209: a saved change whose table couldn't be read back comes without it (and with a
+      // warning) -- the table as it was here, with this change, stands in for it until the next load.
+      if (!res.table) {
+        const known = tablesRef.current.find((t) => t.id === id);
+        return known ? ({ ...res, table: { ...known, ...body } } as T) : res;
+      }
       tableRevisions.current.set(id, res.table.revision);
       return res;
     });
@@ -375,11 +386,12 @@ export function TablesTab({
     setAppliedMessage(null);
     setApplyingTemplate(true);
     try {
-      const res = await api.post<{ addedCount: number; tables: SeatingTableDTO[] }>(
+      const res = await api.post<{ addedCount: number; tables: SeatingTableDTO[] | null }>(
         `/api/v1/weddings/${weddingId}/apply-template`,
         { templateId: applyTemplateId }
       );
-      setTables(res.tables);
+      // TS-209: null when the tables were added but the list couldn't be read back just then.
+      if (res.tables) setTables(res.tables);
       const name = myTemplates?.find((t) => t.id === applyTemplateId)?.name ?? "the template";
       setAppliedMessage(
         `Added ${res.addedCount} table${res.addedCount === 1 ? "" : "s"} from “${name}”. Tables already here weren't changed.`

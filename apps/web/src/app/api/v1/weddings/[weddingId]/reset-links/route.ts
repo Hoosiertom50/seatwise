@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { resetWeddingLinkTokens, LinkResetNotOwnerError } from "@seatwise/db";
+import { resetWeddingLinkTokens, LinkResetNotOwnerError, LINK_RESET_CONFLICT_MESSAGE } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
 import { errorResponse, concurrentChangeResponse } from "@/lib/api-response";
 import { requireAccess } from "@/lib/access";
@@ -26,6 +26,9 @@ export async function POST(req: NextRequest, { params }: Params) {
     // TS-195: handed off to someone else a moment ago -- the owner check is made again under the
     // wedding's lock.
     if (err instanceof LinkResetNotOwnerError) return errorResponse(err.message, 403);
+    // TS-209: its own words -- the general "someone else changed this plan" didn't fit a link reset.
+    const code = (err as { code?: string } | null)?.code;
+    if (code === "40P01" || code === "40001") return errorResponse(LINK_RESET_CONFLICT_MESSAGE, 409);
     // TS-195: lost a race with another change, or the wedding was deleted (nothing saved) -- a
     // clear 409/404, not a server error.
     const conflict = concurrentChangeResponse(err);

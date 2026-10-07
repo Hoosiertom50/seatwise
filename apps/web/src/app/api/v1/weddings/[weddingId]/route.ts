@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { updateWeddingSchema, sideLabelsClash, SIDE_LABELS_MESSAGE } from "@seatwise/shared";
 import { getWeddingById, updateWeddingForOwner, deleteWeddingForOwner, getWeddingAccessDetail } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
-import { errorResponse, zodErrorResponse } from "@/lib/api-response";
+import { errorResponse, zodErrorResponse, databaseBusyResponse } from "@/lib/api-response";
 import { requireAccess } from "@/lib/access";
 
 type Params = { params: Promise<{ weddingId: string }> };
@@ -80,7 +80,20 @@ export async function DELETE(req: NextRequest, { params }: Params) {
   const access = await requireAccess(weddingId, user.id, "OWNER");
   if ("error" in access) return access.error;
 
-  const deleted = await deleteWeddingForOwner(weddingId, user.id);
+  // TS-209: a delete that lost a race with another change (a deadlock the database broke, or the
+  // plan replaced while it waited) deleted nothing -- "try again" (409), not a server error.
+  let deleted: boolean;
+  try {
+    deleted = await deleteWeddingForOwner(weddingId, user.id);
+  } catch (err) {
+    const code = (err as { code?: string } | null)?.code;
+    if (code === "40P01" || code === "40001") {
+      return errorResponse("Someone was changing this wedding at the same moment, so it wasn't deleted. Please try again.", 409);
+    }
+    const busy = databaseBusyResponse(err);
+    if (busy) return busy;
+    throw err;
+  }
   if (!deleted) return errorResponse("Wedding not found", 404);
 
   return NextResponse.json({ ok: true });

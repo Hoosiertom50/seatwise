@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useRef } from "react";
 import { ConfirmDeleteButton } from "@/components/ConfirmDeleteButton";
-import { api, ApiError, apiErrorMessage } from "@/lib/api-client";
+import { api, ApiError, apiErrorMessage, isItemGoneError } from "@/lib/api-client";
 import { formatClockTime, OPEN_EDIT_MESSAGE } from "@/lib/display-format";
 import { matchVendorSuggestions } from "@/lib/vendor-suggestions";
 import type {
@@ -365,6 +365,11 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
         setEditingId(null);
         focusIfLost(`vendor-${vendorId}-edit`);
         setError(`"${fresh.name}" changed since you loaded it (maybe in another tab, or by someone else) — showing the latest. Try again if you still want to make this change.`);
+      } else if (isItemGoneError(err)) {
+        // TS-209: removed by someone else while this was being edited -- it's gone from the list.
+        setVendors((cur) => cur.filter((v) => v.id !== vendorId));
+        setEditingId(null);
+        setError("That vendor was removed (maybe in another tab, or by someone else) — the list has been updated.");
       } else {
         // TS-151: say which field was refused, not just "Validation failed".
         setError(apiErrorMessage(err, ["name", "categoryOther", "contactEmail", "costCents", "arrivalTime", "contractNotes"], "Couldn't save that vendor."));
@@ -422,10 +427,11 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
     setVendors((cur) => cur.filter((v) => v.id !== id));
     try {
       await api.delete(`/api/v1/weddings/${weddingId}/vendors/${id}`);
-    } catch {
+    } catch (err) {
       // Put just this vendor back (not an older copy of the whole list).
       if (removed) setVendors((cur) => sortVendors([...cur, removed]));
-      setError("Couldn't remove that vendor.");
+      // TS-209: the server's own reason. A vendor already removed counts as removed (see api-client).
+      setError(apiErrorMessage(err, [], "Couldn't remove that vendor."));
       return;
     }
     await refreshSummary();

@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { saveWeddingAsTemplateSchema } from "@seatwise/shared";
 import { createTemplateFromWedding } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
-import { errorResponse, zodErrorResponse } from "@/lib/api-response";
+import { errorResponse, zodErrorResponse, concurrentChangeResponse } from "@/lib/api-response";
+import { SAVED_BUT_NOT_REFRESHED } from "@/lib/post-save";
 import { requireAccess } from "@/lib/access";
 
 type Params = { params: Promise<{ weddingId: string }> };
@@ -23,6 +24,15 @@ export async function POST(req: NextRequest, { params }: Params) {
   const parsed = saveWeddingAsTemplateSchema.safeParse(body);
   if (!parsed.success) return zodErrorResponse(parsed.error);
 
-  const template = await createTemplateFromWedding(user.id, weddingId, parsed.data.name);
-  return NextResponse.json({ template }, { status: 201 });
+  // TS-209: a wedding deleted while this was saved is a 404 (it was a server error), and the database
+  // being too busy says nothing was saved. Once saved, the answer is a success -- with a warning when
+  // the new template couldn't be read back.
+  try {
+    const template = await createTemplateFromWedding(user.id, weddingId, parsed.data.name);
+    return NextResponse.json({ template, warnings: template ? [] : [SAVED_BUT_NOT_REFRESHED] }, { status: 201 });
+  } catch (err) {
+    const handled = concurrentChangeResponse(err);
+    if (handled) return handled;
+    throw err;
+  }
 }

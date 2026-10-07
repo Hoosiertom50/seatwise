@@ -14,6 +14,11 @@ export class LinkResetNotOwnerError extends Error {
   }
 }
 
+// TS-209: a reset that lost a race with another change (the database broke a deadlock) -- it said
+// "Someone else changed this plan", which isn't what the owner was doing. Nothing was reset.
+export const LINK_RESET_CONFLICT_MESSAGE =
+  "Someone was changing the guest list or seating at the same moment, so no links were reset. Please try again.";
+
 // TS-179: the owner's "Reset all guest and vendor links". Every guest RSVP link and vendor share
 // link the wedding has handed out gets a brand-new token (the same new hash + encrypted copy the
 // single-link "regenerate" uses), so every old link stops working -- e.g. after removing a

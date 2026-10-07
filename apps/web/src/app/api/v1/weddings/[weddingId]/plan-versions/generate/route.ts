@@ -21,6 +21,7 @@ import { getAuthUser } from "@/lib/session";
 import { errorResponse, zodErrorResponse, concurrentChangeResponse } from "@/lib/api-response";
 import { requireAccess, canManageApproval, actorAccessFor } from "@/lib/access";
 import { SAVED_AS_DRAFT_BECAUSE_APPROVED, MADE_CURRENT_BECAUSE_NO_CURRENT_PLAN } from "@/lib/plan-approval-text";
+import { SAVED_BUT_NOT_REFRESHED, afterSave } from "@/lib/post-save";
 
 type Params = { params: Promise<{ weddingId: string }> };
 
@@ -147,11 +148,13 @@ export async function POST(req: NextRequest, { params }: Params) {
     throw err;
   }
 
-  const planVersion = await getPlanVersionDetail(planVersionId, weddingId);
-  if (!planVersion) {
-    return errorResponse("Plan was generated but couldn't be loaded back", 500);
-  }
-  planVersion.warnings = result.warnings;
+  // TS-209: the plan is saved -- reading it back can't turn that into an error (it answered "Not
+  // saved" and the new plan stayed hidden). Without it, the answer carries what the screen needs to
+  // open the new version (its id, the engine's notes and who's unseated), plus a warning.
+  const loadWarnings: string[] = [];
+  const loaded = await afterSave("reading the new plan back", () => getPlanVersionDetail(planVersionId, weddingId), loadWarnings, SAVED_BUT_NOT_REFRESHED, null);
+  const planVersion = loaded ?? { id: planVersionId, warnings: [] as string[], unassignedGuestIds: result.unassignedGuestIds };
+  planVersion.warnings = [...result.warnings, ...(loaded ? [] : [SAVED_BUT_NOT_REFRESHED])];
 
   // FR-5.3: reported once, right alongside the version it was computed for -- same lifecycle as
   // `warnings` above (surfaced in this response only, not persisted for a later reload).

@@ -30,6 +30,9 @@ const HEADERS = [
   "Version",
   // TS-190: the guest's age category (an update import maps it back). Last, for the same reason.
   "Age category",
+  // TS-210: the stored side (BRIDE / GROOM / BOTH), which the import prefers to the Side name -- the
+  // names can be renamed between the export and the re-import. Last, for the same reason.
+  "Side code",
 ];
 
 // Exists so a bulk *update* import (FR-2.4a) has a Guest ID to map back in the first place --
@@ -63,6 +66,7 @@ export async function GET(req: NextRequest, { params }: Params) {
     g.plusOneNames ?? "",
     String(g.revision),
     g.ageCategory,
+    g.side,
   ]);
   // TS-180: starts with a byte-order mark (see toCsv), so Excel shows accented names correctly.
   const csv = toCsv(HEADERS, rows);

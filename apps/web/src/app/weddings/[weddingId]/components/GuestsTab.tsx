@@ -25,12 +25,21 @@ import {
   CsvParseError,
   findDuplicateCsvHeader,
   duplicateCsvHeaderMessage,
-  decodeCsvBytes,
+  decodeCsvFile,
   CsvEncodingError,
+  type CsvTextEncoding,
   GUEST_TIER_LABELS,
   RSVP_STATUS_LABELS,
 } from "@seatwise/shared";
 import { useUnsavedChanges, useUnsavedFields } from "@/lib/unsaved-changes";
+import {
+  prepareImportCsv,
+  withCommitErrorRows,
+  commitErrorRows,
+  importMayHaveSaved,
+  CHECK_LIST_BEFORE_IMPORTING_AGAIN,
+} from "@/lib/guest-import-client";
+import { GuestExportButton } from "./GuestExportButton";
 // TS-193: the same limits the server checks (packages/shared/src/field-limits.ts).
 import { FIELD_LIMITS } from "@seatwise/shared";
 // TS-202
@@ -94,6 +103,8 @@ function buildImportFields(
     { field: "requiresAccessibleTable", label: "Requires accessible table (yes/no)" },
     { field: "dayOfAttendance", label: "Attendance (Attending/Not Attending)" },
     { field: "side", label: `Side (${sideLabel1}/${sideLabel2}/Both)` },
+    // TS-210: the export's stored side, used before the Side name (names can be renamed).
+    { field: "sideCode", label: "Side code (from an export)" },
     { field: "ageCategory", label: "Age category (Adult/Child/Infant)" },
     { field: "notes", label: "Notes" },
     // TS-180: the export's last two columns.
@@ -217,6 +228,13 @@ export function GuestsTab({
   const [previewing, setPreviewing] = useState(false);
   const [committing, setCommitting] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
+  // TS-210: how the file was read (the Mac check is only for windows-1252), and the file as the
+  // preview sent it (mapped columns only) -- the import sends exactly that.
+  const [csvEncoding, setCsvEncoding] = useState<CsvTextEncoding>("utf-8");
+  const [previewedCsv, setPreviewedCsv] = useState<string | null>(null);
+  // TS-209: a key made for each preview and sent with its import -- sending the same import again
+  // (its answer was lost) gets the first answer back instead of adding every new guest twice.
+  const [importKey, setImportKey] = useState<string | null>(null);
   // TS-159: tell the page this tab has input that leaving it would lose.
   // TS-175: only while the form is there -- once access drops to View it's hidden, and its leftover
   // text used to keep the page asking "you have unsaved changes".
@@ -263,6 +281,8 @@ export function GuestsTab({
     setImportPreview(null);
     setImportError(null);
     setOverwriteChanged(false);
+    setPreviewedCsv(null);
+    setImportKey(null);
     if (fileInputRef.current) fileInputRef.current.value = "";
   }
 
@@ -286,7 +306,8 @@ export function GuestsTab({
       // encoding is refused (CsvEncodingError). And a file holding the "couldn't read this
       // character" mark is no longer refused here as a whole -- the preview shows the rows whose
       // imported cells hold it (a guest's own RSVP note in the export used to block the file).
-      const text = decodeCsvBytes(await file.arrayBuffer());
+      // TS-210: a file with the UTF-8 mark is always read as UTF-8 (see decodeCsvFile).
+      const { text, encoding } = decodeCsvFile(await file.arrayBuffer());
       const { headers } = parseCsv(text);
       if (headers.length === 0) {
         setImportError("Couldn't find a header row in that file.");
@@ -299,6 +320,7 @@ export function GuestsTab({
         return;
       }
       setCsvText(text);
+      setCsvEncoding(encoding);
       setCsvFileName(file.name);
       setCsvHeaders(headers);
       // Best-effort auto-mapping: a column whose header matches a field name/label loosely.
@@ -312,6 +334,8 @@ export function GuestsTab({
         requiresAccessibleTable: ["accessibletable", "accessible"],
         dayOfAttendance: ["attendance"],
         partyName: ["partyhousehold", "party", "household"],
+        // TS-210: the export's "Side code" column.
+        sideCode: ["sidecode"],
       };
       for (const { field, label } of IMPORT_FIELDS) {
         const names = [squash(field), squash(label.split("(")[0]), ...(aliases[field] ?? [])];
@@ -351,15 +375,24 @@ export function GuestsTab({
     setImportError(null);
     setImportResult(null);
     setOverwriteChanged(false);
+    // TS-210: only the mapped columns are sent (and a windows-1252 file is checked for the older Mac
+    // format in those columns only) -- see prepareImportCsv.
+    const prepared = prepareImportCsv(csvText, csvEncoding, cleanMapping());
+    if ("error" in prepared) {
+      setImportError(prepared.error);
+      return;
+    }
     setPreviewing(true);
     const request = ++previewRequest.current;
     try {
       const { preview } = await api.post<{ preview: GuestImportPreview }>(
         `/api/v1/weddings/${weddingId}/guests/import/preview`,
-        { csv: csvText, mapping: cleanMapping() }
+        { csv: prepared.csv, mapping: cleanMapping() }
       );
       if (request !== previewRequest.current) return;
       setImportPreview(preview);
+      setPreviewedCsv(prepared.csv);
+      setImportKey(crypto.randomUUID());
     } catch (err) {
       if (request !== previewRequest.current) return;
       setImportError(err instanceof ApiError ? err.message : "Couldn't preview that file.");
@@ -369,17 +402,31 @@ export function GuestsTab({
     }
   }
 
+  // TS-209: the guest list loaded again, when an import's answer didn't bring it.
+  async function reloadGuests() {
+    try {
+      const { guests: fresh } = await api.get<{ guests: GuestDTO[] }>(`/api/v1/weddings/${weddingId}/guests`);
+      setGuests(fresh.sort((a, b) => a.lastName.localeCompare(b.lastName)));
+    } catch {
+      // The page's own refresh catches up later.
+    }
+  }
+
   async function onConfirmImport() {
-    if (!csvText) return;
+    if (!csvText || !previewedCsv) return;
     setImportError(null);
     setCommitting(true);
     try {
-      const { result, guests: updatedGuests } = await api.post<{
+      const { result, guests: updatedGuests, warnings } = await api.post<{
         result: { createdCount: number; updatedCount: number; skippedCount?: number; unchangedCount?: number; warnings: string[] };
-        guests: GuestDTO[];
+        // TS-209: null when the import saved but the list couldn't be read back (with a warning).
+        guests: GuestDTO[] | null;
+        warnings?: string[];
       }>(`/api/v1/weddings/${weddingId}/guests/import/commit`, {
-        csv: csvText,
+        csv: previewedCsv,
         mapping: cleanMapping(),
+        // TS-209: the same key on every try of this preview's import.
+        ...(importKey ? { importKey } : {}),
         // TS-92: the versions this preview showed, so the import is refused rather than silently
         // overwriting a guest someone else edited in the meantime. TS-180: including guests changed
         // since the export, when the planner chose to overwrite them.
@@ -396,14 +443,26 @@ export function GuestsTab({
         ),
         overwriteChanged,
       });
-      setGuests(updatedGuests.sort(compareGuestNames));
-      setImportResult(result);
+      if (updatedGuests) setGuests(updatedGuests.sort(compareGuestNames));
+      else await reloadGuests();
+      setImportResult({ ...result, warnings: [...result.warnings, ...(warnings ?? [])] });
       resetImport();
       // TS-212: Confirm goes away with the preview -- focus moves to the result message (it used to
       // drop to the page, so the next Tab started from the top).
       setTimeout(() => document.getElementById("guest-import-result")?.focus(), 0);
     } catch (err) {
-      setImportError(err instanceof ApiError ? err.message : "Couldn't complete that import.");
+      // TS-209: the rows the import still refuses, shown in the preview with their reasons.
+      const errorRows = commitErrorRows(err);
+      if (errorRows) setImportPreview((cur) => (cur ? withCommitErrorRows(cur, errorRows) : cur));
+      const message = err instanceof ApiError ? err.message : "Couldn't complete that import.";
+      // TS-209: no answer, or a server error -- it may have gone in. The list is loaded again and the
+      // planner asked to check it (Confirm sends the same key again, so it can't import twice).
+      if (importMayHaveSaved(err)) {
+        await reloadGuests();
+        setImportError(`${message} ${CHECK_LIST_BEFORE_IMPORTING_AGAIN}`);
+      } else {
+        setImportError(message);
+      }
     } finally {
       setCommitting(false);
     }
@@ -468,10 +527,12 @@ export function GuestsTab({
       // TS-197: removed, but the plan couldn't be re-checked afterwards -- say so.
       const res = await api.delete<{ warnings?: string[] }>(`/api/v1/weddings/${weddingId}/guests/${guestId}`);
       if (res.warnings?.length) setWarning(res.warnings.join(" "));
-    } catch {
+    } catch (err) {
       // TS-166: put back just this guest, not an older copy of the whole list.
       if (removed) setGuests((cur) => [...cur, removed].sort(compareGuestNames));
-      setError("Couldn't delete that guest.");
+      // TS-209: the server's reason (someone else changed it, access changed, no connection...). A
+      // guest someone else had already deleted counts as deleted (see api-client), so never lands here.
+      setError(apiErrorMessage(err, [], "Couldn't delete that guest."));
     }
   }
 
@@ -511,14 +572,15 @@ export function GuestsTab({
   function patchRow(guestId: string, changes: Partial<GuestDTO>) {
     setGuests((cur) => cur.map((g) => (g.id === guestId ? { ...g, ...changes } : g)));
   }
-  type GuestSaveResult = { guest: GuestDTO; rsvpEmail?: RsvpEmailOutcome; warnings?: string[] };
+  type GuestSaveResult = { guest: GuestDTO | null; rsvpEmail?: RsvpEmailOutcome; warnings?: string[] };
   function saveGuest(guestId: string, changes: Record<string, unknown>): Promise<GuestSaveResult> {
     const run = async () => {
       const result = await api.patch<GuestSaveResult>(`/api/v1/weddings/${weddingId}/guests/${guestId}`, {
         ...changes,
         expectedRevision: revisionFor(guestId),
       });
-      putGuest(result.guest);
+      // TS-209: a saved edit whose read-back failed comes without the guest (and with a warning).
+      if (result.guest) putGuest(result.guest);
       // TS-166: a save that works clears an earlier save's error, which used to stay up for good.
       // TS-182: only this guest's own error -- not a message about someone else.
       clearRowError(guestId);
@@ -635,7 +697,7 @@ export function GuestsTab({
     try {
       const { guest, rsvpEmail } = await saveGuest(guestId, { email: normalized });
       // TS-143: giving a guest their first email sends their RSVP link.
-      if (rsvpEmail && guest.email) showAutoRsvpResult(guest.id, guest.email, rsvpEmail);
+      if (rsvpEmail && guest?.email) showAutoRsvpResult(guest.id, guest.email, rsvpEmail);
       return true;
     } catch (err) {
       const fresh = conflictGuest(err);
@@ -1331,14 +1393,9 @@ export function GuestsTab({
           Guests ({formatGuestCounts(guests.length, guests.reduce((sum, g) => sum + g.headcount, 0), attendingPeople(guests))})
         </h2>
         {/* TS-170: a download, not a page change -- so it doesn't set off "leave this page?" for
-            half-typed input, or replace the page with an error if the session has run out. */}
-        <a
-          href={`/api/v1/weddings/${weddingId}/guests/export`}
-          download
-          className="rounded-md border border-neutral-300 dark:border-neutral-600 min-h-11 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800"
-        >
-          Export guest list (CSV)
-        </a>
+            half-typed input. TS-211: fetched as a file first, so a failure (signed out, a server
+            error) is said here rather than saved as a broken download. */}
+        <GuestExportButton weddingId={weddingId} />
       </div>
       {guests.length === 0 ? (
         <p className="text-sm text-neutral-500 dark:text-neutral-400">

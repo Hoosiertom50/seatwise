@@ -41,7 +41,11 @@ export async function POST(req: NextRequest, { params }: Params) {
     );
     // TS-175: the guest too -- the change bumps their revision (TS-165), and a screen that kept the
     // old one got a false "edited elsewhere" on its next edit of them.
-    const guest = await getGuestForWedding(guestId, weddingId);
+    // TS-209: saved by now -- a failed read-back gives no guest, not an error (or "nothing was saved").
+    const guest = await getGuestForWedding(guestId, weddingId).catch((readErr) => {
+      console.error("Attendance saved, but reading the guest back failed:", readErr);
+      return null;
+    });
     return NextResponse.json({ planVersion, guest: guest ? guestForViewer(guest, access.accessLevel) : null, unchanged });
   } catch (err) {
     if (err instanceof AttendanceError) {

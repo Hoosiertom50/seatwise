@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ConfirmDeleteButton } from "@/components/ConfirmDeleteButton";
 import { CommitSelect } from "@/components/CommitSelect";
-import { api, ApiError, apiErrorMessage } from "@/lib/api-client";
+import { api, ApiError, apiErrorMessage, isItemGoneError } from "@/lib/api-client";
 import type {
   CollaboratorDTO,
   CollaboratorPermission,
@@ -23,6 +23,9 @@ import { formatDate, localTodayIso } from "@/lib/display-format";
 // so taking access away doesn't stop those links -- the owner's reset below does.
 const LINKS_KEEP_WORKING =
   "Any guest or vendor links they copied keep working until you use Reset all guest and vendor links below.";
+
+// TS-209: a change to someone who was removed meanwhile (by someone else, or they left).
+const COLLABORATOR_GONE = "That person no longer has access to this wedding — the list has been updated.";
 
 const LEVELS: { value: CollaboratorPermission; label: string; hint: string }[] = [
   { value: "VIEW", label: "View", hint: "Can see everything, can't change anything" },
@@ -474,8 +477,9 @@ export function CollaboratorsTab({
     try {
       await api.delete(`/api/v1/weddings/${weddingId}/invites/${id}`);
       await refreshInvites();
-    } catch {
-      setError("Couldn't revoke that invite.");
+    } catch (err) {
+      // TS-209: the server's own reason (an invite already gone counts as revoked -- see api-client).
+      setError(apiErrorMessage(err, [], "Couldn't revoke that invite."));
     }
   }
 
@@ -543,12 +547,19 @@ export function CollaboratorsTab({
           `${before.userName}'s access is now ${LEVELS[rank(saved.permissionLevel)].label}. ${LINKS_KEEP_WORKING}`
         );
       }
-    } catch {
+    } catch (err) {
+      // TS-209: removed by someone else meanwhile -- they're gone, not put back.
+      if (isItemGoneError(err)) {
+        setCollaborators((cur) => cur.filter((c) => c.id !== id));
+        setError(COLLABORATOR_GONE);
+        return;
+      }
       // Put back what's saved -- unless a newer change for this person is waiting, which shows its own.
       const back = confirmedAccess.current.get(id);
       if (back && collaboratorSaves.current.get(id) === save)
         setCollaborators((cur) => cur.map((c) => (c.id === id ? { ...c, ...back } : c)));
-      setError("Couldn't change that collaborator's access level.");
+      // TS-209: the server's own reason (changed by someone else, your access changed, no connection).
+      setError(apiErrorMessage(err, [], "Couldn't change that collaborator's access level."));
       // TS-206: not saved -- Back waits for this and stays.
       return false;
     }
@@ -562,11 +573,17 @@ export function CollaboratorsTab({
     const save = saveCollaborator(id, { role: newRole });
     try {
       await save;
-    } catch {
+    } catch (err) {
+      // TS-209: as above.
+      if (isItemGoneError(err)) {
+        setCollaborators((cur) => cur.filter((c) => c.id !== id));
+        setError(COLLABORATOR_GONE);
+        return;
+      }
       const back = confirmedAccess.current.get(id);
       if (back && collaboratorSaves.current.get(id) === save)
         setCollaborators((cur) => cur.map((c) => (c.id === id ? { ...c, ...back } : c)));
-      setError("Couldn't change that collaborator's role.");
+      setError(apiErrorMessage(err, [], "Couldn't change that collaborator's role."));
       return false;
     }
   }
@@ -578,12 +595,13 @@ export function CollaboratorsTab({
     setCollaborators((cur) => cur.filter((c) => c.id !== id));
     try {
       await api.delete(`/api/v1/weddings/${weddingId}/collaborators/${id}`);
-    } catch {
+    } catch (err) {
       if (removed)
         setCollaborators((cur) =>
           cur.some((c) => c.id === id) ? cur : [...cur.slice(0, index), removed, ...cur.slice(index)]
         );
-      setError("Couldn't remove that collaborator.");
+      // TS-209: the server's own reason. Someone already removed counts as removed (see api-client).
+      setError(apiErrorMessage(err, [], "Couldn't remove that collaborator."));
     }
   }
 

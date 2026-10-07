@@ -9,6 +9,7 @@ import { inReadingOrder } from "@/lib/reading-order";
 import { PickThenActControl } from "@/components/PickThenActControl";
 import { PLAN_CHANGED_EVENT } from "./GettingStarted";
 import { undoPlanFor, type UndoPlan } from "@/lib/plan-undo";
+import { PlanExportButtons } from "./PlanExportButtons";
 import { SAVED_AS_DRAFT_BECAUSE_APPROVED, MADE_CURRENT_BECAUSE_NO_CURRENT_PLAN } from "@/lib/plan-approval-text";
 
 // TS-182: a change queued for one version, but another version is open by the time it runs.
@@ -1131,34 +1132,13 @@ export function PlanTab({
           </div>
 
           {/* TS-179: only the current plan exports -- an approved version that was since replaced is out of date. */}
+          {/* TS-211: fetched as files, with a failure said inline, and a warning while guests aren't seated. */}
           {detail.status === "APPROVED" && detail.isCurrent && (
-            <div className="mb-6 flex flex-wrap items-center gap-2 rounded-lg border border-neutral-200 dark:border-neutral-700 p-3">
-              <span className="text-sm font-medium">Export:</span>
-              <a
-                href={`/api/v1/weddings/${weddingId}/plan-versions/${detail.id}/export/chart`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="rounded-md border border-neutral-300 dark:border-neutral-600 min-h-11 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800"
-              >
-                Seating chart (PDF)
-              </a>
-              <a
-                href={`/api/v1/weddings/${weddingId}/plan-versions/${detail.id}/export/lookup`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="rounded-md border border-neutral-300 dark:border-neutral-600 min-h-11 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800"
-              >
-                Guest lookup list (PDF)
-              </a>
-              <a
-                href={`/api/v1/weddings/${weddingId}/plan-versions/${detail.id}/export/cards`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="rounded-md border border-neutral-300 dark:border-neutral-600 min-h-11 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800"
-              >
-                Place cards (PDF)
-              </a>
-            </div>
+            <PlanExportButtons
+              weddingId={weddingId}
+              planVersionId={detail.id}
+              unseatedCount={detail.unassignedGuestIds.length}
+            />
           )}
 
           {!detail.isCurrent && (

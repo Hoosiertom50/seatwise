@@ -1,6 +1,7 @@
 // FR-2.4/2.4a: a small hand-rolled CSV parser/serializer (RFC 4180-ish) so bulk guest import and
 // export don't need an external dependency. Handles quoted fields containing commas, quotes
 // (escaped as ""), and embedded newlines; tolerates \n, \r\n, and a missing trailing newline.
+// TS-210: also a lone \r, and tab- or semicolon-separated files (see detectCsvDelimiter).
 
 // TS-180: a file the parser can't read safely (an opened quote that never closes) -- the import
 // says so rather than guessing where the cell ends.
@@ -10,9 +11,27 @@ export class CsvParseError extends Error {}
 // now writes so Excel reads accented names correctly.
 export const CSV_BOM = "﻿";
 
+// TS-210: which character separates the cells -- a comma, or the tab (Excel's "Unicode Text") or
+// semicolon (Excel in much of Europe) when the header line has more of those than commas. Before,
+// such a file was read as one column.
+export function detectCsvDelimiter(text: string): "," | "\t" | ";" {
+  const counts = { ",": 0, "\t": 0, ";": 0 };
+  let inQuotes = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (c === '"') inQuotes = !inQuotes;
+    else if (!inQuotes && (c === "\n" || c === "\r")) break;
+    else if (!inQuotes && (c === "," || c === "\t" || c === ";")) counts[c]++;
+  }
+  if (counts["\t"] > counts[","] && counts["\t"] >= counts[";"]) return "\t";
+  if (counts[";"] > counts[","]) return ";";
+  return ",";
+}
+
 export function parseCsv(text: string): { headers: string[]; rows: string[][] } {
   // TS-180: a leading byte-order mark isn't part of the first header.
   if (text.startsWith(CSV_BOM)) text = text.slice(1);
+  const delimiter = detectCsvDelimiter(text);
   const rows: string[][] = [];
   let row: string[] = [];
   let field = "";
@@ -49,18 +68,20 @@ export function parseCsv(text: string): { headers: string[]; rows: string[][] } 
       i++;
       continue;
     }
-    if (c === ",") {
+    if (c === delimiter) {
       row.push(field);
       field = "";
       atFieldStart = true;
       i++;
       continue;
     }
-    if (c === "\r") {
+    // TS-210: a carriage return on its own (classic Mac line endings, or one left inside a cell) is a
+    // line break too -- it used to be dropped, joining the text either side. \r\n is one break.
+    if (c === "\r" && text[i + 1] === "\n") {
       i++;
       continue;
     }
-    if (c === "\n") {
+    if (c === "\n" || c === "\r") {
       row.push(field);
       rows.push(row);
       row = [];
