@@ -18,6 +18,7 @@
  * `CollaboratorsTab.tsx`), so this avoids scanning a still-loading DOM.
  */
 
+import { expect } from "@playwright/test";
 import type { Locator } from "@playwright/test";
 import type { Page } from "@playwright/test";
 import { BasePage } from "./BasePage.js";
@@ -215,6 +216,12 @@ export class WeddingDetailPage extends BasePage {
       this.page.off("dialog", onDialog);
     }
     return asked;
+  }
+
+  /** TS-170 / TS-175: once nothing is unsaved the page takes its extra Back entry off history with a
+   * Back of its own -- wait for that before opening another page, or it cancels the new page load. */
+  async waitForBackGuardGone(): Promise<void> {
+    await expect.poll(() => this.page.evaluate(() => window.history.state?.seatwiseGuard === true)).toBe(false);
   }
 
   /** TS-191: whichever element has keyboard focus, for checking where focus went back to. */

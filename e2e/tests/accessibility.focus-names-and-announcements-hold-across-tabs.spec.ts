@@ -179,6 +179,7 @@ defineQualityTest(
       await expect(tables.errorText()).toContainText("Save or cancel the open edit first.");
       // Put it back, so nothing is left unsaved for the next steps.
       await tables.cancelTableEdit("Table 1");
+      await wedding.waitForBackGuardGone();
     });
 
     await test.step("Escape on the question is Stay", async () => {
