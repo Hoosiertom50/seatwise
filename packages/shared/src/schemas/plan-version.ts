@@ -59,6 +59,8 @@ export interface PlanVersionAssignmentDTO {
   tableId: string;
   tableLabel: string;
   needsReassignment: boolean;
+  /** TS-221: an older version's seat held by a guest since marked not attending. */
+  notAttending?: boolean;
 }
 
 export interface PlanVersionDetailDTO extends PlanVersionDTO {

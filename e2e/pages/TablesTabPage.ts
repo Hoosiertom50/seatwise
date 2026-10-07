@@ -276,6 +276,11 @@ export class TablesTabPage extends BasePage {
     await expect(this.page.getByText(`Saved “${name}”`, { exact: false })).toBeVisible();
   }
 
+  /** TS-216: the "Save as template" result line (a live region), matched by its text. */
+  templateSavedNotice(text: string | RegExp) {
+    return this.page.getByRole("status").filter({ hasText: text });
+  }
+
   /** TS-166: a table's row in the list (found by its Remove button). */
   tableRow(label: string) {
     return this.page.locator("li").filter({ has: this.removeTableButton(label) });

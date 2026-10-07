@@ -22,6 +22,7 @@ import { requireAccess } from "@/lib/access";
 import { guestForViewer } from "@/lib/guest-privacy";
 import { rsvpEmailOutcome, sendGuestRsvpLink } from "@/lib/rsvp-email";
 import { SAVED_BUT_NOT_RECHECKED, SAVED_BUT_NOT_REFRESHED, RSVP_EMAIL_FAILED, afterSave } from "@/lib/post-save";
+import { rsvpEmailChange } from "@/lib/after-commit-answers";
 
 // TS-177: why a guest edit just flagged someone, in the words that fit the reason.
 function flaggedWarning({ name, reason }: NewlyFlaggedSeat): string {
@@ -155,21 +156,27 @@ export async function PATCH(req: NextRequest, { params }: Params) {
   // TS-209: the edit is saved -- reading it back and emailing the RSVP link can't turn it into an
   // error (the row used to roll back on screen though the edit had been saved).
   const guest = await afterSave("reading the guest back", () => getGuestForWedding(guestId, weddingId), warnings, SAVED_BUT_NOT_REFRESHED, null);
-  const firstEmail = !!guest?.email && !!before && !before.email;
+  // TS-220: "first email" and "corrected email" are worked out from the request and the copy read
+  // before the edit -- not from the read-back, whose failure used to skip the RSVP email (and the
+  // fresh link for a corrected address) without a word.
   // TS-154 (Tom's decision #3): correcting one address to another makes a fresh link -- the old
   // one stops working, in case it went to the wrong person -- and emails it to the new address.
-  const correctedEmail =
-    !!guest?.email && !!before?.email && guest.email.trim().toLowerCase() !== before.email.trim().toLowerCase();
+  const newEmail = rest.email || null;
+  const { firstEmail, correctedEmail } = rsvpEmailChange(newEmail, before);
+  // TS-220: who the email goes to -- the saved guest when it could be read back, otherwise built
+  // from the request and the earlier copy.
+  const recipient =
+    guest ?? (before && newEmail ? { id: guestId, firstName: rest.firstName ?? before.firstName, email: newEmail } : null);
   // TS-174: an address added after the old one was cleared is a correction too -- if the guest
   // already has a link (it may have gone to the wrong address), they get a fresh one and the old
   // one stops working. Before, only an address changed in one edit did that.
   const rsvpEmail =
-    (firstEmail || correctedEmail) && guest
+    (firstEmail || correctedEmail) && recipient
       ? await afterSave(
           "emailing the RSVP link",
           async () => {
             const regenerate = correctedEmail || (firstEmail && (await guestHasRsvpLink(guestId, weddingId)));
-            return sendGuestRsvpLink(guest, access.wedding, user, { regenerate, actor: access.actor });
+            return sendGuestRsvpLink(recipient, access.wedding, user, { regenerate, actor: access.actor });
           },
           warnings,
           null,

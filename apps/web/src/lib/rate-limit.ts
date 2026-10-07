@@ -1,5 +1,12 @@
 import { NextResponse } from "next/server";
-import { accountDailyEmailKey, accountDailyEmailLimit, hitRateLimit, peekRateLimit, undoRateLimitHit } from "@seatwise/db";
+import {
+  accountDailyEmailKey,
+  accountDailyEmailLimit,
+  hitRateLimit,
+  peekRateLimit,
+  resolveEmailTransport,
+  undoRateLimitHit,
+} from "@seatwise/db";
 import {
   emailLimitReason,
   tooManyAttemptsMessage,
@@ -7,7 +14,7 @@ import {
   type EmailLimitReason,
   type WeddingWorkKind,
 } from "./limit-messages";
-import { clientNetworks } from "./client-address";
+import { clientNetworks, rateLimitIpv4Block } from "./client-address";
 
 // TS-98: limits for the public, unauthenticated guest RSVP link -- the one part of the API anyone
 // on the internet can call without signing in. Generous enough that no real guest (or a household
@@ -18,11 +25,15 @@ export const RSVP_LIMITS = {
   // Submissions against one guest's link, from anywhere -- a guest changing their mind a few
   // times is normal; hundreds of submits is not.
   submitsPerLink: { limit: 10, windowSeconds: 600 },
+  // TS-219: an IPv6 source's /48 too (see perNetworkCounters).
+  perWiderNetwork: { limit: 300, windowSeconds: 600 },
 };
 
 // TS-114: a vendor's read-only link needs no sign-in either -- same per-address ceiling as RSVP.
 export const VENDOR_LINK_LIMITS = {
   perAddress: { limit: 100, windowSeconds: 600 },
+  // TS-219
+  perWiderNetwork: { limit: 300, windowSeconds: 600 },
 };
 
 // TS-163: invite links need no sign-in to look up either -- same per-address ceiling.
@@ -33,10 +44,78 @@ export const INVITE_LINK_LIMITS = {
 // TS-163: new accounts from one network address. Each account comes with its own email allowance
 // (EMAIL_SEND_LIMITS), so unlimited sign-ups would get round it. Roomy enough for a team signing
 // up together from one office connection.
+// TS-219: an IPv6 source is also counted by its /48 (perWiderNetwork*) -- a free tunnel hands out a
+// /48, which is 65,536 /64s, each with its own 30 an hour. They can't send email unconfirmed, but
+// each account multiplies the per-account limits (weddings a day, hourly work). Roomier than one
+// /64's, since a /48 can be a whole office or campus.
 export const SIGNUP_LIMITS = {
   perAddressHour: { limit: 30, windowSeconds: 3600 },
   perAddressDay: { limit: 100, windowSeconds: 86_400 },
+  perWiderNetworkHour: { limit: 60, windowSeconds: 3600 },
+  perWiderNetworkDay: { limit: 200, windowSeconds: 86_400 },
 };
+
+type Limit = { limit: number; windowSeconds: number };
+export type NetworkCounter = { key: string } & Limit;
+
+/**
+ * TS-219: the counts one per-network limit keeps for a request: the address (an IPv4 address, or an
+ * IPv6 /64) under `keyFor(address)` -- the key it always had -- and for IPv6 its /48 too, under
+ * `keyFor("net48:<network>")`, with the roomier `perWiderNetwork` limit (as accountEmailCounters).
+ */
+export function perNetworkCounters(
+  req: { headers: Headers },
+  keyFor: (network: string) => string,
+  perAddress: Limit,
+  perWiderNetwork: Limit
+): NetworkCounter[] {
+  const { address, wider } = clientNetworks(req);
+  return [{ key: keyFor(address), ...perAddress }, ...(wider ? [{ key: keyFor(`net48:${wider}`), ...perWiderNetwork }] : [])];
+}
+
+/** TS-219: the RSVP link's per-network counts (RSVP_LIMITS), for every request to it. */
+export function rsvpNetworkCounters(req: { headers: Headers }): NetworkCounter[] {
+  return perNetworkCounters(req, (network) => `rsvp:addr:${network}`, RSVP_LIMITS.perAddress, RSVP_LIMITS.perWiderNetwork);
+}
+
+/** TS-219: a vendor link's per-network counts (VENDOR_LINK_LIMITS). */
+export function vendorLinkNetworkCounters(req: { headers: Headers }): NetworkCounter[] {
+  return perNetworkCounters(req, (network) => `vendor-link:addr:${network}`, VENDOR_LINK_LIMITS.perAddress, VENDOR_LINK_LIMITS.perWiderNetwork);
+}
+
+// Tests only: a stand-in for countOr429 (see setNetworkCountForTests).
+let countNetwork: typeof countOr429 = (key, limits, message) => countOr429(key, limits, message);
+
+/** Tests only: replace the counter networkRateLimitOr429 uses (pass nothing to restore it). */
+export function setNetworkCountForTests(count?: typeof countOr429): void {
+  countNetwork = count ?? ((key, limits, message) => countOr429(key, limits, message));
+}
+
+/**
+ * TS-219: rateLimitOr429 for each of `counters` in turn; the first refusal is the answer.
+ * TS-227: a refusal (or a failure) by a later counter gives back the counts the earlier ones
+ * already took -- otherwise someone retrying while their /48 was full used up their own /64 too,
+ * and stayed blocked after the /48 had room again.
+ */
+export async function networkRateLimitOr429(counters: NetworkCounter[], message?: LimitMessage): Promise<NextResponse | null> {
+  const taken: (() => Promise<void>)[] = [];
+  const giveBackTaken = () => Promise.all(taken.map((giveBack) => giveBack().catch(() => {})));
+  for (const { key, limit, windowSeconds } of counters) {
+    let counted;
+    try {
+      counted = await countNetwork(key, { limit, windowSeconds }, message);
+    } catch (err) {
+      await giveBackTaken();
+      throw err;
+    }
+    if (counted.limited) {
+      await giveBackTaken();
+      return counted.limited;
+    }
+    taken.push(counted.giveBack);
+  }
+  return null;
+}
 
 // TS-178: new weddings per account per day (creating or copying one). Every wedding comes with
 // its own allowance for emails nobody signed in sets off (guests' RSVPs, see
@@ -76,22 +155,34 @@ export const EMAIL_VERIFICATION_LIMITS = {
 // IPv6 source is also counted by its /48 (perWiderNetworkDay): a free tunnel hands out a /48, which
 // is 65,536 /64s, each of which had its own 10. Roomier than one /64's, since a /48 can be a whole
 // office or campus.
+// TS-219: and an IPv4 source by its /24 (perIpv4BlockDay): a handful of neighbouring addresses,
+// cheap to rent, each had their own 10, enough between them to empty the shared pools for
+// confirmations and resets. Roomier than one address's, since a /24 can be many households. Like
+// those shared pools it only counts where email really goes out (Gmail or Resend) -- never with
+// the "log" transport used locally and in CI, where every test signs up from neighbouring made-up
+// addresses.
 export const ACCOUNT_EMAIL_LIMITS = {
   perAddressDay: { limit: 10, windowSeconds: 86_400 },
   perWiderNetworkDay: { limit: 30, windowSeconds: 86_400 },
+  perIpv4BlockDay: { limit: 30, windowSeconds: 86_400 },
 };
 export const accountEmailAddressKey = (address: string) => `account-email:addr:day:${address}`;
 export const accountEmailWiderNetworkKey = (network: string) => `account-email:net48:day:${network}`;
+export const accountEmailIpv4BlockKey = (block: string) => `account-email:net24:day:${block}`;
 
 /**
  * TS-203: every per-network count one account email (sign-up confirmation, "Resend link", password
  * reset) goes on: the address (an IPv4 address, or an IPv6 /64), and for IPv6 its /48 too.
+ * TS-219: and for IPv4 its /24, when email really goes out.
  */
-export function accountEmailCounters(req: { headers: Headers }): { key: string; limit: number; windowSeconds: number }[] {
+export function accountEmailCounters(req: { headers: Headers }, env: Record<string, string | undefined> = process.env): NetworkCounter[] {
   const { address, wider } = clientNetworks(req);
+  const transport = resolveEmailTransport(env).kind;
+  const block = transport === "smtp" || transport === "resend" ? rateLimitIpv4Block(address) : null;
   return [
     { key: accountEmailAddressKey(address), ...ACCOUNT_EMAIL_LIMITS.perAddressDay },
     ...(wider ? [{ key: accountEmailWiderNetworkKey(wider), ...ACCOUNT_EMAIL_LIMITS.perWiderNetworkDay }] : []),
+    ...(block ? [{ key: accountEmailIpv4BlockKey(block), ...ACCOUNT_EMAIL_LIMITS.perIpv4BlockDay }] : []),
   ];
 }
 
@@ -138,6 +229,8 @@ export const LOGIN_LIMITS = {
   failuresPerAccountAndAddress: { limit: 10, windowSeconds: 900 },
   failuresPerAccount: { limit: 100, windowSeconds: 900 },
   failuresPerAddress: { limit: 30, windowSeconds: 900 },
+  // TS-219: an IPv6 source's /48 as well, so the 65,536 /64s in one free tunnel don't each get 30.
+  failuresPerWiderNetwork: { limit: 100, windowSeconds: 900 },
 };
 
 const accountSignInFailuresKey = (account: string) => `login:account:${account}`;
@@ -153,12 +246,18 @@ export async function accountSignInLocked(email: string): Promise<boolean> {
 
 // TS-171: the failure counters one password attempt counts against. Keyed by the email as typed
 // (lowercased) whether or not an account exists, so the limits can't reveal which are registered.
-export function signInFailureLimits(email: string, address: string, { perAddress = true }: { perAddress?: boolean } = {}) {
+// TS-219: `widerNetwork` -- an IPv6 source's /48 (clientNetworks' `wider`), counted too.
+export function signInFailureLimits(
+  email: string,
+  address: string,
+  { perAddress = true, widerNetwork = null }: { perAddress?: boolean; widerNetwork?: string | null } = {}
+) {
   const account = email.trim().toLowerCase();
   return [
     { key: `login:account-addr:${account}:${address}`, ...LOGIN_LIMITS.failuresPerAccountAndAddress },
     { key: accountSignInFailuresKey(account), ...LOGIN_LIMITS.failuresPerAccount },
     ...(perAddress ? [{ key: `login:addr:${address}`, ...LOGIN_LIMITS.failuresPerAddress }] : []),
+    ...(perAddress && widerNetwork ? [{ key: `login:net48:${widerNetwork}`, ...LOGIN_LIMITS.failuresPerWiderNetwork }] : []),
   ];
 }
 
@@ -378,6 +477,10 @@ export const WEDDING_WORK_LIMITS: Record<WeddingWorkKind, { limit: number; windo
   importCommit: { limit: 30, windowSeconds: 3600 },
   saveTemplate: { limit: 20, windowSeconds: 3600 },
   comment: { limit: 120, windowSeconds: 3600 },
+  // TS-225: a PDF of a 2,000-guest wedding takes seconds to make, and the import preview reads the
+  // whole file -- both could be repeated in a loop. The three PDFs share one limit.
+  pdfExport: { limit: 60, windowSeconds: 3600 },
+  importPreview: { limit: 60, windowSeconds: 3600 },
 };
 export const weddingWorkKey = (kind: WeddingWorkKind, userId: string) => `wedding-work:${kind}:hour:${userId}`;
 

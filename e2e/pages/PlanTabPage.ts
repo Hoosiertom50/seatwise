@@ -33,7 +33,8 @@ export class PlanTabPage extends BasePage {
   listTableCard(label: string) {
     return this.page
       .locator("div.rounded-lg")
-      .filter({ has: this.page.getByText(label, { exact: true }) })
+      // TS-221: the heading line only -- another card's "Move to..." list names this table too.
+      .filter({ has: this.page.locator("p").getByText(label, { exact: true }) })
       .filter({ hasText: /seated|seats free/ })
       .last();
   }
@@ -467,6 +468,26 @@ export class PlanTabPage extends BasePage {
   /** TS-179: shown after Generate or Restore by someone who can't replace an approved plan. */
   savedAsDraftNotice() {
     return this.page.getByRole("status").filter({ hasText: "saved as a comparison draft" });
+  }
+
+  /** TS-221: shown when the open version was removed (pruned) and the tab opened the current plan. */
+  versionRemovedNotice() {
+    return this.page.getByRole("status").filter({ hasText: "The version you had open was removed — you're now looking at the current plan." });
+  }
+
+  /** TS-221: the screen-reader announcement of the last move, undo or redo (always on the page). */
+  moveAnnouncement() {
+    return this.page.getByTestId("plan-move-announcement");
+  }
+
+  /** TS-221: a guest an older version seats who has since been marked not attending. */
+  notAttendingGuest(guestName: string) {
+    return this.page.getByText(`${guestName} (not attending now)`, { exact: true });
+  }
+
+  /** TS-221: the table labels offered in a guest's List-view "Move to…"/"Seat at…" list. */
+  async listMoveChoices(guestName: string): Promise<string[]> {
+    return (await this.listMoveSelect(guestName).locator("option").allTextContents()).filter((o) => !/^(Move|Seat at)\.\.\.$/.test(o));
   }
 
   /** TS-189: shown when a newer plan was made elsewhere and the tab switched to it. */

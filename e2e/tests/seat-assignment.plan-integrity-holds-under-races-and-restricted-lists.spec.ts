@@ -48,14 +48,19 @@ defineQualityTest(
         for (let i = 0; i < 4; i++) await weddingData.createGuest(w, person());
         const lock = await holdWeddingLock(w);
         let generating;
+        let editing;
         try {
           generating = context.request.post(`/api/v1/weddings/${w}/plan-versions/generate`);
           await lock.waitForWaiters(1);
-          await weddingData.updateTable(w, table.id, { capacity: 2 });
+          // TS-224: before the first plan exists, a table edit waits for the wedding lock too, so
+          // it queues behind Generate (it used to slip past and miss the plan being made).
+          editing = weddingData.updateTable(w, table.id, { capacity: 2 });
+          await lock.waitForWaiters(2);
         } finally {
           await lock.release();
         }
         const res = await generating;
+        await editing;
         expect(res.status()).toBe(201);
         const { planVersion } = (await res.json()) as { planVersion: { id: string } };
         const detail = await weddingData.getPlanVersionDetail(w, planVersion.id);

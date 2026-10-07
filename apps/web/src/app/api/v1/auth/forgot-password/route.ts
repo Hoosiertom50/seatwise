@@ -10,6 +10,8 @@ import {
   PASSWORD_RESET_TTL_MINUTES,
   retireOlderResetTokens,
   emailDelivered,
+  lastPasswordResetAt,
+  newestResetMayGo,
 } from "@seatwise/db";
 import { readJson, zodErrorResponse } from "@/lib/api-response";
 import {
@@ -97,9 +99,20 @@ export async function POST(req: NextRequest) {
   // hold either way.
   const locked = await accountSignInLocked(email);
   const perEmailDay = locked ? PASSWORD_RESET_LIMITS.requestsPerEmailDayWhileLocked : PASSWORD_RESET_LIMITS.requestsPerEmailDay;
-  let overForEmail =
-    (await count(`pw-reset:email:${emailKey}`, PASSWORD_RESET_LIMITS.requestsPerEmail)) ??
-    (await count(`pw-reset:email:day:${emailKey}`, perEmailDay));
+  // TS-219: once the day's counts for this address are full, the newest reset still goes out if
+  // none has gone to the account for a few hours (NEWEST_RESET_AFTER_SECONDS) -- so whoever signed up
+  // with someone else's address can't use those counts up and keep the address's owner from the
+  // reset that lets them take the account back. It isn't counted on them then.
+  const mayGoAnyway = newestResetMayGo(await lastPasswordResetAt(user.id));
+  let overForEmail = await count(`pw-reset:email:${emailKey}`, PASSWORD_RESET_LIMITS.requestsPerEmail);
+  if (!overForEmail) {
+    const day = await countOr429(`pw-reset:email:day:${emailKey}`, perEmailDay);
+    if (!day.limited) counted.push(day.giveBack);
+    else if (!mayGoAnyway) {
+      await giveBackAll();
+      overForEmail = day.limited;
+    }
+  }
   // TS-171: counted with sign-ups and "Resend link" from the same address -- only when an email
   // is really about to go out.
   for (const { key, limit, windowSeconds } of networkCounters) {
@@ -131,7 +144,9 @@ export async function POST(req: NextRequest) {
     // it still goes out when the everyday limit is reached; an unconfirmed account's is an
     // everyday email, from its own smaller share.
     // TS-203: a locked-out account may also use the resets kept for that.
-    confirmed ? { essential: true, lockedOut: locked } : { unconfirmedReset: true }
+    // TS-219: and an unconfirmed account's newest reset after a quiet few hours may go past the
+    // address's count (see mayGoAnyway).
+    confirmed ? { essential: true, lockedOut: locked } : { unconfirmedReset: true, newestReset: mayGoAnyway }
   );
   // TS-153: older links are cancelled only once this one has gone out.
   if (emailDelivered(result)) await retireOlderResetTokens(user.id, token);

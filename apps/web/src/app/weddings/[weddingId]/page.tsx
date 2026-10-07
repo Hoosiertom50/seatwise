@@ -23,7 +23,7 @@ import { NotificationsBell } from "@/components/NotificationsBell";
 import { EmailVerificationNotice } from "@/components/EmailVerificationNotice";
 import { SaveStatusIndicator } from "@/components/SaveStatusIndicator";
 import { saveStatusStore } from "@/lib/save-status";
-import { mergeRefreshedGuests, guestIdFromFieldId } from "@/lib/guest-refresh";
+import { mergeRefreshedGuests, guestIdFromFieldId, crossesGuestPrivacyLine, guestsAfterAccessChange } from "@/lib/guest-refresh";
 import { compareGuestNames } from "@/lib/guest-name-order";
 
 type Tab =
@@ -156,12 +156,51 @@ export default function WeddingDetailPage() {
       setPendingTab(next);
     } else setTab(next);
   }
-  /** True to follow the link now; false when the question is being asked first. */
+  /**
+   * True to follow the link now; false when the page handles it (asking first, or waiting for saves).
+   * TS-218: "Back to dashboard" (the header's and the bell's) waits for a box that saves when you
+   * leave it, the same way the browser's Back does (TS-206): the box is left, which saves it, and the
+   * page only goes once everything has saved. It used to leave at once, so a refused name ("J0hn")
+   * or a dropped connection lost the typing and the reason without a word. If a save fails, the page
+   * stays and the row shows why.
+   */
   function requestLeavePage(href: string): boolean {
-    if (!unsaved.hasUnsaved()) return true;
-    rememberOpener();
-    setPendingHref(href);
+    const active = document.activeElement;
+    const inSaveOnLeaveBox = active instanceof HTMLElement && active.hasAttribute("data-blur-save");
+    if (!inSaveOnLeaveBox && !unsaved.isSaving()) {
+      if (!unsaved.hasUnsaved()) return true;
+      rememberOpener();
+      setPendingHref(href);
+      return false;
+    }
+    void leaveAfterSaves(href);
     return false;
+  }
+  const leaveInProgress = useRef(false);
+  async function leaveAfterSaves(href: string) {
+    if (leaveInProgress.current) return;
+    leaveInProgress.current = true;
+    try {
+      const active = document.activeElement;
+      rememberOpener();
+      if (active instanceof HTMLElement && active.hasAttribute("data-blur-save")) active.blur();
+      const allSaved = unsaved.isSaving() ? await unsaved.waitForSaves() : true;
+      if (allSaved && !unsaved.hasUnsaved()) {
+        questionOpener.current = null;
+        // TS-175: replaces the page's extra history entry if it's on it.
+        if (unsaved.releaseForLink()) router.replace(href);
+        else router.push(href);
+        return;
+      }
+      if (unsaved.hasUnsaved()) setPendingHref(href);
+      else {
+        // A save failed but nothing is held as unsaved: stay, with the row's message showing.
+        restoreFocus(questionOpener.current);
+        questionOpener.current = null;
+      }
+    } finally {
+      leaveInProgress.current = false;
+    }
   }
   function leaveTab() {
     if (pendingHref === BACK) {
@@ -225,6 +264,15 @@ export default function WeddingDetailPage() {
   }, [guests]);
   const guestFetches = useRef({ sent: 0, answered: 0 });
   const refreshGuestsRef = useRef<() => Promise<void>>(async () => {});
+  // TS-217: set when access has crossed the line for private guest data (View/Comment <-> Edit/Owner)
+  // -- the next fetch replaces the list outright instead of merging it (a merge keeps the copy loaded
+  // at the old level, see guest-refresh.ts). Tried again on every tick until it has worked. Holds the
+  // number of the last guest fetch sent before the change (only a later one may replace the list),
+  // or null when no replacement is needed.
+  const guestReplaceAfter = useRef<number | null>(null);
+  // TS-217: while that fresh list is on its way, the Guests tab doesn't show its editable boxes (after
+  // a raise to Edit they'd be empty, and saving one replaced the real note or email).
+  const [guestsReloading, setGuestsReloading] = useState(false);
   useEffect(() => {
     const quiet = () => !unsaved.hasUnsaved() && saveStatusStore.getSnapshot().pending === 0;
     const focusedGuestIds = () => {
@@ -232,13 +280,29 @@ export default function WeddingDetailPage() {
       return new Set(id ? [id] : []);
     };
     refreshGuestsRef.current = async () => {
+      if (guestReplaceAfter.current !== null) {
+        // TS-217: not held back by unsaved input -- what the list shows has to match the new access.
+        const request = ++guestFetches.current.sent;
+        const res = await api.get<{ guests: GuestDTO[] }>(`/api/v1/weddings/${weddingId}/guests`);
+        // Dropped if access changed again after this was sent (a later fetch replaces the list), or a
+        // newer answer is already in. Fetches sent earlier (at the old access level) are dropped from
+        // here on, as older answers.
+        const after = guestReplaceAfter.current;
+        if (after === null || request <= after || request < guestFetches.current.answered) return;
+        guestFetches.current.answered = request;
+        guestReplaceAfter.current = null;
+        setGuests(res.guests);
+        setGuestsReloading(false);
+        return;
+      }
       if (!quiet()) return;
       const request = ++guestFetches.current.sent;
       const idsAtFetchStart = new Set(guestsRef.current.map((g) => g.id));
       const res = await api.get<{ guests: GuestDTO[] }>(`/api/v1/weddings/${weddingId}/guests`);
       // An older answer arriving after a newer one is dropped; so is one that lands while something
       // has just become unsaved (a box being typed in), since merging could redraw that row.
-      if (request < guestFetches.current.answered || !quiet()) return;
+      // TS-217: and so is one that lands after an access change -- it may hold the old level's data.
+      if (request < guestFetches.current.answered || !quiet() || guestReplaceAfter.current !== null) return;
       guestFetches.current.answered = request;
       setGuests((cur) =>
         mergeRefreshedGuests(cur, res.guests, {
@@ -323,7 +387,8 @@ export default function WeddingDetailPage() {
     const interval = setInterval(async () => {
       // TS-207: the guest list too, while a tab that shows it is open (best effort -- the next
       // tick tries again).
-      if (GUEST_TABS.has(tabRef.current)) refreshGuestsRef.current().catch(() => {});
+      // TS-217: and on any tab while an access change still has to replace the list.
+      if (GUEST_TABS.has(tabRef.current) || guestReplaceAfter.current !== null) refreshGuestsRef.current().catch(() => {});
       const check = ++lastSent;
       try {
         const res = await api.get<{ wedding: WeddingDTO; accessLevel: AccessLevel; role: string | null }>(
@@ -338,6 +403,15 @@ export default function WeddingDetailPage() {
           accessLevelRef.current = res.accessLevel;
           setAccessLevel(res.accessLevel);
           setWedding(res.wedding);
+          // TS-217: across the line for private guest data, the guest list is replaced with a fresh
+          // one. Lowered below Edit, notes, RSVP notes and emails go from the screen straight away;
+          // raised to Edit, the editable boxes wait for the real notes and emails.
+          if (crossesGuestPrivacyLine(previous, res.accessLevel)) {
+            guestReplaceAfter.current = guestFetches.current.sent;
+            setGuests((cur) => guestsAfterAccessChange(cur, res.accessLevel));
+            setGuestsReloading(true);
+            refreshGuestsRef.current().catch(() => {});
+          }
           if (previous !== null) {
             const label =
               res.accessLevel === "OWNER"
@@ -579,7 +653,8 @@ export default function WeddingDetailPage() {
           wedding={wedding}
           guests={guests}
           setGuests={setGuests}
-          canEdit={canEdit}
+          // TS-217: no editable boxes until the list for the new access level is in.
+          canEdit={canEdit && !guestsReloading}
         />
       )}
       {tab === "rules" && <RulesTab weddingId={weddingId} guests={guests} canEdit={canEdit} />}

@@ -15,7 +15,8 @@ export class InviteError extends Error {
   constructor(
     message: string,
     // TS-195: NOT_OWNER -- the person asking isn't the wedding's owner any more.
-    public code: "NOT_FOUND" | "ALREADY_OWNER" | "ALREADY_COLLABORATOR" | "NOT_OWNER"
+    // TS-220: ACCEPTED -- revoking an invite the person has already accepted (revokeInvite).
+    public code: "NOT_FOUND" | "ALREADY_OWNER" | "ALREADY_COLLABORATOR" | "NOT_OWNER" | "ACCEPTED"
   ) {
     super(message);
     this.name = "InviteError";
@@ -137,6 +138,10 @@ export async function listInvitesForWedding(weddingId: string): Promise<WeddingI
   return rows.map(withDerivedStatus);
 }
 
+// TS-220: what revoking an invite says when the person has already accepted it.
+export const INVITE_ALREADY_ACCEPTED_MESSAGE =
+  "They accepted this invite a moment ago — remove them from Collaborators if needed.";
+
 // TS-195: only by the wedding's owner, checked in the same statement (it could have been handed off
 // since the route's own check).
 export async function revokeInvite(weddingId: string, inviteId: string, actorUserId: string): Promise<void> {
@@ -149,6 +154,13 @@ export async function revokeInvite(weddingId: string, inviteId: string, actorUse
   if (!rowCount) {
     const { rows: owned } = await pool.query(`SELECT 1 FROM "weddings" WHERE id = $1 AND "ownerId" = $2`, [weddingId, actorUserId]);
     if (!owned[0]) throw new InviteError(NOT_OWNER_MESSAGE, "NOT_OWNER");
+    // TS-220: accepted a moment ago -- before, this was "not found", which the page took as "already
+    // revoked" and dropped the row, so the owner believed access was blocked while the person had it.
+    const { rows: invite } = await pool.query<{ status: string }>(
+      `SELECT status FROM "wedding_invites" WHERE id = $1 AND "weddingId" = $2`,
+      [inviteId, weddingId]
+    );
+    if (invite[0]?.status === "ACCEPTED") throw new InviteError(INVITE_ALREADY_ACCEPTED_MESSAGE, "ACCEPTED");
     throw new InviteError("Invite not found or already resolved.", "NOT_FOUND");
   }
 }

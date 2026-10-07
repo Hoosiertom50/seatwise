@@ -18,8 +18,12 @@ export async function DELETE(req: NextRequest, { params }: Params) {
     await revokeInvite(weddingId, inviteId, user.id);
     return NextResponse.json({ ok: true });
   } catch (err) {
-    // TS-195: NOT_OWNER -- handed off a moment ago.
-    if (err instanceof InviteError) return errorResponse(err.message, err.code === "NOT_OWNER" ? 403 : 404);
+    // TS-195: NOT_OWNER -- handed off a moment ago. TS-220: ACCEPTED -- the person accepted it a
+    // moment ago (409, so the page says so instead of treating the invite as already gone).
+    if (err instanceof InviteError) {
+      const status = err.code === "NOT_OWNER" ? 403 : err.code === "ACCEPTED" ? 409 : 404;
+      return errorResponse(err.message, status);
+    }
     throw err;
   }
 }

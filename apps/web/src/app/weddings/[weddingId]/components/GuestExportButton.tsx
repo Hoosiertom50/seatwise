@@ -11,6 +11,7 @@ export function GuestExportButton({ weddingId }: { weddingId: string }) {
   const [error, setError] = useState<string | null>(null);
 
   async function onExport() {
+    if (busy) return;
     setError(null);
     setBusy(true);
     try {
@@ -31,8 +32,10 @@ export function GuestExportButton({ weddingId }: { weddingId: string }) {
       <button
         type="button"
         onClick={onExport}
-        disabled={busy}
-        className="rounded-md border border-neutral-300 dark:border-neutral-600 min-h-11 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50"
+        // TS-225: aria-disabled (not disabled) while exporting, so the button keeps keyboard focus --
+        // a disabled button dropped it to the page. onExport ignores clicks meanwhile.
+        aria-disabled={busy || undefined}
+        className="rounded-md border border-neutral-300 dark:border-neutral-600 min-h-11 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800 aria-disabled:opacity-50"
       >
         {busy ? "Exporting..." : "Export guest list (CSV)"}
       </button>

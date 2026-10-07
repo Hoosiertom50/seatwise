@@ -209,7 +209,8 @@ test("the 24-hour ceiling defaults to 240 everyday emails, with 60 more kept for
   // TS-194: about 300 in all over any 24 hours (Tom's decision).
   // TS-203: no account may use more than a quarter of the everyday allowance; a fifth of it is kept
   // for invites and RSVP links; 15 of the resets are kept for locked-out accounts.
-  const defaults = { everyday: 240, resets: 60, confirmations: 60, unconfirmedResets: 24, accountShare: 60, plannerFloor: 48, lockedOutResets: 15 };
+  // TS-219: accounts in their first week, together, a quarter of the everyday allowance.
+  const defaults = { everyday: 240, resets: 60, confirmations: 60, unconfirmedResets: 24, accountShare: 60, plannerFloor: 48, lockedOutResets: 15, newAccounts: 60 };
   assert.deepEqual(dailyEmailLimits({}), defaults);
   assert.deepEqual(dailyEmailLimits({ EMAIL_DAILY_LIMIT: "100" }), {
     everyday: 100,
@@ -219,6 +220,7 @@ test("the 24-hour ceiling defaults to 240 everyday emails, with 60 more kept for
     accountShare: 25,
     plannerFloor: 20,
     lockedOutResets: 15,
+    newAccounts: 25,
   });
   assert.deepEqual(dailyEmailLimits({ EMAIL_DAILY_LIMIT: "nonsense" }), defaults);
   assert.equal(dailyEmailLimits({ EMAIL_DAILY_LIMIT: "2" }).confirmations, 1);

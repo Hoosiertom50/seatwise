@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { bumpSessionVersion, revokeSession } from "@seatwise/db";
-import { AUTH_COOKIE_NAME, AUTH_TOKEN_TTL_SECONDS, isSecureCookieContext } from "@/lib/auth";
+import { ALREADY_SIGNED_OUT_EVERYWHERE_MESSAGE, AUTH_COOKIE_NAME, AUTH_TOKEN_TTL_SECONDS, isSecureCookieContext } from "@/lib/auth";
 import { revokedSessionKeepUntil, sessionIdFor } from "@/lib/session-renewal";
 import { getAuthSession } from "@/lib/session";
 import { readJson, zodErrorResponse } from "@/lib/api-response";
@@ -26,6 +26,10 @@ export async function POST(req: NextRequest) {
   const everywhere = parsed.data.everywhere === true;
 
   const session = await getAuthSession(req);
+  // TS-223: "Log out on all devices" from a tab whose session already ended (logged out in another
+  // tab, or it ran out) can't end anything -- it used to answer "done", and a lost phone stayed
+  // signed in. The cookie is still cleared below.
+  const signedOutAlready = everywhere && !session.user;
   if (session.user) {
     if (everywhere) {
       await bumpSessionVersion(session.user.id);
@@ -37,7 +41,9 @@ export async function POST(req: NextRequest) {
       await revokeSession(await sessionIdFor(session.token), session.user.id, new Date(keepUntil * 1000));
     }
   }
-  const response = NextResponse.json({ ok: true, everywhere });
+  const response = signedOutAlready
+    ? NextResponse.json({ error: ALREADY_SIGNED_OUT_EVERYWHERE_MESSAGE }, { status: 401 })
+    : NextResponse.json({ ok: true, everywhere });
   // TS-65: this clearing Set-Cookie must mirror the same httpOnly/secure/sameSite attributes
   // used when the cookie was set at login/signup. Per RFC 6265 a cookie is keyed by
   // name+domain+path only, so an attribute-mismatched clear is spec-legal -- Chromium, Firefox,

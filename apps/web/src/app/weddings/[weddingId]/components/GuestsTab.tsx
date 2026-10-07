@@ -28,6 +28,7 @@ import {
   decodeCsvFile,
   CsvEncodingError,
   type CsvTextEncoding,
+  spreadsheetRowNumber,
   GUEST_TIER_LABELS,
   RSVP_STATUS_LABELS,
 } from "@seatwise/shared";
@@ -45,6 +46,8 @@ import { FIELD_LIMITS } from "@seatwise/shared";
 // TS-202
 import { plusOnesToPrint } from "@seatwise/shared";
 import { GuestDetailsEditor, type GuestDetailsChanges } from "./GuestDetailsEditor";
+// TS-219
+import { rsvpMaybeSentNote } from "@/lib/email-outcome-text";
 
 const TIERS: GuestTier[] = ["VIP", "FAMILY", "FRIEND", "PLUS_ONE", "OTHER"];
 const RSVP_STATUSES: RsvpStatus[] = ["PENDING", "CONFIRMED", "DECLINED"];
@@ -70,6 +73,8 @@ interface RsvpEmailOutcome {
   // TS-171
   recentlyEmailed?: boolean;
   recipientLimited?: boolean;
+  // TS-219: may have been sent (the email service stopped answering part-way).
+  uncertain?: boolean;
 }
 
 // TS-156: shown when the planner has hit their email limit. TS-177: says which one -- the
@@ -710,6 +715,8 @@ export function GuestsTab({
           ? `${RECIPIENT_LIMITED_NOTE} — use "RSVP link" to copy it and send it yourself.`
           : outcome.recentlyEmailed
           ? `Already emailed the RSVP link to ${email} within the last hour.`
+          : outcome.uncertain
+          ? `${rsvpMaybeSentNote(email)} — if they don't get it, use "RSVP link" to copy it and send it yourself.`
           : `Couldn't email ${email} — use "RSVP link" to copy it and send it yourself.`,
     }));
   }
@@ -829,7 +836,10 @@ export function GuestsTab({
   // TS-17 (FR-12.4): "get/copy" (regenerate: false) reuses an existing token or lazily creates
   // one; "regenerate" always issues a fresh one. Either way, if the guest has an email on file the
   // server also (re)sends it -- the result line reflects whichever actually happened.
-  async function onRsvpLink(guestId: string, guestEmail: string | null, regenerate: boolean) {
+  async function onRsvpLink(guestId: string, knownEmail: string | null, regenerate: boolean) {
+    // TS-217: the address on screen can be missing (a list loaded before access was raised to Edit)
+    // while the server still emails the guest -- it used to say "Link copied & emailed to null".
+    const guestEmail = knownEmail ?? "the guest";
     setRsvpLinkBusy((cur) => new Set(cur).add(guestId));
     setRsvpLinkResult((prev) => ({ ...prev, [guestId]: "" }));
     try {
@@ -850,6 +860,8 @@ export function GuestsTab({
         ? `${RECIPIENT_LIMITED_NOTE} — send ${guestEmail} the link yourself. `
         : rsvp.recentlyEmailed
         ? `Already emailed to ${guestEmail} within the last hour, so not sent again. `
+        : rsvp.uncertain
+        ? `${rsvpMaybeSentNote(guestEmail ?? "this guest")} — if they don't get it, send them the link yourself. `
         : rsvp.emailFailed
           ? `Couldn't email ${guestEmail} — send them the link yourself. `
           : "";
@@ -1351,7 +1363,7 @@ export function GuestsTab({
                           : ""
                   }`}
                 >
-                  <span className="w-12 shrink-0 text-neutral-500 dark:text-neutral-400">Row {r.rowNumber}</span>
+                  <span className="w-12 shrink-0 text-neutral-500 dark:text-neutral-400">Row {spreadsheetRowNumber(r.rowNumber)}</span>
                   <span
                     className={`shrink-0 rounded px-1.5 py-0.5 text-xs font-medium ${
                       r.kind === "error"
@@ -1377,6 +1389,10 @@ export function GuestsTab({
                       {r.preview.firstName} {r.preview.lastName}
                       {r.kind === "update" ? " (updating existing guest)" : r.kind === "unchanged" ? " (no changes)" : ""}
                     </span>
+                  )}
+                  {/* TS-222: e.g. a Side name that disagrees with the Side code -- the row still imports. */}
+                  {r.kind !== "error" && r.warning && (
+                    <span className="basis-full text-amber-800 dark:text-amber-300">{r.warning}</span>
                   )}
                 </li>
               ))}

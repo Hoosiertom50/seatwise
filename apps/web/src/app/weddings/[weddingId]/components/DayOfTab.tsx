@@ -22,6 +22,15 @@ import { FIELD_LIMITS } from "@seatwise/shared";
 const NEWER_PLAN_MESSAGE = "A newer plan was made — you're now looking at it.";
 // TS-197: a change sent to the plan that was just replaced -- nothing was saved.
 const SUPERSEDED_CHANGE_MESSAGE = "That wasn't saved — a newer plan was made. Check it and try again.";
+// TS-221: the plan open here was removed (older versions are cleared out automatically once a
+// wedding has many) -- Day-of opened the current plan instead.
+const PLAN_REMOVED_MESSAGE = "The plan you had open was removed — you're now looking at the current plan.";
+const PLAN_REMOVED_CHANGE_MESSAGE = "That wasn't saved — the plan you had open was removed. Check the current plan and try again.";
+
+// TS-221: the server's answer for a plan version that no longer exists.
+function isPlanGone(err: unknown): boolean {
+  return err instanceof ApiError && err.status === 404 && /^Plan version not found\.?$/.test(err.message);
+}
 
 // TS-11 (Day-Of / Emergency Mode, FR-8.1/8.2/8.3/8.4): a phone-friendly view for the day of the
 // wedding — find a guest fast, mark a no-show or walk-in, re-seat or swap without digging through
@@ -151,7 +160,8 @@ export function DayOfTab({
   // TS-197: the plan open here (`openId`, or none yet) is no longer the current one -- someone made
   // or restored a newer plan. Opens the current plan, with the tables and rules as they are now,
   // and says so -- unless another plan was opened here meanwhile, which is then left alone.
-  async function switchToCurrentPlan(openId: string | null, isCancelled: () => boolean) {
+  // TS-221: `message` says why, when it isn't a newer plan (the open one was removed).
+  async function switchToCurrentPlan(openId: string | null, isCancelled: () => boolean, message?: string) {
     const stillOpen = () => !isCancelled() && (detailRef.current?.id ?? null) === openId;
     const { planVersions } = await api.get<{ planVersions: PlanVersionDTO[] }>(`/api/v1/weddings/${weddingId}/plan-versions`);
     if (!stillOpen()) return;
@@ -166,7 +176,7 @@ export function DayOfTab({
     setTables(tableList);
     setRelationships(rules);
     applyDetail(opened.planVersion);
-    setNotice(openId ? NEWER_PLAN_MESSAGE : "A seating plan was made — you're now looking at it.");
+    setNotice(message ?? (openId ? NEWER_PLAN_MESSAGE : "A seating plan was made — you're now looking at it."));
   }
 
   // TS-197: a refused change came back with the plan as it is now. When that's a different plan --
@@ -229,8 +239,14 @@ export function DayOfTab({
         }
         const shown = detailRef.current;
         if (shown && shown.id === openPlanId && shown.revision < res.planVersion.revision) applyDetail(res.planVersion);
-      } catch {
-        // Best-effort, like the Seating plan tab's check -- the next tick tries again.
+      } catch (err) {
+        // TS-221: the plan open here was removed (it had just stopped being current, and was among
+        // the oldest) -- the current plan opens, as it would for a newer plan. The 404 used to be
+        // swallowed, and every change then said "Plan version not found".
+        if (!cancelled && openPlanId && isPlanGone(err)) {
+          await switchToCurrentPlan(openPlanId, () => cancelled, PLAN_REMOVED_MESSAGE).catch(() => {});
+        }
+        // Otherwise best-effort, like the Seating plan tab's check -- the next tick tries again.
       }
     }, 4000);
     return () => {
@@ -316,7 +332,12 @@ export function DayOfTab({
     const nextAttendance = guest.dayOfAttendance === "ATTENDING" ? "NOT_ATTENDING" : "ATTENDING";
     const hadSeat = (detailRef.current?.assignments ?? []).some((a) => a.guestId === guest.id);
     try {
-      const res = await api.post<{ planVersion: PlanVersionDetailDTO | null; guest: GuestDTO | null; unchanged?: boolean }>(
+      const res = await api.post<{
+        planVersion: PlanVersionDetailDTO | null;
+        guest: GuestDTO | null;
+        unchanged?: boolean;
+        warnings?: string[];
+      }>(
         `/api/v1/weddings/${weddingId}/guests/${guest.id}/attendance`,
         { attendance: nextAttendance }
       );
@@ -334,6 +355,14 @@ export function DayOfTab({
           nextAttendance === "NOT_ATTENDING"
             ? `${name} was already marked not attending (changed elsewhere).`
             : `${name} was already marked attending (changed elsewhere).`
+        );
+        return;
+      }
+      // TS-220: saved, but the plan or the guest couldn't be read back -- the screen may still show
+      // the old seat, so it says that plainly instead of "their seat is now free".
+      if (res.warnings && res.warnings.length > 0) {
+        setNotice(
+          `${name} marked ${nextAttendance === "NOT_ATTENDING" ? "not attending" : "attending again"}. ${res.warnings.join(" ")}`
         );
         return;
       }
@@ -396,6 +425,12 @@ export function DayOfTab({
       // TS-197: a newer plan replaced this one -- Day-of is now showing it; the change wasn't made.
       if (fresh && takeFreshPlan(fresh)) {
         setRowError(guestId, SUPERSEDED_CHANGE_MESSAGE);
+        return;
+      }
+      // TS-221: the plan was removed -- the current one opens; nothing was saved.
+      if (isPlanGone(err)) {
+        setRowError(guestId, PLAN_REMOVED_CHANGE_MESSAGE);
+        switchToCurrentPlan(planId, () => false, PLAN_REMOVED_MESSAGE).catch(() => {});
         return;
       }
       setRowError(guestId, apiErrorMessage(err, [], moving ? "Couldn't move that guest." : "Couldn't seat that guest."));
@@ -535,6 +570,14 @@ export function DayOfTab({
         setError(SUPERSEDED_CHANGE_MESSAGE);
         return;
       }
+      // TS-221: as for a seat (see seatGuest).
+      if (isPlanGone(err)) {
+        setSwapAId("");
+        setSwapBId("");
+        setError(PLAN_REMOVED_CHANGE_MESSAGE);
+        switchToCurrentPlan(planId, () => false, PLAN_REMOVED_MESSAGE).catch(() => {});
+        return;
+      }
       setError(apiErrorMessage(err, [], "Couldn't complete that swap."));
     } finally {
       setSwapping(false);
@@ -570,11 +613,15 @@ export function DayOfTab({
           {e.text}
         </p>
       ))}
-      {notice && (
-        <p role="status" className="rounded-lg border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-950 p-3 text-sm text-blue-800 dark:text-blue-300">
-          {notice}
-        </p>
-      )}
+      {/* TS-221: always on the page, only its text changes (the TS-212 pattern) -- a status
+          inserted already holding its text may not be announced. Empty, it takes no space. */}
+      <p
+        role="status"
+        data-testid="dayof-notice"
+        className="rounded-lg border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-950 p-3 text-sm text-blue-800 empty:hidden dark:text-blue-300"
+      >
+        {notice ?? ""}
+      </p>
 
       {!detail && (
         <p className="rounded-lg border border-neutral-200 dark:border-neutral-700 p-4 text-sm text-neutral-500 dark:text-neutral-400">

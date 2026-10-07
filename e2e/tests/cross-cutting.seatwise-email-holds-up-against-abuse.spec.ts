@@ -12,6 +12,9 @@
  * - While an account is locked by the sign-in limits, the email's daily reset limit is higher (12
  *   instead of 6, TS-186) -- so someone else can't lock the owner out and use up their resets, yet
  *   the inbox still can't be flooded.
+ * - TS-219: those daily counts only refuse a reset while one has gone to the account in the last 3
+ *   hours; after that the newest still goes (see cross-cutting.strangers-cannot-use-up-limits-meant-for-others),
+ *   so the steps here first record a recent reset.
  * - A request that ends with no email sent ("Resend link", "Forgot password?") doesn't use up any
  *   allowance.
  * Tests here run with emails only logged, so limits that count only real sends -- the day's
@@ -30,6 +33,7 @@ import {
   otherEmailsToAddressToday,
   ownerNotificationEmailsToday,
   passwordResetCount,
+  plantPasswordResetToken,
   setAccountEmailCount,
   setEmailsToAddressToday,
   setOtherEmailsToAddressToday,
@@ -164,7 +168,7 @@ defineQualityTest(
     id: "cross-cutting.seatwise-email-holds-up-against-abuse.password-resets-for-unconfirmed-and-locked-accounts",
     title: "an unconfirmed account's password reset is held to its own daily count for the address -- which resends can't use up -- a confirmed one's isn't, and a locked account gets a higher -- but still limited -- daily reset limit",
     objective:
-      "Confirms that a reset for an account that hasn't confirmed its address isn't sent once that address has had its 3 such resets today (saying so, and the refused request counts against nothing); that once the account is confirmed a reset to the same address goes out; that (TS-194) for another unconfirmed account whose address has used up both the emails anyone can ask for (3) and the planner-sent ones (5), a reset still goes out -- so whoever signed up with someone else's address can't block the owner taking it back; and that an email at its daily reset limit of 6 is refused (and not counted) -- until the account is locked by wrong passwords, when the limit is 12: refused at 12, sent at 6.",
+      "Confirms that a reset for an account that hasn't confirmed its address isn't sent once that address has had its 3 such resets today, one of them recently (TS-219) (saying so, and the refused request counts against nothing); that once the account is confirmed a reset to the same address goes out; that (TS-194) for another unconfirmed account whose address has used up both the emails anyone can ask for (3) and the planner-sent ones (5), a reset still goes out -- so whoever signed up with someone else's address can't block the owner taking it back; and that an email at its daily reset limit of 6, one of them recent, is refused (and not counted) -- until the account is locked by wrong passwords, when the limit is 12: refused at 12, sent at 6.",
     expectedOutcome:
       "Unconfirmed, address at 3 resets: 200 with sent false and 'This email address has had as many emails from Seatwise as it can in the last 24 hours — please try again within about a day.', no usable reset link, both per-email reset counts 0. Confirmed: 200 sent true. Second unconfirmed account with the other counts full: 200 sent true, its reset count 1. Second account at 6 resets today: 429, count still 6. After locking it (sign-in refused with 429): at 12, 429 and still 12; at 6, 200 sent true and the count 7.",
     requirementIds: ["REQ-NON-FUNCTIONAL"],
@@ -182,6 +186,8 @@ defineQualityTest(
     try {
       await test.step("An unconfirmed account's reset isn't sent once its address has had today's resets, and counts nothing", async () => {
         await setOtherEmailsToAddressToday(unconfirmed.email, "unconfirmed-reset", UNCONFIRMED_RESETS_PER_ADDRESS_PER_DAY);
+        // TS-219: one of them went out recently (its link has since run out).
+        await plantPasswordResetToken(unconfirmed.email, { expired: true });
         const res = await reset(unconfirmed.email);
         expect(res.status()).toBe(200);
         const body = (await res.json()) as { sent: boolean; message: string };
@@ -217,6 +223,8 @@ defineQualityTest(
 
       await test.step("At the daily reset limit a reset is refused -- until the account is locked, when a higher limit applies", async () => {
         await setPasswordResetCount(locked.email, "per-email-day", PASSWORD_RESETS_PER_EMAIL_PER_DAY);
+        // TS-219: one of them went out recently (its link has since run out).
+        await plantPasswordResetToken(locked.email, { expired: true });
         expect((await reset(locked.email)).status()).toBe(429);
         // TS-186: the refused request isn't counted.
         expect(await passwordResetCount(locked.email, "per-email-day")).toBe(PASSWORD_RESETS_PER_EMAIL_PER_DAY);

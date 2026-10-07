@@ -211,7 +211,8 @@ export class WeddingGuestsPage extends BasePage {
   importPreviewRow(fullName: string) {
     return this.page.locator("li").filter({ hasText: /^Row \d+/ }).filter({ hasText: fullName });
   }
-  /** TS-198: a preview row by its row number -- for a row with an error, which may show no name. */
+  /** TS-198: a preview row by its row number -- for a row with an error, which may show no name.
+   * TS-225: the spreadsheet's numbering (the header is row 1, so the first guest is row 2). */
   importPreviewRowNumber(rowNumber: number) {
     return this.page.locator("li").filter({ hasText: new RegExp(`^Row ${rowNumber}(?!\\d)`) });
   }
@@ -270,6 +271,31 @@ export class WeddingGuestsPage extends BasePage {
    * inputs, so (unlike `guestRow`) it's found by the row's text. */
   readOnlyGuestRow(fullName: string): GuestRow {
     return new GuestRow(this.page.locator("li").filter({ hasText: fullName }));
+  }
+
+  /** TS-217: every guest's editable notes box / email box on the tab (Owner and Edit only). */
+  allNotesBoxes() {
+    return this.page.locator('textarea[aria-label^="Notes for "]');
+  }
+  allEmailBoxes() {
+    return this.page.locator('input[aria-label^="Email for "]');
+  }
+  /** TS-217: the value the first notes box has the moment it appears on the page -- to check it never
+   * shows up empty before the real note arrives. */
+  async firstNotesBoxValueWhenItAppears(timeout: number): Promise<string> {
+    const handle = await this.page.waitForFunction(
+      () => {
+        const box = document.querySelector<HTMLTextAreaElement>('textarea[aria-label^="Notes for "]');
+        return box ? { value: box.value } : null;
+      },
+      undefined,
+      { timeout },
+    );
+    return ((await handle.jsonValue()) as { value: string }).value;
+  }
+  /** TS-217: any text on the page, e.g. to check a private note isn't shown anywhere. */
+  textOnPage(text: string) {
+    return this.page.getByText(text);
   }
 
   guestRow(fullName: string): GuestRow {

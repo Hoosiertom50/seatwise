@@ -92,7 +92,8 @@ test("only mapped columns are checked for the Mac format, and only they are sent
   // The unmapped note column is gone; the blank row stays so row numbers still match.
   assert.deepEqual(parseCsv(ok.csv), { headers: ["First name", "Last name"], rows: [["Anna", "Lee"], ["", ""], ["Bo", "Ray"]] });
   const refused = prepareImportCsv(text, "windows-1252", { firstName: "First name", lastName: "Guest's RSVP note" });
-  assert.ok("error" in refused && /older Mac format/.test(refused.error) && /row 1/.test(refused.error));
+  // TS-225: the spreadsheet's row number (the header is row 1).
+  assert.ok("error" in refused && /older Mac format/.test(refused.error) && /row 2,/.test(refused.error));
   // A UTF-8 file is never checked for it.
   assert.ok("csv" in prepareImportCsv(text, "utf-8", { firstName: "First name", lastName: "Guest's RSVP note" }));
 });
@@ -109,7 +110,8 @@ test("a wedding's own export stays under the size limit once unmapped columns ar
 
 // --- TS-210 item 3: side codes ---
 
-test("renamed side names don't move guests: the export's Side code wins, and a disagreeing Side cell is an error", () => {
+// TS-222: a disagreeing Side cell is now a warning (the code is used), not an error.
+test("renamed side names don't move guests: the export's Side code wins, and a disagreeing Side cell is a warning", () => {
   // Exported as Bride / Groom, then the sides renamed to Groom / Partner.
   // A GROOM guest's row as the export wrote it: the side's name then, and the stored code.
   const exported = [[guestSideLabel("GROOM", "Bride", "Groom"), "GROOM"]];
@@ -120,10 +122,12 @@ test("renamed side names don't move guests: the export's Side code wins, and a d
   const h = ["F", "L", ...headers];
   // Code only: the stored side, whatever the names are now.
   assert.equal(parseGuestImportRow(["A", "B", ...exported[0]], h, codeOnly, renamed).data.side, "GROOM");
-  // Both mapped: "Groom" now means the first side (BRIDE) but the code says GROOM -- said, not swapped.
+  // Both mapped: "Groom" now means the first side (BRIDE) but the code says GROOM -- the code is
+  // used and the planner is told, not swapped and not refused.
   const row = parseGuestImportRow(["A", "B", ...exported[0]], h, both, renamed);
-  assert.equal(row.data.side, undefined);
-  assert.match(row.errors.join(" "), /don't agree/);
+  assert.equal(row.data.side, "GROOM");
+  assert.deepEqual(row.errors, []);
+  assert.match(row.warnings.join(" "), /doesn't match Side code "GROOM"/);
   // A Side name that no longer exists is fine with a code.
   assert.equal(parseGuestImportRow(["A", "B", "Bride", "BRIDE"], h, both, { sideLabel1: "Alex", sideLabel2: "Sam" }).data.side, "BRIDE");
   // Agreeing cells are fine.

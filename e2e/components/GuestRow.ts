@@ -328,6 +328,11 @@ export class GuestRow {
     return res.status();
   }
 
+  /** TS-225: the details form's Save button (to check where keyboard focus is). */
+  saveDetailsButton(): Locator {
+    return this.detailsForm().getByRole("button", { name: /^(Save details|Saving\.\.\.)$/ });
+  }
+
   async cancelDetails(): Promise<void> {
     await this.detailsForm().getByRole("button", { name: "Cancel", exact: true }).click();
   }

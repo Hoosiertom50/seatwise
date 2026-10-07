@@ -4,6 +4,7 @@ import { classifyGuestImport, GuestImportError } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
 import { errorResponse, zodErrorResponse, readJson } from "@/lib/api-response";
 import { requireAccess } from "@/lib/access";
+import { limitedWeddingWork } from "@/lib/rate-limit";
 
 type Params = { params: Promise<{ weddingId: string }> };
 
@@ -17,6 +18,12 @@ export async function POST(req: NextRequest, { params }: Params) {
   const access = await requireAccess(weddingId, user.id, "EDIT");
   if ("error" in access) return access.error;
 
+  // TS-225: an hourly limit per account on previews (each reads the whole file and every guest). A
+  // refused or failed try is given back.
+  return limitedWeddingWork("importPreview", user.id, () => previewImport(req, weddingId));
+}
+
+async function previewImport(req: NextRequest, weddingId: string): Promise<Response> {
   // TS-204: readJson refuses a non-JSON or oversized body (413), even one sent without a Content-Length.
   const json = await readJson(req);
   if (!json.ok) return json.response;

@@ -103,6 +103,43 @@ export class UnsavedRegistry {
   }
 }
 
+/**
+ * TS-218: "the page is leaving" for the Back guard (unsaved-changes.tsx). While it's set, the guard's
+ * extra history entry is left alone and Back isn't caught.
+ * - Leaving on purpose (a link, or Back past the page) sets it for good: the page is going.
+ * - A reload or another address typed in while nothing is unsaved (TS-206) sets it too -- but the
+ *   person can cancel that in the browser's own "Leave site?" box, and nothing used to set it back,
+ *   so from then on Back with unsaved typing left without asking. That mark is now lifted as soon as
+ *   the page is used again (a key, a click or a tap). It isn't lifted on a timer: the old page keeps
+ *   running for a moment while a reload loads, and a save finishing then must not take the history
+ *   entry off (that cancelled the reload -- the TS-206 problem).
+ */
+export class LeavingFlag {
+  private on = false;
+  private byPageGoing = false;
+  get value(): boolean {
+    return this.on;
+  }
+  /** Leaving on purpose; stays set until the page closes. */
+  set(): void {
+    this.on = true;
+    this.byPageGoing = false;
+  }
+  /** The browser is about to reload or open another address (it may still be cancelled). */
+  pageGoing(): void {
+    if (this.on) return;
+    this.on = true;
+    this.byPageGoing = true;
+  }
+  /** The page is being used again, so a reload must have been cancelled. True if that lifted the mark. */
+  stillHere(): boolean {
+    if (!this.byPageGoing) return false;
+    this.on = false;
+    this.byPageGoing = false;
+    return true;
+  }
+}
+
 /** TS-206: the page-level note for a save that failed after its tab closed. */
 export function couldntSaveNote(field: string, reason: string): string {
   const why = reason.trim().replace(/\.$/, "");
