@@ -1849,17 +1849,27 @@ function PlanFloorPlan({
                 {t.label}
               </p>
               {isTarget && (
-                <button
-                  type="button"
+                // TS-212: a button by role with its own Tab stop (tabIndex 0) rather than a <button> --
+                // Safari's Tab skips real buttons by default, and this is how a keyboard user puts the
+                // picked guest down (the table box it replaced was a Tab stop there too).
+                <span
+                  role="button"
+                  tabIndex={0}
                   aria-label={`Move ${guestName(pickedGuestId)} to ${t.label}`}
                   onClick={(e) => {
                     e.stopPropagation();
                     void moveTo(pickedGuestId, t.id);
                   }}
-                  className="mb-1 self-start rounded border border-blue-400 px-1.5 py-0.5 text-xs text-blue-800 dark:text-blue-300 hover:bg-blue-50 dark:hover:bg-blue-950"
+                  onKeyDown={(e) => {
+                    if (e.key !== "Enter" && e.key !== " ") return;
+                    e.preventDefault();
+                    e.stopPropagation();
+                    void moveTo(pickedGuestId, t.id);
+                  }}
+                  className="mb-1 cursor-pointer self-start rounded border border-blue-400 px-1.5 py-0.5 text-xs text-blue-800 dark:text-blue-300 hover:bg-blue-50 dark:hover:bg-blue-950"
                 >
                   Move here
-                </button>
+                </span>
               )}
               {/* TS-212: not a Tab stop of its own -- the chips inside are, and the list view shows
                   every guest at every table. */}

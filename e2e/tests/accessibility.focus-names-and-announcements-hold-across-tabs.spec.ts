@@ -19,6 +19,7 @@ import { TimelineTabPage } from "../pages/TimelineTabPage.js";
 import { WeddingDetailPage } from "../pages/WeddingDetailPage.js";
 import { WeddingGuestsPage } from "../pages/WeddingGuestsPage.js";
 import { NotificationsBell } from "../components/NotificationsBell.js";
+import { safariTabSkipsButtons } from "../support/tabOrder.js";
 
 defineQualityTest(
   {
@@ -45,8 +46,11 @@ defineQualityTest(
       await budget.setEditCost("250");
       await budget.saveEdit();
       await expect(wedding.focusedElement()).toHaveAttribute("id", /^vendor-.+-edit$/);
-      await page.keyboard.press("Tab");
-      await expect(wedding.focusedElement()).toHaveAttribute("id", /^vendor-.+-remove$/);
+      // Safari on macOS doesn't Tab to buttons by default (see safariTabSkipsButtons).
+      if (!safariTabSkipsButtons(testInfo.project.name)) {
+        await page.keyboard.press("Tab");
+        await expect(wedding.focusedElement()).toHaveAttribute("id", /^vendor-.+-remove$/);
+      }
       await budget.startEdit("Focus Florist");
       await budget.cancelEdit();
       await expect(wedding.focusedElement()).toHaveAttribute("id", /^vendor-.+-edit$/);
@@ -59,8 +63,11 @@ defineQualityTest(
       await timeline.startEdit("Focus cocktails");
       await timeline.saveEdit("17:45", "Focus cocktails later");
       await expect(wedding.focusedElement()).toHaveAttribute("id", /^timeline-.+-edit$/);
-      await page.keyboard.press("Tab");
-      await expect(wedding.focusedElement()).toHaveAttribute("id", /^timeline-.+-remove$/);
+      // Safari on macOS doesn't Tab to buttons by default (see safariTabSkipsButtons).
+      if (!safariTabSkipsButtons(testInfo.project.name)) {
+        await page.keyboard.press("Tab");
+        await expect(wedding.focusedElement()).toHaveAttribute("id", /^timeline-.+-remove$/);
+      }
     });
 
     await test.step("Guests: after removing a guest, focus stays in the list", async () => {

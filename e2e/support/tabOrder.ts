@@ -456,6 +456,15 @@ export async function walkTabOrderDetailed(page: Page, options: WalkOptions = {}
   };
 }
 
+/**
+ * TS-212: Safari's own setting -- on macOS its Tab key moves only between typing boxes and lists by
+ * default, and skips buttons, checkboxes and links (Option+Tab reaches them). Checks that Tab lands
+ * on a button or checkbox don't apply there. CI runs WebKit on Linux, where Tab reaches every control.
+ */
+export function safariTabSkipsButtons(projectName: string): boolean {
+  return projectName === "webkit" && process.platform === "darwin";
+}
+
 /** The stops of a walk (see walkTabOrderDetailed). */
 export async function walkTabOrder(page: Page, options: WalkOptions = {}): Promise<TabStop[]> {
   return (await walkTabOrderDetailed(page, options)).stops;

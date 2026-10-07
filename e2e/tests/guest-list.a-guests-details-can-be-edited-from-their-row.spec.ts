@@ -13,6 +13,7 @@ import { WeddingGuestsPage } from "../pages/WeddingGuestsPage.js";
 import { GuestRsvpPage } from "../pages/GuestRsvpPage.js";
 import { DayOfTabPage } from "../pages/DayOfTabPage.js";
 import { WeddingDetailPage } from "../pages/WeddingDetailPage.js";
+import { safariTabSkipsButtons } from "../support/tabOrder.js";
 
 interface GuestState {
   headcount: number;
@@ -56,7 +57,11 @@ defineQualityTest(
       await expect(row.detailsField("tier")).toHaveValue("OTHER");
       await expect(row.detailsField("ageCategory")).toHaveValue("ADULT");
       await expect(row.detailsField("accessible")).not.toBeChecked();
-      for (const next of ["headcount", "tier", "ageCategory", "accessible"] as const) {
+      // Safari on macOS doesn't Tab to checkboxes by default (see safariTabSkipsButtons).
+      const tabStops = safariTabSkipsButtons(testInfo.project.name)
+        ? (["headcount", "tier", "ageCategory"] as const)
+        : (["headcount", "tier", "ageCategory", "accessible"] as const);
+      for (const next of tabStops) {
         await page.keyboard.press("Tab");
         await expect(row.detailsField(next)).toBeFocused();
       }

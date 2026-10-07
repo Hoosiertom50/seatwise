@@ -23,7 +23,7 @@ import { WeddingDetailPage } from "../pages/WeddingDetailPage.js";
 import { TablesTabPage } from "../pages/TablesTabPage.js";
 import { WeddingGuestsPage } from "../pages/WeddingGuestsPage.js";
 import { PlanTabPage } from "../pages/PlanTabPage.js";
-import { checkTabOrder, type TabCountException, type TabOrderException } from "../support/tabOrder.js";
+import { checkTabOrder, type TabCountException, type TabOrderException, safariTabSkipsButtons } from "../support/tabOrder.js";
 import { uniquePersonName, uniqueToken } from "../data/ids.js";
 import { TEST_ACCOUNT_EMAIL_DOMAIN } from "../support/auth.js";
 import type { Page, TestInfo } from "@playwright/test";
@@ -60,8 +60,12 @@ async function tabOrderOf(page: Page, testInfo: TestInfo, where: string): Promis
   // doesn't apply; the reading order of the stops it does make is still checked.
   // TS-215: that's a macOS setting, so only on macOS -- CI runs WebKit on Linux, where Tab reaches
   // every control, and there a skipped control is a real finding.
-  const safariTabSetting = testInfo.project.name === "webkit" && process.platform === "darwin";
-  const reachable = safariTabSetting ? walkProblems.filter((p) => !p.startsWith("Tab never reached")) : walkProblems;
+  // TS-215: and, as Safari's Tab skips the page's first control when that's a button, focus coming
+  // back into the page lands on a later control -- read there as Tab "coming back" mid-walk.
+  const safariTabSetting = safariTabSkipsButtons(testInfo.project.name);
+  const reachable = safariTabSetting
+    ? walkProblems.filter((p) => !p.startsWith("Tab never reached") && !p.startsWith("Tab came back to a control"))
+    : walkProblems;
   return { stopCount: stops.length, problems: [...reachable, ...problems] };
 }
 

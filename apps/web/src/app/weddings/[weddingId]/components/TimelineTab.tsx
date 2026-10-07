@@ -10,6 +10,7 @@ import { OPEN_EDIT_MESSAGE, REFRESH_FAILED_MESSAGE } from "@/lib/display-format"
 import { FIELD_LIMITS } from "@seatwise/shared";
 // TS-214: entries after midnight ("next day") are listed after the wedding day's own.
 import { compareTimelineEntries, sameTimelineSlot, timelineTimeLabel, PICK_A_TIME_MESSAGE } from "@seatwise/shared";
+import { focusIfLost } from "@/lib/focus-if-lost";
 
 // TS-18 (Day-Of Timeline / Run-of-Show, FR-13.1/FR-13.2): a per-wedding, chronological schedule of
 // day-of events -- its own record, entirely independent of guests/tables/rules/seating plans.
@@ -18,14 +19,7 @@ import { compareTimelineEntries, sameTimelineSlot, timelineTimeLabel, PICK_A_TIM
 // sharing its exact same time (TS-214: on the same day).
 // TS-212: after the edit box swaps back to the row (Save, Cancel), or opens, focus goes to a stable
 // control by id -- it used to drop to the page, so the next Tab started from the top. Only if focus
-// was lost (someone who has clicked elsewhere keeps their place).
-function focusIfLost(id: string) {
-  setTimeout(() => {
-    const active = document.activeElement;
-    if (active && active !== document.body && active.isConnected) return;
-    document.getElementById(id)?.focus();
-  }, 0);
-}
+// was lost (someone who has clicked elsewhere keeps their place) -- see lib/focus-if-lost.ts.
 
 export function TimelineTab({ weddingId, canEdit }: { weddingId: string; canEdit: boolean }) {
   const [entries, setEntries] = useState<TimelineEntryDTO[]>([]);

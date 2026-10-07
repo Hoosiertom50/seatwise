@@ -17,6 +17,7 @@ import { useUnsavedChanges } from "@/lib/unsaved-changes";
 import { FIELD_LIMITS, CONTACT_PHONE_HTML_PATTERN, CONTACT_PHONE_MESSAGE } from "@seatwise/shared";
 // TS-214: the most a cost or the budget can be, with the server's own plain-dollar messages.
 import { MAX_BUDGET_CENTS, BUDGET_TOO_HIGH_MESSAGE, MAX_VENDOR_COST_CENTS, VENDOR_COST_TOO_HIGH_MESSAGE } from "@seatwise/shared";
+import { focusIfLost } from "@/lib/focus-if-lost";
 
 // TS-20 (FR-15.1/FR-15.2): a per-wedding vendor list plus the wedding's overall budget figure and
 // a running total/remaining against it. Money is always handled here in whole dollars for
@@ -85,14 +86,7 @@ function sortVendors(list: VendorDTO[]): VendorDTO[] {
 
 // TS-212: after the vendor form swaps back to the row (Save, Cancel) or a suggestion fills the form,
 // focus goes to a stable control by id -- it used to drop to the page, so the next Tab started from
-// the top. Only if focus was lost (someone who has clicked elsewhere keeps their place).
-function focusIfLost(id: string) {
-  setTimeout(() => {
-    const active = document.activeElement;
-    if (active && active !== document.body && active.isConnected) return;
-    document.getElementById(id)?.focus();
-  }, 0);
-}
+// the top. Only if focus was lost (someone who has clicked elsewhere keeps their place) -- see lib/focus-if-lost.ts.
 
 export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: boolean }) {
   const [vendors, setVendors] = useState<VendorDTO[]>([]);
