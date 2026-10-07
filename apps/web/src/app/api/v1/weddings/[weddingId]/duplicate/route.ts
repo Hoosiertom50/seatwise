@@ -5,6 +5,7 @@ import { getAuthUser } from "@/lib/session";
 import { errorResponse, zodErrorResponse, readJson } from "@/lib/api-response";
 import { requireAccess } from "@/lib/access";
 import { countOr429, TOO_MANY_WEDDINGS_TODAY, WEDDING_CREATE_LIMITS, weddingCreateKey } from "@/lib/rate-limit";
+import { afterSave, SAVED_BUT_NOT_REFRESHED } from "@/lib/post-save";
 
 type Params = { params: Promise<{ weddingId: string }> };
 
@@ -48,6 +49,17 @@ export async function POST(req: NextRequest, { params }: Params) {
     await giveBack();
     return errorResponse("Wedding not found", 404);
   }
-  const wedding = await getWeddingById(newId);
-  return NextResponse.json({ wedding }, { status: 201 });
+  // TS-220: the copy is saved by now -- a failed read-back answers with the new wedding's id (all
+  // the page needs to open it) and a warning, never an error: a planner told it failed would press
+  // again and make a second copy, using up another of the day's allowance.
+  const warnings: string[] = [];
+  const copyId = newId;
+  const wedding = await afterSave(
+    "reading the copied wedding back",
+    async () => (await getWeddingById(copyId)) ?? { id: copyId },
+    warnings,
+    SAVED_BUT_NOT_REFRESHED,
+    { id: copyId }
+  );
+  return NextResponse.json({ wedding, warnings }, { status: 201 });
 }
