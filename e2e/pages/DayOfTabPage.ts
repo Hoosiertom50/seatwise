@@ -73,6 +73,11 @@ export class DayOfTabPage extends BasePage {
     return this.guestRow(guestName).getByRole("alert");
   }
 
+  /** TS-221: shown when the plan open in Day-of was removed (pruned) and it opened the current plan. */
+  planRemovedNotice() {
+    return this.page.getByRole("status").filter({ hasText: "The plan you had open was removed — you're now looking at the current plan." });
+  }
+
   /** TS-197: shown when Day-of switches to a plan made since it opened. */
   newerPlanNotice() {
     return this.page.getByRole("status").filter({ hasText: "A newer plan was made — you're now looking at it." });
