@@ -96,7 +96,14 @@ function hasUtf8LetterPairs(view: Uint8Array): boolean {
 // has -- "Željko Žižek" is fine. And in a name, ’ or ‘ between two small letters ("Mar’a" for
 // María), and ¿ or § after a letter ("S¿ren", "Strau§"), are the Mac signs too.
 const MAC_ROMAN_NOT_LETTERS = "ƒ‡ˆ‰†‹›\u0081\u008d\u008f\u0090\u009d";
-const MAC_ROMAN_IN_A_WORD = new RegExp(`\\p{L}[${MAC_ROMAN_NOT_LETTERS}]\\p{L}|\\p{Ll}[ŽŠŒŸ]`, "u");
+// TS-225: also a capital then Ž Š Œ Ÿ then a small letter ("MŸller" for Müller -- the comment above
+// claimed it, but only "RenŽe" was caught), and ƒ ‡ ˆ ‰ † ‹ › starting a word before a letter
+// ("ƒloise" for Éloise, "‡ngel" for Ángel). "Željko Žižek" and "HAŸ-LES-ROSES" are still fine.
+const MAC_ROMAN_NOT_LETTERS_AT_START = "ƒ‡ˆ‰†‹›";
+const MAC_ROMAN_IN_A_WORD = new RegExp(
+  `\\p{L}[${MAC_ROMAN_NOT_LETTERS}]\\p{L}|\\p{Ll}[ŽŠŒŸ]|\\p{Lu}[ŽŠŒŸ]\\p{Ll}|(?<!\\p{L})[${MAC_ROMAN_NOT_LETTERS_AT_START}]\\p{L}`,
+  "u"
+);
 const MAC_ROMAN_IN_A_NAME = /\p{Ll}[’‘]\p{Ll}|\p{L}[¿§]/u;
 
 /** TS-210: whether one cell (read as windows-1252) looks like it was saved in the older Mac format. */

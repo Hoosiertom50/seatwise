@@ -37,8 +37,19 @@ const total = () => [...counts.values()].reduce((a, b) => a + b, 0);
 test("the hourly limits and their plain messages", () => {
   assert.deepEqual(
     Object.fromEntries(Object.entries(WEDDING_WORK_LIMITS).map(([k, v]) => [k, [v.limit, v.windowSeconds]])),
-    { generate: [60, 3600], restore: [60, 3600], importCommit: [30, 3600], saveTemplate: [20, 3600], comment: [120, 3600] }
+    {
+      generate: [60, 3600],
+      restore: [60, 3600],
+      importCommit: [30, 3600],
+      saveTemplate: [20, 3600],
+      comment: [120, 3600],
+      // TS-225
+      pdfExport: [60, 3600],
+      importPreview: [60, 3600],
+    }
   );
+  assert.equal(tooMuchWeddingWorkMessage("pdfExport"), "You've made a lot of PDFs in the last hour — please wait a while and try again.");
+  assert.equal(tooMuchWeddingWorkMessage("importPreview"), "You've previewed a lot of guest files in the last hour — please wait a while and try again.");
   assert.equal(tooMuchWeddingWorkMessage("generate"), "You've made a lot of seating plans in the last hour — please wait a while and try again.");
   assert.equal(tooMuchWeddingWorkMessage("comment"), "You've posted a lot of comments in the last hour — please wait a while and try again.");
   assert.notEqual(weddingWorkKey("generate", "u1"), weddingWorkKey("restore", "u1"));

@@ -83,7 +83,8 @@ export function emailSendRefusedMessage(kind: EmailKind, reason: EmailLimitReaso
 
 // TS-205: the hourly limits on heavy work inside a wedding, per account (WEDDING_WORK_LIMITS in
 // ./rate-limit). Each says what there was a lot of, and that it's about an hour's wait.
-export type WeddingWorkKind = "generate" | "restore" | "importCommit" | "saveTemplate" | "comment";
+// TS-225: pdfExport (the seating chart, lookup list and place cards together) and importPreview.
+export type WeddingWorkKind = "generate" | "restore" | "importCommit" | "saveTemplate" | "comment" | "pdfExport" | "importPreview";
 
 const WEDDING_WORK_WHAT: Record<WeddingWorkKind, string> = {
   generate: "made a lot of seating plans",
@@ -91,6 +92,8 @@ const WEDDING_WORK_WHAT: Record<WeddingWorkKind, string> = {
   importCommit: "imported a lot of guest lists",
   saveTemplate: "saved a lot of templates",
   comment: "posted a lot of comments",
+  pdfExport: "made a lot of PDFs",
+  importPreview: "previewed a lot of guest files",
 };
 
 export function tooMuchWeddingWorkMessage(kind: WeddingWorkKind): string {

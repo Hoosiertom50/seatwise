@@ -20,6 +20,7 @@ import {
   changedImportFields,
   importRowChangesNothing,
   parseGuestImportRow,
+  spreadsheetRowNumber,
   withoutPlusOnesForPartyOfOne,
   type GuestImportKeptField,
   type GuestImportCurrentValues,
@@ -161,13 +162,15 @@ async function classifyRows(
   const versionColumnIndex = mapping.version ? headers.indexOf(mapping.version) : -1;
 
   const keptAsIsByRow = new Map<number, GuestImportKeptField[]>();
-  const classified: GuestImportRow[] = numbered.map(({ cells, rowNumber }) => {
+  // TS-222: a row's warnings (e.g. a Side name that disagrees with the Side code), shown in the preview.
+  const warningByRow = new Map<number, string>();
+  const classifiedRows: GuestImportRow[] = numbered.map(({ cells, rowNumber }) => {
     // TS-198: the guest this row updates (an ID used once, that is one of the wedding's guests),
     // so a cell that says what they already have isn't checked again -- see parseGuestImportRow.
     const idCell = guestIdColumnIndex === -1 ? "" : (cells[guestIdColumnIndex] ?? "").trim();
     const existingGuest =
       idCell && (guestIdCellCounts.get(idCell) ?? 0) === 1 ? existingById.get(idCell) : undefined;
-    const { errors, data, keptAsIs } = parseGuestImportRow(
+    const { errors, warnings, data, keptAsIs } = parseGuestImportRow(
       cells,
       headers,
       mapping,
@@ -175,6 +178,7 @@ async function classifyRows(
       existingGuest ? currentValuesOf(existingGuest) : undefined
     );
     if (keptAsIs.length > 0) keptAsIsByRow.set(rowNumber, keptAsIs);
+    if (warnings.length > 0) warningByRow.set(rowNumber, warnings.join(" "));
 
     let exportedVersion: number | undefined;
     if (versionColumnIndex !== -1) {
@@ -199,7 +203,7 @@ async function classifyRows(
           errors.push(`No guest with ID "${raw}" exists in this wedding.`);
           unknownGuestIds.push({
             guestId: raw,
-            name: `${data.firstName ?? ""} ${data.lastName ?? ""}`.trim() || `row ${rowNumber}`,
+            name: `${data.firstName ?? ""} ${data.lastName ?? ""}`.trim() || `row ${spreadsheetRowNumber(rowNumber)}`, // TS-225: as the spreadsheet numbers it
           });
         } else {
           guestId = raw;
@@ -233,6 +237,10 @@ async function classifyRows(
       return { rowNumber, kind: "update", guestId, revision, preview: data };
     }
     return { rowNumber, kind: "new", preview: data };
+  });
+  const classified = classifiedRows.map((r) => {
+    const warning = warningByRow.get(r.rowNumber);
+    return warning && r.kind !== "error" ? { ...r, warning } : r;
   });
 
   const preview: GuestImportPreview = {

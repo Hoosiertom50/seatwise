@@ -378,6 +378,10 @@ export const WEDDING_WORK_LIMITS: Record<WeddingWorkKind, { limit: number; windo
   importCommit: { limit: 30, windowSeconds: 3600 },
   saveTemplate: { limit: 20, windowSeconds: 3600 },
   comment: { limit: 120, windowSeconds: 3600 },
+  // TS-225: a PDF of a 2,000-guest wedding takes seconds to make, and the import preview reads the
+  // whole file -- both could be repeated in a loop. The three PDFs share one limit.
+  pdfExport: { limit: 60, windowSeconds: 3600 },
+  importPreview: { limit: 60, windowSeconds: 3600 },
 };
 export const weddingWorkKey = (kind: WeddingWorkKind, userId: string) => `wedding-work:${kind}:hour:${userId}`;
 

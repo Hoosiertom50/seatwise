@@ -224,9 +224,10 @@ should be live together, so the gap between them is as short as possible:
    but a local database, whatever it's passed.
 5. Check the live site by hand (sign in, open a wedding, its seating plan).
 
-   TS-215: when a release brings in the rolling 24-hour limits (TS-203), the counts already made
-   that day carry over -- the limits keep their names, and today's count is still inside the last 24
-   hours -- so nothing resets on publish. Nothing to do.
+   TS-215 / TS-223: publishing from the TS-160 release brings in the rolling 24-hour limits
+   (TS-203). The counts that release kept aren't read by the new limits, so the 24-hour counts
+   start at 0 when you publish -- at most, someone gets one extra day's allowance on publish day.
+   Nothing to do. (On later publishes the counts carry over: the limits keep their names.)
 
    TS-187: someone who signed up in the gap between steps 2 and 3 got their "confirm your email"
    link from the old code. If it doesn't work for them, they can use **Resend link** on the

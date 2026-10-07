@@ -41,13 +41,20 @@ export default function AccountPage() {
   // out every device -- other browsers, phones, the mobile app -- the way a password reset does.
   const [signOutError, setSignOutError] = useState<string | null>(null);
   const [signingOutEverywhere, setSigningOutEverywhere] = useState(false);
+  const [signOutNeedsSignIn, setSignOutNeedsSignIn] = useState(false);
   async function onLogOutEverywhere() {
     setSignOutError(null);
+    setSignOutNeedsSignIn(false);
     setSigningOutEverywhere(true);
     try {
       await api.post("/api/v1/auth/logout", { everywhere: true });
-    } catch {
-      setSignOutError("Couldn't log out — check your connection and try again.");
+    } catch (err) {
+      // TS-223: this tab's session had already ended, so nothing was signed out -- the server says
+      // so (sign in again first), with a link to sign in. It used to go to the sign-in page as if
+      // it had worked.
+      const signedOut = err instanceof ApiError && err.status === 401;
+      setSignOutNeedsSignIn(signedOut);
+      setSignOutError(signedOut ? (err as ApiError).message : "Couldn't log out — check your connection and try again.");
       setSigningOutEverywhere(false);
       return;
     }
@@ -143,7 +150,22 @@ export default function AccountPage() {
         >
           {signingOutEverywhere ? "Logging out…" : "Log out on all devices"}
         </button>
-        {signOutError && <p role="alert" className="mt-3 text-sm text-red-600 dark:text-red-400">{signOutError}</p>}
+        {/* TS-223: the live region is always on the page, so its message is announced (TS-212). */}
+        <div role="alert" className="text-sm text-red-600 dark:text-red-400">
+          {signOutError && (
+            <p className="mt-3">
+              {signOutError}
+              {signOutNeedsSignIn && (
+                <>
+                  {" "}
+                  <Link href="/login?next=/account" className="underline">
+                    Sign in
+                  </Link>
+                </>
+              )}
+            </p>
+          )}
+        </div>
       </section>
 
       <section aria-labelledby="delete-account" className="rounded-lg border border-red-200 dark:border-red-900 p-4">

@@ -3,7 +3,7 @@
 import { useEffect, useState, useRef } from "react";
 import { ConfirmDeleteButton } from "@/components/ConfirmDeleteButton";
 import { api, ApiError, apiErrorMessage, isItemGoneError } from "@/lib/api-client";
-import { formatClockTime, OPEN_EDIT_MESSAGE } from "@/lib/display-format";
+import { OPEN_EDIT_MESSAGE } from "@/lib/display-format";
 import { matchVendorSuggestions } from "@/lib/vendor-suggestions";
 import type {
   VendorDTO,
@@ -14,7 +14,7 @@ import type {
 } from "@seatwise/shared";
 import { useUnsavedChanges } from "@/lib/unsaved-changes";
 // TS-193: the same limits the server checks (packages/shared/src/field-limits.ts).
-import { FIELD_LIMITS, CONTACT_PHONE_HTML_PATTERN, CONTACT_PHONE_MESSAGE } from "@seatwise/shared";
+import { FIELD_LIMITS, CONTACT_PHONE_HTML_PATTERN, CONTACT_PHONE_MESSAGE, arrivalTimeLabel } from "@seatwise/shared";
 // TS-214: the most a cost or the budget can be, with the server's own plain-dollar messages.
 import { MAX_BUDGET_CENTS, BUDGET_TOO_HIGH_MESSAGE, MAX_VENDOR_COST_CENTS, VENDOR_COST_TOO_HIGH_MESSAGE } from "@seatwise/shared";
 import { focusIfLost } from "@/lib/focus-if-lost";
@@ -849,8 +849,9 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
                             ))
                         : "No contact info"}
                     </p>
+                    {/* TS-223: "(next day)" for an arrival before 5:00 AM, as the vendor sees it. */}
                     {v.arrivalTime && (
-                      <p className="text-sm text-neutral-500 dark:text-neutral-400">Arrives {formatClockTime(v.arrivalTime)}</p>
+                      <p className="text-sm text-neutral-500 dark:text-neutral-400">Arrives {arrivalTimeLabel(v.arrivalTime)}</p>
                     )}
                     {v.contractNotes && <p className="mt-1 whitespace-pre-line break-words text-sm text-neutral-500 dark:text-neutral-400 [overflow-wrap:anywhere]">{v.contractNotes}</p>}
                     {/* TS-212: the link result was never announced -- a status region, always there. */}

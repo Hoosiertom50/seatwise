@@ -82,6 +82,8 @@ export interface GuestImportRow {
   // commit can refuse if that guest changed in between.
   revision?: number;
   reason?: string;
+  // TS-222: something to know that doesn't stop the row (a Side name that disagrees with the Side code).
+  warning?: string;
   preview: GuestImportRowPreview;
 }
 

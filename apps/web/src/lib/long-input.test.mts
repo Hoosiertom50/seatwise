@@ -15,11 +15,26 @@ import { lengthFirst } from "../../../../packages/shared/src/schemas/common";
 const LONG = 100_000;
 const FAST_MS = 50;
 
-/** Parses `body` with `schema`, timing it; returns how long it took and the issues for `field`. */
+// TS-225: how many times each timed check runs; the fastest run counts. One run's wall-clock time
+// failed once (108 ms) while many other processes were busy -- a slow pattern is slow every time,
+// so the best of several still catches it, while a one-off pause on a busy machine no longer fails.
+const TIMED_RUNS = 5;
+
+/** TS-225: the fastest of TIMED_RUNS runs of `fn`, in ms. */
+function bestTimeMs(fn: () => void): number {
+  let best = Infinity;
+  for (let run = 0; run < TIMED_RUNS; run++) {
+    const started = performance.now();
+    fn();
+    best = Math.min(best, performance.now() - started);
+  }
+  return best;
+}
+
+/** Parses `body` with `schema`, timing it (the best of several runs); returns how long it took and the issues for `field`. */
 function timedParse(schema: ZodTypeAny, body: Record<string, unknown>, field: string) {
-  const started = performance.now();
+  const ms = bestTimeMs(() => schema.safeParse(body));
   const result = schema.safeParse(body);
-  const ms = performance.now() - started;
   assert.equal(result.success, false, `${field}: a ${LONG}-character value must be refused`);
   const issues = result.error!.issues.filter((i) => i.path[0] === field);
   return { ms, issues };
@@ -145,9 +160,7 @@ test("the phone pattern checks a 100,000-character value in under 50 ms, however
   ];
   isAllowedContactPhone("555-0199");
   for (const value of values) {
-    const started = performance.now();
-    isAllowedContactPhone(value);
-    const ms = performance.now() - started;
+    const ms = bestTimeMs(() => isAllowedContactPhone(value));
     assert.ok(ms < FAST_MS, `${JSON.stringify(value.slice(0, 12))}...: took ${ms.toFixed(1)} ms`);
   }
 });

@@ -3,6 +3,7 @@
 import {
   parseCsv,
   toCsv,
+  spreadsheetRowNumber,
   findMacRomanCell,
   MAC_ENCODING_MESSAGE,
   type CsvTextEncoding,
@@ -28,15 +29,24 @@ export function prepareImportCsv(
   mapping: Partial<Record<GuestImportField, string>>
 ): { csv: string } | { error: string } {
   const { headers, rows } = parseCsv(text);
-  const mapped = [...new Set(Object.values(mapping).filter((h): h is string => !!h))].filter((h) => headers.includes(h));
+  const mapped = [...new Set(Object.values(mapping).filter((h): h is string => !!h))];
+  // TS-222: a mapped column the file doesn't have is refused, not quietly left out (that used to
+  // import every row without it, with no error).
+  const missing = mapped.find((h) => !headers.includes(h));
+  if (missing !== undefined) return { error: mappedColumnMissingMessage(missing) };
   const columns = mapped.map((h) => headers.indexOf(h));
   if (encoding === "windows-1252") {
     const nameColumns = NAME_FIELDS.map((f) => (mapping[f] ? headers.indexOf(mapping[f]!) : -1)).filter((i) => i !== -1);
     const found = findMacRomanCell(rows, columns, nameColumns);
-    if (found) return { error: `${MAC_ENCODING_MESSAGE} (First seen in row ${found.rowNumber}, column "${headers[found.column]}".)` };
+    if (found) return { error: `${MAC_ENCODING_MESSAGE} (First seen in row ${spreadsheetRowNumber(found.rowNumber)}, column "${headers[found.column]}".)` };
   }
   // A row that is blank in every column (a spacer) stays a row, so later row numbers don't move.
   return { csv: toCsv(mapped, rows.map((cells) => columns.map((c) => cells[c] ?? ""))) };
+}
+
+/** TS-222 */
+export function mappedColumnMissingMessage(header: string): string {
+  return `This file has no column called "${header}" — choose the file again and check the column choices.`;
 }
 
 /**
