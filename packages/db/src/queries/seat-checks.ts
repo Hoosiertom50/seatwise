@@ -383,6 +383,18 @@ export async function lockCurrentPlanOrWedding(client: Queryable, weddingId: str
   return lockCurrentPlan(client, weddingId);
 }
 
+// TS-234: for a change that doesn't need the current plan's lock itself (removing a seating rule):
+// only when the wedding has no current plan yet, wait for the wedding's lock, so a first Generate
+// in progress finishes first and the re-check that follows the change sees its plan. With a plan,
+// nothing is locked here -- the change goes ahead as before and its re-check waits on the plan.
+export async function waitForAnyFirstPlan(client: Queryable, weddingId: string): Promise<void> {
+  const { rows } = await client.query(
+    `SELECT 1 FROM "plan_versions" WHERE "weddingId" = $1 AND "isCurrent" LIMIT 1`,
+    [weddingId]
+  );
+  if (rows.length === 0) await lockWeddingRow(client, weddingId);
+}
+
 // TS-181: taken (right after lockCurrentPlan) by everything that checks a new seating rule against
 // the Restricted tables' required-guest lists or the other way round -- saving a list, editing a
 // Restricted table, adding a rule -- so one can't pass its checks against the other's old state.

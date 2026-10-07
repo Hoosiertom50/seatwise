@@ -108,8 +108,10 @@ defineQualityTest(
     await weddingData.createGuest(w, uniquePersonName(testInfo.workerIndex));
     await weddingData.createTable(w, { label: "Main", capacity: 8 });
     const v1 = await weddingData.generatePlanVersion(w);
-    expect((await weddingData.setAttendance(w, declinerId, "NOT_ATTENDING")).status).toBe(200);
     const v2 = await weddingData.generatePlanVersion(w);
+    // Declined once v1 is no longer current: declining frees their seat in the current plan (v2)
+    // only, so the older v1 still holds it.
+    expect((await weddingData.setAttendance(w, declinerId, "NOT_ATTENDING")).status).toBe(200);
 
     await test.step("The comparison answer marks only the decliner, and doesn't count them", async () => {
       const res = await context.request.get(`/api/v1/weddings/${w}/plan-versions/compare?from=${v1.id}&to=${v2.id}`);

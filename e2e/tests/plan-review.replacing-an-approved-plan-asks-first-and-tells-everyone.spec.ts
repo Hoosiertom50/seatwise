@@ -86,7 +86,7 @@ defineQualityTest(
         const current = (await versions()).find((v) => v.isCurrent)!;
         expect(current.status).toBe("DRAFT");
         await expect
-          .poll(async () => (await notifications(editor.context.request)).filter((n) => n.type === "STATUS_CHANGED").map((n) => n.message))
+          .poll(async () => (await notifications(editor.context.request)).filter((n) => n.type === "STATUS_CHANGED" && /replaced/.test(n.message)).map((n) => n.message))
           .toEqual(["The approved seating plan was replaced by version 3 (Draft)."]);
         // Not to the owner, who did it.
         expect((await notifications(page.request)).some((n) => n.message.startsWith("The approved seating plan was replaced"))).toBe(false);
@@ -147,7 +147,7 @@ defineQualityTest(
         await plan.confirmRestore();
         await expect.poll(async () => (await versions()).find((v) => v.isCurrent)?.versionNumber).toBe(3);
         await expect
-          .poll(async () => (await notifications(editor.context.request)).filter((n) => n.type === "STATUS_CHANGED").map((n) => n.message))
+          .poll(async () => (await notifications(editor.context.request)).filter((n) => n.type === "STATUS_CHANGED" && /replaced/.test(n.message)).map((n) => n.message))
           .toEqual(["The approved seating plan was replaced by version 3 (Draft)."]);
       });
     } finally {

@@ -1003,6 +1003,16 @@ export async function moveGuestAssignment(
   const targetTable = tableRows[0];
   if (!targetTable) throw new ManualMoveError("Table not found.");
 
+  // TS-228: an undo that would split a must-sit group is refused with that reason first -- the
+  // checks below (room at the table, say) would otherwise answer with one that doesn't say why the
+  // undo can't happen. Checked again under the plan's lock further down.
+  if (undoSeatsBefore) {
+    const groupNow = await findMustSitTogetherUnit(weddingId, guestId);
+    if (undoSplitsGroup([guestId, ...groupNow.map((g) => g.id)], undoSeatsBefore, targetTableId)) {
+      throw new ManualMoveError(UNDO_SPLITS_GROUP_MESSAGE);
+    }
+  }
+
   // FR-3.7a: every wedding-wide required-table membership (at most one row per guest -- enforced
   // by a DB unique constraint) -- used below to block either side of a Restricted table's
   // required list being violated by a manual move.

@@ -91,6 +91,19 @@ test("removing a seating rule waits for the wedding's lock (no plan yet) before 
   assert.equal(log.at(-1), "COMMIT");
 });
 
+test("removing a seating rule takes neither the plan's nor the wedding's lock when there is a plan", async () => {
+  fakeDatabase((sql, p) => {
+    if (/SELECT 1 FROM "plan_versions"/.test(sql)) return [{ "?column?": 1 }];
+    if (/DELETE FROM "guest_relationships"/.test(sql)) return [{ guestAId: "g1", guestBId: "g2" }];
+    return noPlanYet(sql, p);
+  });
+  const removed = await db.deleteRelationshipForWedding("r1", "w1", { userId: "owner-1", accessLevel: "OWNER" });
+  assert.deepEqual(removed, { guestAId: "g1", guestBId: "g2" });
+  assert.equal(indexOf(PLAN_LOCK), -1, `order was: ${log.join(" | ")}`);
+  assert.equal(indexOf(WEDDING_LOCK), -1, `order was: ${log.join(" | ")}`);
+  assert.ok(indexOf(/DELETE FROM "guest_relationships"/) > indexOf(ACCESS_RECHECK));
+});
+
 test("deleting a guest waits for the wedding's lock when there is no plan yet", async () => {
   fakeDatabase((sql, p) => {
     if (/DELETE FROM "guests"/.test(sql)) return [{ dayOfAttendance: "ATTENDING" }];
