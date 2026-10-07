@@ -52,7 +52,9 @@ defineQualityTest(
         ]);
         expect(res.status()).toBe(409);
         expect(((await res.json()) as { error: string }).error).toBe(ACCEPTED_MESSAGE);
-        await expect(tab.message(ACCEPTED_MESSAGE)).toBeVisible();
+        await expect(tab.revokeError()).toHaveText(ACCEPTED_MESSAGE);
+        // TS-220: the collaborators list is loaded again, so they show under the people with access.
+        await expect(tab.person(invitee.email)).toBeVisible();
       });
 
       await test.step("The person still has access, and asking again gives the same answer", async () => {

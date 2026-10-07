@@ -6,7 +6,7 @@
  * - A wedding handed to someone with the Collaborators tab open shows them the wedding note, and
  *   tabbing through the box doesn't delete it.
  * - "Back to dashboard" while a refused name ("J0hn") is being saved stays and shows why.
- * - Revoking an invite the person has just accepted says so (409), instead of looking revoked.
+ * (Revoking an invite the person has just accepted is covered by cross-cutting.revokes-and-copies-say-what-really-happened.)
  */
 
 import { expect, defineQualityTest, test } from "../fixtures/index.js";
@@ -14,7 +14,6 @@ import { uniquePersonName } from "../data/ids.js";
 import { patchWedding } from "../data/api.js";
 import { signUpFreshAccountInNewContext } from "../support/auth.js";
 import { failRequests } from "../support/networkFaults.js";
-import { inviteToken } from "../support/testDatabase.js";
 import { CollaboratorsTabPage } from "../pages/CollaboratorsTabPage.js";
 import { DashboardPage } from "../pages/DashboardPage.js";
 import { WeddingDetailPage } from "../pages/WeddingDetailPage.js";
@@ -242,51 +241,5 @@ defineQualityTest(
       await wedding.stayOnTab();
       await refuse.clear();
     });
-  },
-);
-
-defineQualityTest(
-  {
-    id: "cross-cutting.access-changes-and-leaving-keep-data-right.revoke-after-accept-says-so",
-    title: "revoking an invite the person has just accepted says they accepted it, and shows them under the people with access",
-    objective:
-      "Confirms (TS-220) that when the owner presses Revoke on an invite that the invitee accepted a moment earlier (the owner's list still shows it as pending), the page says they accepted it and to remove them from Collaborators if needed, and the collaborators list is loaded again so they show there -- before, the server's 404 counted as 'already revoked', the row disappeared and the owner believed access was blocked while the person had it.",
-    expectedOutcome:
-      "The revoke answers 409 and the page shows 'They accepted this invite a moment ago'. The invitee's row is listed under the people with access, and they still have access to the wedding.",
-    requirementIds: ["REQ-COLLABORATION-NOTIFICATIONS", "REQ-ACCESS-CONTROL"],
-    tags: ["@mutating", "@feature:collaboration", "@risk:high", "@suite:regression"],
-  },
-  async ({ managedWedding, weddingData, page, browser }, testInfo) => {
-    test.setTimeout(90_000);
-    const w = managedWedding.id;
-    const invitee = await signUpFreshAccountInNewContext(browser, testInfo.workerIndex, "invitee");
-    try {
-      const created = await weddingData.createInvite(w, invitee.email, "VIEW");
-      expect(created.status, JSON.stringify(created.body)).toBe(201);
-      const inviteId = created.body.invite!.id;
-      const collaboratorsTab = new CollaboratorsTabPage(page);
-      await collaboratorsTab.goto(w);
-      await expect(collaboratorsTab.pendingInvite(invitee.email)).toBeVisible();
-
-      await test.step("The invitee accepts while the owner's list still shows the invite", async () => {
-        const token = await inviteToken(inviteId);
-        const accept = await invitee.context.request.post(`/api/v1/invites/${token}/accept`, { data: {} });
-        expect(accept.status(), await accept.text()).toBe(200);
-      });
-
-      await test.step("Revoke says they accepted, and they show under the people with access", async () => {
-        const answered = page.waitForResponse(
-          (r) => r.request().method() === "DELETE" && new URL(r.url()).pathname === `/api/v1/weddings/${w}/invites/${inviteId}`,
-        );
-        await collaboratorsTab.revokeInvite(invitee.email);
-        expect((await answered).status()).toBe(409);
-        await expect(collaboratorsTab.revokeError()).toContainText("They accepted this invite a moment ago");
-        await expect(collaboratorsTab.person(invitee.email)).toBeVisible();
-        const read = await invitee.context.request.get(`/api/v1/weddings/${w}`);
-        expect(read.status()).toBe(200);
-      });
-    } finally {
-      await invitee.context.close();
-    }
   },
 );
