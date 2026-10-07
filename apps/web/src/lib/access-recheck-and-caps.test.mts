@@ -256,3 +256,20 @@ test("TS-204: the wedding note is sent to its owner only", () => {
   // The original isn't changed.
   assert.equal(wedding.note, "Owner's private note");
 });
+
+// TS-204 (Copilot review on PR #102): the re-check reads who owns the wedding with FOR KEY SHARE, so
+// it waits for a hand-off (which takes FOR UPDATE) and sees the new owner -- the old owner's change
+// used to go through as the owner's. It must not take the ordinary wedding lock (NO KEY UPDATE),
+// which would make it wait behind Generate and others and could deadlock.
+test("the re-check reads the owner with FOR KEY SHARE, so it waits for a hand-off but nothing else", async () => {
+  const seen: string[] = [];
+  const q = {
+    async query(sql: string) {
+      seen.push(sql);
+      return { rows: /FROM "weddings"/.test(sql) ? [{ ownerId: "owner-1" }] : [] };
+    },
+  };
+  await db.recheckActorAccess(q as never, "w-1", { userId: "owner-1", accessLevel: "EDIT" });
+  assert.match(seen[0], /FROM "weddings" WHERE id = \$1 FOR KEY SHARE$/);
+  assert.doesNotMatch(seen[0], /NO KEY UPDATE/);
+});

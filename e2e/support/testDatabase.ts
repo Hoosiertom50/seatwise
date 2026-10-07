@@ -519,24 +519,25 @@ export interface HeldHandOff {
 
 /**
  * TS-187: pauses a hand-off of a test wedding half-way -- after it has made the collaborator the
- * owner, before it's saved. A hand-off's last step adds the old owner back as an Edit collaborator;
- * this holds an unsaved collaborator row for that same person on that wedding, so that step waits
- * for it (the database allows one row per person per wedding). release() drops the row unsaved and
- * the hand-off finishes as normal. Test weddings and accounts only.
+ * owner, before it's saved. A hand-off's last step adds the old owner back as an Edit collaborator,
+ * which makes the database check the old owner's account is there (a share lock on its row); this
+ * holds that account row locked, so that step waits. release() lets it go and the hand-off finishes
+ * as normal. Test weddings and accounts only.
+ * TS-204: it used to hold an unsaved collaborator row for the old owner instead -- but adding that
+ * row share-locks the wedding, and a hand-off now locks the wedding FOR UPDATE first, so it waited
+ * at its very start rather than half-way.
  */
 export async function holdOwnershipHandOff(weddingId: string, ownerEmail: string): Promise<HeldHandOff> {
   const { Client } = await import("pg");
-  const { randomUUID } = await import("node:crypto");
   testPool(); // the same production refusal as every other helper here
   const client = new Client({ connectionString: resolveDatabaseUrl() });
   await client.connect();
   await client.query("BEGIN");
   const { rowCount } = await client.query(
-    `INSERT INTO "wedding_collaborators" (id, "weddingId", "userId", role, "permissionLevel")
-     SELECT $1, w.id, u.id, 'COLLABORATOR'::"CollaboratorRole", 'VIEW'::"CollaboratorPermission"
-     FROM "weddings" w JOIN "users" u ON u.id = w."ownerId"
-     WHERE w.id = $2 AND u.email = $3 AND u.email LIKE $4`,
-    [randomUUID(), weddingId, ownerEmail, TEST_EMAIL_PATTERN],
+    `SELECT u.id FROM "users" u JOIN "weddings" w ON w."ownerId" = u.id
+     WHERE w.id = $1 AND u.email = $2 AND u.email LIKE $3
+     FOR UPDATE OF u`,
+    [weddingId, ownerEmail, TEST_EMAIL_PATTERN],
   );
   if (!rowCount) {
     await client.query("ROLLBACK");

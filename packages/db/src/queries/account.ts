@@ -30,10 +30,14 @@ export async function transferWeddingOwnership(
   const client = await pool.connect();
   try {
     await beginTransaction(client);
-    // TS-187: NO KEY UPDATE, like every other wedding lock (TS-185) -- a full FOR UPDATE here also
-    // held up every change elsewhere in the wedding that Postgres checks the wedding exists for.
+    // TS-187: every other wedding lock is NO KEY UPDATE (TS-185), so it doesn't hold up changes that
+    // Postgres checks the wedding exists for. TS-204 (Copilot review): the hand-off alone takes FOR
+    // UPDATE -- a change made at the same moment reads who owns the wedding with FOR KEY SHARE (see
+    // recheckActorAccess), and has to wait for this one to finish, so it sees the new owner rather
+    // than letting the old owner through as "the owner" after the hand-off. A hand-off is rare and
+    // quick, and it takes nothing else first, so the short wait can't turn into a deadlock.
     const { rows: weddingRows } = await client.query(
-      `SELECT "ownerId" FROM "weddings" WHERE id = $1 FOR NO KEY UPDATE`,
+      `SELECT "ownerId" FROM "weddings" WHERE id = $1 FOR UPDATE`,
       [weddingId]
     );
     if (!weddingRows[0] || weddingRows[0].ownerId !== currentOwnerId) {

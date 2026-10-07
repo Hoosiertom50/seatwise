@@ -68,7 +68,12 @@ const RANK: Record<Exclude<AccessLevel, null>, number> = { VIEW: 1, COMMENT: 2, 
  * wedding lock, never before: the access changes take the wedding lock first, then this row.
  */
 export async function recheckActorAccess(q: Queryable, weddingId: string, actor: ActorAccess): Promise<void> {
-  const { rows: wedding } = await q.query(`SELECT "ownerId" FROM "weddings" WHERE id = $1`, [weddingId]);
+  // TS-204 (Copilot review): FOR KEY SHARE -- it doesn't wait for the ordinary wedding lock (NO KEY
+  // UPDATE) or hold anyone up, but it does wait for a hand-off (which alone takes FOR UPDATE, see
+  // transferWeddingOwnership). Before, a plain read could still see the old owner while a hand-off was
+  // being saved, and the old owner's change went through as the owner's -- even if the new owner then
+  // removed them straight away.
+  const { rows: wedding } = await q.query(`SELECT "ownerId" FROM "weddings" WHERE id = $1 FOR KEY SHARE`, [weddingId]);
   if (!wedding[0]) throw new WeddingDeletedError();
   if (wedding[0].ownerId === actor.userId) return; // the owner has every level
   const { rows } = await q.query(
