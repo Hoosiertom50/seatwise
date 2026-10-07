@@ -1,6 +1,6 @@
 import { randomUUID } from "crypto";
 import { pool, beginTransaction } from "../pool";
-import { lockCurrentPlan, lockRestrictedLists } from "./seat-checks";
+import { lockCurrentPlan, lockCurrentPlanOrWedding, lockRestrictedLists } from "./seat-checks";
 import { inWeddingChange, lockWeddingRow, recheckActorAccess, type ActorAccess } from "./wedding-lock";
 import { assertWeddingHasRoom } from "./wedding-caps";
 
@@ -287,11 +287,25 @@ export async function deleteRelationshipForWedding(
   /** TS-204: the access the request was let in with -- read again as the rule is removed. */
   actor?: ActorAccess
 ): Promise<{ guestAId: string; guestBId: string } | null> {
-  return inWeddingChange(weddingId, actor, async (client) => {
+  // TS-234: the current plan's lock first (the wedding's, when there's no plan yet), so a rule
+  // removed during a first Generate waits for the new plan, and the re-check that follows
+  // (resyncGuestsSeats) sees it -- before, the removal went ahead with no lock and the new plan
+  // kept the old rule's flags. Then the person's access, read again, as everywhere else.
+  const client = await pool.connect();
+  try {
+    await beginTransaction(client);
+    await lockCurrentPlanOrWedding(client, weddingId);
+    if (actor) await recheckActorAccess(client, weddingId, actor);
     const { rows } = await client.query(
       `DELETE FROM "guest_relationships" WHERE id = $1 AND "weddingId" = $2 RETURNING "guestAId", "guestBId"`,
       [id, weddingId]
     );
-    return rows[0] ?? null;
-  });
+    await client.query("COMMIT");
+    return (rows[0] as { guestAId: string; guestBId: string } | undefined) ?? null;
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
 }

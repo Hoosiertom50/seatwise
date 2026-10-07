@@ -315,13 +315,15 @@ async function notifyEveryone(
     if (recipient.id === actorUserId) continue;
     // TS-186: written only if they're still the owner or a collaborator at this moment -- someone
     // removed while this was running (between the list above and here) gets neither the
-    // notification nor the email.
+    // notification nor the email. TS-234: their access row is share-locked (FOR KEY SHARE) as it's
+    // checked, so a removal being saved at this very moment is waited for and then seen -- before,
+    // the check didn't wait, and the person still got this one notification and email.
     try {
       const { rowCount } = await pool.query(
         `INSERT INTO "notifications" (id, "weddingId", "recipientUserId", type, message)
          SELECT $1, $2, $3, $4::"NotificationType", $5
          WHERE EXISTS (SELECT 1 FROM "weddings" WHERE id = $2 AND "ownerId" = $3)
-            OR EXISTS (SELECT 1 FROM "wedding_collaborators" WHERE "weddingId" = $2 AND "userId" = $3)`,
+            OR EXISTS (SELECT 1 FROM "wedding_collaborators" WHERE "weddingId" = $2 AND "userId" = $3 FOR KEY SHARE)`,
         [randomUUID(), weddingId, recipient.id, type, message]
       );
       if (rowCount) notified.push(recipient);

@@ -220,6 +220,11 @@ model WeddingInvite {
 
   @@index([weddingId])
   @@index([email])
+  // TS-234: the database also has a hand-written partial unique index, written in SQL in migration
+  // 20261007200100_one_pending_invite_per_email because Prisma can't express it here:
+  //   CREATE UNIQUE INDEX "wedding_invites_one_pending_per_email" ON "wedding_invites" ("weddingId", lower(email)) WHERE status = 'PENDING';
+  // At most one pending invite per address per wedding. Like plan_versions_one_current_per_wedding,
+  // `prisma migrate dev` will offer to DROP it -- never accept that; CI's drift check allows it.
   @@map("wedding_invites")
 }
 
