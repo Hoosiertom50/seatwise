@@ -4,6 +4,7 @@ import { getWeddingById, updateWeddingForOwner, deleteWeddingForOwner } from "@s
 import { getAuthUser } from "@/lib/session";
 import { errorResponse, zodErrorResponse, readJson, databaseBusyResponse } from "@/lib/api-response";
 import { requireAccess, weddingForViewer } from "@/lib/access";
+import { afterSave, SAVED_BUT_NOT_REFRESHED } from "@/lib/post-save";
 
 type Params = { params: Promise<{ weddingId: string }> };
 
@@ -68,15 +69,27 @@ export async function PATCH(req: NextRequest, { params }: Params) {
   if (saved === "SIDE_LABELS_CLASH") {
     return errorResponse(SIDE_LABELS_MESSAGE, 422, { [sideLabel1 !== undefined ? "sideLabel1" : "sideLabel2"]: [SIDE_LABELS_MESSAGE] });
   }
-  const wedding = await getWeddingById(weddingId);
   // TS-195: deleted, or handed to someone else, a moment ago -- nothing was saved (it used to answer
   // as if it had been).
   if (saved === "NOT_FOUND") {
+    const wedding = await getWeddingById(weddingId);
     return wedding
       ? errorResponse("Only the wedding's owner can change these settings — you aren't its owner any more.", 403)
       : errorResponse("Wedding not found", 404);
   }
-  return NextResponse.json({ wedding });
+  // TS-209 (Copilot review): saved by now -- if reading it back fails, the answer is still success:
+  // the settings as they were plus this change, at the next settings version, with a "refresh"
+  // warning. It used to be a server error for a change that had been saved.
+  const warnings: string[] = [];
+  const wedding = await afterSave("reading the wedding back", () => getWeddingById(weddingId), warnings, SAVED_BUT_NOT_REFRESHED, null);
+  return NextResponse.json({
+    wedding: wedding ?? {
+      ...access.wedding,
+      ...changes,
+      settingsRevision: (expectedRevision ?? access.wedding.settingsRevision) + 1,
+    },
+    warnings,
+  });
 }
 
 export async function DELETE(req: NextRequest, { params }: Params) {
