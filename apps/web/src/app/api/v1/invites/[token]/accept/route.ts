@@ -1,5 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getInviteByToken, acceptInvite, inviteAcceptConfirmsEmail, getWeddingAccessLevel } from "@seatwise/db";
+import {
+  getInviteByToken,
+  acceptInvite,
+  inviteAcceptConfirmsEmail,
+  getWeddingAccessLevel,
+  INVITE_ACCEPTED_BY_OWNER_MESSAGE,
+} from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
 import { errorResponse } from "@/lib/api-response";
 import { confirmEmailToAcceptMessage } from "@/lib/email-verification-text";
@@ -62,6 +68,11 @@ export async function POST(req: NextRequest, { params }: Params) {
   const result = await acceptInvite(token, user.id, { confirmEmail: confirmsEmail });
   if ("error" in result && result.error === "EMAIL_NOT_VERIFIED") {
     return NextResponse.json({ error: confirmEmailToAcceptMessage(), status: "EMAIL_NOT_VERIFIED" }, { status: 403 });
+  }
+  // TS-234: the person now owns this wedding (it was handed to them after the invite went out) --
+  // refused, with a plain answer; they already have full access.
+  if ("error" in result && result.error === "ALREADY_OWNER") {
+    return NextResponse.json({ error: INVITE_ACCEPTED_BY_OWNER_MESSAGE, status: "ALREADY_OWNER" }, { status: 409 });
   }
   // TS-209: already a member (their access is left as it is) -- sent to the wedding rather than shown
   // an error with no way there.

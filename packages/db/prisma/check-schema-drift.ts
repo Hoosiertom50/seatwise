@@ -5,7 +5,8 @@
 // that into schema.prisma. The answer should be nothing -- except for one known, deliberate
 // difference: the partial unique index "plan_versions_one_current_per_wedding" (see the comment on
 // PlanVersion in schema.prisma). Prisma can't express a partial index, so it always proposes
-// dropping it; that one line is allowed and anything else fails the check.
+// dropping it; that one line is allowed and anything else fails the check. TS-234: and the same
+// for "wedding_invites_one_pending_per_email" (see WeddingInvite in schema.prisma).
 //
 // TS-200: this check BLOCKS. It ran report-only (continue-on-error) at first, in case the
 // hand-written first migration (0001_init) disagreed with Prisma's defaults; the first CI runs
@@ -26,7 +27,11 @@ import { Client } from "pg";
 import { isLocalDatabase } from "./local-only";
 
 /** SQL statements Prisma may propose that are known and accepted. */
-const ALLOWED_DIFF_LINES = [/^DROP INDEX "plan_versions_one_current_per_wedding";$/];
+const ALLOWED_DIFF_LINES = [
+  /^DROP INDEX "plan_versions_one_current_per_wedding";$/,
+  // TS-234: the second hand-written partial index (see WeddingInvite in schema.prisma).
+  /^DROP INDEX "wedding_invites_one_pending_per_email";$/,
+];
 
 /** The statements in Prisma's proposed script that aren't allowed (comments and blank lines ignored). */
 export function unexpectedDriftLines(script: string): string[] {
@@ -94,7 +99,7 @@ async function main() {
     console.error(script);
     console.error(
       "\nAdd a migration for the schema change (or update schema.prisma to match the migration). " +
-        "Only DROP INDEX \"plan_versions_one_current_per_wedding\" is expected here."
+        "Only DROP INDEX \"plan_versions_one_current_per_wedding\" and \"wedding_invites_one_pending_per_email\" are expected here."
     );
     process.exitCode = 1;
     return;

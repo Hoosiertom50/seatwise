@@ -116,7 +116,7 @@ export async function updateTimelineEntry(
   weddingId: string,
   input: Partial<CreateTimelineEntryData>,
   expectedRevision?: number,
-  /** TS-204: the access the edit was let in with -- read again under the entry's lock. */
+  /** TS-204: the access the edit was let in with -- read again first (TS-234). */
   actor?: ActorAccess
 ): Promise<TimelineEntryRow | null> {
   const fields: string[] = [];
@@ -141,14 +141,18 @@ export async function updateTimelineEntry(
   const client = await pool.connect();
   try {
     await beginTransaction(client);
+    // TS-204: the person's access read again. TS-234: before the entry's lock, not after -- it
+    // share-locks the wedding row, and taking that after the entry's lock was the other way round
+    // from a wedding delete (wedding row, then its entries), so the two could deadlock and the edit
+    // answered a server error. Now a delete running at that moment waits for this edit, or this
+    // edit finds the wedding gone.
+    if (actor) await recheckActorAccess(client, weddingId, actor);
     // TS-92: lock, then compare -- same pattern as guests/tables/vendors (FR-7.7).
     const { rows: current } = await client.query(
       // TS-187: NO KEY UPDATE -- the entry's id doesn't change here.
       `SELECT ${COLUMNS} FROM "timeline_entries" WHERE id = $1 AND "weddingId" = $2 FOR NO KEY UPDATE`,
       [id, weddingId]
     );
-    // TS-204: the person's access read again under the lock above.
-    if (actor) await recheckActorAccess(client, weddingId, actor);
     if (!current[0]) {
       await client.query("ROLLBACK").catch(() => {});
       return null;
@@ -201,12 +205,15 @@ export async function reorderTimelineEntry(
   id: string,
   weddingId: string,
   direction: "UP" | "DOWN",
-  /** TS-204: the access the request was let in with -- read again under the group's lock. */
+  /** TS-204: the access the request was let in with -- read again first (TS-234). */
   actor?: ActorAccess
 ): Promise<TimelineEntryRow | null> {
   const client = await pool.connect();
   try {
     await beginTransaction(client);
+    // TS-204: the person's access read again. TS-234: first, before the group's lock -- see
+    // updateTimelineEntry (the other order could deadlock with a wedding delete).
+    if (actor) await recheckActorAccess(client, weddingId, actor);
     const { rows: entryRows } = await client.query(
       `SELECT time, "nextDay" FROM "timeline_entries" WHERE id = $1 AND "weddingId" = $2`,
       [id, weddingId]
@@ -223,8 +230,6 @@ export async function reorderTimelineEntry(
        ORDER BY ${TIMELINE_ENTRY_ORDER} FOR NO KEY UPDATE`,
       [weddingId, entryRows[0].time, entryRows[0].nextDay]
     );
-    // TS-204: the person's access read again under the lock above.
-    if (actor) await recheckActorAccess(client, weddingId, actor);
     const index = group.findIndex((g) => g.id === id);
     // TS-174: its time was changed (or it was removed) between the two reads above -- before, this
     // fell through to a TypeError and a server error.

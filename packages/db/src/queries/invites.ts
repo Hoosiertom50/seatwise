@@ -16,12 +16,20 @@ export class InviteError extends Error {
     message: string,
     // TS-195: NOT_OWNER -- the person asking isn't the wedding's owner any more.
     // TS-220: ACCEPTED -- revoking an invite the person has already accepted (revokeInvite).
-    public code: "NOT_FOUND" | "ALREADY_OWNER" | "ALREADY_COLLABORATOR" | "NOT_OWNER" | "ACCEPTED"
+    // TS-234: PENDING_EXISTS -- another invite to the same address was saved at the same moment.
+    public code: "NOT_FOUND" | "ALREADY_OWNER" | "ALREADY_COLLABORATOR" | "NOT_OWNER" | "ACCEPTED" | "PENDING_EXISTS"
   ) {
     super(message);
     this.name = "InviteError";
   }
 }
+
+// TS-234: what sending an invite says when another one to the same address was just saved.
+export const INVITE_JUST_SENT_MESSAGE =
+  "An invite to that address was sent at the same moment — refresh to see it. Nothing else was sent.";
+
+// TS-234: what accepting an invite says to the person who now owns the wedding.
+export const INVITE_ACCEPTED_BY_OWNER_MESSAGE = "You own this wedding now, so you already have full access — this invite isn't needed.";
 
 const NOT_OWNER_MESSAGE = "Only the wedding's owner can manage invites — and you aren't its owner any more.";
 
@@ -72,61 +80,82 @@ export async function createInvite(
 ): Promise<WeddingInviteRow & { token: string }> {
   const normalizedEmail = email.trim().toLowerCase();
 
-  const { rows: weddingRows } = await pool.query(`SELECT "ownerId" FROM "weddings" WHERE id = $1`, [
-    weddingId,
-  ]);
-  const wedding = weddingRows[0];
-  if (!wedding) {
-    throw new InviteError("Wedding not found.", "NOT_FOUND");
+  // TS-234: the checks, the revoke of any pending invite and the insert run as one transaction under
+  // the wedding's lock, so two invites sent to the same address at the same moment come one after
+  // the other -- the second replaces the first. Before, each was a separate statement and both could
+  // stay pending; one left over could later be accepted by someone who had since become the owner.
+  // The database also allows only one pending invite per address (migration
+  // 20261007200100_one_pending_invite_per_email).
+  const client = await pool.connect();
+  try {
+    await beginTransaction(client);
+    // The wedding's lock first (the usual order). A hand-off takes FOR UPDATE, so the owner read
+    // here is the owner until this finishes.
+    const { rows: weddingRows } = await client.query(`SELECT "ownerId" FROM "weddings" WHERE id = $1 FOR NO KEY UPDATE`, [
+      weddingId,
+    ]);
+    const wedding = weddingRows[0];
+    if (!wedding) {
+      throw new InviteError("Wedding not found.", "NOT_FOUND");
+    }
+    if (wedding.ownerId !== invitedByUserId) throw new InviteError(NOT_OWNER_MESSAGE, "NOT_OWNER");
+
+    const { rows: ownerRows } = await client.query(`SELECT id, email FROM "users" WHERE id = $1`, [wedding.ownerId]);
+    if ((ownerRows[0]?.email as string | undefined)?.toLowerCase() === normalizedEmail) {
+      throw new InviteError("That person already owns this wedding.", "ALREADY_OWNER");
+    }
+
+    const { rows: existingCollabRows } = await client.query(
+      `SELECT wc.id FROM "wedding_collaborators" wc
+       JOIN "users" u ON u.id = wc."userId"
+       WHERE wc."weddingId" = $1 AND lower(u.email) = $2`,
+      [weddingId, normalizedEmail]
+    );
+    if (existingCollabRows[0]) {
+      throw new InviteError("That person is already a collaborator on this wedding.", "ALREADY_COLLABORATOR");
+    }
+
+    // Re-inviting the same address supersedes any invite already pending for it, so there's never
+    // more than one active invite (and one live token) per email per wedding.
+    await client.query(
+      `UPDATE "wedding_invites" SET status = 'REVOKED'
+       WHERE "weddingId" = $1 AND lower(email) = $2 AND status = 'PENDING'`,
+      [weddingId, normalizedEmail]
+    );
+
+    const id = randomUUID();
+    const token = randomBytes(32).toString("hex");
+
+    const { rows } = await client.query(
+      // TS-187: the expiry is worked out by the database, in UTC (the column has no time zone and is
+      // read as UTC). Before, it was a JavaScript date, which is sent in the server's own time zone
+      // -- so on a server not set to UTC an invite lasted hours longer or shorter than 7 days.
+      // TS-195: only while the person sending it still owns the wedding -- checked in the same
+      // statement that saves it (TS-234: the wedding's lock above now holds a hand-off back too).
+      `INSERT INTO "wedding_invites"
+         (id, "weddingId", email, role, "permissionLevel", token, status, "invitedByUserId", "expiresAt")
+       SELECT $1, $2, $3, $4::"CollaboratorRole", $5::"CollaboratorPermission", $6, 'PENDING', $7,
+               ${UTC_NOW} + make_interval(days => $8::int)
+       WHERE EXISTS (SELECT 1 FROM "weddings" WHERE id = $2 AND "ownerId" = $7)
+       RETURNING ${INVITE_COLUMNS}`,
+      // TS-160: only the token's hash is stored; the token itself goes out in the email and nowhere else.
+      [id, weddingId, normalizedEmail, role, permissionLevel, hashLinkToken(token), invitedByUserId, INVITE_TTL_DAYS]
+    );
+
+    if (!rows[0]) throw new InviteError(NOT_OWNER_MESSAGE, "NOT_OWNER");
+    await client.query("COMMIT");
+    return { ...withDerivedStatus(rows[0] as unknown as WeddingInviteRow), token };
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => {});
+    // TS-234: the database's one-pending-invite-per-address rule refused it -- another invite to
+    // this address was saved at the same moment. Nothing was saved by this one.
+    if ((err as { code?: string } | null)?.code === "23505") {
+      throw new InviteError(INVITE_JUST_SENT_MESSAGE, "PENDING_EXISTS");
+    }
+    throw err;
+  } finally {
+    client.release();
   }
-  if (wedding.ownerId !== invitedByUserId) throw new InviteError(NOT_OWNER_MESSAGE, "NOT_OWNER");
-
-  const { rows: ownerRows } = await pool.query(`SELECT id, email FROM "users" WHERE id = $1`, [
-    wedding.ownerId,
-  ]);
-  if (ownerRows[0]?.email?.toLowerCase() === normalizedEmail) {
-    throw new InviteError("That person already owns this wedding.", "ALREADY_OWNER");
-  }
-
-  const { rows: existingCollabRows } = await pool.query(
-    `SELECT wc.id FROM "wedding_collaborators" wc
-     JOIN "users" u ON u.id = wc."userId"
-     WHERE wc."weddingId" = $1 AND lower(u.email) = $2`,
-    [weddingId, normalizedEmail]
-  );
-  if (existingCollabRows[0]) {
-    throw new InviteError("That person is already a collaborator on this wedding.", "ALREADY_COLLABORATOR");
-  }
-
-  // Re-inviting the same address supersedes any invite already pending for it, so there's never
-  // more than one active invite (and one live token) per email per wedding.
-  await pool.query(
-    `UPDATE "wedding_invites" SET status = 'REVOKED'
-     WHERE "weddingId" = $1 AND lower(email) = $2 AND status = 'PENDING'`,
-    [weddingId, normalizedEmail]
-  );
-
-  const id = randomUUID();
-  const token = randomBytes(32).toString("hex");
-
-  const { rows } = await pool.query(
-    // TS-187: the expiry is worked out by the database, in UTC (the column has no time zone and is
-    // read as UTC). Before, it was a JavaScript date, which is sent in the server's own time zone
-    // -- so on a server not set to UTC an invite lasted hours longer or shorter than 7 days.
-    // TS-195: only while the person sending it still owns the wedding (it could have been handed
-    // off since the check above) -- checked in the same statement that saves it.
-    `INSERT INTO "wedding_invites"
-       (id, "weddingId", email, role, "permissionLevel", token, status, "invitedByUserId", "expiresAt")
-     SELECT $1, $2, $3, $4::"CollaboratorRole", $5::"CollaboratorPermission", $6, 'PENDING', $7,
-             ${UTC_NOW} + make_interval(days => $8::int)
-     WHERE EXISTS (SELECT 1 FROM "weddings" WHERE id = $2 AND "ownerId" = $7)
-     RETURNING ${INVITE_COLUMNS}`,
-    // TS-160: only the token's hash is stored; the token itself goes out in the email and nowhere else.
-    [id, weddingId, normalizedEmail, role, permissionLevel, hashLinkToken(token), invitedByUserId, INVITE_TTL_DAYS]
-  );
-
-  if (!rows[0]) throw new InviteError(NOT_OWNER_MESSAGE, "NOT_OWNER");
-  return { ...withDerivedStatus(rows[0]), token };
 }
 
 export async function listInvitesForWedding(weddingId: string): Promise<WeddingInviteRow[]> {
@@ -228,16 +257,33 @@ export async function acceptInvite(
   { confirmEmail = false }: { confirmEmail?: boolean } = {}
 ): Promise<
   | { weddingId: string; emailConfirmed: boolean }
-  | { error: InviteStatus | "NOT_FOUND" | "ALREADY_COLLABORATOR" | "EMAIL_NOT_VERIFIED" }
+  | { error: InviteStatus | "NOT_FOUND" | "ALREADY_COLLABORATOR" | "EMAIL_NOT_VERIFIED" | "ALREADY_OWNER" }
 > {
+  const tokenHash = hashLinkToken(token);
   const client = await pool.connect();
   try {
     await beginTransaction(client);
+    // TS-234: the person who owns the wedding can't accept an invite to it -- they'd be its owner
+    // and a collaborator at once, and their next hand-off then failed (a server error), leaving them
+    // unable to hand the wedding off or delete their account. The wedding's owner is read with FOR
+    // KEY SHARE before the invite is claimed: a hand-off (FOR UPDATE, which also revokes the new
+    // owner's pending invites) finishes first, and is seen here; and taking the wedding before the
+    // invite is the same order as the hand-off, so the two can't each wait for the other.
+    const { rows: invited } = await client.query(`SELECT "weddingId" FROM "wedding_invites" WHERE token = $1`, [tokenHash]);
+    if (invited[0]) {
+      const { rows: owner } = await client.query(`SELECT "ownerId" FROM "weddings" WHERE id = $1 FOR KEY SHARE`, [
+        invited[0].weddingId,
+      ]);
+      if (owner[0]?.ownerId === acceptingUserId) {
+        await client.query("ROLLBACK").catch(() => {});
+        return { error: "ALREADY_OWNER" };
+      }
+    }
     const { rows } = await client.query(
       `UPDATE "wedding_invites" SET status = 'ACCEPTED', "acceptedAt" = now()
        WHERE token = $1 AND status = 'PENDING' AND "expiresAt" > ${UTC_NOW}
        RETURNING "weddingId", role, "permissionLevel", "invitedByUserId", email, "emailedAt"`,
-      [hashLinkToken(token)]
+      [tokenHash]
     );
     const claimed = rows[0];
     if (!claimed) {

@@ -6,6 +6,7 @@ import { encryptText, decryptText } from "../crypto";
 import {
   applyAttendanceChange,
   lockCurrentPlan,
+  lockCurrentPlanOrWedding,
   lockRestrictedLists,
   recordRecheckIfApproved,
   refreshPlanCompleteness,
@@ -267,7 +268,8 @@ export async function updateGuestForWedding(
     // other way round from saving a list, so the two could each wait for the other.
     if (mayChangeAttendance) await lockWeddingRow(client, weddingId);
     let planVersionId: string | null = null;
-    if (mayChangeAttendance || checksLists) planVersionId = await lockCurrentPlan(client, weddingId);
+    // TS-234: ...OrWedding, so an edit made during a first Generate waits for the new plan.
+    if (mayChangeAttendance || checksLists) planVersionId = await lockCurrentPlanOrWedding(client, weddingId);
     if (checksLists) await lockRestrictedLists(client, weddingId);
     // TS-204: the person's access read again, under the locks above -- lowered or removed while
     // this waited: refused, nothing saved.
@@ -397,7 +399,7 @@ export async function deleteGuestForWedding(
   try {
     await beginTransaction(client);
     // TS-173: the current plan's row first, then the guest's (see lockCurrentPlan).
-    const planVersionId = await lockCurrentPlan(client, weddingId);
+    const planVersionId = await lockCurrentPlanOrWedding(client, weddingId); // TS-234
     // TS-204: the person's access read again under that lock.
     if (actor) await recheckActorAccess(client, weddingId, actor);
     const affected = planVersionId ? await tablesAffectedBy(client, weddingId, planVersionId, [id]) : [];

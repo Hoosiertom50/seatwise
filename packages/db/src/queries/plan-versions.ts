@@ -7,6 +7,7 @@ import {
   tablesAffectedBy,
   recordRecheckIfApproved,
   lockCurrentPlan,
+  lockCurrentPlanOrWedding,
   lockRestrictedLists,
   restrictedListsOverCapacity,
   applyAttendanceChange,
@@ -462,8 +463,9 @@ export async function refreshPlanAfterGuestAdded(weddingId: string, guestName: s
     await beginTransaction(client);
     // TS-181: locked by "the current plan" (lockCurrentPlan re-reads isCurrent under the lock) --
     // before, the id was read first and locked after, so a Generate in between left the new
-    // version uncounted and recorded the guest on the old one.
-    const planVersionId = await lockCurrentPlan(client, weddingId);
+    // version uncounted and recorded the guest on the old one. TS-234: ...OrWedding, so a guest
+    // added during a first Generate is counted against the new plan too.
+    const planVersionId = await lockCurrentPlanOrWedding(client, weddingId);
     if (planVersionId) {
       // TS-189: the plan now has someone new to seat, so anyone holding it from before gets "this
       // plan changed" -- before, the revision stayed the same and an older copy could still act.
@@ -496,7 +498,7 @@ export async function recomputeCurrentPlanCompleteness(
   const client = await pool.connect();
   try {
     await beginTransaction(client);
-    const planVersionId = await lockCurrentPlan(client, weddingId);
+    const planVersionId = await lockCurrentPlanOrWedding(client, weddingId); // TS-234
     if (planVersionId) {
       const { rows: countRows } = await client.query(
         `SELECT pv."isComplete",

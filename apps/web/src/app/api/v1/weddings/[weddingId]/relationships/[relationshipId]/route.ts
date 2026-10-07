@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { deleteRelationshipForWedding, resyncGuestsSeats } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
-import { errorResponse, weddingDeletedResponse } from "@/lib/api-response";
+import { errorResponse, concurrentChangeResponse } from "@/lib/api-response";
 import { requireAccess } from "@/lib/access";
 import { SAVED_BUT_NOT_RECHECKED } from "@/lib/post-save";
 
@@ -20,7 +20,8 @@ export async function DELETE(req: NextRequest, { params }: Params) {
     deleted = await deleteRelationshipForWedding(relationshipId, weddingId, access.actor);
   } catch (err) {
     // TS-204: access dropped while it waited (403), or the wedding was deleted (404) -- nothing saved.
-    const refused = weddingDeletedResponse(err);
+    // TS-234: it now waits for the current plan (or a first Generate), so a lost race is a 409 too.
+    const refused = concurrentChangeResponse(err);
     if (refused) return refused;
     throw err;
   }

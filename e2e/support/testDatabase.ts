@@ -125,6 +125,18 @@ export async function expireInvite(inviteId: string): Promise<void> {
 }
 
 /**
+ * TS-234: puts a revoked test invite back to pending -- the state a hand-off used to leave behind
+ * (the new owner's own invite still live), so a test can check that accepting it is refused.
+ */
+export async function reopenInvite(inviteId: string): Promise<void> {
+  const { rowCount } = await testPool().query(
+    `UPDATE "wedding_invites" SET status = 'PENDING' WHERE id = $1 AND email LIKE $2 AND status = 'REVOKED'`,
+    [inviteId, TEST_EMAIL_PATTERN],
+  );
+  if (!rowCount) throw new Error(`testDatabase: no revoked test invite ${inviteId}.`);
+}
+
+/**
  * TS-142: plants a password-reset token for a *test* account (reserved domain only) and returns the
  * raw token -- the same thing the emailed link carries. The app only stores a SHA-256 hash, so the
  * test hashes it the same way. \`expired\` makes it an hour stale.
