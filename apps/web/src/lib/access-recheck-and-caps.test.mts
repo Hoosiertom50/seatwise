@@ -205,7 +205,7 @@ test("TS-205: the cap messages read plainly", () => {
   );
 });
 
-test("TS-205: pruning reads the versions and removes only the chosen ones, never approved or current", async () => {
+test("TS-205 / TS-235: pruning reads the versions and removes only the chosen ones, never the current or new one", async () => {
   fakeDatabase(() => undefined);
   const versions = Array.from({ length: 52 }, (_, i) => ({
     id: `v${i + 1}`,
@@ -219,12 +219,12 @@ test("TS-205: pruning reads the versions and removes only the chosen ones, never
     seen.push({ sql: sql.replace(/\s+/g, " ").trim(), params });
     if (/^SELECT/.test(seen.at(-1)!.sql)) return { rows: versions, rowCount: versions.length };
     return { rows: [], rowCount: (params?.[1] as string[]).length };
-  } }, "wedding");
+  } }, "wedding", "v52");
   assert.equal(seen.length, 2);
   assert.match(seen[0].sql, /FROM "plan_versions" WHERE "weddingId" = \$1/);
-  assert.match(seen[1].sql, /DELETE FROM "plan_versions" WHERE "weddingId" = \$1 AND id = ANY\(\$2::text\[\]\) AND status <> 'APPROVED' AND NOT "isCurrent"/);
-  // 52 versions, cap 50: the two oldest that aren't approved (v1 is) go.
-  assert.deepEqual(seen[1].params, ["wedding", ["v2", "v3"]]);
+  assert.match(seen[1].sql, /DELETE FROM "plan_versions" WHERE "weddingId" = \$1 AND id = ANY\(\$2::text\[\]\) AND id <> \$3 AND NOT "isCurrent"/);
+  // 52 versions, cap 50: the two oldest that aren't approved (v1 is, and is among the newest 5 approved) go.
+  assert.deepEqual(seen[1].params, ["wedding", ["v2", "v3"], "v52"]);
   assert.equal(removed, 2);
 });
 

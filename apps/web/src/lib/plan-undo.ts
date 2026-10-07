@@ -36,8 +36,10 @@ export interface UndoPlan {
   seatsBefore: Record<string, string>;
 }
 
-/** TS-221: what Undo says when putting the move back would split a must-sit-together group. */
-export const UNDO_SPLITS_GROUP_MESSAGE = "Can't undo — that would split a must-sit-together group.";
+// TS-228: the message and the check live in @seatwise/shared -- the server runs the same check
+// again under the plan's lock (undoSeatsBefore on the assignments request).
+import { UNDO_SPLITS_GROUP_MESSAGE, undoSplitsGroup } from "@seatwise/shared";
+export { UNDO_SPLITS_GROUP_MESSAGE };
 
 export interface MustSitRule {
   guestAId: string;
@@ -81,7 +83,19 @@ export function mustSitGroup(
  */
 export function undoWouldSplitGroup(plan: UndoPlan, group: readonly string[]): boolean {
   if (plan.undoTableId === null) return false;
-  return group.some((g) => (plan.seatsBefore[g] ?? null) !== plan.undoTableId);
+  return undoSplitsGroup(group, plan.seatsBefore, plan.undoTableId);
+}
+
+/**
+ * TS-228: what Undo sends with the request (undoSeatsBefore) -- where each member of `group` sat
+ * before the move (members who had no seat are left out). The server works the group out again
+ * under the plan's lock; anyone in it who isn't listed here (a partner linked a moment ago) means
+ * the undo would split a group, and it's refused.
+ */
+export function undoSeatsBeforeFor(plan: UndoPlan, group: readonly string[]): Record<string, string> {
+  const seats: Record<string, string> = {};
+  for (const g of group) if (Object.prototype.hasOwnProperty.call(plan.seatsBefore, g)) seats[g] = plan.seatsBefore[g];
+  return seats;
 }
 
 /**

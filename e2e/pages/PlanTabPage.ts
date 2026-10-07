@@ -201,7 +201,8 @@ export class PlanTabPage extends BasePage {
     return this.page.getByText("That move was made, but note:", { exact: true }).locator("..");
   }
 
-  private undoButton() {
+  // TS-228: public, so a test can check an undo that can never be done is dropped.
+  undoButton() {
     return this.page.getByTestId("undo-button");
   }
   private redoButton() {
@@ -483,6 +484,38 @@ export class PlanTabPage extends BasePage {
   /** TS-221: a guest an older version seats who has since been marked not attending. */
   notAttendingGuest(guestName: string) {
     return this.page.getByText(`${guestName} (not attending now)`, { exact: true });
+  }
+
+  /** TS-231: the question Generate asks before it replaces an approved current plan. */
+  replaceApprovedPrompt() {
+    return this.page.getByRole("alertdialog").filter({ hasText: "This replaces the approved plan." });
+  }
+  /** TS-231: clicks Generate (draft box left as it is) without answering a replace-approved question. */
+  async clickGenerate(): Promise<void> {
+    await this.generateButton().click();
+  }
+  /** TS-231: answers the replace-approved question with "Replace the approved plan" and waits for the run. */
+  async confirmReplaceApproved(): Promise<void> {
+    await this.replaceApprovedPrompt().getByRole("button", { name: "Replace the approved plan", exact: true }).click();
+    await this.page.getByRole("button", { name: "Generate new plan", exact: true }).waitFor();
+  }
+  async cancelReplaceApproved(): Promise<void> {
+    await this.replaceApprovedPrompt().getByRole("button", { name: "Cancel", exact: true }).click();
+  }
+  /** TS-231: the restore preview's line saying confirming replaces the approved plan. */
+  restoreReplacesApprovedNote() {
+    return this.page.getByTestId("restore-replaces-approved");
+  }
+  /** TS-235: the comparison's note about guests not attending now (listed, not counted). */
+  comparisonNotAttendingNote() {
+    return this.page.getByTestId("comparison-not-attending-note");
+  }
+  /** TS-235: the comparison table's row for a guest, by the name it shows. */
+  comparisonRow(shownName: string) {
+    return this.page
+      .getByRole("region", { name: "Version comparison" })
+      .getByRole("row")
+      .filter({ has: this.page.getByRole("cell", { name: shownName, exact: true }) });
   }
 
   /** TS-221: the table labels offered in a guest's List-view "Move to…"/"Seat at…" list. */

@@ -14,6 +14,9 @@ export const WEDDING_CAPS = {
   vendors: 200,
   /** Plan versions kept; the oldest ones that aren't approved or current are removed past this. */
   planVersionsKept: 50,
+  /** TS-235: past the cap above, approved versions that aren't current go too, but the newest
+   * this many of them are always kept. */
+  approvedVersionsKept: 5,
 } as const;
 
 export type CappedKind = "guests" | "tables" | "relationships" | "timelineEntries" | "vendors";
@@ -85,12 +88,26 @@ export interface PrunablePlanVersion {
  * step only -- a version kept just because it is a source doesn't in turn keep its own source --
  * so a long chain of restores can't grow a wedding's versions without limit (at most `keep` plus
  * the sources of those kept, i.e. no more than twice the cap).
+ *
+ * TS-235: approved versions that aren't current used to be kept whatever their number, so Generate
+ * then Approve, over and over, grew a wedding's versions without limit. Now, past the cap, the
+ * older ones go too -- after every unapproved one -- but the newest `approvedKept` of them always
+ * stay. And `keepId` (the version the same save is creating) is never removed: a brand-new
+ * comparison draft was removed in its own save when the older versions were all approved.
  */
-export function planVersionsToPrune(versions: PrunablePlanVersion[], keep: number): string[] {
+export function planVersionsToPrune(
+  versions: PrunablePlanVersion[],
+  keep: number,
+  { keepId = null, approvedKept = WEDDING_CAPS.approvedVersionsKept }: { keepId?: string | null; approvedKept?: number } = {}
+): string[] {
   const excess = versions.length - keep;
   if (excess <= 0) return [];
   const oldestFirst = [...versions].sort((a, b) => a.versionNumber - b.versionNumber);
-  const removable = oldestFirst.filter((v) => v.status !== "APPROVED" && !v.isCurrent).slice(0, excess);
+  const mayGo = (v: PrunablePlanVersion) => !v.isCurrent && v.id !== keepId;
+  const approved = oldestFirst.filter((v) => v.status === "APPROVED" && mayGo(v));
+  const olderApproved = approved.slice(0, Math.max(approved.length - approvedKept, 0));
+  // Unapproved versions first (oldest first), then the older approved ones.
+  const removable = [...oldestFirst.filter((v) => v.status !== "APPROVED" && mayGo(v)), ...olderApproved].slice(0, excess);
   const removing = new Set(removable.map((v) => v.id));
   const sourcesOfKept = new Set(
     versions.filter((v) => !removing.has(v.id) && v.restoredFromId).map((v) => v.restoredFromId as string)
@@ -100,20 +117,22 @@ export function planVersionsToPrune(versions: PrunablePlanVersion[], keep: numbe
 
 /**
  * TS-205: keeps at most WEDDING_CAPS.planVersionsKept plan versions, removing the oldest ones that
- * are neither approved nor current (with their seats and history) -- see planVersionsToPrune. An
- * approved or current version is never removed, even past the cap. Call it with the wedding's lock
- * held, after saving a new version (Generate, Restore). Returns how many were removed.
+ * are neither approved nor current (with their seats and history) -- see planVersionsToPrune. The
+ * current version is never removed, even past the cap. Call it with the wedding's lock held, after
+ * saving a new version (Generate, Restore). Returns how many were removed.
+ * TS-235: `newVersionId` -- the version this save created, never removed by it; and approved
+ * versions past the newest WEDDING_CAPS.approvedVersionsKept can go now (see planVersionsToPrune).
  */
-export async function pruneOldPlanVersions(q: Queryable, weddingId: string): Promise<number> {
+export async function pruneOldPlanVersions(q: Queryable, weddingId: string, newVersionId: string): Promise<number> {
   const { rows } = await q.query(
     `SELECT id, "versionNumber", status, "isCurrent", "restoredFromId" FROM "plan_versions" WHERE "weddingId" = $1`,
     [weddingId]
   );
-  const ids = planVersionsToPrune(rows as unknown as PrunablePlanVersion[], WEDDING_CAPS.planVersionsKept);
+  const ids = planVersionsToPrune(rows as unknown as PrunablePlanVersion[], WEDDING_CAPS.planVersionsKept, { keepId: newVersionId });
   if (ids.length === 0) return 0;
   const { rowCount } = await q.query(
-    `DELETE FROM "plan_versions" WHERE "weddingId" = $1 AND id = ANY($2::text[]) AND status <> 'APPROVED' AND NOT "isCurrent"`,
-    [weddingId, ids]
+    `DELETE FROM "plan_versions" WHERE "weddingId" = $1 AND id = ANY($2::text[]) AND id <> $3 AND NOT "isCurrent"`,
+    [weddingId, ids, newVersionId]
   );
   return rowCount ?? 0;
 }

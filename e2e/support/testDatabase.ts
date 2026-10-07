@@ -1036,6 +1036,24 @@ export async function removePlanVersionAsPruningWould(planVersionId: string): Pr
 }
 
 /**
+ * TS-235: gives a test wedding `count` older approved plan versions (not current, no seats),
+ * numbered below its existing ones -- as many Generate-then-Approve rounds would leave behind --
+ * so a test can check pruning without making fifty plans first. Test weddings only.
+ */
+export async function addOldApprovedPlanVersions(weddingId: string, count: number): Promise<void> {
+  const { rowCount } = await testPool().query(
+    `INSERT INTO "plan_versions" (id, "weddingId", "versionNumber", status, "isComplete", "approvedAt", "isCurrent")
+     SELECT 'zz-approved-' || md5(random()::text || n::text), w.id,
+            LEAST((SELECT MIN("versionNumber") FROM "plan_versions" WHERE "weddingId" = w.id), 1) - n,
+            'APPROVED', true, now(), false
+     FROM "weddings" w JOIN "users" u ON u.id = w."ownerId", generate_series(1, $2::int) AS n
+     WHERE w.id = $1 AND u.email LIKE $3`,
+    [weddingId, count, TEST_EMAIL_PATTERN],
+  );
+  if (rowCount !== count) throw new Error(`testDatabase: no test wedding ${weddingId}.`);
+}
+
+/**
  * TS-219: the per-/48 counts an IPv6 source is also held to (apps/web/src/lib/rate-limit.ts) --
  * sign-ups per hour (SIGNUP_LIMITS.perWiderNetworkHour), wrong passwords
  * (LOGIN_LIMITS.failuresPerWiderNetwork) and RSVP-link requests (RSVP_LIMITS.perWiderNetwork) --

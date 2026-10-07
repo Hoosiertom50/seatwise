@@ -139,8 +139,29 @@ export const moveGuestAssignmentSchema = z.object({
   // TS-208: with tableId null, unseat only these members of the guest's must-sit-together group
   // (undo of seating a guest whose partner was already at that table keeps the partner seated).
   onlyGuestIds: z.array(z.string().min(1).max(64)).max(500).optional(),
+  // TS-228: sent by Undo when it puts a group back at a table -- where each member of the guest's
+  // must-sit-together group (as the screen saw it) sat before the move being undone. The server
+  // works the group out again under the plan's lock and refuses (UNDO_SPLITS_GROUP_MESSAGE) if
+  // anyone in it wasn't at that table then -- e.g. a must-sit rule added a moment before the undo.
+  undoSeatsBefore: z
+    .record(z.string().min(1).max(64), z.string().min(1).max(64))
+    .refine((seats) => Object.keys(seats).length <= 500, "Too many seats.")
+    .optional(),
 });
 export type MoveGuestAssignmentInput = z.infer<typeof moveGuestAssignmentSchema>;
+
+/** TS-221: what Undo says when putting the move back would split a must-sit-together group. */
+export const UNDO_SPLITS_GROUP_MESSAGE = "Can't undo — that would split a must-sit-together group.";
+
+/**
+ * TS-221 / TS-228: true when sending `group` (everyone who moves together) to `undoTableId` would
+ * put someone at a table they weren't at before the move -- the group was split then, so moving it
+ * back together isn't an undo. `seatsBefore`: guest id -> table before the move (unseated: absent).
+ * Used by the Seating plan tab and again by the server, under the plan's lock.
+ */
+export function undoSplitsGroup(group: readonly string[], seatsBefore: Readonly<Record<string, string>>, undoTableId: string): boolean {
+  return group.some((g) => (Object.prototype.hasOwnProperty.call(seatsBefore, g) ? seatsBefore[g] : null) !== undoTableId);
+}
 
 // FR-8.1 (Day-Of Mode): swap two guests' (or their forced-together units') tables in one move.
 export const swapGuestAssignmentsSchema = z.object({
@@ -183,6 +204,8 @@ export interface GuestComparisonEntryDTO {
   toTableId: string | null;
   toTableLabel: string | null;
   status: GuestComparisonStatus;
+  /** TS-235: set (true) when the guest is marked not attending now -- left out of the summary counts. */
+  notAttending?: true;
 }
 
 export interface PlanVersionComparisonSummaryRefDTO {
@@ -196,6 +219,7 @@ export interface PlanVersionComparisonDTO {
   from: PlanVersionComparisonSummaryRefDTO;
   to: PlanVersionComparisonSummaryRefDTO;
   guests: GuestComparisonEntryDTO[];
+  // TS-235: guests not attending now aren't counted.
   summary: {
     movedCount: number;
     addedCount: number;
