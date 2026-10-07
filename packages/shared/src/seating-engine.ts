@@ -30,6 +30,8 @@
 //   - TS-196: if a plan leaves anyone unseated, it's repaired (one seated group moved to make room
 //     -- TS-201: or two, in a chain) and also tried in plain largest-first order, and the best is
 //     kept: TS-201: fewest people needing an accessible table left unseated, then fewest people.
+//     TS-226: if people needing an accessible table are still unseated, one more order is tried --
+//     the groups with the most such people first.
 //     Every hard rule above still holds in each of them, and the result is the same every time.
 
 export type EngineRelationshipType =
@@ -198,7 +200,9 @@ interface Unit {
 // first, so that ordering really does keep those seats for them (version 4 could swap in a plan that
 // gave them away); the repair can move two groups; and which table a must-sit group with locks is
 // kept at no longer depends on guest-list order (a locked table wins).
-export const RULE_WEIGHT_CONFIG_VERSION = 5;
+// TS-226: version 6 -- one more order is tried when people who need an accessible table are left
+// unseated (groups with the most such people first), so plans can come out differently.
+export const RULE_WEIGHT_CONFIG_VERSION = 6;
 export const RULE_WEIGHT_CONFIG = {
   preferNearBonus: 10,
   avoidPenalty: 10,
@@ -548,13 +552,16 @@ export function generateSeatingPlan(
   // Attempts to place `unit` at the best of `pool`; returns the chosen table, or null if no
   // table in `pool` can hold it without breaking a hard rule. Mutates remainingCapacity/
   // occupants/assignments/warnings only on success.
-  function attemptPlace(unit: Unit, pool: EngineTable[]): EngineTable | null {
-    const capacityFeasible = pool.filter((t) => {
-      if ((remainingCapacity.get(t.id) ?? 0) < unit.totalHeadcount) return false;
-      if (unit.requiresAccessible && !t.isAccessible) return false;
-      return true;
-    });
-    const feasible = capacityFeasible.filter((t) => !hasMustNotConflict(unit, t.id));
+  // TS-226: could `unit` sit at `t` right now without breaking a hard rule?
+  const canTake = (unit: Unit, t: EngineTable) =>
+    (remainingCapacity.get(t.id) ?? 0) >= unit.totalHeadcount &&
+    (!unit.requiresAccessible || t.isAccessible) &&
+    !hasMustNotConflict(unit, t.id);
+
+  // TS-226: `pinned` is true when `pool` is the one table a pin (a lock, a locked table, or a
+  // Restricted table's list) keeps them at, so an unmet preference warning can say so.
+  function attemptPlace(unit: Unit, pool: EngineTable[], pinned = false): EngineTable | null {
+    const feasible = pool.filter((t) => canTake(unit, t));
     if (feasible.length === 0) return null;
 
     // Score each feasible table: fewer AVOID conflicts and more PREFER_NEAR satisfactions is
@@ -635,6 +642,23 @@ export function generateSeatingPlan(
     const existingBefore = [...occupants.get(best.id)!];
     occupants.get(best.id)!.push(...unit.guestIds);
 
+    // TS-226: why an unmet preference below happened. "No other table had room" only when that's
+    // true -- before, it was said even when another table was free and the prefer-near or
+    // side-mixing bonus simply outweighed the penalty. Checked against every unlocked,
+    // unrestricted table (not just `pool`, which is a single table when re-running a repaired plan).
+    const unmetReason = () => {
+      if (pinned) {
+        const who = unit.guestIds.map(guestName).join(", ");
+        const verb = unit.guestIds.length === 1 ? "is" : "are";
+        return unit.pinReason === "required"
+          ? `${who} ${verb} required at "${best.label}"`
+          : `${who} ${verb} kept at "${best.label}" because of a lock`;
+      }
+      return candidateTables.some((t) => t.id !== best.id && canTake(unit, t))
+        ? "it was the best fit overall, weighing everyone's seating preferences"
+        : "no other table had room";
+    };
+
     // FR-3.4: surface an unmet Single-Side-Only preference (soft — non-blocking) the same way an
     // AVOID conflict is surfaced below.
     if (unit.side !== "BOTH" && best.singleSideOnly) {
@@ -653,8 +677,8 @@ export function generateSeatingPlan(
       if (established && established !== unit.side) {
         warnings.push(
           `${unit.guestIds.map(guestName).join(", ")} ${unit.guestIds.length === 1 ? "was" : "were"} ` +
-            `seated at "${best.label}" (Single-Side-Only) despite being on the other side — no other ` +
-            `table had room (weighting-configuration version ${RULE_WEIGHT_CONFIG_VERSION}).`
+            `seated at "${best.label}" (Single-Side-Only) despite being on the other side — ` +
+            `${unmetReason()} (weighting-configuration version ${RULE_WEIGHT_CONFIG_VERSION}).`
         );
       }
     }
@@ -665,7 +689,7 @@ export function generateSeatingPlan(
         if (avoidMap.get(guestId)?.has(other)) {
           warnings.push(
             `${guestName(guestId)} and ${guestName(other)} were seated at the same table despite an ` +
-              `"avoid" preference between them — no other table had room (weighting-configuration ` +
+              `"avoid" preference between them — ${unmetReason()} (weighting-configuration ` +
               `version ${RULE_WEIGHT_CONFIG_VERSION}).`
           );
         }
@@ -727,6 +751,12 @@ export function generateSeatingPlan(
   const unpinnedUnits = [...units.filter((u) => !u.pinnedTableId)].sort(
     (a, b) => b.totalHeadcount - a.totalHeadcount
   );
+  // TS-226: how many people in a group need an accessible table (party sizes).
+  const accessibleNeed = (u: Unit) =>
+    u.guestIds.reduce((sum, id) => {
+      const g = guestById.get(id);
+      return sum + (g?.requiresAccessibleTable ? g.headcount : 0);
+    }, 0);
 
   // TS-196: where each automatically seated group (a lock that couldn't be kept, or an unpinned
   // group) landed in the current attempt, and -- when re-running a repaired plan -- the table each
@@ -802,7 +832,7 @@ export function generateSeatingPlan(
       // A required-table pin targets its own restricted table directly (attemptPlace doesn't
       // filter by isRestricted -- only the *general* candidateTables pool excludes it), same as a
       // locked pin targeting any table.
-      const placedAt = target ? attemptPlace(toPlace, [target]) : null;
+      const placedAt = target ? attemptPlace(toPlace, [target], true) : null;
       if (placedAt) {
         if (newcomers.length > 0) {
           unassignedGuestIds.push(...newcomers);
@@ -930,7 +960,13 @@ export function generateSeatingPlan(
   // (failed locks, then unpinned), tried when the normal order leaves someone unseated. With
   // `forced` (a repaired plan), each listed group is seated at its given table, and anyone not
   // listed is tried last, once every listed group has its seat.
-  function runPlacement(order: "accessibleFirst" | "largestFirst", forced: Map<Unit, string> | null): Attempt {
+  // TS-226: "accessibleByNeed" is "accessibleFirst" with the unpinned groups that need an accessible
+  // table ordered by how many of their people need it (most first; ties stay largest-first), so a
+  // big party with one person needing those seats can't take them from a group where everyone does.
+  function runPlacement(
+    order: "accessibleFirst" | "largestFirst" | "accessibleByNeed",
+    forced: Map<Unit, string> | null
+  ): Attempt {
     remainingCapacity = new Map(tables.map((t) => [t.id, t.capacity]));
     occupants = new Map(tables.map((t) => [t.id, []]));
     assignments = [];
@@ -942,11 +978,16 @@ export function generateSeatingPlan(
     const failedLocks: { unit: Unit; target: EngineTable | undefined }[] = [];
     placePinnedUnits(failedLocks);
 
+    const accessibleUnpinned = unpinnedUnits.filter((u) => u.requiresAccessible);
+    if (order === "accessibleByNeed") {
+      // Array sort is stable, so equal counts keep the largest-first order.
+      accessibleUnpinned.sort((x, y) => accessibleNeed(y) - accessibleNeed(x));
+    }
     const steps: Step[] =
-      order === "accessibleFirst"
+      order !== "largestFirst"
         ? [
             ...failedLocks.filter((f) => f.unit.requiresAccessible).map((lock) => ({ lock })),
-            ...unpinnedUnits.filter((u) => u.requiresAccessible).map((unit) => ({ unit })),
+            ...accessibleUnpinned.map((unit) => ({ unit })),
             ...failedLocks.filter((f) => !f.unit.requiresAccessible).map((lock) => ({ lock })),
             ...unpinnedUnits.filter((u) => !u.requiresAccessible).map((unit) => ({ unit })),
           ]
@@ -1007,15 +1048,22 @@ export function generateSeatingPlan(
       (!unit.requiresAccessible || t.isAccessible) &&
       rem.get(t.id)! + (leaving?.totalHeadcount ?? 0) >= unit.totalHeadcount &&
       !clashes(unit, t.id, leaving);
+    // TS-226: free seats at unlocked, unrestricted tables. Moving a group between them never
+    // changes this, so a group bigger than it can't be seated by any repair -- it's skipped
+    // without spending the work budget (before, the repair used its whole budget on such groups
+    // when there were far more guests than seats).
+    let freeSeats = candidateTables.reduce((sum, t) => sum + Math.max(0, rem.get(t.id)!), 0);
     const seat = (unit: Unit, t: EngineTable) => {
       for (const g of unit.guestIds) occ.get(t.id)!.add(g);
       rem.set(t.id, rem.get(t.id)! - unit.totalHeadcount);
+      freeSeats -= unit.totalHeadcount;
       movableAt.get(t.id)!.push(unit);
       tableOfUnit.set(unit, t.id);
     };
     const unseat = (unit: Unit, t: EngineTable) => {
       for (const g of unit.guestIds) occ.get(t.id)!.delete(g);
       rem.set(t.id, rem.get(t.id)! + unit.totalHeadcount);
+      freeSeats += unit.totalHeadcount;
       const list = movableAt.get(t.id)!;
       list.splice(list.indexOf(unit), 1);
       tableOfUnit.delete(unit);
@@ -1060,6 +1108,7 @@ export function generateSeatingPlan(
       for (const step of attempt.steps) {
         if (work > REPAIR_WORK_BUDGET) break;
         if ("lock" in step || tableOfUnit.has(step.unit)) continue;
+        if (freeSeats < step.unit.totalHeadcount) continue; // TS-226: can't fit, see freeSeats
         const limit = moves === 1 ? REPAIR_WORK_BUDGET : Math.min(REPAIR_WORK_BUDGET, work + REPAIR_TWO_MOVE_SHARE);
         if (insert(step.unit, moves, new Set(), limit)) improved = true;
       }
@@ -1101,6 +1150,14 @@ export function generateSeatingPlan(
         if (repairedAlternate) better(runPlacement("largestFirst", repairedAlternate));
       }
     }
+    // TS-226: if people who need an accessible table are still left unseated, also try seating the
+    // groups with the most such people first. Tried last, so it's only kept when strictly better --
+    // a plan can never get worse. Skipped when it would be the same order as the normal one.
+    const accessibleUnpinned = unpinnedUnits.filter((u) => u.requiresAccessible);
+    const needOrderDiffers = accessibleUnpinned.some(
+      (u, i) => i > 0 && accessibleNeed(u) > accessibleNeed(accessibleUnpinned[i - 1])
+    );
+    if (rank(best)[0] > 0 && needOrderDiffers) better(runPlacement("accessibleByNeed", null));
   }
 
   return {
