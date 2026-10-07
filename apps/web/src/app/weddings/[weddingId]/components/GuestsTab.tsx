@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ConfirmDeleteButton } from "@/components/ConfirmDeleteButton";
 import { CommitSelect } from "@/components/CommitSelect";
-import { api, ApiError, apiErrorMessage } from "@/lib/api-client";
+import { api, ApiError, apiErrorMessage, isItemGoneError } from "@/lib/api-client";
 import { formatMomentDate } from "@/lib/display-format";
 // TS-214: the server's own guest order (last name, first name, then id).
 import { compareGuestNames } from "@/lib/guest-name-order";
@@ -406,7 +406,7 @@ export function GuestsTab({
   async function reloadGuests() {
     try {
       const { guests: fresh } = await api.get<{ guests: GuestDTO[] }>(`/api/v1/weddings/${weddingId}/guests`);
-      setGuests(fresh.sort((a, b) => a.lastName.localeCompare(b.lastName)));
+      setGuests(fresh.sort(compareGuestNames));
     } catch {
       // The page's own refresh catches up later.
     }
@@ -573,14 +573,27 @@ export function GuestsTab({
     setGuests((cur) => cur.map((g) => (g.id === guestId ? { ...g, ...changes } : g)));
   }
   type GuestSaveResult = { guest: GuestDTO | null; rsvpEmail?: RsvpEmailOutcome; warnings?: string[] };
+  // TS-209: the edit saved but the guest couldn't be read back, so the revision known here is out
+  // of date -- the next edit to this guest was refused as "changed since you loaded it". The guest
+  // is read again; if that fails too, the save moved the revision on by one.
+  async function catchUpAfterSave(guestId: string, sentRevision: number | undefined) {
+    try {
+      const { guest } = await api.get<{ guest: GuestDTO }>(`/api/v1/weddings/${weddingId}/guests/${guestId}`);
+      putGuest(guest);
+    } catch {
+      if (sentRevision !== undefined) confirmedRevision.current.set(guestId, sentRevision + 1);
+    }
+  }
   function saveGuest(guestId: string, changes: Record<string, unknown>): Promise<GuestSaveResult> {
     const run = async () => {
+      const sentRevision = revisionFor(guestId);
       const result = await api.patch<GuestSaveResult>(`/api/v1/weddings/${weddingId}/guests/${guestId}`, {
         ...changes,
-        expectedRevision: revisionFor(guestId),
+        expectedRevision: sentRevision,
       });
       // TS-209: a saved edit whose read-back failed comes without the guest (and with a warning).
       if (result.guest) putGuest(result.guest);
+      else await catchUpAfterSave(guestId, sentRevision);
       // TS-166: a save that works clears an earlier save's error, which used to stay up for good.
       // TS-182: only this guest's own error -- not a message about someone else.
       clearRowError(guestId);
@@ -618,6 +631,20 @@ export function GuestsTab({
       return next;
     });
   }
+  // TS-209: a save answered "not found" because the guest was deleted elsewhere. Their row goes, with
+  // its unsaved marks and kept text -- before, the text stayed "unsaved" for good, so Back kept
+  // asking and the page's 4-second guest refresh (which waits while anything is unsaved) stopped.
+  // Returns true: there's nothing left to save, so Back can go on.
+  function dropGoneGuest(guestId: string): true {
+    for (const field of ["firstName", "lastName", "notes", "email", "side", "rsvpStatus", "details"]) {
+      rowFields.markDirty(`guest-row-${guestId}-${field}`, false);
+    }
+    for (const field of ["firstName", "lastName", "notes", "email"] as const) dropUnsavedText(guestId, field);
+    confirmedRevision.current.delete(guestId);
+    setGuests((cur) => cur.filter((g) => g.id !== guestId));
+    setError("That guest was removed (maybe by someone else) — the list has been updated.");
+    return true;
+  }
   function showConflict(fresh: GuestDTO) {
     putGuest(fresh);
     setRowError(fresh.id, 
@@ -634,6 +661,8 @@ export function GuestsTab({
       await saveGuest(guestId, { rsvpStatus: newStatus });
       return true;
     } catch (err) {
+      // TS-209: deleted elsewhere -- the row goes (see dropGoneGuest).
+      if (isItemGoneError(err)) return dropGoneGuest(guestId);
       const fresh = conflictGuest(err);
       if (fresh) showConflict(fresh);
       else {
@@ -653,6 +682,8 @@ export function GuestsTab({
       await saveGuest(guestId, { side: newSide });
       return true;
     } catch (err) {
+      // TS-209: deleted elsewhere -- the row goes (see dropGoneGuest).
+      if (isItemGoneError(err)) return dropGoneGuest(guestId);
       const fresh = conflictGuest(err);
       if (fresh) showConflict(fresh);
       else {
@@ -700,6 +731,8 @@ export function GuestsTab({
       if (rsvpEmail && guest?.email) showAutoRsvpResult(guest.id, guest.email, rsvpEmail);
       return true;
     } catch (err) {
+      // TS-209: deleted elsewhere -- the row goes (see dropGoneGuest).
+      if (isItemGoneError(err)) return dropGoneGuest(guestId);
       const fresh = conflictGuest(err);
       if (fresh) {
         showConflict(fresh);
@@ -730,6 +763,8 @@ export function GuestsTab({
       await saveGuest(guestId, { notes: normalized });
       return true;
     } catch (err) {
+      // TS-209: deleted elsewhere -- the row goes (see dropGoneGuest).
+      if (isItemGoneError(err)) return dropGoneGuest(guestId);
       const fresh = conflictGuest(err);
       if (fresh) {
         showConflict(fresh);
@@ -770,6 +805,8 @@ export function GuestsTab({
       await saveGuest(guestId, { [field]: trimmed });
       return true;
     } catch (err) {
+      // TS-209: deleted elsewhere -- the row goes (see dropGoneGuest).
+      if (isItemGoneError(err)) return dropGoneGuest(guestId);
       const fresh = conflictGuest(err);
       if (fresh) {
         showConflict(fresh);
@@ -848,6 +885,11 @@ export function GuestsTab({
       await saveGuest(guestId, changes);
       return null;
     } catch (err) {
+      // TS-209: deleted elsewhere -- the row (and this form) goes; nothing is left to save.
+      if (isItemGoneError(err)) {
+        dropGoneGuest(guestId);
+        return null;
+      }
       const fresh = conflictGuest(err);
       if (fresh) {
         putGuest(fresh);
@@ -867,6 +909,11 @@ export function GuestsTab({
     try {
       await saveGuest(guestId, { isLocked });
     } catch (err) {
+      // TS-209: deleted elsewhere -- the row goes (see dropGoneGuest).
+      if (isItemGoneError(err)) {
+        dropGoneGuest(guestId);
+        return;
+      }
       const fresh = conflictGuest(err);
       if (fresh) showConflict(fresh);
       else {

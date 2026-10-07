@@ -190,3 +190,65 @@ export async function delayThenFailRequests(
     clear: () => page.unroute(urlPattern, handler),
   };
 }
+
+/** TS-209: lets the first `times` `method` requests to a URL matching `urlPattern` reach the real
+ * server (so the change is saved), then hands the page the answer with `key` set to null -- the
+ * way the server answers when the change saved but the record couldn't be read back afterwards. */
+export async function dropReadBack(
+  page: Page,
+  urlPattern: string | RegExp,
+  method: string,
+  key: string,
+  times = 1,
+): Promise<FaultHandle> {
+  let hits = 0;
+  const handler = async (route: Route) => {
+    if (route.request().method() !== method || hits >= times) return route.fallback();
+    hits++;
+    const response = await route.fetch();
+    const body = (await response.json()) as Record<string, unknown>;
+    const warnings = Array.isArray(body.warnings) ? body.warnings : [];
+    return route.fulfill({
+      response,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ...body,
+        [key]: null,
+        warnings: [...warnings, "Saved, but Seatwise couldn't load the latest just now — refresh the page to see it."],
+      }),
+    });
+  };
+  await page.route(urlPattern, handler);
+  return {
+    get hits() {
+      return hits;
+    },
+    clear: () => page.unroute(urlPattern, handler),
+  };
+}
+
+/** TS-208/TS-209: runs `before` (e.g. deleting the record through the API, as another planner
+ * would) just before the first `times` `method` requests to a URL matching `urlPattern` go on to
+ * the real server -- so the page's request finds the change already made, with no timing race. */
+export async function beforeRequests(
+  page: Page,
+  urlPattern: string | RegExp,
+  method: string,
+  before: () => Promise<void>,
+  times = 1,
+): Promise<FaultHandle> {
+  let hits = 0;
+  const handler = async (route: Route) => {
+    if (route.request().method() !== method || hits >= times) return route.fallback();
+    hits++;
+    await before();
+    return route.fallback();
+  };
+  await page.route(urlPattern, handler);
+  return {
+    get hits() {
+      return hits;
+    },
+    clear: () => page.unroute(urlPattern, handler),
+  };
+}

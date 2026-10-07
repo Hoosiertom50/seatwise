@@ -24,6 +24,7 @@ import { EmailVerificationNotice } from "@/components/EmailVerificationNotice";
 import { SaveStatusIndicator } from "@/components/SaveStatusIndicator";
 import { saveStatusStore } from "@/lib/save-status";
 import { mergeRefreshedGuests, guestIdFromFieldId } from "@/lib/guest-refresh";
+import { compareGuestNames } from "@/lib/guest-name-order";
 
 type Tab =
   | "guests"
@@ -243,7 +244,8 @@ export default function WeddingDetailPage() {
         mergeRefreshedGuests(cur, res.guests, {
           idsAtFetchStart,
           protectedIds: focusedGuestIds(),
-          compare: (a, b) => a.lastName.localeCompare(b.lastName),
+          // TS-214: the server's own order (last name, first name, id), as the rest of the page uses.
+          compare: compareGuestNames,
         })
       );
     };

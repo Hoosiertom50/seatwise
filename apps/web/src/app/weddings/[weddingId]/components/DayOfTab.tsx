@@ -61,6 +61,19 @@ export function DayOfTab({
       return next;
     });
   }, []);
+  // TS-208: a message about a guest who has since gone from the list (deleted elsewhere) goes with
+  // them -- it used to stay at the top of the tab for good.
+  useEffect(() => {
+    const listed = new Set(guests.map((g) => g.id));
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- TS-208: follows the guest list as it changes.
+    setRowErrors((cur) => {
+      const gone = Object.keys(cur).filter((id) => !listed.has(id));
+      if (gone.length === 0) return cur;
+      const next = { ...cur };
+      for (const id of gone) delete next[id];
+      return next;
+    });
+  }, [guests]);
   const [notice, setNotice] = useState<string | null>(null);
   // TS-170: every guest with a change queued or on its way (one value used to stand for all).
   const [busyIds, setBusyIds] = useState<ReadonlySet<string>>(new Set());
@@ -241,8 +254,8 @@ export function DayOfTab({
     );
   }, [guests, search]);
 
-  // TS-182: messages about guests the search is hiding (or who have gone) are shown at the top, with
-  // their names, instead of nowhere.
+  // TS-182: messages about guests the search is hiding are shown at the top, with their names,
+  // instead of nowhere. (TS-208: a guest who has gone takes their message with them -- see above.)
   const shownIds = new Set(filteredGuests.map((g) => g.id));
   const hiddenRowErrors = Object.entries(rowErrors)
     .filter(([id]) => !shownIds.has(id))

@@ -237,3 +237,61 @@ test("generate and import commit get the long timeout; everything else the usual
   assert.equal(requestTimeoutFor("GET", "/api/v1/weddings/w1/plan-versions"), REQUEST_TIMEOUT_MS);
   assert.ok(LONG_REQUEST_TIMEOUT_MS >= 120_000);
 });
+
+// TS-214: a wedding settings save (owner's Settings) whose first try landed and whose retry was
+// refused with the latest settings is a success -- it used to say "changed elsewhere, not saved".
+test("a retried wedding settings save whose first try landed counts as saved", async () => {
+  const { api, resolveRetriedPatchConflict } = await import("./api-client");
+  const fresh = {
+    id: "w1",
+    name: "Lee & Kim",
+    eventDate: "2027-06-12",
+    venueName: null,
+    note: "Line one\nLine two",
+    sideLabel1: "Lee",
+    sideLabel2: "Kim",
+    rsvpCutoffDate: "2027-05-01",
+    settingsRevision: 7,
+  };
+  const body = (o: object) => JSON.stringify(o);
+  const conflict = { error: "This wedding's settings changed since you opened them", wedding: fresh };
+  // Each field the settings send, alone or together (date and venue go together), with any revision.
+  for (const sent of [
+    { name: "Lee & Kim" },
+    { sideLabel1: "Lee" },
+    { sideLabel2: "Kim" },
+    { note: "Line one\r\nLine two" },
+    { rsvpCutoffDate: "2027-05-01" },
+    { eventDate: "2027-06-12", venueName: null },
+    { eventDate: "2027-06-12", venueName: "" },
+  ]) {
+    assert.deepEqual(
+      resolveRetriedPatchConflict("/api/v1/weddings/w1", body({ ...sent, expectedRevision: 3 }), conflict),
+      { wedding: fresh },
+      JSON.stringify(sent)
+    );
+  }
+  // A value the latest settings don't have is a real conflict.
+  assert.equal(resolveRetriedPatchConflict("/api/v1/weddings/w1", body({ note: null, expectedRevision: 3 }), conflict), null);
+  assert.equal(
+    resolveRetriedPatchConflict("/api/v1/weddings/w1", body({ rsvpCutoffDate: null, expectedRevision: 3 }), conflict),
+    null
+  );
+  assert.equal(resolveRetriedPatchConflict("/api/v1/weddings/w1", body({ expectedRevision: 3 }), conflict), null);
+
+  // End to end through api.patch: the retry's 409 comes back as the saved wedding.
+  const realFetch = globalThis.fetch;
+  try {
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls++;
+      if (calls === 1) throw new Error("connection dropped");
+      return new Response(JSON.stringify(conflict), { status: 409 });
+    }) as typeof fetch;
+    const result = await api.patch<{ wedding: typeof fresh }>("/api/v1/weddings/w1", { name: "Lee & Kim", expectedRevision: 6 });
+    assert.equal(calls, 2);
+    assert.deepEqual(result.wedding, fresh);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
