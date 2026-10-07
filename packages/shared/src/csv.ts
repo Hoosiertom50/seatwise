@@ -146,6 +146,27 @@ export function spreadsheetRowNumber(dataRowNumber: number): number {
   return dataRowNumber + 1;
 }
 
+// TS-233: the most columns an import file can have -- a guest file needs a few dozen at most, and a
+// header row hundreds of thousands of columns wide made each preview slow.
+export const MAX_IMPORT_COLUMNS = 200;
+
+/** TS-233: what the import says about a file with more than MAX_IMPORT_COLUMNS columns. */
+export function tooManyColumnsMessage(columnCount: number): string {
+  return `That file has ${columnCount.toLocaleString("en-US")} columns — keep it to at most ${MAX_IMPORT_COLUMNS} (delete the columns you don't need), then choose it again.`;
+}
+
+/**
+ * TS-233: each header name's column, built once per import (the first column with that name, as
+ * indexOf would find) -- looking every cell's header up again was slow on a wide file.
+ */
+export function headerIndexMap(headers: readonly string[]): ReadonlyMap<string, number> {
+  const map = new Map<string, number>();
+  headers.forEach((h, i) => {
+    if (!map.has(h)) map.set(h, i);
+  });
+  return map;
+}
+
 /** TS-180: the first header name used by two columns (blank headers aside), or null. */
 export function findDuplicateCsvHeader(headers: string[]): string | null {
   const seen = new Set<string>();

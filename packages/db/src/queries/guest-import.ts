@@ -17,6 +17,9 @@ import {
   CsvParseError,
   findDuplicateCsvHeader,
   duplicateCsvHeaderMessage,
+  headerIndexMap,
+  MAX_IMPORT_COLUMNS,
+  tooManyColumnsMessage,
   changedImportFields,
   importRowChangesNothing,
   parseGuestImportRow,
@@ -112,6 +115,8 @@ async function classifyRows(
     throw err;
   }
   const { headers, rows: allRows } = parsed;
+  // TS-233: a file far wider than any guest list is refused before any row is read.
+  if (headers.length > MAX_IMPORT_COLUMNS) throw new GuestImportError(tooManyColumnsMessage(headers.length));
   // TS-180: two columns with the same name can't be told apart when mapping.
   const duplicateHeader = findDuplicateCsvHeader(headers);
   if (duplicateHeader !== null) throw new GuestImportError(duplicateCsvHeaderMessage(duplicateHeader));
@@ -161,6 +166,8 @@ async function classifyRows(
   // TS-180: the "Version" column, when mapped -- the guest's revision when the file was exported.
   const versionColumnIndex = mapping.version ? headers.indexOf(mapping.version) : -1;
 
+  // TS-233: each header's column, looked up once for the whole file (see parseGuestImportRow).
+  const columnOf = headerIndexMap(headers);
   const keptAsIsByRow = new Map<number, GuestImportKeptField[]>();
   // TS-222: a row's warnings (e.g. a Side name that disagrees with the Side code), shown in the preview.
   const warningByRow = new Map<number, string>();
@@ -172,7 +179,7 @@ async function classifyRows(
       idCell && (guestIdCellCounts.get(idCell) ?? 0) === 1 ? existingById.get(idCell) : undefined;
     const { errors, warnings, data, keptAsIs } = parseGuestImportRow(
       cells,
-      headers,
+      columnOf,
       mapping,
       sideLabels,
       existingGuest ? currentValuesOf(existingGuest) : undefined

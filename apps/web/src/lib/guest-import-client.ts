@@ -5,6 +5,8 @@ import {
   toCsv,
   spreadsheetRowNumber,
   findMacRomanCell,
+  MAX_IMPORT_COLUMNS,
+  tooManyColumnsMessage,
   MAC_ENCODING_MESSAGE,
   type CsvTextEncoding,
   type GuestImportField,
@@ -15,7 +17,9 @@ import { ApiError, NETWORK_ERROR_STATUS } from "./api-client";
 
 // TS-210: the columns that hold names -- where a curly quote between two small letters is a sign of
 // the older Mac format ("Mar’a" for María).
-const NAME_FIELDS: GuestImportField[] = ["firstName", "lastName", "partyName", "plusOneNames"];
+// TS-233: first and last name only -- in Household or Plus-ones, "Bride’s college friends" or
+// "Sarah’s husband Tom" is ordinary Windows text, and was refused.
+const NAME_FIELDS: GuestImportField[] = ["firstName", "lastName"];
 
 /**
  * TS-210: the file as the import sends it -- only the mapped columns (so a wedding's own export, with
@@ -29,6 +33,8 @@ export function prepareImportCsv(
   mapping: Partial<Record<GuestImportField, string>>
 ): { csv: string } | { error: string } {
   const { headers, rows } = parseCsv(text);
+  // TS-233: the same column limit as the server's.
+  if (headers.length > MAX_IMPORT_COLUMNS) return { error: tooManyColumnsMessage(headers.length) };
   const mapped = [...new Set(Object.values(mapping).filter((h): h is string => !!h))];
   // TS-222: a mapped column the file doesn't have is refused, not quietly left out (that used to
   // import every row without it, with no error).

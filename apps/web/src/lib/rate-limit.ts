@@ -492,10 +492,25 @@ export function countWeddingWork(kind: WeddingWorkKind, userId: string) {
   return countOr429(weddingWorkKey(kind, userId), WEDDING_WORK_LIMITS[kind], tooMuchWeddingWorkMessage(kind));
 }
 
+// TS-233: refusals that still use up the hourly count (see refusedButCounted).
+const COUNTED_REFUSALS = new WeakSet<Response>();
+
+/**
+ * TS-233: marks a refusal that still counts against the hourly limit -- an import file refused only
+ * after it was read through (an unclosed quote, too many rows, rows with errors). Giving those
+ * back let a file made to fail be sent over and over without ever reaching the limit. Nothing is
+ * added to the answer itself.
+ */
+export function refusedButCounted(response: Response): Response {
+  COUNTED_REFUSALS.add(response);
+  return response;
+}
+
 /**
  * TS-205: runs `work` counted against this account's hourly limit for `kind` -- refused (429,
  * with the plain message) when over it, and given back when the work doesn't succeed (any answer
  * that isn't 2xx, or an error), so a refused or failed try never uses the limit up.
+ * TS-233: except an answer the work marked with refusedButCounted -- that one keeps the count.
  */
 export async function limitedWeddingWork(
   kind: WeddingWorkKind,
@@ -511,6 +526,6 @@ export async function limitedWeddingWork(
     await giveBack();
     throw err;
   }
-  if (!response.ok) await giveBack();
+  if (!response.ok && !COUNTED_REFUSALS.has(response)) await giveBack();
   return response;
 }
