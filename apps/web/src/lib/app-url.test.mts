@@ -49,3 +49,14 @@ test("on Netlify, http://localhost and the email-logging fallback are refused", 
 test("netlify dev on this machine keeps the local rules", () => {
   assert.equal(appBaseUrl({ NODE_ENV: "development", NETLIFY_DEV: "true", CONTEXT: "dev", SITE_ID: "abc" }), "http://localhost:3000");
 });
+
+// CodeQL alert #14: trailing slashes are taken off with a plain loop -- the same result as before,
+// including on very long values (no timing check: a busy CI machine would make one flaky).
+test("trailing slashes come off APP_URL, whatever its length", () => {
+  assert.equal(appBaseUrl({ NODE_ENV: "development", APP_URL: "http://localhost:4000///" }), "http://localhost:4000");
+  assert.equal(appBaseUrl({ NODE_ENV: "development", APP_URL: "  http://localhost:4000/  " }), "http://localhost:4000");
+  assert.equal(appBaseUrl({ NODE_ENV: "development", APP_URL: "http://localhost:4000/a/" }), "http://localhost:4000/a");
+  const long = "http://localhost:4000" + "/x".repeat(100_000) + "y";
+  assert.equal(appBaseUrl({ NODE_ENV: "development", APP_URL: long }), long);
+  assert.equal(appBaseUrl({ NODE_ENV: "development", APP_URL: "http://localhost:4000" + "/".repeat(100_000) }), "http://localhost:4000");
+});
