@@ -92,3 +92,35 @@ test("a token signed with another secret is just 'no session', never 'account go
   const res = await getMe(bearer(`${header}.${payload}.${"x".repeat(43)}`));
   assert.equal((await res.json()).code, "NO_SESSION");
 });
+
+// TS-204: "Log out" used to record the ended session only until the logging-out token expired, so a
+// copy renewed later outlived the record and worked again.
+test("'Log out' keeps the ended session until no renewed copy can still be valid", async () => {
+  const { POST: logout } = await import("../app/api/v1/auth/logout/route");
+  const { RENEWAL_LIMIT_SECONDS } = await import("./session-renewal");
+  const authTime = Math.floor(Date.now() / 1000) - 5 * 24 * 60 * 60;
+  const token = await signToken({ sub: "u1", email: "u1@example.invalid", authTime, sessionVersion: 0 });
+  const claims = (await verifyToken(token))!;
+  let inserted: unknown[] | null = null;
+  (pool as unknown as { query: unknown }).query = async (sql: string, params: unknown[] = []) => {
+    if (/FROM "users"/.test(sql)) {
+      return { rows: [{ id: "u1", email: "u1@example.invalid", name: "u1", passwordHash: "x", sessionVersion: 0, emailVerifiedAt: null }] };
+    }
+    if (/INSERT INTO "revoked_sessions"/.test(sql)) {
+      inserted = params;
+      return { rows: [] };
+    }
+    if (/revoked_sessions/.test(sql)) return { rows: [] };
+    throw new Error(`unexpected query: ${sql}`);
+  };
+  const res = await logout(
+    new NextRequest("http://localhost/api/v1/auth/logout", { method: "POST", headers: { authorization: `Bearer ${token}` } })
+  );
+  assert.equal(res.status, 200);
+  assert.ok(inserted, "the session was recorded as ended");
+  const [id, userId, keptUntil] = inserted as unknown as [string, string, Date];
+  assert.equal(id, claims.sessionId);
+  assert.equal(userId, "u1");
+  assert.equal(keptUntil.getTime(), (authTime + RENEWAL_LIMIT_SECONDS + AUTH_TOKEN_TTL_SECONDS) * 1000);
+  assert.ok(keptUntil.getTime() > claims.expiresAt * 1000);
+});

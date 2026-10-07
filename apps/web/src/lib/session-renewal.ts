@@ -23,3 +23,17 @@ export function shouldRenew(claims: { issuedAt: number; authTime: number }, nowS
 /** Response header carrying a renewed token to a Bearer-token client (the mobile app), which has no
  * cookie jar for the renewal to land in. Web clients get a refreshed cookie instead. */
 export const RENEWED_TOKEN_HEADER = "x-seatwise-renewed-token";
+
+/**
+ * TS-204: how long a session ended with "Log out" must stay on the ended list (seconds since
+ * epoch). A copy of the token can still be renewed (proxy.ts doesn't look at the database), each
+ * renewal keeping the session id -- but renewal stops RENEWAL_LIMIT_SECONDS after sign-in, so no
+ * token of this session can be valid past sign-in + that limit + one token lifetime. Keeping the
+ * row only until the logging-out token's own expiry let a renewed copy outlive it.
+ */
+export function revokedSessionKeepUntil(
+  claims: { authTime: number; expiresAt: number },
+  tokenTtlSeconds: number
+): number {
+  return Math.max(claims.expiresAt, claims.authTime + RENEWAL_LIMIT_SECONDS + tokenTtlSeconds);
+}

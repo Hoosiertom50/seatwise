@@ -31,7 +31,11 @@ export async function proxy(req: NextRequest) {
     email: claims.email,
     authTime: claims.authTime,
     sessionVersion: claims.sessionVersion,
-    // TS-204: the same session, so "Log out" on this device still ends the renewed token.
+    // TS-204: the same session, so "Log out" on this device still ends the renewed token. This
+    // doesn't look up whether the session was ended (no database here, so the proxy stays cheap
+    // and can run wherever the host puts it) -- instead an ended session stays on the ended list
+    // until any token renewal could issue has expired (revokedSessionKeepUntil), and every route's
+    // getAuthSession refuses it for that whole time.
     sessionId: claims.sessionId ?? undefined,
   });
   const response = NextResponse.next();

@@ -19,6 +19,9 @@ export interface GrantedAccess {
    * TS-204: the access this request was let in with, for the change to read again under its
    * lock (recheckActorAccess in packages/db) -- refused, nothing saved, if it dropped meanwhile.
    * Without the role: an ordinary change doesn't depend on being a Couple member.
+   * Its level is the one the route requires (minLevel), not the person's own: someone lowered
+   * meanwhile to a level that still allows the change isn't refused (Edit lowered to Comment, adding
+   * a comment). Approval decisions use approvalActor instead, from the person's real level and role.
    */
   actor: ActorAccess;
 }
@@ -47,7 +50,8 @@ export async function requireAccess(
     return { error: errorResponse("You don't have permission to do that", 403) };
   }
 
-  return { wedding, accessLevel, role, actor: { userId, accessLevel } };
+  // TS-204: the re-check asks "may they still do this?" -- the route's minLevel, not their level.
+  return { wedding, accessLevel, role, actor: { userId, accessLevel: minLevel } };
 }
 
 // TS-179: who may approve a plan, or undo an approval -- the wedding's owner, or a Couple member
@@ -76,8 +80,10 @@ export function weddingForViewer<T extends { ownerId: string; note?: string | nu
 
 // TS-195 / TS-204: the access an approval decision was made from, with the role -- read again
 // under the lock, so a Couple member made a Collaborator (or lowered, or removed) while the change
-// waited is refused. The same reading mayManageApproval used.
+// waited is refused. The same reading mayManageApproval used -- with the person's real level (not
+// the route's minLevel that `actor` carries), since what the route decided (approve, undo an
+// approval, move Draft/In review, replace an approved plan) depends on it.
 export function approvalActor(access: Pick<GrantedAccess, "accessLevel" | "role" | "actor">): ActorAccess {
-  if (access.accessLevel === "OWNER") return access.actor;
-  return { ...access.actor, role: access.role };
+  if (access.accessLevel === "OWNER") return { userId: access.actor.userId, accessLevel: "OWNER" };
+  return { userId: access.actor.userId, accessLevel: access.accessLevel, role: access.role };
 }
