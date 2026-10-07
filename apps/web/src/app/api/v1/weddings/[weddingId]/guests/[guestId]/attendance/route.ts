@@ -54,7 +54,8 @@ export async function POST(req: NextRequest, { params }: Params) {
     return NextResponse.json({ planVersion, guest: guest ? guestForViewer(guest, access.accessLevel) : null, unchanged });
   } catch (err) {
     if (err instanceof AttendanceError) {
-      return errorResponse(err.message, 409);
+      // TS-209: a guest deleted elsewhere a moment ago is gone (404), not a conflict.
+      return errorResponse(err.message, err.message === "Guest not found." ? 404 : 409);
     }
     const conflict = concurrentChangeResponse(err);
     if (conflict) return conflict;
