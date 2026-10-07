@@ -133,16 +133,27 @@ export function resolveRetriedPatchConflict(
   return { ...route.extra, [route.key]: fresh };
 }
 
-/** TS-199: true only when asking "who is signed in?" answers 401 (no account any more). */
-async function accountIsGone(): Promise<boolean> {
+/**
+ * TS-199: true only when asking "who is signed in?" says there's no account any more.
+ * TS-204: only when it says why -- ACCOUNT_GONE. A 401 for any other reason (this device was
+ * logged out in another tab, a password reset ended the session) says nothing about whether the
+ * account was deleted, and used to be taken as "deleted".
+ */
+async function accountCheck(): Promise<"ACCOUNT_GONE" | "SIGNED_OUT" | "UNKNOWN"> {
   try {
     const check = await fetchWithRetry(ACCOUNT_PATH, { method: "GET", credentials: "include" });
-    return check.status === 401;
+    if (check.status !== 401) return "UNKNOWN";
+    const body = (await check.json().catch(() => ({}))) as { code?: unknown };
+    return body.code === "ACCOUNT_GONE" ? "ACCOUNT_GONE" : "SIGNED_OUT";
   } catch {
     // No answer at all -- can't tell, so don't claim it was deleted.
-    return false;
+    return "UNKNOWN";
   }
 }
+
+/** TS-204: a retried "Delete my account" whose answer was lost, and this device is signed out. */
+export const ACCOUNT_DELETE_UNCONFIRMED =
+  "You were signed out before we could confirm whether your account was deleted. Sign in to check — if your account still exists, you can delete it from there.";
 
 // TS-166: non-GET requests that don't save anything the planner made.
 const NOT_A_SAVE = [/\/guests\/import\/preview$/, /^\/api\/v1\/notifications(\/[^/]+\/read)?$/];
@@ -187,7 +198,8 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   // it wasn't deleted; no account (401) means it was.
   const retriedAccount401 =
     options.method === "DELETE" && retriedResponses.has(res) && res.status === 401 && path === ACCOUNT_PATH;
-  const accountReallyGone = retriedAccount401 ? await accountIsGone() : false;
+  const accountState = retriedAccount401 ? await accountCheck() : null;
+  const accountReallyGone = accountState === "ACCOUNT_GONE";
   const alreadyGone =
     options.method === "DELETE" && retriedResponses.has(res) && (res.status === 404 || accountReallyGone);
   // TS-177: likewise a retried edit "refused" only because the first try already saved it.
@@ -219,6 +231,9 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 
   if (alreadyGone) return {} as T;
   if (alreadySaved) return alreadySaved as T;
+  // TS-204: the retry was refused because this device is signed out (logged out in another tab, a
+  // password reset) while the account still exists -- say so, instead of a false "deleted".
+  if (accountState === "SIGNED_OUT") throw new ApiError(ACCOUNT_DELETE_UNCONFIRMED, 401, undefined, data);
   if (!res.ok) {
     throw new ApiError(data.error || "Something went wrong", res.status, data.fieldErrors, data);
   }

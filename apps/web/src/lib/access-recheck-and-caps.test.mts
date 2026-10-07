@@ -218,3 +218,32 @@ test("TS-205: pruning keeps approved and current versions and only removes past 
   assert.match(sql, /ORDER BY "versionNumber" ASC/);
   assert.match(sql, /GREATEST\(0, \(SELECT count\(\*\) FROM "plan_versions" WHERE "weddingId" = \$1\) - \$2\)/);
 });
+
+// --- TS-204: one access reading, and the owner-only note ---------------------------------------
+
+const { mayManageApproval, approvalActor, weddingForViewer } = await import("./access");
+
+test("TS-204: who may approve comes from the request's one access reading, and the same reading is re-checked", () => {
+  const owner = { accessLevel: "OWNER" as const, role: null, actor: { userId: "o", accessLevel: "OWNER" as const } };
+  const coupleComment = { accessLevel: "COMMENT" as const, role: "COUPLE" as const, actor: { userId: "c", accessLevel: "COMMENT" as const } };
+  const coupleView = { accessLevel: "VIEW" as const, role: "COUPLE" as const, actor: { userId: "c", accessLevel: "VIEW" as const } };
+  const editCollab = { accessLevel: "EDIT" as const, role: "COLLABORATOR" as const, actor: { userId: "e", accessLevel: "EDIT" as const } };
+  assert.equal(mayManageApproval(owner), true);
+  assert.equal(mayManageApproval(coupleComment), true);
+  assert.equal(mayManageApproval(coupleView), false);
+  assert.equal(mayManageApproval(editCollab), false);
+  // The re-check carries the role the decision was made from, so a Couple member made a
+  // Collaborator meanwhile is refused.
+  assert.deepEqual(approvalActor(coupleComment), { userId: "c", accessLevel: "COMMENT", role: "COUPLE" });
+  assert.deepEqual(approvalActor(owner), { userId: "o", accessLevel: "OWNER" });
+});
+
+test("TS-204: the wedding note is sent to its owner only", () => {
+  const wedding = { id: "w", ownerId: "owner", name: "W", note: "Owner's private note" };
+  assert.equal(weddingForViewer(wedding, "owner"), wedding);
+  const forCollaborator = weddingForViewer(wedding, "someone-else");
+  assert.equal("note" in forCollaborator, false);
+  assert.equal(forCollaborator.name, "W");
+  // The original isn't changed.
+  assert.equal(wedding.note, "Owner's private note");
+});

@@ -59,6 +59,21 @@ export function mayManageApproval(access: Pick<GrantedAccess, "accessLevel" | "r
   return access.role === "COUPLE" && access.accessLevel !== "VIEW";
 }
 
+/**
+ * TS-204 (Tom's decision): the wedding's note is the owner's alone -- it's left out of the wedding
+ * for everyone else, wherever a wedding is sent (the wedding itself, the dashboard's list). Before,
+ * a View collaborator's browser received it with every wedding, though no screen showed it.
+ */
+export function weddingForViewer<T extends { ownerId: string; note?: string | null }>(
+  wedding: T,
+  viewerId: string
+): T | Omit<T, "note"> {
+  if (wedding.ownerId === viewerId) return wedding;
+  const { note: _ownerOnly, ...rest } = wedding;
+  void _ownerOnly;
+  return rest;
+}
+
 // TS-195 / TS-204: the access an approval decision was made from, with the role -- read again
 // under the lock, so a Couple member made a Collaborator (or lowered, or removed) while the change
 // waited is refused. The same reading mayManageApproval used.

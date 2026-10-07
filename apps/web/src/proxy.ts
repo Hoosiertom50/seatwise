@@ -31,6 +31,8 @@ export async function proxy(req: NextRequest) {
     email: claims.email,
     authTime: claims.authTime,
     sessionVersion: claims.sessionVersion,
+    // TS-204: the same session, so "Log out" on this device still ends the renewed token.
+    sessionId: claims.sessionId ?? undefined,
   });
   const response = NextResponse.next();
   if (bearer) response.headers.set(RENEWED_TOKEN_HEADER, renewed);

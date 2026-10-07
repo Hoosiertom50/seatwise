@@ -37,6 +37,23 @@ export default function AccountPage() {
       });
   }, [router, loadAttempt]);
 
+  // TS-204 (Tom's decision): "Log out" (on the dashboard) signs out this device only; this signs
+  // out every device -- other browsers, phones, the mobile app -- the way a password reset does.
+  const [signOutError, setSignOutError] = useState<string | null>(null);
+  const [signingOutEverywhere, setSigningOutEverywhere] = useState(false);
+  async function onLogOutEverywhere() {
+    setSignOutError(null);
+    setSigningOutEverywhere(true);
+    try {
+      await api.post("/api/v1/auth/logout", { everywhere: true });
+    } catch {
+      setSignOutError("Couldn't log out — check your connection and try again.");
+      setSigningOutEverywhere(false);
+      return;
+    }
+    router.replace("/login");
+  }
+
   async function onDelete() {
     setError(null);
     setOwnedWeddings([]);
@@ -107,6 +124,26 @@ export default function AccountPage() {
           </a>{" "}
           at {SUPPORT_EMAIL}. {SUPPORT_PROMISE}
         </p>
+      </section>
+
+      {/* TS-204 */}
+      <section aria-labelledby="sign-out-everywhere" className="mb-6 rounded-lg border border-neutral-200 dark:border-neutral-700 p-4">
+        <h2 id="sign-out-everywhere" className="mb-1 text-lg font-medium">
+          Signed in elsewhere
+        </h2>
+        <p className="mb-3 text-sm text-neutral-600 dark:text-neutral-300">
+          Log out signs out this device only. If you&apos;ve signed in on a shared or lost device, sign
+          out everywhere — every browser, phone and app signed in to your account, this one included.
+        </p>
+        <button
+          type="button"
+          onClick={onLogOutEverywhere}
+          disabled={signingOutEverywhere}
+          className="rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50"
+        >
+          {signingOutEverywhere ? "Logging out…" : "Log out on all devices"}
+        </button>
+        {signOutError && <p role="alert" className="mt-3 text-sm text-red-600 dark:text-red-400">{signOutError}</p>}
       </section>
 
       <section aria-labelledby="delete-account" className="rounded-lg border border-red-200 dark:border-red-900 p-4">

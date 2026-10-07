@@ -18,6 +18,7 @@ export * from "./queries/vendors";
 export * from "./queries/link-reset";
 export * from "./queries/wedding-lock";
 export * from "./queries/wedding-caps";
+export * from "./queries/sessions";
 export * from "./queries/rate-limit";
 export * from "./email";
 export * from "./queries/account";

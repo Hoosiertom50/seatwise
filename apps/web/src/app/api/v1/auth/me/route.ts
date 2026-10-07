@@ -2,14 +2,26 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { MAX_PASSWORD_INPUT } from "@seatwise/shared";
 import { deleteUserAccount, findUserById } from "@seatwise/db";
-import { getAuthUser } from "@/lib/session";
+import { getAuthSession, getAuthUser, type NoSessionReason } from "@/lib/session";
 import { errorResponse, readJson, zodErrorResponse } from "@/lib/api-response";
 import { AUTH_COOKIE_NAME, isSecureCookieContext, verifyPassword } from "@/lib/auth";
 import { accountDeleteFailureLimits, clientAddress, countSignInAttempt } from "@/lib/rate-limit";
 
+// TS-204: why there's no signed-in account, for the app (see NoSessionReason in lib/session) --
+// a retried "Delete my account" counts as done only when the account is really gone, not when this
+// device's session simply ended (logged out in another tab, a password reset) before it arrived.
+const NO_SESSION_MESSAGES: Record<NoSessionReason, string> = {
+  NO_SESSION: "Not authenticated",
+  SESSION_ENDED: "Your session has ended — please sign in again.",
+  ACCOUNT_GONE: "This account no longer exists.",
+};
+
 export async function GET(req: NextRequest) {
-  const user = await getAuthUser(req);
-  if (!user) return errorResponse("Not authenticated", 401);
+  const session = await getAuthSession(req);
+  if (!session.user) {
+    return NextResponse.json({ error: NO_SESSION_MESSAGES[session.reason], code: session.reason }, { status: 401 });
+  }
+  const user = session.user;
   // TS-164: whether the address has been confirmed (drives the "confirm your email" banner).
   return NextResponse.json({
     user: { id: user.id, name: user.name, email: user.email, emailVerified: user.emailVerifiedAt !== null },

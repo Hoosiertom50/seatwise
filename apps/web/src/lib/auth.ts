@@ -97,12 +97,20 @@ export interface TokenPayload {
   // version is older than the account's current one has been ended (password reset, log out).
   // Absent on tokens issued before TS-155 -- treated as 0.
   sessionVersion?: number;
+  // TS-204: this session's own id (claim "sid"), so "Log out" can end just this one (see
+  // revokeSession in packages/db). A new one is made at sign-in; renewal (proxy.ts) keeps it.
+  // Absent on tokens issued before TS-204.
+  sessionId?: string;
 }
 
-export interface VerifiedToken extends TokenPayload {
+export interface VerifiedToken extends Omit<TokenPayload, "sessionId"> {
   issuedAt: number;
   authTime: number;
   sessionVersion: number;
+  /** TS-204: null on a token issued before sessions had their own id. */
+  sessionId: string | null;
+  /** TS-204: when the token expires (seconds since epoch). */
+  expiresAt: number;
 }
 
 // TS-94: a token is valid for 30 days from when it was *issued*, and an active session keeps being
@@ -121,7 +129,12 @@ export async function verifyPassword(password: string, hash: string): Promise<bo
 
 export async function signToken(payload: TokenPayload): Promise<string> {
   const now = Math.floor(Date.now() / 1000);
-  return new SignJWT({ email: payload.email, authTime: payload.authTime ?? now, sv: payload.sessionVersion ?? 0 })
+  return new SignJWT({
+    email: payload.email,
+    authTime: payload.authTime ?? now,
+    sv: payload.sessionVersion ?? 0,
+    sid: payload.sessionId ?? crypto.randomUUID(),
+  })
     .setProtectedHeader({ alg: "HS256" })
     .setSubject(payload.sub)
     .setIssuedAt(now)
@@ -137,7 +150,9 @@ export async function verifyToken(token: string): Promise<VerifiedToken | null> 
     const issuedAt = typeof payload.iat === "number" ? payload.iat : 0;
     const authTime = typeof payload.authTime === "number" ? payload.authTime : issuedAt;
     const sessionVersion = typeof payload.sv === "number" ? payload.sv : 0;
-    return { sub: payload.sub, email: payload.email, issuedAt, authTime, sessionVersion };
+    const sessionId = typeof payload.sid === "string" && payload.sid.length > 0 ? payload.sid : null;
+    const expiresAt = typeof payload.exp === "number" ? payload.exp : issuedAt + AUTH_TOKEN_TTL_SECONDS;
+    return { sub: payload.sub, email: payload.email, issuedAt, authTime, sessionVersion, sessionId, expiresAt };
   } catch {
     return null;
   }

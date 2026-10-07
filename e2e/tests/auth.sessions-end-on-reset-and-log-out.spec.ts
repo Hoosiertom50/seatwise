@@ -2,7 +2,9 @@
  * TS-155 (REQ-ACCOUNT-WEDDING-MANAGEMENT) — a session that should be over stays over.
  * - Resetting the password ends every other session of that account; the person who reset stays
  *   signed in.
- * - Logging out ends that session everywhere, including a copy of its token used directly.
+ * - Logging out ends that session, including a copy of its token used directly -- and (TS-204,
+ *   Tom's decision) only that one: another browser stays signed in. "Log out on all devices"
+ *   ends every session.
  * - Many wrong passwords sent at once still only get the 10 allowed tries.
  * - The password check for deleting an account counts toward the same limit.
  * - Another site can't sign someone in or out with a form post (non-JSON or cross-site writes
@@ -19,11 +21,11 @@ const COOKIE = "seatwise_token";
 defineQualityTest(
   {
     id: "auth.sessions-end-on-reset-and-log-out.reset-logout-parallel-limit-cross-site",
-    title: "a password reset or log out ends other sessions, parallel wrong passwords stay capped, and cross-site or non-JSON writes are refused",
+    title: "a password reset or 'log out on all devices' ends other sessions, log out ends only this one, parallel wrong passwords stay capped, and cross-site or non-JSON writes are refused",
     objective:
-      "Confirms that after a password reset another browser signed into the same account is signed out while the resetting browser stays in; that logging out makes the old token useless both as a cookie and as a Bearer token; that 25 simultaneous wrong-password sign-ins for one account produce at most 10 password checks (the rest 429); that wrong passwords on account deletion hit the same limit; and that a plain-text (form-style) or cross-site sign-in request is refused before it can set a cookie.",
+      "Confirms that after a password reset another browser signed into the same account is signed out while the resetting browser stays in; that logging out makes the old token useless both as a cookie and as a Bearer token while another browser stays signed in, and that 'log out on all devices' signs that other browser out too; that 25 simultaneous wrong-password sign-ins for one account produce at most 10 password checks (the rest 429); that wrong passwords on account deletion hit the same limit; and that a plain-text (form-style) or cross-site sign-in request is refused before it can set a cookie.",
     expectedOutcome:
-      "Browser B gets 401 from /auth/me after A resets the password, and A still gets 200. After logout the saved token gets 401 as cookie and as Bearer. Exactly 10 of 25 parallel attempts return 401 and 15 return 429. The 11th wrong deletion password returns 429. A text/plain sign-in returns 415 and a cross-site one 403, with no session cookie set.",
+      "Browser B gets 401 from /auth/me after A resets the password, and A still gets 200. After logout the saved token gets 401 as cookie and as Bearer, while B still gets 200; after 'log out on all devices' B gets 401. Exactly 10 of 25 parallel attempts return 401 and 15 return 429. The 11th wrong deletion password returns 429. A text/plain sign-in returns 415 and a cross-site one 403, with no session cookie set.",
     requirementIds: ["REQ-ACCOUNT-WEDDING-MANAGEMENT"],
     tags: ["@mutating", "@feature:authentication", "@risk:critical", "@suite:regression"],
   },
@@ -66,14 +68,15 @@ defineQualityTest(
       }
     });
 
-    await test.step("Logging out ends the session everywhere, even for a saved copy of the token", async () => {
+    await test.step("Logging out ends this session -- even a saved copy of its token -- and only this one", async () => {
       const { email, password } = await newAccount();
       const a = await signedIn(email, password);
       const b = await signedIn(email, password);
       try {
         const saved = (await a.cookies()).find((c) => c.name === COOKIE)!.value;
         expect((await a.request.post("/api/v1/auth/logout", { data: {} })).status()).toBe(200);
-        expect((await b.request.get("/api/v1/auth/me")).status()).toBe(401);
+        // TS-204 (Tom's decision): the other browser stays signed in.
+        expect((await b.request.get("/api/v1/auth/me")).status()).toBe(200);
         const api = await playwright.request.newContext({ baseURL });
         try {
           expect((await api.get("/api/v1/auth/me", { headers: { authorization: `Bearer ${saved}` } })).status()).toBe(401);
@@ -85,6 +88,28 @@ defineQualityTest(
         const again = await signedIn(email, password);
         expect((await again.request.get("/api/v1/auth/me")).status()).toBe(200);
         await again.close();
+      } finally {
+        await a.close();
+        await b.close();
+      }
+    });
+
+    await test.step("TS-204: 'Log out on all devices' ends every session of the account", async () => {
+      const { email, password } = await newAccount();
+      const a = await signedIn(email, password);
+      const b = await signedIn(email, password);
+      try {
+        const savedB = (await b.cookies()).find((c) => c.name === COOKIE)!.value;
+        const res = await a.request.post("/api/v1/auth/logout", { data: { everywhere: true } });
+        expect(res.status()).toBe(200);
+        expect((await b.request.get("/api/v1/auth/me")).status()).toBe(401);
+        expect((await a.request.get("/api/v1/auth/me")).status()).toBe(401);
+        const api = await playwright.request.newContext({ baseURL });
+        try {
+          expect((await api.get("/api/v1/auth/me", { headers: { authorization: `Bearer ${savedB}` } })).status()).toBe(401);
+        } finally {
+          await api.dispose();
+        }
       } finally {
         await a.close();
         await b.close();

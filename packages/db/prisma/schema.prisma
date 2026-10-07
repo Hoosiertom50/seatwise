@@ -40,6 +40,8 @@ model User {
   seatingTemplates SeatingTemplate[]
   passwordResetTokens PasswordResetToken[]
   emailVerificationTokens EmailVerificationToken[]
+  // TS-204: sessions ended one at a time ("Log out" on one device).
+  revokedSessions RevokedSession[]
 
   @@map("users")
 }
@@ -756,4 +758,20 @@ model EmailVerificationToken {
 
   @@index([userId])
   @@map("email_verification_tokens")
+}
+
+// TS-204: a session ended on its own device ("Log out"). Every session token carries its own id
+// (claim "sid"); a token whose id is here is refused. Kept only until the token would have expired
+// anyway (expiresAt), then cleared out. "Log out on all devices" and a password reset use
+// User.sessionVersion instead.
+model RevokedSession {
+  id        String   @id
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([expiresAt])
+  @@index([userId])
+  @@map("revoked_sessions")
 }

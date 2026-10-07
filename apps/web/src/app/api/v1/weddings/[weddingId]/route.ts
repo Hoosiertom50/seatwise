@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { updateWeddingSchema, sideLabelsClash, SIDE_LABELS_MESSAGE } from "@seatwise/shared";
-import { getWeddingById, updateWeddingForOwner, deleteWeddingForOwner, getWeddingAccessDetail } from "@seatwise/db";
+import { getWeddingById, updateWeddingForOwner, deleteWeddingForOwner } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
 import { errorResponse, zodErrorResponse, readJson } from "@/lib/api-response";
-import { requireAccess } from "@/lib/access";
+import { requireAccess, weddingForViewer } from "@/lib/access";
 
 type Params = { params: Promise<{ weddingId: string }> };
 
@@ -17,8 +17,12 @@ export async function GET(req: NextRequest, { params }: Params) {
 
   // TS-151: the caller's collaborator role too (null for the owner), so the page can offer Approve
   // to a Couple member with Comment access -- the server already allows it.
-  const { role } = await getWeddingAccessDetail(weddingId, user.id);
-  return NextResponse.json({ wedding: access.wedding, accessLevel: access.accessLevel, role });
+  // TS-204: read with the access level (requireAccess), and the note left out for anyone but the owner.
+  return NextResponse.json({
+    wedding: weddingForViewer(access.wedding, user.id),
+    accessLevel: access.accessLevel,
+    role: access.role,
+  });
 }
 
 // Renaming/rescheduling the wedding is owner-only — collaborators (even Edit) can't touch these

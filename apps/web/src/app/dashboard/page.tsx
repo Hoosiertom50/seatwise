@@ -254,6 +254,7 @@ export default function DashboardPage() {
 
   // TS-175: a failed log out says so (it failed silently), and a successful one replaces this
   // page in history, so Back doesn't bounce between the dashboard and the sign-in page.
+  // TS-204 (Tom's decision): this device only -- "Log out on all devices" is on the Account page.
   async function onLogout() {
     try {
       await api.post("/api/v1/auth/logout");
