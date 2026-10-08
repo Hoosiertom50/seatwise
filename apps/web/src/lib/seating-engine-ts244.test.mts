@@ -2,6 +2,7 @@
 // plan's warnings say "so everyone could be seated" only when everyone is, a group the repair newly
 // seated isn't said to have "moved", and renaming a guest never changes the plan (groups of the same
 // size go by lowest guest id, not by the guest list's last-name order).
+// TS-252: also a mixed-side must-sit family's side, and Fully Mixed leaving a table one-sided.
 // Run with `pnpm --filter @seatwise/web test`.
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -93,8 +94,8 @@ test("an avoid pair that neither moved says neither of them was moved", () => {
   assert.match(w ?? "", /G3 and G1 .* — neither of them was moved when seats were rearranged so everyone could be seated \(/);
 });
 
-test("the weighting version is 8", () => {
-  assert.equal(RULE_WEIGHT_CONFIG_VERSION, 8);
+test("the weighting version is 9", () => {
+  assert.equal(RULE_WEIGHT_CONFIG_VERSION, 9);
 });
 
 // Item 2: two singles compete for the last seat. Before, the one earlier in the guest list (by last
@@ -218,4 +219,64 @@ test("Fully Mixed mixes every table for any processing order (TS-247)", () => {
     const result = generateSeatingPlan(guests, [], [table("A", "A", 4), table("B", "B", 4)], "FULLY_MIXED");
     assert.equal(result.scoreReport?.sideMixing.mixedTableCount, 2, `order ${order.join(",")}`);
   }
+});
+
+// TS-252: a must-sit family of Bride, Groom and Bride guests counts as Both whatever order they're
+// listed in. Before, the side was folded in list (last-name) order -- Bride, Groom, Bride came out
+// Bride but Bride, Bride, Groom came out Both -- so renaming Cy Clark to Cy Abbot moved the family
+// to the other table under Keep Separate.
+test("renaming one of a mixed-side family never changes the plan under Keep Separate (TS-252)", () => {
+  const tables = [table("t1", "Table 1", 7), table("t2", "Table 2", 7)];
+  const rels = [rel("a", "b", "MUST_SIT_TOGETHER"), rel("b", "c", "MUST_SIT_TOGETHER")];
+  const others = [guest("x", "Xavier Young", 4, { side: "GROOM" }), guest("y", "Yolanda York", 4, { side: "BRIDE" })];
+  const sorted = (list: EngineGuest[]) => [...list].sort((p, q) => lastFirst(p).localeCompare(lastFirst(q)));
+  const seats = (r: ReturnType<typeof generateSeatingPlan>) => r.assignments.map((a) => `${a.guestId}@${a.tableId}`).sort();
+  const run = (cName: string) =>
+    generateSeatingPlan(
+      sorted([
+        guest("a", "Ann Adams", 1, { side: "BRIDE" }),
+        guest("b", "Bob Baker", 1, { side: "GROOM" }),
+        guest("c", cName, 1, { side: "BRIDE" }),
+        ...others,
+      ]),
+      rels,
+      tables,
+      "KEEP_SEPARATE"
+    );
+  const before = run("Cy Clark"); // listed Bride, Groom, Bride
+  const after = run("Cy Abbot"); // listed Bride, Bride, Groom
+  assert.equal(before.isComplete, true);
+  assert.deepEqual(seats(after), seats(before));
+
+  // And every listing order of the family gives the same plan, under every setting.
+  const family = [
+    guest("a", "A", 1, { side: "BRIDE" }),
+    guest("b", "B", 1, { side: "GROOM" }),
+    guest("c", "C", 1, { side: "BRIDE" }),
+  ];
+  const orders = [[0, 1, 2], [0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0]];
+  for (const mix of ["KEEP_SEPARATE", "BALANCED_MIX", "FULLY_MIXED"] as const) {
+    const plans = orders.map((o) => seats(generateSeatingPlan([...o.map((i) => family[i]), ...others], rels, tables, mix)));
+    for (const p of plans) assert.deepEqual(p, plans[0], mix);
+  }
+});
+
+// TS-252, the review's repro: under Fully Mixed, the second Bride guest went to Table 1 for its
+// many Groom guests (the other-side bonus was counted per guest) instead of Table 2, which had no
+// Bride guest yet -- leaving Table 2 Groom-only though both tables could have been mixed.
+test("Fully Mixed prefers a table with nobody from a guest's side over one with many of the other side (TS-252)", () => {
+  const guests = [
+    guest("a", "a", 2, { side: "GROOM" }),
+    guest("b", "b", 2, { side: "GROOM" }),
+    guest("c", "c", 1, { side: "BRIDE" }),
+    guest("d", "d", 1, { side: "GROOM" }),
+    guest("e", "e", 1, { side: "GROOM" }),
+    guest("f", "f", 1, { side: "BRIDE" }),
+  ];
+  const result = generateSeatingPlan(guests, [], [table("T1", "Table 1", 6), table("T2", "Table 2", 6)], "FULLY_MIXED");
+  const tableOf = (id: string) => result.assignments.find((a) => a.guestId === id)?.tableId ?? null;
+  assert.equal(result.isComplete, true);
+  assert.equal(result.scoreReport?.sideMixing.mixedTableCount, 2);
+  assert.equal(result.scoreReport?.sideMixing.singleSideTableCount, 0);
+  assert.notEqual(tableOf("c"), tableOf("f"));
 });

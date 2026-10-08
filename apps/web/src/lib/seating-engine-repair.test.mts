@@ -44,7 +44,8 @@ const tableOf = (result: ReturnType<typeof generateSeatingPlan>, guestId: string
 test("the accessible-table penalty is gone, and the weighting version says so", () => {
   // TS-226: version 6 (one more order for accessible seats; see seating-engine-ts226.test.mts).
   // TS-244: version 8 (unpinned groups of the same size go by lowest guest id; see seating-engine-ts244.test.mts).
-  assert.equal(RULE_WEIGHT_CONFIG_VERSION, 8);
+  // TS-252: version 9 (a mixed must-sit group counts as Both whatever the order; Fully Mixed fix).
+  assert.equal(RULE_WEIGHT_CONFIG_VERSION, 9);
   assert.equal("accessibleTableMisusePenalty" in RULE_WEIGHT_CONFIG, false);
 });
 
