@@ -34,7 +34,8 @@
     "db:fill-existing": "pnpm --filter @seatwise/db fill-existing",
     "db:cleanup-test-weddings": "pnpm --filter @seatwise/db cleanup-test-weddings",
     "db:cleanup-test-templates": "pnpm --filter @seatwise/db cleanup-test-templates",
-    "db:cleanup-test-users": "pnpm --filter @seatwise/db cleanup-test-users"
+    "db:cleanup-test-users": "pnpm --filter @seatwise/db cleanup-test-users",
+    "db:local-test-data": "pnpm --filter @seatwise/db local-test-data"
   },
   "workspaces": [
     "apps/*",
