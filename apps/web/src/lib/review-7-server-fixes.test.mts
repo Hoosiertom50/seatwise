@@ -194,6 +194,9 @@ test("TS-214: a new comment thread's notification is cut with an ellipsis, never
       messages.push(params[4] as string);
       return [{}];
     }
+    // TS-237: the locks taken before the notification is written.
+    if (/SELECT "ownerId" FROM "weddings" WHERE id = \$1 FOR KEY SHARE/.test(sql)) return [{ ownerId: "owner" }];
+    if (/FROM "users" WHERE id = \$1 FOR KEY SHARE/.test(sql)) return [{}];
     return undefined;
   });
   // 119 letters then emoji: slice(0, 120) would have cut the first emoji in half.

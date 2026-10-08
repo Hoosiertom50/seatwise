@@ -116,7 +116,14 @@ export async function POST(req: NextRequest, { params }: Params) {
     // TS-219: `uncertain` -- the email may have been sent (the email service stopped answering
     // part-way), so the screen says "may have been sent" rather than "couldn't be sent".
     return NextResponse.json(
-      { invite: invitePublic, emailed, ...(sent === "uncertain" ? { uncertain: true } : {}), ...(emailed ? {} : { acceptUrl }) },
+      {
+        invite: invitePublic,
+        emailed,
+        ...(sent === "uncertain" ? { uncertain: true } : {}),
+        // TS-241: held back by Seatwise's own email limit -- said as such, not as a failure.
+        ...(sent === "limited" ? { siteEmailLimited: true } : {}),
+        ...(emailed ? {} : { acceptUrl }),
+      },
       { status: 201 }
     );
   } catch (err) {

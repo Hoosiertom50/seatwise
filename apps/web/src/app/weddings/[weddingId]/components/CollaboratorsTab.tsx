@@ -587,7 +587,7 @@ export function CollaboratorsTab({
     setInviteSent(null);
     setAdding(true);
     try {
-      const res = await api.post<{ invite: WeddingInviteDTO; emailed: boolean; uncertain?: boolean; acceptUrl?: string }>(
+      const res = await api.post<{ invite: WeddingInviteDTO; emailed: boolean; uncertain?: boolean; siteEmailLimited?: boolean; acceptUrl?: string }>(
         `/api/v1/weddings/${weddingId}/invites`,
         { email, permissionLevel: level, role }
       );

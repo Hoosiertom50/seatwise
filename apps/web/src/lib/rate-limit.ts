@@ -211,23 +211,92 @@ export const PASSWORD_RESET_LIMITS = {
   // in CI. Getting the budget's 45 now takes at least 9 such networks in a day.
   confirmedPerIpv4BlockDay: { limit: 5, windowSeconds: 86_400 },
   confirmedPerIpv6NetworkDay: { limit: 5, windowSeconds: 86_400 },
+  // TS-238: the same for resets of accounts that haven't confirmed their address -- they share 24 a
+  // day (UNCONFIRMED_RESET_SHARE_OF_EVERYDAY), and one /24 used to be able to send all 24. Now that
+  // takes at least 5 networks, and even then the address's owner still gets the newest reset after
+  // a quiet few hours (it's drawn from the resets' own budget once the 24 are used).
+  unconfirmedPerIpv4BlockDay: { limit: 5, windowSeconds: 86_400 },
+  unconfirmedPerIpv6NetworkDay: { limit: 5, windowSeconds: 86_400 },
 };
 export const confirmedResetIpv4BlockKey = (block: string) => `pw-reset:confirmed:net24:day:${block}`;
 export const confirmedResetIpv6NetworkKey = (network: string) => `pw-reset:confirmed:net48:day:${network}`;
+export const unconfirmedResetIpv4BlockKey = (block: string) => `pw-reset:unconfirmed:net24:day:${block}`;
+export const unconfirmedResetIpv6NetworkKey = (network: string) => `pw-reset:unconfirmed:net48:day:${network}`;
 
-/** TS-230: the per-network counts a confirmed account's reset goes on (none with the "log" transport). */
-export function confirmedResetNetworkCounters(
+/**
+ * TS-230 / TS-238: one network's slice of a shared email budget -- its IPv4 /24 or its IPv6 /48,
+ * under the given keys and limits. Like the budgets they protect, they count only where email
+ * really goes out (Gmail or Resend), never with the "log" transport used locally and in CI.
+ */
+function realSendNetworkCounters(
   req: { headers: Headers },
-  env: Record<string, string | undefined> = process.env
+  env: Record<string, string | undefined>,
+  ipv4: { key: (block: string) => string } & Limit,
+  ipv6: { key: (network: string) => string } & Limit
 ): NetworkCounter[] {
   const transport = resolveEmailTransport(env).kind;
   if (transport !== "smtp" && transport !== "resend") return [];
   const { address, wider } = clientNetworks(req);
   const block = rateLimitIpv4Block(address);
   return [
-    ...(block ? [{ key: confirmedResetIpv4BlockKey(block), ...PASSWORD_RESET_LIMITS.confirmedPerIpv4BlockDay }] : []),
-    ...(wider ? [{ key: confirmedResetIpv6NetworkKey(wider), ...PASSWORD_RESET_LIMITS.confirmedPerIpv6NetworkDay }] : []),
+    ...(block ? [{ key: ipv4.key(block), limit: ipv4.limit, windowSeconds: ipv4.windowSeconds }] : []),
+    ...(wider ? [{ key: ipv6.key(wider), limit: ipv6.limit, windowSeconds: ipv6.windowSeconds }] : []),
   ];
+}
+
+/**
+ * TS-230: the per-network counts a confirmed account's reset goes on (none with the "log" transport).
+ * TS-238: an unconfirmed account's newest reset (see the forgot-password route) goes on them too,
+ * when it's drawn from the same resets' budget these protect.
+ */
+export function confirmedResetNetworkCounters(
+  req: { headers: Headers },
+  env: Record<string, string | undefined> = process.env
+): NetworkCounter[] {
+  return realSendNetworkCounters(
+    req,
+    env,
+    { key: confirmedResetIpv4BlockKey, ...PASSWORD_RESET_LIMITS.confirmedPerIpv4BlockDay },
+    { key: confirmedResetIpv6NetworkKey, ...PASSWORD_RESET_LIMITS.confirmedPerIpv6NetworkDay }
+  );
+}
+
+/** TS-238: the per-network counts an unconfirmed account's reset goes on (none with the "log" transport). */
+export function unconfirmedResetNetworkCounters(
+  req: { headers: Headers },
+  env: Record<string, string | undefined> = process.env
+): NetworkCounter[] {
+  return realSendNetworkCounters(
+    req,
+    env,
+    { key: unconfirmedResetIpv4BlockKey, ...PASSWORD_RESET_LIMITS.unconfirmedPerIpv4BlockDay },
+    { key: unconfirmedResetIpv6NetworkKey, ...PASSWORD_RESET_LIMITS.unconfirmedPerIpv6NetworkDay }
+  );
+}
+
+// TS-238: sign-up confirmation emails (and "Resend link") from one network in 24 hours -- an IPv4
+// /24, or an IPv6 /48. Every new account's confirmation comes out of one shared share (60 a day,
+// CONFIRMATION_SHARE_OF_EVERYDAY), and two /24s used to be able to use it all up -- then nobody's
+// confirmation went out, and an unconfirmed account can't send invites. Now that takes 12 networks.
+// Real sends only, like the resets' slices above.
+export const CONFIRMATION_NETWORK_LIMITS = {
+  perIpv4BlockDay: { limit: 5, windowSeconds: 86_400 },
+  perIpv6NetworkDay: { limit: 5, windowSeconds: 86_400 },
+};
+export const confirmationIpv4BlockKey = (block: string) => `verify-email:sent:net24:day:${block}`;
+export const confirmationIpv6NetworkKey = (network: string) => `verify-email:sent:net48:day:${network}`;
+
+/** TS-238: the per-network counts a confirmation email goes on (none with the "log" transport). */
+export function confirmationNetworkCounters(
+  req: { headers: Headers },
+  env: Record<string, string | undefined> = process.env
+): NetworkCounter[] {
+  return realSendNetworkCounters(
+    req,
+    env,
+    { key: confirmationIpv4BlockKey, ...CONFIRMATION_NETWORK_LIMITS.perIpv4BlockDay },
+    { key: confirmationIpv6NetworkKey, ...CONFIRMATION_NETWORK_LIMITS.perIpv6NetworkDay }
+  );
 }
 
 type LimitHit = Awaited<ReturnType<typeof hitRateLimit>>;

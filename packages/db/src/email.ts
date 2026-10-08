@@ -178,11 +178,21 @@ export const LOCKED_OUT_RESETS_RESERVED = 15;
 // of the everyday allowance -- including the emails their weddings' guests set off. Each new
 // account alone was held to 20, but a dozen of them (cheap to make) could still use all 240 between
 // them, and then nobody's invites or RSVP links went out.
-export const NEW_ACCOUNTS_SHARE_OF_EVERYDAY = 0.25;
+// TS-240: only invites and RSVP links (emails a first-week planner sends to someone outside the
+// wedding) count here now -- not notifications to the wedding's own members, nor emails guests'
+// answers set off. Those have pools of their own (see notifications.ts), and counting them let one
+// busy new planner fill the whole share (20 + 20 + 20 = 60) and stop every other new planner's
+// invites and RSVP links for a day. The share is larger too: 96 of 240, room for nearly 5 new
+// planners' full 20 links each.
+export const NEW_ACCOUNTS_SHARE_OF_EVERYDAY = 0.4;
 // TS-232: emails guests' answers set off (RSVP notifications, see sendEmail's `forGuestsOf`), from
-// every wedding together, may use at most this share of the everyday allowance. They aren't charged
-// to anyone's own share, and each owner has a pool of 60 for them -- so two week-old accounts could
-// use all 240 between them (2 x (60 + 60)). Now that takes about four, as the account share intends.
+// every wedding together, may use at most this share of the everyday allowance (48 of 240). They
+// aren't charged to anyone's own share, and each owner had a pool of 60 for them -- so two week-old
+// accounts could use all 240 between them (2 x (60 + 60)).
+// TS-241: and one owner's pool (60) was larger than this whole share, so a single account could use
+// it all up and stop every other wedding's RSVP emails for a day. Each owner's pool is now 12 (5 in
+// the account's first week -- see NOTIFICATION_EMAILS_PER_OWNER_WITHOUT_ACTOR), so filling the 48
+// takes at least 4 established owners, or 10 first-week ones.
 export const GUEST_ANSWERS_SHARE_OF_EVERYDAY = 0.2;
 
 export function dailyEmailLimits(env: EmailEnv = process.env): {
@@ -491,6 +501,7 @@ export async function sendEmail(
     lockedOut = false,
     forGuestsOf,
     newestReset = false,
+    beforeResetsBudget,
   }: {
     /**
      * A password reset for an account that has confirmed its address: counted only against the
@@ -520,8 +531,7 @@ export async function sendEmail(
      * TS-219: an email a guest set off (an RSVP answer) in a wedding this account owns. Not charged
      * to the owner's share (TS-186: guests' answers must never use up the owner's own email) -- the
      * wedding's and the owner's pools for guests' answers (see notifications.ts) and the site's
-     * limits bound it. While the owner's account is in its first week it does count toward the
-     * first-week accounts' combined share.
+     * limits bound it. TS-240: nor toward the first-week accounts' combined share any more.
      */
     forGuestsOf?: string;
     /**
@@ -532,6 +542,12 @@ export async function sendEmail(
      * reset that lets them take the account back.
      */
     newestReset?: boolean;
+    /**
+     * TS-238: for a `newestReset`, called just before it's drawn from the resets' own budget (only
+     * when the unconfirmed accounts' share is full); false refuses it as Seatwise's limit. The caller
+     * counts the asking network's slice of that budget here (and gives it back if nothing is sent).
+     */
+    beforeResetsBudget?: () => Promise<boolean>;
     /** TS-203: a reset for an account locked out by wrong passwords -- may use the resets kept for that. */
     lockedOut?: boolean;
   } = {}
@@ -631,6 +647,38 @@ export async function sendEmail(
     if (essential) {
       const resetLimit = lockedOut ? limits.resets : limits.resets - limits.lockedOutResets;
       if (!(await fits(resetCounter, resetLimit, "allowance for password-reset emails"))) return "limited";
+    } else if (unconfirmedReset && newestReset) {
+      // TS-238: the newest reset after a quiet few hours (TS-219) for an unconfirmed account -- the
+      // only way for an address's real owner to take back an account someone else signed up with.
+      // It goes from the unconfirmed accounts' share as usual, but when that share (or the everyday
+      // allowance) is full it's drawn from the resets' own budget instead, still short of the resets
+      // kept for locked-out accounts. Before, a few networks filling the 24 kept the address's owner
+      // out for good. Each network's draw on that budget is limited too (see `beforeResetsBudget`).
+      const firstCounted = counted.length;
+      const viaShare = async () => {
+        for (const [counter, limit] of [
+          [unconfirmedResetCounter, limits.unconfirmedResets],
+          [dailyCounter, limits.everyday - limits.plannerFloor],
+        ] as const) {
+          const counts = await counter.hit();
+          counted.push(() => counter.undo(counts.windowStart));
+          if (counts.count > limit) return false;
+        }
+        return true;
+      };
+      if (!(await viaShare())) {
+        // Only this step's counts are given back -- the address's count (if any) stays.
+        for (const undo of counted.splice(firstCounted).reverse()) await undo();
+        if (beforeResetsBudget && !(await beforeResetsBudget())) {
+          await giveBack();
+          console.warn(`[email] not sent to ${shown}: this network has had its share of the password-reset emails in the last 24 hours.`);
+          return "limited";
+        }
+        const fromResets = limits.resets - limits.lockedOutResets;
+        if (!(await fits(resetCounter, fromResets, "allowance for password-reset emails (after the unconfirmed accounts' share)"))) {
+          return "limited";
+        }
+      }
     } else {
       if (confirmation && !(await fits(confirmationCounter, limits.confirmations, "share for email confirmations"))) return "limited";
       if (unconfirmedReset && !(await fits(unconfirmedResetCounter, limits.unconfirmedResets, "share for unconfirmed accounts' resets"))) {
@@ -652,10 +700,11 @@ export async function sendEmail(
       if (forGuestsOf && !account && !(await fits(guestAnswersCounter, limits.guestAnswers, "share for emails guests' answers set off"))) {
         return "limited";
       }
-      // TS-219: and for an account in its first week (whether it sent this or its guests set it
-      // off), the first-week accounts' combined share -- refused as Seatwise's limit.
-      const chargedTo = account ?? forGuestsOf;
-      if (chargedTo && (await accountIsNew(chargedTo))) {
+      // TS-219: and for an account in its first week, the first-week accounts' combined share --
+      // refused as Seatwise's limit. TS-240: only for what it sends to people outside its weddings
+      // (invites, RSVP links) -- not notifications to the wedding's members, nor emails its guests'
+      // answers set off, which used to let one busy new planner fill the share for everyone.
+      if (account && !toWeddingMember && (await accountIsNew(account))) {
         if (!(await fits(newAccountsCounter, limits.newAccounts, "share for accounts in their first week"))) return "limited";
       }
       // TS-203: only invites and RSVP links (planner-sent, to someone outside the wedding) may use

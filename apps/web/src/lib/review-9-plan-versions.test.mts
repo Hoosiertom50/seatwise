@@ -58,6 +58,10 @@ const members: Responder = (sql) => {
     ];
   }
   if (/INSERT INTO "notifications"/.test(sql)) return [{}];
+  // TS-237: the locks taken before each notification is written.
+  if (/SELECT "ownerId" FROM "weddings" WHERE id = \$1 FOR KEY SHARE/.test(sql)) return [{ ownerId: "owner" }];
+  if (/FROM "users" WHERE id = \$1 FOR KEY SHARE/.test(sql)) return [{}];
+  if (/FROM "wedding_collaborators" WHERE "weddingId" = \$1 AND "userId" = \$2 FOR KEY SHARE/.test(sql)) return [{}];
   return undefined;
 };
 

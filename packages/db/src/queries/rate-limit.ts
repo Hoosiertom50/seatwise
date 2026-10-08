@@ -165,6 +165,20 @@ async function rollingWindows(key: string, currentStart: Date, spanSeconds: numb
 }
 
 /**
+ * TS-237: runs the read that follows a hit's INSERT. If it fails (the database busy), the hit --
+ * already saved -- is taken back before the error goes on: the caller only sees an error, so it
+ * can't give back a hit it was never told about, and that hit used to stay counted.
+ */
+async function refundIfFails<T>(key: string, windowStart: Date, read: () => Promise<T>): Promise<T> {
+  try {
+    return await read();
+  } catch (err) {
+    await undoRateLimitHit(key, ROLLING_BUCKET_SECONDS, windowStart).catch(() => {});
+    throw err;
+  }
+}
+
+/**
  * TS-203: counts one hit in the current hourly window of a rolling limit. Returns the rolling total
  * (this hit included), and every window as it stands without this hit (for rollingRetryAfterSeconds).
  */
@@ -178,7 +192,10 @@ async function hitRolling(key: string, spanSeconds: number, nowMs: number) {
   );
   pruneOldCounters();
   const current = Number(rows[0].count);
-  const earlier = (await rollingWindows(key, windowStart, spanSeconds)).filter((w) => w.startMs !== windowStart.getTime());
+  // TS-237: if reading the earlier windows fails, this hit is taken back before the error goes on.
+  const earlier = (await refundIfFails(key, windowStart, () => rollingWindows(key, windowStart, spanSeconds))).filter(
+    (w) => w.startMs !== windowStart.getTime()
+  );
   const total = rollingTotal(current, earlier, windowStart.getTime(), spanSeconds);
   const without = [...earlier, { startMs: windowStart.getTime(), count: current - 1 }];
   return { windowStart, total, without };
@@ -211,7 +228,8 @@ export async function hitRateLimit(key: string, limit: number, windowSeconds: nu
 
   pruneOldCounters();
 
-  const previous = await previousWindowCount(key, windowStart, windowMs);
+  // TS-237: likewise, a failed read of the previous window takes this hit back.
+  const previous = await refundIfFails(key, windowStart, () => previousWindowCount(key, windowStart, windowMs));
   const counted = rows[0].count + carriedOver(previous, windowStart, windowMs, nowMs);
   return {
     allowed: counted <= limit,

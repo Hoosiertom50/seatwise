@@ -75,6 +75,8 @@ export interface RsvpLinkDTO {
   // TS-219: with emailFailed -- the mail server stopped answering after it may have taken the email,
   // so it may have been sent (it counts as sent for the hour's "already emailed").
   uncertain?: boolean;
+  // TS-241: with emailFailed -- Seatwise's own email limit for now (site-wide), not a failure.
+  siteEmailLimited?: boolean;
   // TS-132: true only when the email really went out (or, in local dev/CI, was logged) -- lets the
   // UI say "link emailed to X" vs. "link copied".
   emailed: boolean;

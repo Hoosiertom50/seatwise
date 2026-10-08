@@ -43,6 +43,8 @@ export async function sendGuestRsvpLink(
   rsvpClosed?: boolean;
   // TS-219: the email may have been sent (the mail server stopped answering part-way).
   uncertain?: boolean;
+  // TS-241: Seatwise's own email limit for now.
+  siteEmailLimited?: boolean;
 } | null> {
   // TS-178: worked out first -- on a live site without a proper APP_URL this throws before any
   // link is changed (see ./app-url).
@@ -124,12 +126,24 @@ export async function sendGuestRsvpLink(
 export function rsvpEmailSendOutcome(
   url: string,
   result: EmailResult
-): { url: string; emailed: boolean; emailFailed: boolean; emailLimited?: boolean; emailLimitedToday?: boolean; recipientLimited?: boolean; uncertain?: boolean } {
+): {
+  url: string;
+  emailed: boolean;
+  emailFailed: boolean;
+  emailLimited?: boolean;
+  emailLimitedToday?: boolean;
+  recipientLimited?: boolean;
+  uncertain?: boolean;
+  siteEmailLimited?: boolean;
+} {
   const emailed = emailDelivered(result);
   if (result === "recipient-limited") return { url, emailed: false, emailFailed: true, recipientLimited: true };
   // TS-203: the account's share of Seatwise's email is used up for now -- more in the next 24 hours.
   if (result === "account-limited") return { url, emailed: false, emailFailed: true, emailLimited: true, emailLimitedToday: true };
   if (result === "uncertain") return { url, emailed: false, emailFailed: true, uncertain: true };
+  // TS-241: Seatwise's own limit (the site-wide cap, or a share of it) -- said as such, not as
+  // "Couldn't email", which reads as something broken.
+  if (result === "limited") return { url, emailed: false, emailFailed: true, siteEmailLimited: true };
   return { url, emailed, emailFailed: !emailed };
 }
 
@@ -148,5 +162,6 @@ export function rsvpEmailOutcome(
     recipientLimited: sent.recipientLimited ?? false,
     rsvpClosed: sent.rsvpClosed ?? false,
     uncertain: sent.uncertain ?? false,
+    siteEmailLimited: sent.siteEmailLimited ?? false,
   };
 }
