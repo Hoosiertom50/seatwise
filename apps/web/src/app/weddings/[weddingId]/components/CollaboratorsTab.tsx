@@ -818,6 +818,13 @@ export function CollaboratorsTab({
       setCutoffWarning(null);
       return refuseChangedElsewhere("setting-rsvp-cutoff", (fresh) => setRsvpCutoffDate(fresh.rsvpCutoffDate ?? ""));
     }
+    // TS-255: already the saved cutoff (another tab saved this same date) -- nothing to send, like
+    // leaving the box unchanged; a save here would only move the settings revision on.
+    if (value === (wedding.rsvpCutoffDate ?? "")) {
+      setCutoffWarning(null);
+      settingFields.markDirty("setting-rsvp-cutoff", false);
+      return;
+    }
     await saveRsvpCutoff(value);
   }
 

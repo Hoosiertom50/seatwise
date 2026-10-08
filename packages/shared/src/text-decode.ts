@@ -159,7 +159,7 @@ const MAC_ROMAN_IN_A_WORD = new RegExp(`\\p{L}[${MAC_ROMAN_NOT_LETTERS}]\\p{L}|\
 // "Ka’iulani" and "Ja’nae" are real Windows names; ‘ between two small letters ("No‘l" for Noël)
 // stays here. Also a small letter then ‘ or ’ at the end of a word -- Mac ë and í ("Zo‘" for Zoë,
 // "Mart’" for Martí), which used to be made a plain apostrophe and saved as "Zo'" -- but not inside a
-// quoted nickname ("Robert ‘Bob’"). And the Mac's own curly apostrophes, which windows-1252 shows as
+// quoted nickname ("Robert ‘Bob’", "Robert ‘Bobby Joe’", "‘Bobby-Joe’"). And the Mac's own curly apostrophes, which windows-1252 shows as
 // Õ and Ô, inside a name ("OÕBrien", "DÔArcy", "KaÕiulani").
 const MAC_ROMAN_IN_A_NAME = new RegExp(
   [
@@ -167,7 +167,7 @@ const MAC_ROMAN_IN_A_NAME = new RegExp(
     `\\p{L}[¿§]`,
     `(?<!\\p{L})[${MAC_ROMAN_NOT_LETTERS_AT_START}]\\p{L}`,
     `\\p{L}œ(?![ui])\\p{Ll}`,
-    `(?<!['‘"“][\\p{L}\\p{M}]*)\\p{Ll}[’‘](?![\\p{L}\\p{M}])`,
+    `(?<!['‘"“][\\p{L}\\p{M}]*)(?<![‘"“][\\p{L}\\p{M} .-]*)\\p{Ll}[’‘](?![\\p{L}\\p{M}])`,
     `\\p{Ll}[ÕÔ]\\p{L}|\\p{Lu}[ÕÔ]\\p{Lu}\\p{Ll}`,
   ].join("|"),
   "u"

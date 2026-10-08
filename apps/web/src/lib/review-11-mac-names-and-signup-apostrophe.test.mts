@@ -94,6 +94,10 @@ test("TS-254: a Mac ú after a capital (Núria read as Nœria) is refused; Frenc
 test("TS-254: a quoted nickname in a Windows name (Robert ‘Bob’) is not the Mac sign", () => {
   assert.equal(looksLikeMacRoman("Robert ‘Bob’", true), false);
   assert.equal(looksLikeMacRoman("‘Bob’", true), false);
+  // TS-255: and a nickname of more than one word, or with a hyphen.
+  assert.equal(looksLikeMacRoman("Robert ‘Bobby Joe’", true), false);
+  assert.equal(looksLikeMacRoman("Robert ‘Bobby-Joe’", true), false);
+  assert.equal(looksLikeMacRoman("Zo‘ Ann", true), true);
   // Only in name columns: in a notes cell "the Smiths’" is ordinary text.
   assert.equal(looksLikeMacRoman("from the Smiths’", false), false);
 });
