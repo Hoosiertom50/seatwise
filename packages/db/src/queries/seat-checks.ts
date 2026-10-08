@@ -93,11 +93,14 @@ export interface NewlyFlaggedSeat {
 
 // TS-181: the order seats at a table are counted in, so who gets flagged when there isn't room is
 // always the same and makes sense: locked guests first, then in the order they were seated there,
-// and guests seated at the same moment (a whole plan is saved at once) by name. Before, the
+// and guests seated at the same moment (a whole plan is saved at once) by guest id. Before, the
 // tie-break was the seat's random id, so the same plan could flag a different guest each time.
 // Shared by the table re-check and the restore preview (which must keep and drop the same guests).
 // Uses the aliases sa (seat_assignments) and g (guests).
-export const SEAT_ORDER = `g."isLocked" DESC, sa."createdAt", g."lastName", g."firstName", g.id`;
+// TS-237: guests seated at the same moment go by guest id, not name -- the same tie-break Generate
+// uses (getLatestAssignmentsForWedding's seatOrder), so the table re-check and Generate agree on who
+// keeps a seat, and renaming a guest never changes who is flagged.
+export const SEAT_ORDER = `g."isLocked" DESC, sa."createdAt", g.id`;
 
 // FR-4.6 / TS-120 / TS-150: re-checks everyone seated at one table in the given plan version and
 // sets Needs Reassignment exactly where a hard rule is broken or the table has no room left for

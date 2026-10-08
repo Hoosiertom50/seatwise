@@ -118,6 +118,29 @@ async function getCurrentPlanDetail(weddingId: string, q: PlanReader = pool): Pr
   return rows[0] ? getPlanVersionDetail(rows[0].id as string, weddingId, q) : null;
 }
 export class RestoreError extends Error {}
+// TS-237: Generate or Restore would replace an approved plan the person didn't confirm replacing --
+// it was approved after their page last looked (or they were never asked). Nothing was saved; the
+// screen asks again, naming the approved version it now knows about.
+export const APPROVED_PLAN_NOT_CONFIRMED_MESSAGE = "The plan was approved a moment ago — confirm again to replace it.";
+export class ApprovedPlanNotConfirmedError extends Error {
+  approvedVersionId: string;
+  constructor(approvedVersionId: string) {
+    super(APPROVED_PLAN_NOT_CONFIRMED_MESSAGE);
+    this.approvedVersionId = approvedVersionId;
+  }
+}
+// TS-237: whether a save that would make itself current may replace the current plan. Only an
+// approved current plan needs the person's confirmation, and only when the caller passes one at all
+// (`confirmed` undefined is an internal caller, such as a script, that isn't asking anyone):
+// it must name that very version. null means "I wasn't replacing an approved plan".
+function checkApprovedReplacementConfirmed(
+  currentPlanId: string | null,
+  currentIsApproved: boolean,
+  confirmed: string | null | undefined
+): void {
+  if (!currentPlanId || !currentIsApproved || confirmed === undefined) return;
+  if (confirmed !== currentPlanId) throw new ApprovedPlanNotConfirmedError(currentPlanId);
+}
 // TS-173: a guest or table this new version seats was deleted while it was being worked out (the
 // database refused the seat, 23503). Nothing was saved; trying again works from the new data.
 export class PlanSourceChangedError extends Error {
@@ -301,6 +324,9 @@ export async function createPlanVersionWithAssignments(
     // saved as a comparison draft and the approved plan stays current. Checked under the wedding
     // lock below, so an approval landing a moment earlier is still respected.
     mayReplaceApproved?: boolean;
+    /** TS-237: the approved version the person confirmed replacing (null: none) -- see
+     * checkApprovedReplacementConfirmed. Left out, nothing is checked. */
+    replacesApprovedVersionId?: string | null;
     /** TS-195: the access the person was let in with -- read again under the wedding lock. */
     actorAccess?: ActorAccess;
   }
@@ -341,6 +367,9 @@ export async function createPlanVersionWithAssignments(
       makeCurrent = false;
       savedAsDraftBecauseApproved = true;
     }
+    // TS-237: replacing an approved plan needs the person's confirmation of that very version,
+    // checked here under the wedding lock -- their page may not have shown a fresh approval.
+    if (makeCurrent) checkApprovedReplacementConfirmed(currentPlanId, currentIsApproved, input.replacesApprovedVersionId);
     // TS-231: an approved plan replaced by this one -- everyone is told once it's saved (below).
     replacedApproved = makeCurrent && currentIsApproved;
 
@@ -610,6 +639,15 @@ export async function listPlanVersionsForWedding(weddingId: string): Promise<Pla
 export async function getPlanVersionStatusForWedding(id: string, weddingId: string): Promise<string | null> {
   const { rows } = await pool.query(`SELECT status FROM "plan_versions" WHERE id = $1 AND "weddingId" = $2`, [id, weddingId]);
   return (rows[0]?.status as string | undefined) ?? null;
+}
+
+// TS-237: the current plan's id and status (the restore preview names the approved version it shows).
+export async function getCurrentPlanVersionIdAndStatus(weddingId: string): Promise<{ id: string; status: string } | null> {
+  const { rows } = await pool.query(
+    `SELECT id, status FROM "plan_versions" WHERE "weddingId" = $1 AND "isCurrent" LIMIT 1`,
+    [weddingId]
+  );
+  return rows[0] ? { id: rows[0].id as string, status: rows[0].status as string } : null;
 }
 
 export async function getCurrentPlanVersionStatus(weddingId: string): Promise<string | null> {
@@ -2187,7 +2225,13 @@ export async function restorePlanVersion(
   actorUserId: string,
   // TS-179: false when the person restoring can't undo an approval -- an approved current plan is
   // then left current and the restored version is saved as a comparison draft beside it.
-  options: { mayReplaceApproved?: boolean; /** TS-195: read again under the wedding lock. */ actorAccess?: ActorAccess } = {}
+  options: {
+    mayReplaceApproved?: boolean;
+    /** TS-195: read again under the wedding lock. */
+    actorAccess?: ActorAccess;
+    /** TS-237: the approved version the person confirmed replacing (see createPlanVersionWithAssignments). */
+    replacesApprovedVersionId?: string | null;
+  } = {}
 ): Promise<ManualMoveResult & { savedAsDraftBecauseApproved: boolean }> {
   let planVersion!: PlanVersionDetail;
   const client = await pool.connect();
@@ -2220,6 +2264,8 @@ export async function restorePlanVersion(
     const currentIsApproved = await currentPlanIsApproved(client, currentPlanId);
     savedAsDraftBecauseApproved = options.mayReplaceApproved === false && currentIsApproved;
     const makeCurrent = !savedAsDraftBecauseApproved;
+    // TS-237: as for Generate -- an approved plan is only replaced when that version was confirmed.
+    if (makeCurrent) checkApprovedReplacementConfirmed(currentPlanId, currentIsApproved, options.replacesApprovedVersionId);
     // TS-231: an approved plan replaced by this restore -- everyone is told once it's saved (below).
     replacedApprovedAs = makeCurrent && currentIsApproved ? versionNumber : null;
 

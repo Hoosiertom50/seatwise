@@ -1,6 +1,8 @@
 import { z } from "zod";
 import { FIELD_LIMITS } from "../field-limits";
 import { expectedRevisionField } from "./common";
+// TS-243: free text refuses hidden control characters and line breaks (see ../safe-text).
+import { safeText } from "../safe-text";
 import type { SideMixing } from "./wedding";
 
 export type PlanVersionStatusValue = "DRAFT" | "IN_REVIEW" | "APPROVED";
@@ -17,8 +19,10 @@ export const planVersionStatusSchema = z.object({
 // FR-9.4/TS-10: a plan version's label is a free-text nickname ("Family-approved draft",
 // "Post-RSVP final") to tell versions apart at a glance beyond the auto-incrementing number.
 // Empty string clears the label back to none.
+// TS-243: the same text rules as every other label -- before, a NUL character was a server error,
+// and direction-flipping marks and line breaks were saved.
 export const setPlanVersionLabelSchema = z.object({
-  label: z.string().trim().max(FIELD_LIMITS.planVersionLabel),
+  label: safeText(FIELD_LIMITS.planVersionLabel),
   expectedRevision: expectedRevisionField,
 });
 export type SetPlanVersionLabelInput = z.infer<typeof setPlanVersionLabelSchema>;
@@ -77,8 +81,19 @@ export interface PlanVersionDetailDTO extends PlanVersionDTO {
 // Current version (replacing whichever was Current before) or a non-replacing Comparison Draft.
 // Defaults to true so existing callers that don't send a body keep the old "always current"
 // behavior.
+// TS-237: the approved current version the person confirmed replacing, or null when they weren't
+// asked (their page showed no approved plan). If the current plan is approved and this doesn't name
+// it, nothing is saved and the screen asks again (409).
+const replacesApprovedVersionIdField = z.string().min(1).max(100).nullable().optional();
+
 export const generatePlanVersionSchema = z.object({
   makeCurrent: z.boolean().optional(),
+  replacesApprovedVersionId: replacesApprovedVersionIdField,
+});
+
+// TS-237: a restore's body -- only the confirmation above.
+export const restorePlanVersionSchema = z.object({
+  replacesApprovedVersionId: replacesApprovedVersionIdField,
 });
 export type GeneratePlanVersionInput = z.infer<typeof generatePlanVersionSchema>;
 

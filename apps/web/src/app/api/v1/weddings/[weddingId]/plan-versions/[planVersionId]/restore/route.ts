@@ -1,10 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
-import { restorePlanVersion, RestoreError } from "@seatwise/db";
+import { restorePlanVersion, RestoreError, ApprovedPlanNotConfirmedError } from "@seatwise/db";
+import { restorePlanVersionSchema } from "@seatwise/shared";
 import { getAuthUser } from "@/lib/session";
-import { errorResponse, concurrentChangeResponse } from "@/lib/api-response";
+import { errorResponse, concurrentChangeResponse, readJson, zodErrorResponse } from "@/lib/api-response";
 import { requireAccess, mayManageApproval, approvalActor, type GrantedAccess } from "@/lib/access";
 import { limitedWeddingWork } from "@/lib/rate-limit";
 import { SAVED_AS_DRAFT_BECAUSE_APPROVED } from "@/lib/plan-approval-text";
+import { approvedPlanNotConfirmedResponse } from "@/lib/approved-plan-response";
 
 type Params = { params: Promise<{ weddingId: string; planVersionId: string }> };
 
@@ -22,10 +24,22 @@ export async function POST(req: NextRequest, { params }: Params) {
   if ("error" in access) return access.error;
 
   // TS-205: an hourly limit per account (each Restore stores a whole new plan version).
-  return limitedWeddingWork("restore", user.id, () => restore(weddingId, planVersionId, user.id, access));
+  return limitedWeddingWork("restore", user.id, () => restore(req, weddingId, planVersionId, user.id, access));
 }
 
-async function restore(weddingId: string, planVersionId: string, userId: string, access: GrantedAccess): Promise<Response> {
+async function restore(
+  req: NextRequest,
+  weddingId: string,
+  planVersionId: string,
+  userId: string,
+  access: GrantedAccess
+): Promise<Response> {
+  // TS-237: an optional body naming the approved version the person confirmed replacing.
+  const json = await readJson(req);
+  if (!json.ok) return json.response;
+  const parsedBody = restorePlanVersionSchema.safeParse(json.body ?? {});
+  if (!parsedBody.success) return zodErrorResponse(parsedBody.error);
+
   // TS-179 (Tom's decision): someone who can't undo an approval gets the restored version as a
   // comparison draft when the current plan is approved -- the approved plan stays current.
   // TS-204: from the same access reading the restore re-checks under the wedding lock.
@@ -37,7 +51,12 @@ async function restore(weddingId: string, planVersionId: string, userId: string,
       weddingId,
       userId,
       // TS-195: the access read again under the restore's lock -- refused if it dropped meanwhile.
-      { mayReplaceApproved, actorAccess: approvalActor(access) }
+      {
+        mayReplaceApproved,
+        actorAccess: approvalActor(access),
+        // TS-237: checked under the restore's lock (see the Generate route).
+        replacesApprovedVersionId: parsedBody.data.replacesApprovedVersionId ?? null,
+      }
     );
     return NextResponse.json(
       {
@@ -50,6 +69,7 @@ async function restore(weddingId: string, planVersionId: string, userId: string,
     );
   } catch (err) {
     if (err instanceof RestoreError) return errorResponse(err.message, 404);
+    if (err instanceof ApprovedPlanNotConfirmedError) return approvedPlanNotConfirmedResponse(err);
     const conflict = concurrentChangeResponse(err);
     if (conflict) return conflict;
     throw err;
