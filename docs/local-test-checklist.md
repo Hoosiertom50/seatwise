@@ -66,7 +66,7 @@ Give the tester:
 - this checklist,
 - the Mac (or tell them where it is) with the app running.
 
-**Fresh data between browsers:** the tester runs Part 2 once per browser. Before each new browser, run step 1 again (no need to rebuild or restart) and give the tester the new setup sheet, because the passwords change.
+**Fresh data between full runs:** the tester runs all of Part 2 once in each browser being tested (Chrome, Safari, Firefox, Edge). Only when a whole run is finished and the next one is about to start, run step 1 again (no need to rebuild or restart) and give the tester the new setup sheet, because the passwords change. Do **not** run it when the tester opens a second browser in the middle of a run for the two-browser steps: that would sign the first browser out and undo the changes made so far.
 
 ---
 
