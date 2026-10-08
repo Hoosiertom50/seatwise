@@ -291,7 +291,7 @@ Sign in as `owner@demo.seatwise.test`. Open **Jamie & Morgan's Wedding**. The **
 ## 6. Seating plan tab
 
 - [ ] **6.1** Click the **Seating plan** tab.
-  You should see: the **Version** list shows "v2 — Final plan — …, Approved (…)", with a date and 12-hour time. Under it: "Version 2 — …", an **Approved** label, and a count of seated and unassigned guests. If you did step 5.5, a **Needs reassignment** list shows the guests from Table 3.
+  You should see: the **Version** list shows "v2 — Final plan — …, Approved (…)", with a date and 12-hour time. Under it: "Version 2 — …", an **Approved** label, and a count of seated and unassigned guests. There is no **Needs reassignment** list: step 5.5 put Table 3 back to 10 seats, so its guests fit again and their flags are cleared.
 - [ ] **6.2** Next to **Export:**, click **Seating chart (PDF)**, then **Guest lookup list (PDF)**, then **Place cards (PDF)**.
   You should see: each one downloads and opens. Names with accents and apostrophes print correctly (for example "Lucía Rivera", "Michael O'Brien"). Any date reads 11-14-2026.
 - [ ] **6.3** Click **Compare two versions...**. Pick From `v2 …` and To `v3 …`. Click **Compare**.
@@ -448,6 +448,8 @@ Keep the owner in browser 1. Use browser 2 for the other accounts.
   You should see: in browser 2, within about 5 seconds: "This wedding is no longer available (it may have been deleted, or your access was removed)." and "Taking you back to your dashboard...".
 
 ## 14. Hand-off
+
+First, in browser 2: log out, sign in as `couple@demo.seatwise.test` (Jamie), open **Jamie & Morgan's Wedding** and click the **Collaborators** tab. Leave it open there.
 
 - [ ] **14.1** Browser 1 (owner): **Collaborators** tab, **Hand off this wedding**. In **New owner**, pick **Jamie Rivera**. Click **Hand off**.
   You should see: the question names Jamie: "Make Jamie Rivera the owner of this wedding? You'll stay on as a collaborator with Edit access. Only the new owner can undo this." It **also** says: "Your private wedding note will be visible to the new owner — clear it first if it's only for you."
