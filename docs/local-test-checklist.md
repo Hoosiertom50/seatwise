@@ -442,7 +442,7 @@ Keep the owner in browser 1. Use browser 2 for the other accounts.
 - [ ] **13.9** Browser 2 (New Helper): **Seating plan** tab. Make sure the current plan shows **Approved** (if not, approve it as the owner first). Click **Generate new plan**.
   You should see: "The plan is approved, so this was saved as a comparison draft — only the owner or a Couple member can replace an approved plan." The approved plan is still current.
 - [ ] **13.10** Browser 1: in **Invite a collaborator**, type Email address `invite.test@demo.seatwise.test`, Role **Collaborator**, Access level **View**. Click **Send invite**.
-  You should see: "Invite sent…" and it's under **Pending invites**. Get its link (helper B, `--invite-link invite.test@demo.seatwise.test`). Then click **Revoke**, **Yes, revoke invite**. Open the link.
+  You should see: "Invite sent…" and it's under **Pending invites**. Get its link (helper B, `--invite-link invite.test@demo.seatwise.test`). Getting the link makes a fresh invite and retires the one on screen, so **reload the page** and go back to the **Collaborators** tab. Then, on `invite.test@demo.seatwise.test` under **Pending invites**, click **Revoke**, **Yes, revoke invite**. Open the link.
   You should see: "This invite link is no longer active…".
 - [ ] **13.11** Browser 2: as New Helper, open the wedding. Browser 1: on New Helper's row, click **Remove**, then **Yes, remove access**.
   You should see: in browser 2, within about 5 seconds: "This wedding is no longer available (it may have been deleted, or your access was removed)." and "Taking you back to your dashboard...".
