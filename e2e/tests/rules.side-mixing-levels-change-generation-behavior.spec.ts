@@ -123,12 +123,9 @@ defineQualityTest(
       const body = await generateUnder("BALANCED_MIX");
       expect(body.planVersion.sideMixingSetting).toBe("BALANCED_MIX");
       expect(body.planVersion.isComplete).toBe(true);
-      expect(body.scoreReport.sideMixing).toEqual({
-        setting: "BALANCED_MIX",
-        mixedTableCount: 1,
-        singleSideTableCount: 0,
-        singleSideOnlyViolations: 0,
-      });
+      // Exactly one mixed table; whether the other holds one side or only the Both guest follows
+      // guest ids (TS-244), so singleSideTableCount isn't fixed here.
+      expect(body.scoreReport.sideMixing).toMatchObject({ setting: "BALANCED_MIX", mixedTableCount: 1, singleSideOnlyViolations: 0 });
     });
 
     await test.step("Act + Assert: Fully Mixed produces two mixed tables", async () => {
@@ -152,7 +149,7 @@ defineQualityTest(
     objective:
       "Confirms that when a table is marked Single-Side-Only and capacity forces a guest from the other side onto it anyway, generation still completes successfully, and the violation is surfaced as a non-blocking warning and counted in the score report -- not treated as a hard rule.",
     expectedOutcome:
-      "Generation is complete (isComplete: true) with a warning naming the Groom guest and the Single-Side-Only table, and the score report counts exactly one Single-Side-Only violation.",
+      "Generation is complete (isComplete: true) with one warning naming the Single-Side-Only table, which seats guests from both sides, and the score report counts exactly one Single-Side-Only violation.",
     requirementIds: ["REQ-RELATIONSHIPS-SEATING-RULES"],
     tags: ["@mutating", "@feature:relationships", "@feature:seating-plan", "@risk:normal", "@suite:regression"],
   },
@@ -181,10 +178,15 @@ defineQualityTest(
       return (await res.json()) as GenerateResponse;
     });
 
-    await test.step("Assert: generation completes, the Groom is forced onto the Single-Side-Only table, and it's reported as a warning plus a score-report violation", async () => {
+    await test.step("Assert: generation completes, the other side is forced onto the Single-Side-Only table, and it's reported as a warning plus a score-report violation", async () => {
       expect(body.planVersion.isComplete).toBe(true);
+      // TS-244: whoever comes first (by guest id now, not name) sets the table's side -- usually a
+      // Bride, sometimes the Groom. Either way the 3-seat Single-Side-Only table must take both
+      // sides, since only one seat is left elsewhere.
       const groomTable = body.planVersion.assignments.find((a) => a.guestId === idGroom)?.tableId;
-      expect(groomTable).toBe(tableIdSSO);
+      const ssoGuests = body.planVersion.assignments.filter((a) => a.tableId === tableIdSSO);
+      expect(ssoGuests).toHaveLength(3);
+      if (groomTable !== tableIdSSO) expect(ssoGuests.some((a) => a.guestId === idGroom)).toBe(false);
       expect(body.planVersion.warnings.length).toBe(1);
       expect(body.planVersion.warnings[0]).toContain("Single-Side-Only");
       expect(body.planVersion.warnings[0]).toContain("Table A");
