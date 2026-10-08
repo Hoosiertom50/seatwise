@@ -73,7 +73,7 @@ defineQualityTest(
     let idG2 = "";
     let idBoth = "";
 
-    await test.step("Arrange: two Bride guests, two Groom guests, one Both guest, and two capacity-4 tables (last names and table labels chosen to make processing order deterministic)", async () => {
+    await test.step("Arrange: two Bride guests, two Groom guests, one Both guest, and two capacity-4 tables", async () => {
       idB1 = (
         await weddingData.createGuest(managedWedding.id, { firstName: "Playwright", lastName: `BrideA-${token}`, side: "BRIDE" })
       ).id;
@@ -111,11 +111,12 @@ defineQualityTest(
         singleSideTableCount: 2,
         singleSideOnlyViolations: 0,
       });
-      // The Both guest always lands on the same table as both Brides here -- proving their
-      // presence doesn't turn that all-Bride table into a "mixed" one.
+      // Each side sits together, and the Both guest -- whichever table it lands on (that depends on
+      // guest ids since TS-244) -- never turns that table into a "mixed" one (the counts above).
       const tableOf = (id: string) => body.planVersion.assignments.find((a) => a.guestId === id)?.tableId;
-      expect(tableOf(idBoth)).toBe(tableOf(idB1));
       expect(tableOf(idB2)).toBe(tableOf(idB1));
+      expect(tableOf(idG2)).toBe(tableOf(idG1));
+      expect([tableOf(idB1), tableOf(idG1)]).toContain(tableOf(idBoth));
     });
 
     await test.step("Act + Assert: Balanced Mix produces exactly one mixed table", async () => {

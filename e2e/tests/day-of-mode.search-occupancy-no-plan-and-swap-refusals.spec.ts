@@ -42,9 +42,13 @@ defineQualityTest(
     });
 
     const plan = await weddingData.generatePlanVersion(w);
-    await weddingData.moveGuestAssignment(w, plan.id, guestA.id, alpha.id);
-    await weddingData.moveGuestAssignment(w, plan.id, guestB.id, alpha.id);
-    await weddingData.moveGuestAssignment(w, plan.id, guestC.id, beta.id);
+    // TS-244: Generate's order for same-size guests now follows their ids, not names, so where it
+    // put them varies -- unseat everyone first, then seat each where this test needs them (a move
+    // into a full table is refused, and the helper doesn't fail on that by itself).
+    for (const g of [guestA, guestB, guestC]) expect((await weddingData.moveGuestAssignment(w, plan.id, g.id, null)).status).toBe(200);
+    expect((await weddingData.moveGuestAssignment(w, plan.id, guestA.id, alpha.id)).status).toBe(200);
+    expect((await weddingData.moveGuestAssignment(w, plan.id, guestB.id, alpha.id)).status).toBe(200);
+    expect((await weddingData.moveGuestAssignment(w, plan.id, guestC.id, beta.id)).status).toBe(200);
 
     await test.step("With guests seated: each table's seated/capacity count", async () => {
       await dayOf.goto(w);

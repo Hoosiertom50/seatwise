@@ -616,6 +616,10 @@ export function generateSeatingPlan(
           // penalize a table that's already stacked with this unit's own side.
           score += oppositeSide * w.sideMixing.fullyMixedOppositeSideBonus;
           score -= sameSide * (w.sideMixing.fullyMixedOppositeSideBonus * 0.5);
+          // TS-247: and favor a table that has nobody from this side yet -- otherwise, depending
+          // on the order guests come in, one table took both sides and filled up while the other
+          // was left with one side only, though every table could have been mixed.
+          if (sameSide === 0) score += w.sideMixing.fullyMixedOppositeSideBonus;
         } else {
           score += oppositeSide * w.sideMixing.balancedMixOppositeSideBonus;
         }

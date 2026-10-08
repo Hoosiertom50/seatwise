@@ -201,3 +201,21 @@ test("3,000 random weddings: renaming a guest never changes the plan", () => {
   // The rename really did reorder the guest list in a good share of the weddings.
   assert.ok(changedOrder > 500, `only ${changedOrder} renames reordered the list`);
 });
+
+// TS-247: Fully Mixed spreads each side over the tables whatever order the guests come in -- it
+// used to leave one table with a single side in about two orders out of three.
+test("Fully Mixed mixes every table for any processing order (TS-247)", () => {
+  const sides = ["BRIDE", "BRIDE", "GROOM", "GROOM", "BOTH"] as const;
+  const perms: number[][] = [];
+  const permute = (rest: number[], acc: number[]) => {
+    if (rest.length === 0) return void perms.push(acc);
+    rest.forEach((x, i) => permute([...rest.slice(0, i), ...rest.slice(i + 1)], [...acc, x]));
+  };
+  permute([0, 1, 2, 3, 4], []);
+  for (const order of perms) {
+    // ids decide the order for same-size groups (TS-244), so give them in this permutation's order
+    const guests = order.map((k, rank) => guest(`g${rank}-${k}`, `Guest ${k}`, 1, { side: sides[k] }));
+    const result = generateSeatingPlan(guests, [], [table("A", "A", 4), table("B", "B", 4)], "FULLY_MIXED");
+    assert.equal(result.scoreReport?.sideMixing.mixedTableCount, 2, `order ${order.join(",")}`);
+  }
+});
