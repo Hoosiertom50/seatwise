@@ -157,7 +157,9 @@ test("TS-242: a vendor edit reads access again (the wedding) before it locks the
   assert.ok(recheck > 0 && vendorLock > recheck, `order was: ${log.join(" | ")}`);
 });
 
-test("TS-242: renaming a plan version reads access again (the wedding) before it locks the plan", async () => {
+// TS-253: and the current plan's row comes before both -- a wedding delete holds the current plan
+// and then needs the wedding to itself, so reading access first deadlocked with it.
+test("TS-242/TS-253: renaming a plan version locks the current plan, then reads access again, then locks the version", async () => {
   fakeDatabase((sql) => {
     if (ACCESS_RECHECK.test(sql)) return [{ ownerId: "owner-1" }];
     if (/FROM "plan_versions" WHERE id = \$1 AND "weddingId" = \$2 FOR NO KEY UPDATE/.test(sql)) return [{ revision: 3, isCurrent: true }];
@@ -167,7 +169,8 @@ test("TS-242: renaming a plan version reads access again (the wedding) before it
   await db.setPlanVersionLabel("p1", "w1", "Final", 3, OWNER);
   const recheck = indexOf(ACCESS_RECHECK);
   const planLock = indexOf(/FROM "plan_versions" WHERE id = \$1 AND "weddingId" = \$2 FOR NO KEY UPDATE/);
-  assert.ok(recheck > 0 && planLock > recheck, `order was: ${log.join(" | ")}`);
+  const currentPlanLock = indexOf(/FROM "plan_versions" WHERE "weddingId" = \$1 AND "isCurrent" FOR NO KEY UPDATE/);
+  assert.ok(currentPlanLock > 0 && recheck > currentPlanLock && planLock > recheck, `order was: ${log.join(" | ")}`);
 });
 
 test("TS-242: a vendor change that lost a race is said in vendor words, not the plan's", async () => {

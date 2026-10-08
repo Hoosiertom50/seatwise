@@ -2349,10 +2349,13 @@ export async function setPlanVersionLabel(
   const client = await pool.connect();
   try {
     await beginTransaction(client);
-    // TS-204: the person's access read again inside the save -- lowered or removed while this
-    // waited: refused, nothing saved.
-    // TS-242: before the plan's lock, not after -- the wedding first, then its rows (as the timeline
-    // does since TS-234), so a wedding delete at the same moment can't leave each waiting for the other.
+    // TS-253: the current plan's row first, as a move does (see lockCurrentPlan). A wedding delete
+    // holds the current plan and then needs the wedding to itself -- reading access first (which
+    // holds the wedding) while waiting for that plan left each waiting for the other when the
+    // current plan was the one being renamed.
+    await lockCurrentPlan(client, weddingId);
+    // TS-204: the person's access read again under the plan's lock -- lowered or removed while
+    // this waited: refused, nothing saved. TS-242: before the version's own row is locked.
     if (actorAccess) await recheckActorAccess(client, weddingId, actorAccess);
     await checkPlanVersionRevision(client, id, weddingId, expectedRevision);
 
