@@ -213,7 +213,11 @@ interface Unit {
 // TS-244: version 8 -- groups not pinned to a table that tie on party size (and so on "most need
 // first" too) go in order of their lowest guest id, not the guest list's last-name order, so
 // renaming a guest never changes the plan.
-export const RULE_WEIGHT_CONFIG_VERSION = 8;
+// TS-252: version 9 -- a must-sit group with both Bride and Groom guests counts as Both whatever
+// order its members are listed in; and under Fully Mixed the bonus for the other side being at a
+// table is counted once, not per guest, so a table with nobody from a guest's side yet always
+// wins and tables are less often left one-sided.
+export const RULE_WEIGHT_CONFIG_VERSION = 9;
 
 // TS-244: stands in for the end of a repaired plan's warning until the attempt is finished (see
 // runPlacement). Contains characters a guest or table name can never hold.
@@ -449,12 +453,6 @@ export function generateSeatingPlan(
     unit.guestIds.push(g.id);
     unit.totalHeadcount += g.headcount;
     if (g.requiresAccessibleTable) unit.requiresAccessible = true;
-    // FR-3.4: BRIDE/GROOM only sticks if every non-BOTH member agrees; a mix (or all-BOTH) stays
-    // neutral. First non-BOTH member sets it, a later *conflicting* one resets to neutral.
-    if (g.side !== "BOTH") {
-      if (unit.side === "BOTH") unit.side = g.side;
-      else if (unit.side !== g.side) unit.side = "BOTH";
-    }
     // FR-3.7a: a required-table pin takes priority over a lock (it's a hard rule, a lock is a
     // soft "keep them where they were"); either way the whole unit is pinned, since forced-
     // together members are always seated as one.
@@ -465,6 +463,14 @@ export function generateSeatingPlan(
     }
   }
   const units = [...unitsByRoot.values()];
+  // FR-3.4: BRIDE/GROOM only sticks if every non-BOTH member agrees; a mix (or all-BOTH) stays
+  // neutral. TS-252: worked out once every member is known -- folding it member by member made
+  // Bride, Groom, Bride come out BRIDE but Bride, Bride, Groom come out BOTH, so renaming a guest
+  // (the list is in last-name order) could change the plan.
+  for (const unit of units) {
+    const sides = new Set(unit.guestIds.map((id) => guestById.get(id)!.side).filter((side) => side !== "BOTH"));
+    unit.side = sides.size === 1 ? [...sides][0] : "BOTH";
+  }
   // TS-236: which group each guest is in.
   const unitOfGuest = new Map<string, Unit>();
   for (const u of units) for (const id of u.guestIds) unitOfGuest.set(id, u);
@@ -614,7 +620,11 @@ export function generateSeatingPlan(
         } else if (sideMixing === "FULLY_MIXED") {
           // Actively push toward an even mix: reward the other side being there, and mildly
           // penalize a table that's already stacked with this unit's own side.
-          score += oppositeSide * w.sideMixing.fullyMixedOppositeSideBonus;
+          // TS-252: the other-side reward is counted once, not per guest -- per guest, a table with
+          // several of the other side could outbid a table with nobody from this side yet (below),
+          // still leaving that table one-sided. Capped, the "nobody from this side yet" table wins
+          // on side mixing alone (guest-to-guest preferences still come first).
+          score += Math.min(oppositeSide, 1) * w.sideMixing.fullyMixedOppositeSideBonus;
           score -= sameSide * (w.sideMixing.fullyMixedOppositeSideBonus * 0.5);
           // TS-247: and favor a table that has nobody from this side yet -- otherwise, depending
           // on the order guests come in, one table took both sides and filled up while the other

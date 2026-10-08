@@ -142,6 +142,12 @@ export class FakeDatabase {
       const user = [...this.users.values()].find((u) => u.email === String(params[0]));
       return done(user ? [{ ...user, passwordHash: "x", sessionVersion: 0, updatedAt: user.createdAt }] : []);
     }
+    // TS-248: a signed-in request (getAuthSession) -- the account by id, and no ended sessions.
+    if (/^SELECT id, email, .* FROM "users" WHERE id = \$1$/.test(sql)) {
+      const user = this.users.get(String(params[0]));
+      return done(user ? [{ ...user, passwordHash: "x", sessionVersion: 0, updatedAt: user.createdAt }] : []);
+    }
+    if (sql.startsWith(`SELECT 1 FROM "revoked_sessions"`)) return done();
     if (sql.startsWith(`SELECT "createdAt" > now() - make_interval(days => $2) AS "isNew" FROM "users"`)) {
       const user = this.users.get(String(params[0]));
       return done(user ? [{ isNew: user.createdAt.getTime() > Date.now() - Number(params[1]) * 86_400_000 }] : []);
@@ -174,6 +180,17 @@ export class FakeDatabase {
       let n = 0;
       for (const l of this.resetLinks) {
         if (l.userId === params[0] && !l.usedAt && l.tokenHash !== params[1] && kept && l.createdAt < kept.createdAt) {
+          l.usedAt = new Date();
+          n++;
+        }
+      }
+      return done([], n);
+    }
+    if (sql.startsWith(`UPDATE "password_reset_tokens" SET "usedAt" = now() WHERE "tokenHash" = $1`)) {
+      // TS-253: an unsent link marked used (when it couldn't be deleted).
+      let n = 0;
+      for (const l of this.resetLinks) {
+        if (l.tokenHash === params[0] && !l.usedAt) {
           l.usedAt = new Date();
           n++;
         }

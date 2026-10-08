@@ -24,6 +24,11 @@ export class PlanTabPage extends BasePage {
     return this.page.getByRole("button", { name: /^generate new plan$|^generating\.\.\.$/i });
   }
 
+  /** TS-255: the Generate button in its ready state (for checking where keyboard focus lands). */
+  generateNewPlanButton() {
+    return this.page.getByRole("button", { name: "Generate new plan", exact: true });
+  }
+
   private saveAsDraftCheckbox() {
     return this.page.getByRole("checkbox", { name: /save as comparison draft/i });
   }
@@ -400,7 +405,11 @@ export class PlanTabPage extends BasePage {
     await this.page.getByRole("button", { name: "Confirm restore", exact: true }).click();
   }
   async cancelRestore(): Promise<void> {
-    await this.page.getByRole("button", { name: "Cancel", exact: true }).click();
+    await this.restoreCancelButton().click();
+  }
+  /** TS-255: the restore preview's Cancel (pressed with the keyboard to check where focus lands). */
+  restoreCancelButton() {
+    return this.page.getByRole("button", { name: "Cancel", exact: true });
   }
   /** Any status-change button (none should show on a past version). */
   statusChangeButtons() {
@@ -580,6 +589,11 @@ export class PlanTabPage extends BasePage {
   /** TS-211: the warning next to Export while attending guests aren't seated. */
   exportUnseatedWarning() {
     return this.page.getByTestId("export-unseated-warning");
+  }
+
+  /** TS-250: the warning next to Export while guests need a new seat since the plan was approved. */
+  exportNeedsReassignmentWarning() {
+    return this.page.getByTestId("export-needs-reassignment-warning");
   }
 
   /** TS-211: a failed export's message, shown next to the export buttons. */

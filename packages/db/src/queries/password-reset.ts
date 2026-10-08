@@ -75,6 +75,14 @@ export async function discardPasswordResetToken(token: string): Promise<void> {
   await pool.query(`DELETE FROM "password_reset_tokens" WHERE "tokenHash" = $1 AND "usedAt" IS NULL`, [hashResetToken(token)]);
 }
 
+/**
+ * TS-253: the fallback when an unsent link couldn't be deleted -- it's marked used instead, so it
+ * neither works nor counts as "already sent" (see hasUsablePasswordResetToken).
+ */
+export async function markPasswordResetTokenUsed(token: string): Promise<void> {
+  await pool.query(`UPDATE "password_reset_tokens" SET "usedAt" = now() WHERE "tokenHash" = $1 AND "usedAt" IS NULL`, [hashResetToken(token)]);
+}
+
 // TS-219: once the day's reset counts for an address are full, the newest reset still goes out if
 // none has gone to the account for this long. Someone who signed up with another person's address
 // could otherwise ask for 3 resets (an hour apart) and use up the count meant for the address's

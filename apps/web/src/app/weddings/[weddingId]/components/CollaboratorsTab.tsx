@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { ConfirmDeleteButton } from "@/components/ConfirmDeleteButton";
 import { CommitSelect } from "@/components/CommitSelect";
 import { api, ApiError, apiErrorMessage, isItemGoneError } from "@/lib/api-client";
-import { leaveCountsAsDone } from "@/lib/leave-wedding";
+import { deleteCountsAsDone, leaveCountsAsDone } from "@/lib/leave-wedding";
 import type {
   CollaboratorDTO,
   CollaboratorPermission,
@@ -26,6 +26,7 @@ import {
   boxesChangedUnderneath,
   emailSwitchRevision,
   SETTINGS_CHANGED_ELSEWHERE_MESSAGE,
+  takeChangedFlags,
   type SettingsBoxKey,
   type SettingsBoxValues,
 } from "@/lib/settings-boxes";
@@ -574,6 +575,11 @@ export function CollaboratorsTab({
       await api.delete(`/api/v1/weddings/${weddingId}`);
       router.push("/dashboard");
     } catch (err) {
+      // TS-253: a 404 means it's gone (e.g. a retry after the first try's answer was lost).
+      if (deleteCountsAsDone(err)) {
+        router.push("/dashboard");
+        return;
+      }
       // Shown inside the delete section, next to the button the owner just used.
       setDeleteError(apiErrorMessage(err, [], "Couldn't delete this wedding."));
     }
@@ -803,8 +809,29 @@ export function CollaboratorsTab({
     }
   }
 
+  // TS-251: "Save anyway" -- refused like any other box when the cutoff was saved elsewhere (another
+  // tab, say) while the question was up; it used to overwrite that newer cutoff and leave the flag
+  // set, so the next real change was refused instead.
+  async function onSaveCutoffAnyway(value: string) {
+    if (!wedding) return;
+    if (takeChangedFlags(changedUnderneath.current, ["setting-rsvp-cutoff"], value, wedding.rsvpCutoffDate ?? "")) {
+      setCutoffWarning(null);
+      return refuseChangedElsewhere("setting-rsvp-cutoff", (fresh) => setRsvpCutoffDate(fresh.rsvpCutoffDate ?? ""));
+    }
+    // TS-255: already the saved cutoff (another tab saved this same date) -- nothing to send, like
+    // leaving the box unchanged; a save here would only move the settings revision on.
+    if (value === (wedding.rsvpCutoffDate ?? "")) {
+      setCutoffWarning(null);
+      settingFields.markDirty("setting-rsvp-cutoff", false);
+      return;
+    }
+    await saveRsvpCutoff(value);
+  }
+
   // TS-214: "Change it" -- the saved cutoff goes back in the box, and the box gets focus.
   function onKeepOldCutoff() {
+    // TS-251: the box shows the latest saved cutoff now, so a flag from a change elsewhere is done with.
+    takeChangedFlags(changedUnderneath.current, ["setting-rsvp-cutoff"], "", "");
     setCutoffWarning(null);
     setRsvpCutoffDate(wedding?.rsvpCutoffDate ?? "");
     settingFields.markDirty("setting-rsvp-cutoff", false);
@@ -1229,7 +1256,7 @@ export function CollaboratorsTab({
                   </span>
                   <button
                     type="button"
-                    onClick={() => void saveRsvpCutoff(cutoffWarning.value)}
+                    onClick={() => void onSaveCutoffAnyway(cutoffWarning.value)}
                     className="rounded-md bg-amber-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-amber-800"
                   >
                     Save anyway

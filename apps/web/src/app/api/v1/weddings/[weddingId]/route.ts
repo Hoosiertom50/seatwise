@@ -102,7 +102,7 @@ export async function DELETE(req: NextRequest, { params }: Params) {
 
   // TS-209: a delete that lost a race with another change (a deadlock the database broke, or the
   // plan replaced while it waited) deleted nothing -- "try again" (409), not a server error.
-  let deleted: boolean;
+  let deleted: Awaited<ReturnType<typeof deleteWeddingForOwner>>;
   try {
     deleted = await deleteWeddingForOwner(weddingId, user.id);
   } catch (err) {
@@ -114,7 +114,12 @@ export async function DELETE(req: NextRequest, { params }: Params) {
     if (busy) return busy;
     throw err;
   }
-  if (!deleted) return errorResponse("Wedding not found", 404);
+  // TS-255: handed off between the owner check and the delete -- not deleted, and not "not found"
+  // either, so a retrying screen doesn't treat it as done.
+  if (deleted === "not-owner") {
+    return errorResponse("Only the wedding's owner can delete it — you aren't its owner any more.", 403);
+  }
+  if (deleted === "gone") return errorResponse("Wedding not found", 404);
 
   return NextResponse.json({ ok: true });
 }
