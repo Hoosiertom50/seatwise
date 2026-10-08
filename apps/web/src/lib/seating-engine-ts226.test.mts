@@ -81,10 +81,11 @@ test("a plan that already seats everyone who needs the accessible table is uncha
 // Item 2, the review's repro: Ann prefers Bea and avoids Cal; all three sit at T1 while T2 is empty.
 test('an "avoid" warning says it was the best fit when another table had room', () => {
   const result = generateSeatingPlan(
-    [guest("Bea", { headcount: 2 }), guest("Cal"), guest("Ann")],
+    // TS-244: singles go in guest-id order, so Cal's id sorts before Ann's to seat Cal first.
+    [guest("g1", { name: "Bea", headcount: 2 }), guest("g2", { name: "Cal" }), guest("g3", { name: "Ann" })],
     [
-      { guestAId: "Ann", guestBId: "Bea", type: "PREFER_NEAR" },
-      { guestAId: "Ann", guestBId: "Cal", type: "AVOID" },
+      { guestAId: "g3", guestBId: "g1", type: "PREFER_NEAR" },
+      { guestAId: "g3", guestBId: "g2", type: "AVOID" },
     ],
     [table("T1", 8), table("T2", 8)]
   );
