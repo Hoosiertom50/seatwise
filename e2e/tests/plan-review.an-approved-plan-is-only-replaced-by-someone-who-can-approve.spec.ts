@@ -77,7 +77,8 @@ defineQualityTest(
       });
 
       const ownerGen = await test.step("The owner's Generate still replaces the approved plan", async () => {
-        const res = await context.request.post(api("plan-versions/generate"));
+        // TS-237: naming the approved version it replaces, as the Plan tab does once confirmed.
+        const res = await context.request.post(api("plan-versions/generate"), { data: { replacesApprovedVersionId: first.id } });
         expect(res.status()).toBe(201);
         const body = (await res.json()) as { savedAsDraftBecauseApproved: boolean; planVersion: { id: string; isCurrent: boolean } };
         expect(body.savedAsDraftBecauseApproved).toBe(false);

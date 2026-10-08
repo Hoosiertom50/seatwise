@@ -12,3 +12,7 @@ export const MADE_CURRENT_BECAUSE_NO_CURRENT_PLAN =
 // approved and this person may replace it -- it used to be replaced with no warning.
 export const REPLACES_APPROVED_PLAN =
   "This replaces the approved plan. The new version becomes the current plan as a Draft, PDF exports wait until it's approved again, and everyone on the wedding is told.";
+
+// TS-237: the code a Generate or Restore refusal carries when the approved plan it would replace
+// isn't the one the person confirmed (see approved-plan-response.ts). The Plan tab then asks again.
+export const APPROVED_PLAN_NOT_CONFIRMED = "APPROVED_PLAN_NOT_CONFIRMED";

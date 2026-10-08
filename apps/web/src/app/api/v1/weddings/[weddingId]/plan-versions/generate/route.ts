@@ -14,12 +14,14 @@ import {
   listSeatingTablesForWedding,
   getLatestAssignmentsForWedding,
   createPlanVersionWithAssignments,
+  ApprovedPlanNotConfirmedError,
   getPlanVersionDetail,
   getWeddingById,
   type UserRow,
 } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
 import { errorResponse, zodErrorResponse, concurrentChangeResponse, readJson } from "@/lib/api-response";
+import { approvedPlanNotConfirmedResponse } from "@/lib/approved-plan-response";
 import { requireAccess, mayManageApproval, approvalActor, type GrantedAccess } from "@/lib/access";
 import { SAVED_AS_DRAFT_BECAUSE_APPROVED, MADE_CURRENT_BECAUSE_NO_CURRENT_PLAN } from "@/lib/plan-approval-text";
 import { limitedWeddingWork } from "@/lib/rate-limit";
@@ -153,10 +155,14 @@ async function generatePlan(req: NextRequest, weddingId: string, user: UserRow, 
       ruleConfigVersion: RULE_WEIGHT_CONFIG_VERSION,
       makeCurrent,
       mayReplaceApproved,
+      // TS-237: the approved version the person confirmed replacing (null: none) -- checked as it's
+      // saved; without the right one, nothing is saved and the screen asks again.
+      replacesApprovedVersionId: parsedBody.data.replacesApprovedVersionId ?? null,
       // TS-195: read again under the wedding lock -- refused if it dropped while this was worked out.
       actorAccess: approvalActor(access),
     }));
   } catch (err) {
+    if (err instanceof ApprovedPlanNotConfirmedError) return approvedPlanNotConfirmedResponse(err);
     const conflict = concurrentChangeResponse(err);
     if (conflict) return conflict;
     throw err;

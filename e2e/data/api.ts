@@ -654,7 +654,10 @@ export class WeddingDataSetup {
    * seat-assignment/access-control tests call this raw, but TS-43's plan-review-status tests need
    * it repeatedly across several files, so it's centralized here rather than copy-pasted. */
   async generatePlanVersion(weddingId: string): Promise<PlanVersionDetail> {
-    const res = await this.request.post(`/api/v1/weddings/${weddingId}/plan-versions/generate`);
+    // TS-237: replacing an approved plan needs that version named -- these helpers always mean to.
+    const res = await this.request.post(`/api/v1/weddings/${weddingId}/plan-versions/generate`, {
+      data: { replacesApprovedVersionId: await this.approvedCurrentVersionId(weddingId) },
+    });
     await assertOk(res, `generatePlanVersion(${weddingId})`);
     const body = (await res.json()) as { planVersion: PlanVersionDetail };
     return body.planVersion;
@@ -875,8 +878,21 @@ export class WeddingDataSetup {
     weddingId: string,
     planVersionId: string,
   ): Promise<{ status: number; body: { planVersion?: PlanVersionDetail; warnings?: string[]; error?: string } }> {
-    const res = await this.request.post(`/api/v1/weddings/${weddingId}/plan-versions/${planVersionId}/restore`);
+    // TS-237: as generatePlanVersion -- an approved current plan is replaced on purpose.
+    const res = await this.request.post(`/api/v1/weddings/${weddingId}/plan-versions/${planVersionId}/restore`, {
+      data: { replacesApprovedVersionId: await this.approvedCurrentVersionId(weddingId) },
+    });
     return { status: res.status(), body: await res.json() };
+  }
+
+  /** TS-237: the current plan version's id when it's Approved, else null -- what Generate and
+   * Restore send to confirm they replace that approved plan (the server refuses, 409, otherwise). */
+  async approvedCurrentVersionId(weddingId: string): Promise<string | null> {
+    // Not asserted: a caller without access gets its own refusal from the Generate/Restore itself.
+    const res = await this.request.get(`/api/v1/weddings/${weddingId}/plan-versions`);
+    if (!res.ok()) return null;
+    const current = ((await res.json()) as { planVersions: PlanVersionRow[] }).planVersions.find((v) => v.isCurrent);
+    return current?.status === "APPROVED" ? current.id : null;
   }
 
   /** Deletes a single guest. Supported by the app's API (DELETE
