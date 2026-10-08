@@ -267,7 +267,13 @@ export async function resolveComment(
   // TS-209: the resolved comment is read back inside the change, before it commits -- read after
   // it, a failure answered an error for a comment that was resolved.
   return inWeddingChange(weddingId, recheckAs, async (client) => {
-    await client.query(`UPDATE "comments" SET "resolvedAt" = now(), "resolvedByUserId" = $1 WHERE id = $2`, [requesterId, commentId]);
+    // TS-242: only a thread that isn't resolved yet. Resolving one already resolved (another tab, or
+    // someone else a moment earlier) used to put this person and this time over who resolved it and
+    // when; now it's left as it is and that's what comes back.
+    await client.query(
+      `UPDATE "comments" SET "resolvedAt" = now(), "resolvedByUserId" = $1 WHERE id = $2 AND "resolvedAt" IS NULL`,
+      [requesterId, commentId]
+    );
     const { rows: updatedRows } = await client.query<CommentRow>(`${SELECT_COMMENT} WHERE c.id = $1`, [commentId]);
     return updatedRows[0];
   });

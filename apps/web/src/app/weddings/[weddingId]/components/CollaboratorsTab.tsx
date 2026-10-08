@@ -21,11 +21,23 @@ import { rsvpCutoffWarning } from "@seatwise/shared";
 import { formatDate, localTodayIso } from "@/lib/display-format";
 // TS-219: "may have been sent" when the email service stopped answering part-way.
 import { inviteSentMessage } from "@/lib/email-outcome-text";
+// TS-246: a box whose setting was saved elsewhere while it was being typed in.
+import {
+  boxesChangedUnderneath,
+  emailSwitchRevision,
+  SETTINGS_CHANGED_ELSEWHERE_MESSAGE,
+  type SettingsBoxKey,
+  type SettingsBoxValues,
+} from "@/lib/settings-boxes";
 
 // TS-179: guest RSVP and vendor links someone copied while they had access aren't tied to them,
 // so taking access away doesn't stop those links -- the owner's reset below does.
 const LINKS_KEEP_WORKING =
   "Any guest or vendor links they copied keep working until you use Reset all guest and vendor links below.";
+
+// TS-246: added to the hand-off question when the wedding has a private note.
+const HAND_OFF_NOTE_WARNING =
+  "Your private wedding note will be visible to the new owner — clear it first if it's only for you.";
 
 // TS-209: a change to someone who was removed meanwhile (by someone else, or they left).
 const COLLABORATOR_GONE = "That person no longer has access to this wedding — the list has been updated.";
@@ -157,10 +169,15 @@ export function CollaboratorsTab({
   );
 
   // TS-220: also loaded again after an invite is revoked (or turns out to have been accepted).
+  // TS-242: only the newest load is shown -- one started before a hand-off can answer after the
+  // one started by it.
+  const collaboratorsLoad = useRef(0);
   function loadCollaborators() {
+    const load = ++collaboratorsLoad.current;
     return api
       .get<{ collaborators: CollaboratorDTO[] }>(`/api/v1/weddings/${weddingId}/collaborators`)
       .then((res) => {
+        if (load !== collaboratorsLoad.current) return;
         setCollaborators(res.collaborators);
         // TS-214: what's saved is what the server just sent -- a value remembered from an earlier
         // save (confirmedAccess, below) could be out of date by now, and a failed change would
@@ -169,13 +186,18 @@ export function CollaboratorsTab({
           res.collaborators.map((c) => [c.id, { permissionLevel: c.permissionLevel, role: c.role }])
         );
       })
-      .catch(() => setError("Couldn't load collaborators."))
+      .catch(() => {
+        if (load === collaboratorsLoad.current) setError("Couldn't load collaborators.");
+      })
       .finally(() => setLoading(false));
   }
+  // TS-242: loaded again when this person's ownership changes too (as the invites and the email
+  // switch are) -- after a hand-off the new owner kept the list as a collaborator sees it: their own
+  // row there, the old owner missing and no emails.
   useEffect(() => {
     loadCollaborators();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [weddingId]);
+  }, [weddingId, isOwner]);
 
   // FR-1.4a: pending/expired/revoked invites, shown to the owner only (same audience as managing
   // collaborators directly) so they can see what's outstanding, resend, or revoke. Always
@@ -247,6 +269,8 @@ export function CollaboratorsTab({
     if (err instanceof ApiError && err.status === 409) {
       putBack(conflictWedding(err) ?? wedding!);
       settingFields.markDirty(fieldKey, false);
+      // TS-246: this box now shows the latest, so it no longer counts as changed underneath.
+      changedUnderneath.current.delete(fieldKey as SettingsBoxKey);
     } else settingFields.keepUnsaved(fieldKey, field, reason);
     return false;
   }
@@ -264,6 +288,30 @@ export function CollaboratorsTab({
   // This tab's own saves and showFreshSettings move the revision on before they change the wedding,
   // so they never land here.
   const boxesFrom = useRef<WeddingDTO | null>(wedding);
+  // TS-246: the boxes with typing in them whose own setting was saved elsewhere meanwhile (see
+  // lib/settings-boxes.ts). Their save is refused as "changed since you opened them" instead of
+  // quietly overwriting the newer value.
+  const changedUnderneath = useRef(new Set<SettingsBoxKey>());
+  function takeNewerSettings(old: WeddingDTO, fresh: WeddingDTO) {
+    const boxes: SettingsBoxValues = {
+      "setting-name": weddingName,
+      "setting-date": eventDate,
+      "setting-venue": venueName,
+      "setting-side-1": sideLabel1,
+      "setting-side-2": sideLabel2,
+      // A note box nobody typed in is never saved (TS-218), so it never counts.
+      "setting-note": noteEdited.current ? note : (old.note ?? ""),
+      "setting-rsvp-cutoff": rsvpCutoffDate,
+    };
+    for (const key of boxesChangedUnderneath(old, fresh, boxes)) changedUnderneath.current.add(key);
+    refillUntouchedBoxes(old, fresh);
+  }
+  /** TS-246: whether this box's save must be refused (and forgets it -- the latest is shown now). */
+  function changedElsewhere(...keys: SettingsBoxKey[]): boolean {
+    const hit = keys.some((k) => changedUnderneath.current.has(k));
+    for (const k of keys) changedUnderneath.current.delete(k);
+    return hit;
+  }
   useEffect(() => {
     if (!wedding) return;
     const old = boxesFrom.current;
@@ -271,7 +319,8 @@ export function CollaboratorsTab({
     if (wedding.settingsRevision <= settingsRevision.current) return;
     settingsRevision.current = wedding.settingsRevision;
     // A different wedding is filled in full by the effect above.
-    if (old && old.id === wedding.id) refillUntouchedBoxes(old, wedding);
+    if (old && old.id === wedding.id) takeNewerSettings(old, wedding);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- TS-246: reads the boxes as they are when a newer copy arrives.
   }, [wedding]);
   const settingsSaves = useRef<Promise<unknown>>(Promise.resolve());
   function saveSettings(change: Partial<WeddingDTO>): Promise<WeddingDTO> {
@@ -316,7 +365,16 @@ export function CollaboratorsTab({
           }
         : w
     );
-    if (old) refillUntouchedBoxes(old, fresh);
+    // TS-246: another box with typing in it whose setting this answer shows changed is refused too.
+    if (old) takeNewerSettings(old, fresh);
+  }
+  // TS-246: a box whose setting was saved elsewhere while it was being typed in -- refused like a
+  // stale save (409): the latest value goes back in the box, with the same message.
+  function refuseChangedElsewhere(fieldKey: string, putBack: (fresh: WeddingDTO) => void): false {
+    setError(SETTINGS_CHANGED_ELSEWHERE_MESSAGE);
+    if (wedding) putBack(wedding);
+    settingFields.markDirty(fieldKey, false);
+    return false;
   }
   // TS-214: each settings box still showing the old saved value takes the new one; a box with
   // typing in it keeps the typing.
@@ -337,6 +395,9 @@ export function CollaboratorsTab({
   async function onSaveName() {
     if (!wedding) return;
     const trimmed = weddingName.trim();
+    // TS-246: checked first -- the box is refused, or (back to what's saved) no longer counts.
+    if (changedElsewhere("setting-name") && trimmed !== wedding.name)
+      return refuseChangedElsewhere("setting-name", (fresh) => setWeddingName(fresh.name));
     if (trimmed === wedding.name) return;
     if (trimmed === "") {
       setError("Wedding name can't be blank.");
@@ -366,6 +427,15 @@ export function CollaboratorsTab({
   async function onSaveDetails(e: React.FormEvent) {
     e.preventDefault();
     if (!wedding) return;
+    // TS-246: the date or venue was saved elsewhere while being changed here -- both boxes show
+    // what's saved now; the change can be made again.
+    if (changedElsewhere("setting-date", "setting-venue")) {
+      setDetailsSaved(false);
+      setError(SETTINGS_CHANGED_ELSEWHERE_MESSAGE);
+      setEventDate(wedding.eventDate ?? "");
+      setVenueName(wedding.venueName ?? "");
+      return;
+    }
     setSavingDetails(true);
     setDetailsSaved(false);
     setError(null);
@@ -397,6 +467,7 @@ export function CollaboratorsTab({
       if (fresh) {
         setEventDate(fresh.eventDate ?? "");
         setVenueName(fresh.venueName ?? "");
+        changedElsewhere("setting-date", "setting-venue"); // TS-246: they show the latest now.
       }
     } finally {
       setSavingDetails(false);
@@ -412,6 +483,9 @@ export function CollaboratorsTab({
     const setTyped = which === 1 ? setSideLabel1 : setSideLabel2;
     const field = which === 1 ? "sideLabel1" : "sideLabel2";
     const label = typed.trim() || (which === 1 ? "Bride" : "Groom");
+    // TS-246: see onSaveName.
+    if (changedElsewhere(`setting-side-${which}`) && label !== wedding[field])
+      return refuseChangedElsewhere(`setting-side-${which}`, (fresh) => setTyped(fresh[field]));
     if (label === wedding[field]) {
       if (typed.trim() === "") setTyped(label);
       return;
@@ -437,6 +511,12 @@ export function CollaboratorsTab({
     // TS-218: a box nobody typed in is never saved (see noteEdited).
     if (!noteEdited.current) return;
     const trimmed = note.trim();
+    // TS-246: see onSaveName.
+    if (changedElsewhere("setting-note") && trimmed !== (wedding.note ?? ""))
+      return refuseChangedElsewhere("setting-note", (fresh) => {
+        setNote(fresh.note ?? "");
+        noteEdited.current = false;
+      });
     if (trimmed === (wedding.note ?? "")) {
       noteEdited.current = false;
       return;
@@ -507,7 +587,7 @@ export function CollaboratorsTab({
     setInviteSent(null);
     setAdding(true);
     try {
-      const res = await api.post<{ invite: WeddingInviteDTO; emailed: boolean; uncertain?: boolean; acceptUrl?: string }>(
+      const res = await api.post<{ invite: WeddingInviteDTO; emailed: boolean; uncertain?: boolean; siteEmailLimited?: boolean; acceptUrl?: string }>(
         `/api/v1/weddings/${weddingId}/invites`,
         { email, permissionLevel: level, role }
       );
@@ -673,6 +753,11 @@ export function CollaboratorsTab({
     }
     if (!wedding) return;
     const trimmed = rsvpCutoffDate.trim();
+    // TS-246: see onSaveName.
+    if (changedElsewhere("setting-rsvp-cutoff") && trimmed !== (wedding.rsvpCutoffDate ?? "")) {
+      setCutoffWarning(null);
+      return refuseChangedElsewhere("setting-rsvp-cutoff", (fresh) => setRsvpCutoffDate(fresh.rsvpCutoffDate ?? ""));
+    }
     if (trimmed === (wedding.rsvpCutoffDate ?? "")) {
       setCutoffWarning(null);
       return;
@@ -734,9 +819,22 @@ export function CollaboratorsTab({
     setWedding((w) => (w ? { ...w, emailNotificationsEnabled: next } : w));
     setSavingSettings(true);
     try {
-      await api.patch(`/api/v1/weddings/${weddingId}/notification-settings`, {
-        emailNotificationsEnabled: next,
-      });
+      // TS-237: the switch now moves the settings revision on (so other tabs show it). It waits its
+      // turn behind this tab's settings saves, and this tab takes the new revision only when
+      // nothing else was saved in between (see emailSwitchRevision) -- before the wedding changes,
+      // so the newer-copy effect above doesn't treat it as a change from elsewhere.
+      const run = () =>
+        api.patch<{ settingsRevision?: number; updatedAt?: string }>(`/api/v1/weddings/${weddingId}/notification-settings`, {
+          emailNotificationsEnabled: next,
+        });
+      const pressed = settingsSaves.current.catch(() => {}).then(run);
+      settingsSaves.current = pressed;
+      const res = await pressed;
+      const revision = typeof res.settingsRevision === "number" ? emailSwitchRevision(settingsRevision.current, res.settingsRevision) : null;
+      if (revision !== null) {
+        settingsRevision.current = revision;
+        setWedding((w) => (w ? { ...w, settingsRevision: revision, updatedAt: res.updatedAt ?? w.updatedAt } : w));
+      }
     } catch {
       setWedding((w) => (w ? { ...w, emailNotificationsEnabled: !next } : w));
       setError("Couldn't update the email notification setting.");
@@ -1310,7 +1408,11 @@ export function CollaboratorsTab({
             <ConfirmDeleteButton
               label="Hand off"
               disabled={!handOffTo}
-              question={`Make ${collaborators.find((c) => c.id === handOffTo)?.userName ?? "them"} the owner of this wedding? You'll stay on as a collaborator with Edit access. Only the new owner can undo this.`}
+              // TS-246 (Tom's decision): the owner-only note stays with the wedding, so the question says
+              // the new owner will see it -- there's still time to clear it first.
+              question={`Make ${collaborators.find((c) => c.id === handOffTo)?.userName ?? "them"} the owner of this wedding? You'll stay on as a collaborator with Edit access. Only the new owner can undo this.${
+                wedding?.note ? ` ${HAND_OFF_NOTE_WARNING}` : ""
+              }`}
               confirmLabel="Yes, hand it off"
               busyLabel="Handing off…"
               className="rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50"

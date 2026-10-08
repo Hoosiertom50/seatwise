@@ -64,8 +64,12 @@ defineQualityTest(
       planVersionId = generated.id;
       // Pin each guest to a known table deterministically, rather than trusting generation's own
       // tie-break, so the swap's expected before/after state is unambiguous.
-      await weddingData.moveGuestAssignment(managedWedding.id, planVersionId, guestAId, tableAId);
-      await weddingData.moveGuestAssignment(managedWedding.id, planVersionId, guestBId, tableBId);
+      // TS-244: with single-seat tables a direct move can't trade places, so unseat both first.
+      for (const id of [guestAId, guestBId]) {
+        expect((await weddingData.moveGuestAssignment(managedWedding.id, planVersionId, id, null)).status).toBe(200);
+      }
+      expect((await weddingData.moveGuestAssignment(managedWedding.id, planVersionId, guestAId, tableAId)).status).toBe(200);
+      expect((await weddingData.moveGuestAssignment(managedWedding.id, planVersionId, guestBId, tableBId)).status).toBe(200);
     });
 
     await test.step("Act: open Day-of mode and swap the two guests", async () => {

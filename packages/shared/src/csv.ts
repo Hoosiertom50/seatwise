@@ -226,7 +226,9 @@ export function fromSpreadsheetSafe(value: string): string {
 function csvEscape(raw: string): string {
   const value = toSpreadsheetSafe(raw);
   // TS-180: a ; is quoted too -- spreadsheets set to a ; separator would split the cell there.
-  if (/[",;\n\r]/.test(value)) {
+  // TS-243: and a tab -- the import re-sends the mapped columns as CSV, and an unquoted tab in a
+  // header made the server read the whole file as tab-separated.
+  if (/[",;\n\r\t]/.test(value)) {
     return `"${value.replace(/"/g, '""')}"`;
   }
   return value;

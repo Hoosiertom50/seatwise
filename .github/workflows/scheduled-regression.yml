@@ -36,6 +36,8 @@ jobs:
   regression:
     name: Full regression suite
     runs-on: ubuntu-24.04
+    # TS-245: a stuck run is stopped after 30 minutes (the tests themselves are capped at 10).
+    timeout-minutes: 30
     services:
       postgres:
         image: postgres:16
@@ -58,7 +60,10 @@ jobs:
           node-version: "22"
           cache: "pnpm"
       - run: pnpm install --frozen-lockfile
-      - run: pnpm exec playwright install --with-deps chromium
+      - name: Install Playwright's Chromium (with OS deps)
+        # TS-245: a browser install can hang -- give up after 10 minutes instead.
+        timeout-minutes: 10
+        run: pnpm exec playwright install --with-deps chromium
       - name: Generate ephemeral, non-secret app config for this CI run only
         # TS-200: each value is masked before it's saved, so it never shows in the log even if a
         # later step prints it.

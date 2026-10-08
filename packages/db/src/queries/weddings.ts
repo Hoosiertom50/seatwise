@@ -280,12 +280,23 @@ export async function listWeddingsWithSummaryForUser(userId: string): Promise<We
   return rows;
 }
 
-export async function setEmailNotificationsEnabled(id: string, ownerId: string, enabled: boolean): Promise<boolean> {
-  const { rowCount } = await pool.query(
-    `UPDATE "weddings" SET "emailNotificationsEnabled" = $1, "updatedAt" = now() WHERE id = $2 AND "ownerId" = $3`,
+// TS-237: moves the settings revision on too, so other open tabs (whose 4-second check only takes
+// settings from a newer revision, see apps/web/src/lib/wedding-poll.ts) show the switch as it is
+// now. Not compare-and-set: it's one on/off switch, and the last press wins. Returns the new
+// revision (null: not found, or not the owner).
+export async function setEmailNotificationsEnabled(
+  id: string,
+  ownerId: string,
+  enabled: boolean
+): Promise<{ settingsRevision: number; updatedAt: Date } | null> {
+  const { rows } = await pool.query<{ settingsRevision: number; updatedAt: Date }>(
+    `UPDATE "weddings"
+        SET "emailNotificationsEnabled" = $1, "settingsRevision" = "settingsRevision" + 1, "updatedAt" = now()
+      WHERE id = $2 AND "ownerId" = $3
+      RETURNING "settingsRevision", "updatedAt"`,
     [enabled, id, ownerId]
   );
-  return (rowCount ?? 0) > 0;
+  return rows[0] ?? null;
 }
 
 export async function updateWeddingForOwner(

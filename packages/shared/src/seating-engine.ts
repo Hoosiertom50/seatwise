@@ -210,7 +210,14 @@ interface Unit {
 // TS-236: version 7 -- in that order, groups with the same number of such people go smallest party
 // first; the repair seats a group at the table with the fewest "avoid" conflicts; and locked guests
 // competing for too few seats are decided by seating order (or guest id), not by name.
-export const RULE_WEIGHT_CONFIG_VERSION = 7;
+// TS-244: version 8 -- groups not pinned to a table that tie on party size (and so on "most need
+// first" too) go in order of their lowest guest id, not the guest list's last-name order, so
+// renaming a guest never changes the plan.
+export const RULE_WEIGHT_CONFIG_VERSION = 8;
+
+// TS-244: stands in for the end of a repaired plan's warning until the attempt is finished (see
+// runPlacement). Contains characters a guest or table name can never hold.
+const REPAIR_PURPOSE = "\u0000repair-purpose\u0000";
 export const RULE_WEIGHT_CONFIG = {
   preferNearBonus: 10,
   avoidPenalty: 10,
@@ -609,6 +616,10 @@ export function generateSeatingPlan(
           // penalize a table that's already stacked with this unit's own side.
           score += oppositeSide * w.sideMixing.fullyMixedOppositeSideBonus;
           score -= sameSide * (w.sideMixing.fullyMixedOppositeSideBonus * 0.5);
+          // TS-247: and favor a table that has nobody from this side yet -- otherwise, depending
+          // on the order guests come in, one table took both sides and filled up while the other
+          // was left with one side only, though every table could have been mixed.
+          if (sameSide === 0) score += w.sideMixing.fullyMixedOppositeSideBonus;
         } else {
           score += oppositeSide * w.sideMixing.balancedMixOppositeSideBonus;
         }
@@ -669,15 +680,21 @@ export function generateSeatingPlan(
       // TS-236: in a repaired plan the table came from the repair, which moved groups to seat
       // everyone -- so "best fit overall" or "no other table had room" wouldn't be true. Say a move
       // did it when this group (or, for "avoid", the other guest's group) was one that moved.
+      // TS-244: a repaired plan is kept when it seats more people, not only when it seats everyone,
+      // so the end of the sentence (REPAIR_PURPOSE) is chosen once the attempt is finished. A group
+      // the repair newly seated "only got a seat" (it wasn't moved -- it had no seat before); and
+      // when neither group moved, it says they kept the table they already had.
       if (forcedTable?.has(unit)) {
         const otherUnit = other !== undefined ? unitOfGuest.get(other) : undefined;
-        if (movedUnits.has(unit)) {
-          return other !== undefined
-            ? "one of them was moved there so everyone could be seated"
-            : "they were moved there so everyone could be seated";
-        }
-        if (otherUnit && movedUnits.has(otherUnit)) return "one of them was moved there so everyone could be seated";
-        return "seats were rearranged so everyone could be seated";
+        const how = (u: Unit, who: "one of them was" | "they were") =>
+          newlySeatedUnits.has(u)
+            ? `${who === "they were" ? "they" : "one of them"} only got a seat when seats were rearranged ${REPAIR_PURPOSE}`
+            : `${who} moved there ${REPAIR_PURPOSE}`;
+        if (movedUnits.has(unit)) return how(unit, other !== undefined ? "one of them was" : "they were");
+        if (otherUnit && movedUnits.has(otherUnit)) return how(otherUnit, "one of them was");
+        return other !== undefined
+          ? `neither of them was moved when seats were rearranged ${REPAIR_PURPOSE}`
+          : `they kept their table when seats were rearranged ${REPAIR_PURPOSE}`;
       }
       return candidateTables.some((t) => t.id !== best.id && canTake(unit, t))
         ? "it was the best fit overall, weighing everyone's seating preferences"
@@ -784,9 +801,13 @@ export function generateSeatingPlan(
       .map(({ u }) => u);
   const pinnedUnits = [...pinPass("required"), ...pinPass("lock"), ...pinPass("table")];
   // (TS-188: units needing an accessible table are taken out of this order and seated first.)
-  const unpinnedUnits = [...units.filter((u) => !u.pinnedTableId)].sort(
-    (a, b) => b.totalHeadcount - a.totalHeadcount
-  );
+  // TS-244: equal party sizes go in order of each group's lowest guest id. Before, ties kept the
+  // guest-list order -- by last name -- so renaming one guest could change who got seated.
+  const lowestId = (u: Unit) => [...u.guestIds].sort()[0];
+  const unpinnedUnits = [...units.filter((u) => !u.pinnedTableId)]
+    .map((u) => ({ u, id: lowestId(u) }))
+    .sort((a, b) => b.u.totalHeadcount - a.u.totalHeadcount || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+    .map(({ u }) => u);
   // TS-226: how many people in a group need an accessible table (party sizes).
   const accessibleNeed = (u: Unit) =>
     u.guestIds.reduce((sum, id) => {
@@ -805,6 +826,8 @@ export function generateSeatingPlan(
   let forcedTable: Map<Unit, string> | null = null;
   // TS-236: in a repaired plan, the groups the repair moved (or newly seated) -- see unmetReason.
   let movedUnits = new Set<Unit>();
+  // TS-244: the ones among them that weren't seated at all before the repair.
+  let newlySeatedUnits = new Set<Unit>();
   const autoPool = (unit: Unit): EngineTable[] => {
     const forced = forcedTable?.get(unit);
     return forced ? [tablesById.get(forced)!] : candidateTables;
@@ -1021,6 +1044,7 @@ export function generateSeatingPlan(
     autoTable = new Map();
     forcedTable = forced;
     movedUnits = new Set([...(forced ?? [])].filter(([u, t]) => repairedFrom?.get(u) !== t).map(([u]) => u));
+    newlySeatedUnits = new Set([...movedUnits].filter((u) => !repairedFrom?.has(u)));
 
     const failedLocks: { unit: Unit; target: EngineTable | undefined }[] = [];
     placePinnedUnits(failedLocks);
@@ -1050,6 +1074,9 @@ export function generateSeatingPlan(
     }
     forcedTable = null;
     for (const step of later) runStep(step);
+    // TS-244: "so everyone could be seated" only when this attempt really seats everyone.
+    const purpose = unassignedGuestIds.length === 0 ? "so everyone could be seated" : "to make room for more guests";
+    warnings = warnings.map((w) => w.split(REPAIR_PURPOSE).join(purpose));
     return { assignments, unassignedGuestIds, warnings, autoTable, steps };
   }
 

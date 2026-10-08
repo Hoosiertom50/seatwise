@@ -494,6 +494,13 @@ export class PlanTabPage extends BasePage {
   async clickGenerate(): Promise<void> {
     await this.generateButton().click();
   }
+  /** TS-237: unticks the draft box (if offered) and clicks Generate, without waiting for the run. */
+  async clickGenerateToReplaceCurrent(): Promise<void> {
+    await this.generateButton().waitFor();
+    const checkbox = this.saveAsDraftCheckbox();
+    if ((await checkbox.count()) > 0 && (await checkbox.isChecked())) await checkbox.click();
+    await this.generateButton().click();
+  }
   /** TS-231: answers the replace-approved question with "Replace the approved plan" and waits for the run. */
   async confirmReplaceApproved(): Promise<void> {
     await this.replaceApprovedPrompt().getByRole("button", { name: "Replace the approved plan", exact: true }).click();
@@ -505,6 +512,10 @@ export class PlanTabPage extends BasePage {
   /** TS-231: the restore preview's line saying confirming replaces the approved plan. */
   restoreReplacesApprovedNote() {
     return this.page.getByTestId("restore-replaces-approved");
+  }
+  /** TS-237: the restore preview's line when the plan was approved after the preview was shown. */
+  restoreApprovedMeanwhileNote() {
+    return this.page.getByTestId("restore-approved-meanwhile");
   }
   /** TS-235: the comparison's note about guests not attending now (listed, not counted). */
   comparisonNotAttendingNote() {

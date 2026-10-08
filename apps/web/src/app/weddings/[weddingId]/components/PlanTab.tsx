@@ -10,7 +10,12 @@ import { PickThenActControl } from "@/components/PickThenActControl";
 import { PLAN_CHANGED_EVENT } from "./GettingStarted";
 import { undoPlanFor, mustSitGroup, undoWouldSplitGroup, undoSeatsBeforeFor, UNDO_SPLITS_GROUP_MESSAGE, type UndoPlan } from "@/lib/plan-undo";
 import { PlanExportButtons } from "./PlanExportButtons";
-import { SAVED_AS_DRAFT_BECAUSE_APPROVED, MADE_CURRENT_BECAUSE_NO_CURRENT_PLAN, REPLACES_APPROVED_PLAN } from "@/lib/plan-approval-text";
+import {
+  SAVED_AS_DRAFT_BECAUSE_APPROVED,
+  MADE_CURRENT_BECAUSE_NO_CURRENT_PLAN,
+  REPLACES_APPROVED_PLAN,
+  APPROVED_PLAN_NOT_CONFIRMED,
+} from "@/lib/plan-approval-text";
 
 // TS-182: a change queued for one version, but another version is open by the time it runs.
 const VERSION_CLOSED_MESSAGE = "That version isn't open any more — nothing was saved.";
@@ -25,6 +30,14 @@ const VERSION_REMOVED_MESSAGE = "The version you had open was removed — you're
 // TS-221: the server's answer for a plan version that no longer exists (a restore says "Source").
 function isVersionGone(err: unknown): boolean {
   return err instanceof ApiError && err.status === 404 && /^(Source plan|Plan) version not found\.?$/.test(err.message);
+}
+
+// TS-237: a Generate or Restore refused because the plan it would replace was approved after this
+// page looked -- the approved version's id (to confirm and send back), or null for anything else.
+function approvedMeanwhileId(err: unknown): string | null {
+  if (!(err instanceof ApiError) || err.status !== 409 || err.data?.code !== APPROVED_PLAN_NOT_CONFIRMED) return null;
+  const id = err.data.approvedVersionId;
+  return typeof id === "string" ? id : null;
 }
 
 // TS-221: a table this version seats guests at that isn't in the tab's table list (added on another
@@ -167,6 +180,11 @@ export function PlanTab({
   const [saveAsDraft, setSaveAsDraft] = useState(false);
   // TS-231: Generate is asking "This replaces the approved plan" before it runs.
   const [confirmReplaceApproved, setConfirmReplaceApproved] = useState(false);
+  // TS-237: the approved version that question is about -- sent with the confirmed Generate, so the
+  // server replaces only that one -- and, when the server said it was approved meanwhile, why it's
+  // asking again.
+  const [replaceApprovedId, setReplaceApprovedId] = useState<string | null>(null);
+  const [replaceApprovedNotice, setReplaceApprovedNotice] = useState<string | null>(null);
   const replaceApprovedConfirmRef = useRef<HTMLButtonElement | null>(null);
   useEffect(() => {
     if (confirmReplaceApproved) replaceApprovedConfirmRef.current?.focus();
@@ -211,6 +229,10 @@ export function PlanTab({
   const [restoreWillBeDraft, setRestoreWillBeDraft] = useState(false);
   // TS-231: confirming the restore replaces the approved current plan (this person may) -- said so.
   const [restoreReplacesApproved, setRestoreReplacesApproved] = useState(false);
+  // TS-237: which approved version that is (sent back with the confirmed restore), and the server's
+  // "approved a moment ago" answer when it changed before the restore was confirmed.
+  const [restoreApprovedId, setRestoreApprovedId] = useState<string | null>(null);
+  const [restoreApprovedNotice, setRestoreApprovedNotice] = useState("");
   const [previewingRestore, setPreviewingRestore] = useState(false);
   const [restoring, setRestoring] = useState(false);
   // TS-175: the version whose nickname is being typed. Switching to another version closes the box
@@ -482,13 +504,20 @@ export function PlanTab({
   async function onGenerate(confirmedReplaceApproved = false) {
     // TS-231: the new version would replace an approved current plan (the draft box is unticked,
     // and this person may replace it) -- asked first. The server decides again as it saves.
-    const replacesApproved =
-      canApprove && versions.length > 0 && !saveAsDraft && versions.some((v) => v.isCurrent && v.status === "APPROVED");
+    const approvedOnPage = versions.find((v) => v.isCurrent && v.status === "APPROVED");
+    const replacesApproved = canApprove && versions.length > 0 && !saveAsDraft && approvedOnPage !== undefined;
     if (replacesApproved && !confirmedReplaceApproved) {
+      setReplaceApprovedId(approvedOnPage.id);
+      setReplaceApprovedNotice(null);
       setConfirmReplaceApproved(true);
       return;
     }
+    // TS-237: the approved version this person confirmed replacing (none if they weren't asked). The
+    // page's list can be out of date (it isn't refreshed while an older version is open), so the
+    // server checks it: if a different or newly approved plan is current, it saves nothing and asks.
+    const confirmedApprovedId = confirmedReplaceApproved ? replaceApprovedId : null;
     setConfirmReplaceApproved(false);
+    setReplaceApprovedNotice(null);
     setError(null);
     setDraftNotice(null);
     setSupersededNotice(null);
@@ -508,6 +537,7 @@ export function PlanTab({
       }>(`/api/v1/weddings/${weddingId}/plan-versions/generate`, {
         // TS-189: the very first plan is always the current one (the choice isn't offered then).
         makeCurrent: versions.length === 0 || !saveAsDraft,
+        replacesApprovedVersionId: confirmedApprovedId,
       });
       window.dispatchEvent(new Event(PLAN_CHANGED_EVENT));
       // TS-182: the plan was made even if reloading the list then fails -- say that, not "Couldn't".
@@ -533,7 +563,13 @@ export function PlanTab({
       // TS-197: a comparison draft asked for when there was no current plan was made current -- say so.
       else if (res.madeCurrentBecauseNoCurrentPlan) setDraftNotice(res.notice ?? MADE_CURRENT_BECAUSE_NO_CURRENT_PLAN);
     } catch (err) {
-      if (err instanceof ApiError && err.status === 409 && err.fieldErrors?.conflicts) {
+      const approvedId = approvedMeanwhileId(err);
+      if (approvedId) {
+        // TS-237: the plan was approved after this page last looked -- nothing was saved; ask again.
+        setReplaceApprovedId(approvedId);
+        setReplaceApprovedNotice((err as ApiError).message);
+        setConfirmReplaceApproved(true);
+      } else if (err instanceof ApiError && err.status === 409 && err.fieldErrors?.conflicts) {
         setConflicts(err.fieldErrors.conflicts as unknown as string[]);
       } else {
         setError(err instanceof ApiError ? err.message : "Couldn't generate a plan.");
@@ -792,12 +828,19 @@ export function PlanTab({
     setError(null);
     setPreviewingRestore(true);
     try {
-      const res = await api.get<{ preview: RestorePreviewDTO; willSaveAsDraft?: boolean; willReplaceApproved?: boolean }>(
+      const res = await api.get<{
+        preview: RestorePreviewDTO;
+        willSaveAsDraft?: boolean;
+        willReplaceApproved?: boolean;
+        approvedVersionId?: string | null;
+      }>(
         `/api/v1/weddings/${weddingId}/plan-versions/${detail.id}/restore-preview`
       );
       setRestorePreview(res.preview);
       setRestoreWillBeDraft(res.willSaveAsDraft === true);
       setRestoreReplacesApproved(res.willReplaceApproved === true);
+      setRestoreApprovedId(res.approvedVersionId ?? null);
+      setRestoreApprovedNotice("");
     } catch (err) {
       if (handledVersionGone(err, detailRef.current?.id)) return;
       setError(err instanceof ApiError ? err.message : "Couldn't preview that restore.");
@@ -817,7 +860,10 @@ export function PlanTab({
         planVersion: PlanVersionDetailDTO;
         warnings: string[];
         savedAsDraftBecauseApproved?: boolean;
-      }>(`/api/v1/weddings/${weddingId}/plan-versions/${detail.id}/restore`);
+      }>(`/api/v1/weddings/${weddingId}/plan-versions/${detail.id}/restore`, {
+        // TS-237: the approved version the preview said this replaces (checked by the server).
+        replacesApprovedVersionId: restoreReplacesApproved ? restoreApprovedId : null,
+      });
       // TS-197: what was shown about the version restored from (a Generate's or a move's notes) goes.
       clearVersionMessages();
       setUndoStack([]);
@@ -835,6 +881,16 @@ export function PlanTab({
       setRestoreWarnings(res.warnings);
       if (res.savedAsDraftBecauseApproved) setDraftNotice(SAVED_AS_DRAFT_BECAUSE_APPROVED);
     } catch (err) {
+      const approvedId = approvedMeanwhileId(err);
+      if (approvedId) {
+        // TS-237: approved after the preview was shown -- nothing was saved. The preview now says it
+        // replaces the approved plan, and confirming again replaces that version.
+        setRestoreReplacesApproved(true);
+        setRestoreWillBeDraft(false);
+        setRestoreApprovedId(approvedId);
+        setRestoreApprovedNotice((err as ApiError).message);
+        return;
+      }
       if (handledVersionGone(err, detailRef.current?.id)) return;
       setError(err instanceof ApiError ? err.message : "Couldn't restore that version.");
     } finally {
@@ -1009,9 +1065,16 @@ export function PlanTab({
               <div
                 role="alertdialog"
                 aria-labelledby="replace-approved-text"
+                aria-describedby={replaceApprovedNotice ? "replace-approved-notice" : undefined}
                 data-testid="generate-replaces-approved"
                 className="max-w-md rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950 p-3 text-sm text-amber-800 dark:text-amber-300"
               >
+                {/* TS-237: the server refused because the plan was approved after this page looked. */}
+                {replaceApprovedNotice && (
+                  <p id="replace-approved-notice" className="mb-2 font-medium" data-testid="generate-approved-meanwhile">
+                    {replaceApprovedNotice}
+                  </p>
+                )}
                 <p id="replace-approved-text" className="mb-2">{REPLACES_APPROVED_PLAN}</p>
                 <div className="flex flex-wrap justify-end gap-2">
                   <button
@@ -1415,6 +1478,10 @@ export function PlanTab({
                       plan stays current. Only the owner or a Couple member can replace an approved plan.
                     </p>
                   )}
+                  {/* TS-237: the restore was refused because the plan was approved after the preview. */}
+                  <p role="alert" className="text-sm font-medium text-amber-800 dark:text-amber-300" data-testid="restore-approved-meanwhile">
+                    {restoreApprovedNotice}
+                  </p>
                   {restoreReplacesApproved && (
                     <p className="mb-2 text-sm font-medium text-amber-800 dark:text-amber-300" data-testid="restore-replaces-approved">
                       {REPLACES_APPROVED_PLAN}

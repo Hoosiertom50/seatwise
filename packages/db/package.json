@@ -19,7 +19,9 @@
     "copy-weddings": "tsx prisma/copy-weddings-to-production.ts",
     "encrypt-old-link-tokens": "tsx prisma/encrypt-old-link-tokens.ts",
     "recheck-current-plans": "tsx prisma/recheck-current-plans.ts",
-    "check-schema-drift": "tsx prisma/check-schema-drift.ts"
+    "check-schema-drift": "tsx prisma/check-schema-drift.ts",
+    "make-large-test-wedding": "tsx prisma/make-large-test-wedding.ts",
+    "local-test-data": "tsx prisma/local-test-data.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"

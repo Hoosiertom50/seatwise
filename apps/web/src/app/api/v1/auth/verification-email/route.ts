@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAuthUser } from "@/lib/session";
 import { errorResponse } from "@/lib/api-response";
-import { accountEmailCounters, countOr429, EMAIL_VERIFICATION_LIMITS } from "@/lib/rate-limit";
+import { accountEmailCounters, confirmationNetworkCounters, countOr429, EMAIL_VERIFICATION_LIMITS } from "@/lib/rate-limit";
 import { emailNotSentMessage, sendVerificationEmail } from "@/lib/email-verification";
 import { emailDelivered, emailMayHaveGone } from "@seatwise/db";
 
@@ -19,6 +19,9 @@ export async function POST(req: NextRequest) {
     // the only per-address count for resends (10 a day, with sign-ups and resets). TS-203: rolling
     // over 24 hours, and for IPv6 the /48 as well (see accountEmailCounters).
     ...accountEmailCounters(req),
+    // TS-238: and this network's slice of the confirmations' shared share (5 a day per IPv4 /24 or
+    // IPv6 /48, real sends only) -- given back with the rest if nothing is sent.
+    ...confirmationNetworkCounters(req),
   ];
   // TS-186: each count can be given back from exactly the window it was made in -- and all of them
   // are, when a later limit refuses the request.

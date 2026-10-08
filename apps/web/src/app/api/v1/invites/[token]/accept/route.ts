@@ -7,7 +7,8 @@ import {
   INVITE_ACCEPTED_BY_OWNER_MESSAGE,
 } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
-import { errorResponse } from "@/lib/api-response";
+import { databaseBusyResponse, errorResponse } from "@/lib/api-response";
+import { inviteAcceptSameMomentResponse } from "@/lib/same-moment-answers";
 import { confirmEmailToAcceptMessage } from "@/lib/email-verification-text";
 
 type Params = { params: Promise<{ token: string }> };
@@ -65,7 +66,16 @@ export async function POST(req: NextRequest, { params }: Params) {
     );
   }
 
-  const result = await acceptInvite(token, user.id, { confirmEmail: confirmsEmail });
+  let result: Awaited<ReturnType<typeof acceptInvite>>;
+  try {
+    result = await acceptInvite(token, user.id, { confirmEmail: confirmsEmail });
+  } catch (err) {
+    // TS-242: lost a race with another change (say, the owner removing this person at that moment)
+    // -- "try again" (409), nothing saved; it used to be a server error. Busy database: 503.
+    const refused = inviteAcceptSameMomentResponse(err) ?? databaseBusyResponse(err);
+    if (refused) return refused;
+    throw err;
+  }
   if ("error" in result && result.error === "EMAIL_NOT_VERIFIED") {
     return NextResponse.json({ error: confirmEmailToAcceptMessage(), status: "EMAIL_NOT_VERIFIED" }, { status: 403 });
   }

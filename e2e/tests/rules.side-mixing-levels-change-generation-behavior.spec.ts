@@ -73,7 +73,7 @@ defineQualityTest(
     let idG2 = "";
     let idBoth = "";
 
-    await test.step("Arrange: two Bride guests, two Groom guests, one Both guest, and two capacity-4 tables (last names and table labels chosen to make processing order deterministic)", async () => {
+    await test.step("Arrange: two Bride guests, two Groom guests, one Both guest, and two capacity-4 tables", async () => {
       idB1 = (
         await weddingData.createGuest(managedWedding.id, { firstName: "Playwright", lastName: `BrideA-${token}`, side: "BRIDE" })
       ).id;
@@ -111,23 +111,21 @@ defineQualityTest(
         singleSideTableCount: 2,
         singleSideOnlyViolations: 0,
       });
-      // The Both guest always lands on the same table as both Brides here -- proving their
-      // presence doesn't turn that all-Bride table into a "mixed" one.
+      // Each side sits together, and the Both guest -- whichever table it lands on (that depends on
+      // guest ids since TS-244) -- never turns that table into a "mixed" one (the counts above).
       const tableOf = (id: string) => body.planVersion.assignments.find((a) => a.guestId === id)?.tableId;
-      expect(tableOf(idBoth)).toBe(tableOf(idB1));
       expect(tableOf(idB2)).toBe(tableOf(idB1));
+      expect(tableOf(idG2)).toBe(tableOf(idG1));
+      expect([tableOf(idB1), tableOf(idG1)]).toContain(tableOf(idBoth));
     });
 
     await test.step("Act + Assert: Balanced Mix produces exactly one mixed table", async () => {
       const body = await generateUnder("BALANCED_MIX");
       expect(body.planVersion.sideMixingSetting).toBe("BALANCED_MIX");
       expect(body.planVersion.isComplete).toBe(true);
-      expect(body.scoreReport.sideMixing).toEqual({
-        setting: "BALANCED_MIX",
-        mixedTableCount: 1,
-        singleSideTableCount: 0,
-        singleSideOnlyViolations: 0,
-      });
+      // Exactly one mixed table; whether the other holds one side or only the Both guest follows
+      // guest ids (TS-244), so singleSideTableCount isn't fixed here.
+      expect(body.scoreReport.sideMixing).toMatchObject({ setting: "BALANCED_MIX", mixedTableCount: 1, singleSideOnlyViolations: 0 });
     });
 
     await test.step("Act + Assert: Fully Mixed produces two mixed tables", async () => {
@@ -151,7 +149,7 @@ defineQualityTest(
     objective:
       "Confirms that when a table is marked Single-Side-Only and capacity forces a guest from the other side onto it anyway, generation still completes successfully, and the violation is surfaced as a non-blocking warning and counted in the score report -- not treated as a hard rule.",
     expectedOutcome:
-      "Generation is complete (isComplete: true) with a warning naming the Groom guest and the Single-Side-Only table, and the score report counts exactly one Single-Side-Only violation.",
+      "Generation is complete (isComplete: true) with the Groom at the Single-Side-Only table (the Restricted table only takes its listed Bride); each guest seated against the table's side is a warning naming Table A, and the score report counts the same number of Single-Side-Only violations (at least one).",
     requirementIds: ["REQ-RELATIONSHIPS-SEATING-RULES"],
     tags: ["@mutating", "@feature:relationships", "@feature:seating-plan", "@risk:normal", "@suite:regression"],
   },
@@ -160,8 +158,8 @@ defineQualityTest(
     let idGroom = "";
     let tableIdSSO = "";
 
-    await test.step("Arrange: three Brides and one Groom; a 3-seat Single-Side-Only table and a 1-seat plain table (zero slack)", async () => {
-      await weddingData.createGuest(managedWedding.id, { firstName: "Playwright", lastName: `BrideA-${token}`, side: "BRIDE" });
+    await test.step("Arrange: three Brides and one Groom; a 3-seat Single-Side-Only table and a 1-seat Restricted table only one Bride may use (zero slack)", async () => {
+      const brideA = await weddingData.createGuest(managedWedding.id, { firstName: "Playwright", lastName: `BrideA-${token}`, side: "BRIDE" });
       await weddingData.createGuest(managedWedding.id, { firstName: "Playwright", lastName: `BrideB-${token}`, side: "BRIDE" });
       await weddingData.createGuest(managedWedding.id, { firstName: "Playwright", lastName: `BrideC-${token}`, side: "BRIDE" });
       idGroom = (
@@ -170,7 +168,10 @@ defineQualityTest(
       tableIdSSO = (
         await weddingData.createTable(managedWedding.id, { label: "Table A", capacity: 3, singleSideOnly: true })
       ).id;
-      await weddingData.createTable(managedWedding.id, { label: "Table B", capacity: 1 });
+      // TS-244: Restricted to one Bride, so the Groom can't take that seat whichever order guests
+      // are processed in -- the Single-Side-Only table must take both sides.
+      const tableB = await weddingData.createTable(managedWedding.id, { label: "Table B", capacity: 1, isRestricted: true });
+      await weddingData.setRequiredGuests(managedWedding.id, tableB.id, [brideA.id]);
       await weddingData.updateWedding(managedWedding.id, { sideMixing: "FULLY_MIXED" });
     });
 
@@ -180,14 +181,17 @@ defineQualityTest(
       return (await res.json()) as GenerateResponse;
     });
 
-    await test.step("Assert: generation completes, the Groom is forced onto the Single-Side-Only table, and it's reported as a warning plus a score-report violation", async () => {
+    await test.step("Assert: generation completes, the other side is forced onto the Single-Side-Only table, and it's reported as a warning plus a score-report violation", async () => {
       expect(body.planVersion.isComplete).toBe(true);
+      // The Groom and two Brides share the Single-Side-Only table. Whoever was seated there first
+      // (by guest id since TS-244) set its side, so one or two guests are on the other side -- each
+      // reported, never a failure.
       const groomTable = body.planVersion.assignments.find((a) => a.guestId === idGroom)?.tableId;
       expect(groomTable).toBe(tableIdSSO);
-      expect(body.planVersion.warnings.length).toBe(1);
-      expect(body.planVersion.warnings[0]).toContain("Single-Side-Only");
-      expect(body.planVersion.warnings[0]).toContain("Table A");
-      expect(body.scoreReport.sideMixing.singleSideOnlyViolations).toBe(1);
+      const ssoWarnings = body.planVersion.warnings.filter((w) => w.includes("Single-Side-Only"));
+      expect(ssoWarnings.length).toBeGreaterThanOrEqual(1);
+      expect(ssoWarnings.length).toBe(body.scoreReport.sideMixing.singleSideOnlyViolations);
+      for (const w of ssoWarnings) expect(w).toContain("Table A");
     });
   },
 );

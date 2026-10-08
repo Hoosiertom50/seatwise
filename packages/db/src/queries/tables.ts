@@ -152,6 +152,47 @@ async function insertSeatingTable(client: PoolClient, weddingId: string, input: 
   return { ...rows[0], requiredGuestIds: [] };
 }
 
+// TS-239: the biggest table number quick-create continues from. A longer number is ignored --
+// past about 9 quadrillion, adding 1 gives back the same number, so the old loop never ended
+// (holding the wedding's lock) or gave two tables the same name.
+const MAX_QUICK_CREATE_NUMBER_DIGITS = 9;
+
+/**
+ * The labels a quick-create of `count` tables gets, given the labels the wedding already has.
+ * TS-153: numbering continues after the highest number already used with this prefix (not the
+ * table count) -- after "Table 2" of five was deleted, the count-based numbering made a second
+ * "Table 5". Labels already taken are skipped either way.
+ * TS-239: numbers longer than 9 digits are ignored, each new label is marked taken, and the
+ * search stops after a fixed number of tries, so this always finishes with different labels.
+ */
+export function quickCreateLabels(existingLabels: string[], labelPrefix: string, count: number): string[] {
+  const taken = new Set(existingLabels.map((l) => l.trim().toLowerCase()));
+  const prefix = labelPrefix.trim();
+  const numberPattern = new RegExp(`^${prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s+(\\d+)$`, "i");
+  let highest = 0;
+  for (const label of existingLabels) {
+    const digits = label.trim().match(numberPattern)?.[1].replace(/^0+(?=\d)/, "");
+    if (!digits || digits.length > MAX_QUICK_CREATE_NUMBER_DIGITS) continue;
+    highest = Math.max(highest, Number(digits));
+  }
+  let next = highest + 1;
+  const labels: string[] = [];
+  // TS-239: each try either adds a label or skips one already taken, so this many tries is
+  // always enough; the limit is only a guard.
+  const maxTries = count + taken.size + 1;
+  for (let tries = 0; labels.length < count; tries++) {
+    if (tries >= maxTries || !Number.isSafeInteger(next)) {
+      throw new Error("Couldn't find free table names for quick-create");
+    }
+    const label = `${prefix} ${next++}`;
+    const key = label.toLowerCase();
+    if (taken.has(key)) continue;
+    taken.add(key);
+    labels.push(label);
+  }
+  return labels;
+}
+
 // FR-4.2: create a standard set of same-shape, same-capacity tables in one action (e.g. "12 round
 // tables of 8"). Numbering continues after the highest number already used with that prefix, so a
 // repeated quick-create (or one run after tables were added or deleted) never repeats a label.
@@ -180,22 +221,11 @@ export async function quickCreateSeatingTables(
     );
     // Grid placement continues after however many tables there are.
     const startIndex = existingRows.length;
-    // TS-153: numbering continues after the highest number already used with this prefix (not
-    // the table count) -- after "Table 2" of five was deleted, the count-based numbering made a
-    // second "Table 5". Labels already taken are skipped either way.
-    const taken = new Set(existingRows.map((r) => r.label.trim().toLowerCase()));
-    const prefix = input.labelPrefix.trim();
-    const numberPattern = new RegExp(`^${prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s+(\\d+)$`, "i");
-    let next =
-      existingRows.reduce((max, r) => {
-        const m = r.label.trim().match(numberPattern);
-        return m ? Math.max(max, Number(m[1])) : max;
-      }, 0) + 1;
-    const labels: string[] = [];
-    while (labels.length < input.count) {
-      const label = `${prefix} ${next++}`;
-      if (!taken.has(label.toLowerCase())) labels.push(label);
-    }
+    const labels = quickCreateLabels(
+      existingRows.map((r) => r.label),
+      input.labelPrefix,
+      input.count
+    );
     const created: SeatingTableRow[] = [];
     for (let i = 0; i < input.count; i++) {
       const id = randomUUID();

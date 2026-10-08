@@ -186,12 +186,17 @@ test("the notification's membership check share-locks the access row, so it wait
       return [{ ownerId: "owner-1", name: "W", emailNotificationsEnabled: false }];
     }
     if (/UNION/.test(sql)) return [{ id: "u2", email: "u2@example.invalid", emailVerifiedAt: null, wantsEmail: false }];
+    // TS-237: the wedding, the recipient and their access row are locked before the INSERT.
+    if (ACCESS_RECHECK.test(sql)) return [{ ownerId: "owner-1" }];
+    if (/FROM "users" WHERE id = \$1 FOR KEY SHARE/.test(sql)) return [{}];
+    if (/FROM "wedding_collaborators" WHERE "weddingId" = \$1 AND "userId" = \$2 FOR KEY SHARE/.test(sql)) return [{}];
     return undefined;
   });
   await db.notifyWeddingCollaborators("w1", "owner-1", "GUEST_ADDED", "Ann Lee was added.");
   const insert = log.find((s) => s.startsWith('INSERT INTO "notifications"'));
   assert.ok(insert, "a notification was attempted");
-  assert.match(insert!, /FROM "wedding_collaborators" WHERE "weddingId" = \$2 AND "userId" = \$3 FOR KEY SHARE\)/);
+  const access = indexOf(/FROM "wedding_collaborators" WHERE "weddingId" = \$1 AND "userId" = \$2 FOR KEY SHARE/);
+  assert.ok(access >= 0 && access < log.indexOf(insert!), "the access row is share-locked before the INSERT");
 });
 
 // ---- 4. Invites ----

@@ -50,9 +50,9 @@ import { waitUntilSafelyInsideUtcDay } from "../support/utcDay.js";
 
 const ACCOUNT_EMAILS_PER_DAY = 100;
 const WEDDING_RSVP_EMAILS_PER_DAY = 50;
-const OWNER_RSVP_EMAILS_PER_DAY = 60;
+const OWNER_RSVP_EMAILS_PER_DAY = 12; // TS-241: was 60
 // TS-203: an owner account in its first week.
-const NEW_OWNER_RSVP_EMAILS_PER_DAY = 20;
+const NEW_OWNER_RSVP_EMAILS_PER_DAY = 5; // TS-241: was 20
 const ANONYMOUS_EMAILS_PER_ADDRESS_PER_DAY = 3;
 const UNCONFIRMED_RESETS_PER_ADDRESS_PER_DAY = 3;
 const WEDDINGS_PER_DAY = 10;
@@ -68,9 +68,9 @@ defineQualityTest(
     id: "cross-cutting.seatwise-email-holds-up-against-abuse.rsvp-emails-use-the-weddings-own-pool-and-weddings-are-capped",
     title: "emails about guests' RSVPs come out of the wedding's own daily pool and the owner's pool across their weddings, not the owner's allowance, and an account can create at most 10 weddings a day",
     objective:
-      "Confirms (TS-186, Tom's decision) that with the owner's daily email allowance used up, a guest's RSVP is still emailed -- counted in the wedding's own daily pool, with the owner's allowance untouched; that with the wedding's daily pool used up, the next RSVP still makes an in-app notification but no email (and counts nothing); that the same holds when instead the owner's daily pool across all their weddings (60, TS-194; 20 in the account's first week, TS-203) is used up; and that an account's 11th new wedding of the day, or a copy, is refused with a message saying when more can be created (TS-203: a rolling 24 hours, not 'tomorrow').",
+      "Confirms (TS-186, Tom's decision) that with the owner's daily email allowance used up, a guest's RSVP is still emailed -- counted in the wedding's own daily pool, with the owner's allowance untouched; that with the wedding's daily pool used up, the next RSVP still makes an in-app notification but no email (and counts nothing); that the same holds when instead the owner's daily pool across all their weddings (12 since TS-241; 5 in the account's first week) is used up; and that an account's 11th new wedding of the day, or a copy, is refused with a message saying when more can be created (TS-203: a rolling 24 hours, not 'tomorrow').",
     expectedOutcome:
-      "Owner's allowance at 100: RSVP returns 200, one RSVP_RECEIVED notification, 1 email counted this hour and today for the wedding, owner's allowance still 100. Wedding's pool at 50: one more notification, the wedding's counts unchanged (50 today, 1 this hour), owner's allowance unchanged. New owner's pool at 20 (wedding's back at 0): a third notification, the wedding's count still 0 and the owner's pool still 20 (TS-203). Aged 8 days: a fourth RSVP is emailed (pool 21); at 60, a fifth notification, the wedding's count still 0 and the pool still 60. Weddings 1–10 return 201; the 11th POST and a duplicate return 429 with \"You've created a lot of weddings in the last 24 hours — you can create more in about a day.\" (TS-203: rolling).",
+      "Owner's allowance at 100: RSVP returns 200, one RSVP_RECEIVED notification, 1 email counted this hour and today for the wedding, owner's allowance still 100. Wedding's pool at 50: one more notification, the wedding's counts unchanged (50 today, 1 this hour), owner's allowance unchanged. New owner's pool at 5 (wedding's back at 0): a third notification, the wedding's count still 0 and the owner's pool still 5 (TS-203, TS-241). Aged 8 days: a fourth RSVP is emailed (pool 6); at 12, a fifth notification, the wedding's count still 0 and the pool still 12. Weddings 1–10 return 201; the 11th POST and a duplicate return 429 with \"You've created a lot of weddings in the last 24 hours — you can create more in about a day.\" (TS-203: rolling).",
     requirementIds: ["REQ-NON-FUNCTIONAL"],
     tags: ["@mutating", "@feature:rsvp", "@feature:portfolio", "@risk:high", "@suite:regression"],
   },
@@ -118,9 +118,9 @@ defineQualityTest(
       expect(await accountEmailCount(account.email, "account-day")).toBe(0);
     });
 
-    // TS-203: an owner account in its first week has a pool of 20, so a few fresh accounts can't
+    // TS-203: an owner account in its first week has a pool of 5 (TS-241), so a few fresh accounts can't
     // use their own guests' answers to spend Seatwise's email.
-    await test.step("A new owner's pool across their weddings is 20: used up, the next RSVP shows in the app but isn't emailed", async () => {
+    await test.step("A new owner's pool across their weddings is 5: used up, the next RSVP shows in the app but isn't emailed", async () => {
       await setWeddingNotificationEmailsToday(w, 0);
       await setOwnerNotificationEmailsToday(account.email, NEW_OWNER_RSVP_EMAILS_PER_DAY);
       await guestResponds();
@@ -129,7 +129,7 @@ defineQualityTest(
       expect(await ownerNotificationEmailsToday(account.email)).toBe(NEW_OWNER_RSVP_EMAILS_PER_DAY);
     });
 
-    await test.step("After its first week the owner's pool is 60: at 20 the next RSVP is emailed, at 60 it isn't", async () => {
+    await test.step("After its first week the owner's pool is 12: at 5 the next RSVP is emailed, at 12 it isn't", async () => {
       await ageTestAccount(account.email, 8);
       await guestResponds();
       expect(await rsvpNotifications()).toBe(4);

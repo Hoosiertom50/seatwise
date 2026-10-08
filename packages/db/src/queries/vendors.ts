@@ -179,13 +179,16 @@ export async function updateVendorForWedding(
   const client = await pool.connect();
   try {
     await beginTransaction(client);
+    // TS-204: the person's access read again inside the save.
+    // TS-242: before the vendor's own lock, not after -- the wedding first, then its rows (as the
+    // timeline does since TS-234). The other way round, a wedding delete at the same moment (which
+    // takes the wedding, then its vendors) and this edit could each wait for the other.
+    if (actor) await recheckActorAccess(client, weddingId, actor);
     const { rows } = await client.query(
       // TS-187: NO KEY UPDATE -- the row's id and link don't change here.
       `SELECT revision, category, "categoryOther" FROM "vendors" WHERE id = $1 AND "weddingId" = $2 FOR NO KEY UPDATE`,
       [id, weddingId]
     );
-    // TS-204: the person's access read again under that lock.
-    if (actor) await recheckActorAccess(client, weddingId, actor);
     const current = rows[0];
     if (!current) {
       await client.query("ROLLBACK").catch(() => {});
