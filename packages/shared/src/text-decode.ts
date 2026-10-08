@@ -65,8 +65,10 @@ function utf16WithoutBom(view: Uint8Array): "utf-16le" | "utf-16be" | null {
     if (view[i + 1] === 0) oddZeros++;
   }
   const pairs = n / 2;
-  if (oddZeros >= pairs * 0.9 && evenZeros === 0) return "utf-16le";
-  if (evenZeros >= pairs * 0.9 && oddZeros === 0) return "utf-16be";
+  // TS-243: a few zeros on the other half too (at most 10%) -- a character whose code ends in 00
+  // (一, Ā, Ō, Ѐ) has one there, and requiring none read such a file as UTF-8 full of zeros.
+  if (oddZeros >= pairs * 0.9 && evenZeros <= pairs * 0.1) return "utf-16le";
+  if (evenZeros >= pairs * 0.9 && oddZeros <= pairs * 0.1) return "utf-16be";
   return null;
 }
 
@@ -91,6 +93,13 @@ function hasUtf8LetterPairs(view: Uint8Array): boolean {
     if (b >= 0xc2 && b <= 0xc5 && cont(view[i + 1])) return true;
     if (b >= 0xf0 && b <= 0xf4 && cont(view[i + 1]) && cont(view[i + 2]) && cont(view[i + 3])) return true;
     if (b >= 0xe0 && b <= 0xef && cont(view[i + 1]) && cont(view[i + 2])) {
+      // TS-237: a windows-1252 small letter, a no-break space and a punctuation mark ("é »", bytes
+      // E9 A0 BB) is how French text looks, so it is no evidence either way -- even repeated
+      // ("café » café »" used to count as two UTF-8 letters and refuse a Windows file).
+      if (view[i + 1] === 0xa0 && isWindows1252Punctuation(view[i + 2])) {
+        i += 2;
+        continue;
+      }
       const codePoint = ((b & 0x0f) << 12) | ((view[i + 1] & 0x3f) << 6) | (view[i + 2] & 0x3f);
       // Not a real three-byte character (too small, or half of a UTF-16 pair): just stray bytes.
       if (codePoint >= 0x800 && (codePoint < 0xd800 || codePoint > 0xdfff)) {
@@ -110,6 +119,11 @@ function hasUtf8LetterPairs(view: Uint8Array): boolean {
   return threeByteLetters > 1 && threeByteLetters > strayBytes;
 }
 
+/** TS-237: A1-BF in windows-1252 (the same as Latin-1) that aren't letters: ¡ ¢ £ « » ¿ … (not ª µ º). */
+function isWindows1252Punctuation(b: number): boolean {
+  return b >= 0xa1 && b <= 0xbf && b !== 0xaa && b !== 0xb5 && b !== 0xba;
+}
+
 // TS-198: the characters windows-1252 shows for Mac Roman's accented letters -- Ž is é, Ÿ is ü, ƒ is
 // É, Š is ä, Œ is å, ‡ is á, ˆ is à, ‰ is â, † is Ü, ‹ is ã, › is õ, and the bytes windows-1252
 // leaves undefined (Å, ç, è, ê, ù). Curly quotes (Mac í, ì, î, ë) are left out: "O’Brien" is a
@@ -122,19 +136,47 @@ function hasUtf8LetterPairs(view: Uint8Array): boolean {
 const MAC_ROMAN_NOT_LETTERS = "ƒ‡ˆ‰†‹›\u0081\u008d\u008f\u0090\u009d";
 // TS-225: also a capital then Ž Š Œ Ÿ then a small letter ("MŸller" for Müller -- the comment above
 // claimed it, but only "RenŽe" was caught), and ƒ ‡ ˆ ‰ † ‹ › starting a word before a letter
-// ("ƒloise" for Éloise, "‡ngel" for Ángel). "Željko Žižek" and "HAŸ-LES-ROSES" are still fine.
+// ("ƒloise" for Éloise; TS-243: "‡ngel" is "ángel" in small letters -- 0x87 is Mac á. Ángel
+// itself comes out as "çngel", caught by the TS-243 rule below). "Željko Žižek" and "HAŸ-LES-ROSES" are still fine.
 const MAC_ROMAN_NOT_LETTERS_AT_START = "ƒ‡ˆ‰†‹›";
 // TS-233: the start-of-word rule, like the curly-quote rule, is for names only -- in a Windows
 // notes cell "‹VIP›" or "In memory of †Opa" is real text.
 const MAC_ROMAN_IN_A_WORD = new RegExp(`\\p{L}[${MAC_ROMAN_NOT_LETTERS}]\\p{L}|\\p{Ll}[ŽŠŒŸ]|\\p{Lu}[ŽŠŒŸ]\\p{Ll}`, "u");
+// TS-243: and in a name, Mac ú is œ ("Jesœs", "Raœl"): œ between small letters counts, except
+// "œu" and "œi", which are French ("Lacœur", "Lœillet").
 const MAC_ROMAN_IN_A_NAME = new RegExp(
-  `\\p{Ll}[’‘]\\p{Ll}|\\p{L}[¿§]|(?<!\\p{L})[${MAC_ROMAN_NOT_LETTERS_AT_START}]\\p{L}`,
+  `\\p{Ll}[’‘]\\p{Ll}|\\p{L}[¿§]|(?<!\\p{L})[${MAC_ROMAN_NOT_LETTERS_AT_START}]\\p{L}|\\p{Ll}œ(?![ui])\\p{Ll}`,
   "u"
 );
+// TS-243: Mac capitals Á Ó Ú È Í Î Ô Ò Â Ê Ë are small accented letters in windows-1252 (ç î ò é ê
+// ë ï ñ å æ è), so "Ángel" came out as "çngel" and "Óscar" as "îscar", and passed. A name word that
+// starts with a small accented letter followed by a small letter is flagged -- but only when the
+// file's names are written with capitals (a file typed all in small letters can hold a real
+// "élodie").
+const MAC_ROMAN_CAPITAL_READ_AS_SMALL = /(?<![\p{L}\p{M}'’‘])(?![a-z])\p{Ll}\p{Ll}/u;
 
-/** TS-210: whether one cell (read as windows-1252) looks like it was saved in the older Mac format. */
-export function looksLikeMacRoman(cell: string, isName = false): boolean {
-  return MAC_ROMAN_IN_A_WORD.test(cell) || (isName && MAC_ROMAN_IN_A_NAME.test(cell));
+/**
+ * TS-210: whether one cell (read as windows-1252) looks like it was saved in the older Mac format.
+ * TS-243: `namesWithCapitals` -- whether the file's names start with capitals (see above).
+ */
+export function looksLikeMacRoman(cell: string, isName = false, namesWithCapitals = true): boolean {
+  if (MAC_ROMAN_IN_A_WORD.test(cell)) return true;
+  if (!isName) return false;
+  return MAC_ROMAN_IN_A_NAME.test(cell) || (namesWithCapitals && MAC_ROMAN_CAPITAL_READ_AS_SMALL.test(cell));
+}
+
+/** TS-243: whether at least as many name cells start with a capital as with a small letter. */
+function namesStartWithCapitals(rows: string[][], nameColumns: number[]): boolean {
+  let capital = 0;
+  let small = 0;
+  for (const row of rows) {
+    for (const c of nameColumns) {
+      const first = row[c]?.trim().charAt(0) ?? "";
+      if (/\p{Lu}/u.test(first)) capital++;
+      else if (/\p{Ll}/u.test(first)) small++;
+    }
+  }
+  return capital >= small;
 }
 
 /**
@@ -147,10 +189,11 @@ export function findMacRomanCell(
   columns: number[],
   nameColumns: number[]
 ): { rowNumber: number; column: number } | null {
+  const capitals = namesStartWithCapitals(rows, nameColumns);
   for (let r = 0; r < rows.length; r++) {
     for (const c of columns) {
       const cell = rows[r][c];
-      if (cell && looksLikeMacRoman(cell, nameColumns.includes(c))) return { rowNumber: r + 1, column: c };
+      if (cell && looksLikeMacRoman(cell, nameColumns.includes(c), capitals)) return { rowNumber: r + 1, column: c };
     }
   }
   return null;

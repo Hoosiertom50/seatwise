@@ -3,7 +3,7 @@ import { z } from "zod";
 import { safeText } from "../safe-text";
 import { FIELD_LIMITS } from "../field-limits";
 import { expectedRevisionField, lengthFirst } from "./common";
-import { PERSON_NAME_PATTERN, PERSON_NAME_MESSAGE, looksLikeWebAddress, NO_WEB_ADDRESS_MESSAGE, hasMixedScriptWord, NO_MIXED_SCRIPT_MESSAGE } from "../validation";
+import { PERSON_NAME_PATTERN, PERSON_NAME_MESSAGE, looksLikeWebAddress, NO_WEB_ADDRESS_MESSAGE, hasMixedScriptWord, NO_MIXED_SCRIPT_MESSAGE, normalizePersonName } from "../validation";
 
 export const guestTierEnum = z.enum(["VIP", "FAMILY", "FRIEND", "PLUS_ONE", "OTHER"]);
 export type GuestTier = z.infer<typeof guestTierEnum>;
@@ -44,7 +44,8 @@ export const ageCategoryEnum = z.enum(["ADULT", "CHILD", "INFANT"]);
 export type AgeCategory = z.infer<typeof ageCategoryEnum>;
 
 function guestNameField(requiredMessage: string) {
-  return lengthFirst(
+  // TS-243: ’ ‘ ʼ and the no-break space are made plain first (see normalizePersonName).
+  return z.string().transform(normalizePersonName).pipe(lengthFirst(
     FIELD_LIMITS.personName,
     z
       .string()
@@ -55,7 +56,7 @@ function guestNameField(requiredMessage: string) {
       .refine((v) => !looksLikeWebAddress(v), NO_WEB_ADDRESS_MESSAGE)
       // TS-178: nor mix look-alike letters from different alphabets in one word.
       .refine((v) => !hasMixedScriptWord(v), NO_MIXED_SCRIPT_MESSAGE)
-  );
+  ));
 }
 
 export const createGuestSchema = z.object({
