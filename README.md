@@ -189,6 +189,26 @@ should be live together, so the gap between them is as short as possible:
      and counted as sent; on the live site nobody would get an email.
 2. **Migrate**: run the `prisma migrate deploy` command above against production.
 
+   **Check it applied exactly the expected migrations** (TS-245). Its output lists each one it
+   applied; compare that with what this release adds since the last publish (`git diff --name-only
+   origin/release..main -- packages/db/prisma/migrations` lists them too). For the first publish
+   after the TS-160 release, that's these **12**, in this order:
+
+   1. `20261005160000_email_verification`
+   2. `20261005170000_declined_guests_not_attending`
+   3. `20261006120000_seat_and_rule_lookup_indexes`
+   4. `20261006180000_wedding_owner_restrict`
+   5. `20261007100000_member_notification_emails`
+   6. `20261007100100_more_notification_types`
+   7. `20261007110000_revoked_sessions`
+   8. `20261007120000_guest_import_results`
+   9. `20261007130000_timeline_next_day`
+   10. `20261007130100_wedding_settings_revision`
+   11. `20261007200000_guest_email_changed_at`
+   12. `20261007200100_one_pending_invite_per_email`
+
+   Fewer, more, or different names: stop and find out why before publishing.
+
    **If it reports a failed migration** (TS-215), stop: **don't publish** -- the new code expects
    the new schema. Either restore the database from Neon's history to just before the migrate
    (Neon keeps 6 hours: Branches → Restore, see Backups below) and try again once the problem is
@@ -220,8 +240,8 @@ should be live together, so the gap between them is as short as possible:
    unset PRODUCTION_DATABASE_URL PRODUCTION_ENCRYPTION_KEY
    ```
 
-   Every other script in `packages/db/prisma` (seed, cleanup, fill) refuses to run against anything
-   but a local database, whatever it's passed.
+   Every other script in `packages/db/prisma` (seed, cleanup, fill, make-large-test-wedding)
+   refuses to run against anything but a local database, whatever it's passed.
 5. Check the live site by hand (sign in, open a wedding, its seating plan).
 
    TS-215 / TS-223: publishing from the TS-160 release brings in the rolling 24-hour limits
@@ -229,9 +249,9 @@ should be live together, so the gap between them is as short as possible:
    start at 0 when you publish -- at most, someone gets one extra day's allowance on publish day.
    Nothing to do. (On later publishes the counts carry over: the limits keep their names.)
 
-   TS-187: someone who signed up in the gap between steps 2 and 3 got their "confirm your email"
-   link from the old code. If it doesn't work for them, they can use **Resend link** on the
-   confirm-your-email banner (shown once they sign in) to get a fresh one from the new code.
+   TS-187 / TS-245: someone who signed up in the gap between steps 2 and 3 got **no** "confirm
+   your email" message -- the old code doesn't send one. Once the new code is live they see the
+   confirm-your-email banner when they sign in, and **Resend link** on it sends them one.
 6. **Optional, once (TS-195): time limits for every query.** The app gives each of its own
    transactions a 20-second limit per statement and ends one left idle for 30 seconds (TS-180/
    TS-187, set inside the transaction). Queries the app runs *outside* a transaction — most simple
@@ -251,6 +271,23 @@ should be live together, so the gap between them is as short as possible:
    size; if one ever stops with "canceling statement due to statement timeout", run
    `ALTER ROLE <app role> RESET statement_timeout;`, re-run the step, then set the limit again.
    Nothing in the app depends on this step.
+7. **Before sharing the link: time Generate at full size on Neon** (TS-245). A wedding at the caps
+   (2,000 guests, 300 tables) makes thousands of database round trips in one Generate or Approve.
+   That's quick locally but hasn't been measured against Neon. Never do this on the production
+   database -- use a Neon test branch:
+   1. On your machine, make the guest list (this only ever touches your local database; it also
+      adds the same wedding there, so you can time it locally first):
+      `pnpm --filter @seatwise/db make-large-test-wedding -- --owner <your local account's email> --csv ~/large-guests.csv`
+   2. In the Neon console, **Branches → Create branch** (schema only, if offered). Copy that
+      branch's connection string -- check the branch name, not `production`.
+   3. Run the app on your machine against the branch: `read -rs BRANCH_URL && DATABASE_URL="$BRANCH_URL"
+      EMAIL_TRANSPORT=log pnpm --filter @seatwise/web dev` (the sign-up confirm link is printed in
+      that terminal). Sign up, make a wedding, import `~/large-guests.csv` on the Guests tab, and
+      Quick-create 100 tables of 8 three times.
+   4. On the Seating plan tab, time **Generate**, then **Approve**. Over about 10 seconds is worth a
+      ticket before sharing -- people will think it's stuck. Your machine is likely further from
+      Neon than Netlify is, so the live site should be no slower than this.
+   5. Delete the branch in the Neon console, and `~/large-guests.csv`.
 
 **Backups.** Two layers:
 - **Neon** keeps 6 hours of history — for a mistake noticed right away, restore to a point in time

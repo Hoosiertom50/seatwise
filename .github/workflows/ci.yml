@@ -214,6 +214,8 @@ jobs:
   e2e:
     name: "Application E2E (shard ${{ matrix.shard }}/2)"
     runs-on: ubuntu-24.04
+    # TS-245: a stuck job (a browser install once hung for 2 hours) is stopped after 30 minutes.
+    timeout-minutes: 30
     # TS-139: run inside Playwright's official image, pinned to the same version as
     # @playwright/test. Its browsers and every OS library they need are already installed, so the job
     # no longer spends 10-20 minutes on `playwright install --with-deps` downloading ~150 packages
@@ -362,6 +364,8 @@ jobs:
   e2e-firefox:
     name: "Application E2E on Firefox (shard ${{ matrix.shard }}/2)"
     runs-on: ubuntu-24.04
+    # TS-245: a stuck job (a browser install once hung for 2 hours) is stopped after 30 minutes.
+    timeout-minutes: 30
     # TS-139: run inside Playwright's official image, pinned to the same version as
     # @playwright/test. Its browsers and every OS library they need are already installed, so the job
     # no longer spends 10-20 minutes on `playwright install --with-deps` downloading ~150 packages
@@ -479,6 +483,8 @@ jobs:
   e2e-webkit:
     name: "Application E2E on WebKit (shard ${{ matrix.shard }}/2)"
     runs-on: ubuntu-24.04
+    # TS-245: a stuck job (a browser install once hung for 2 hours) is stopped after 30 minutes.
+    timeout-minutes: 30
     # TS-139: run inside Playwright's official image, pinned to the same version as
     # @playwright/test. Its browsers and every OS library they need are already installed, so the job
     # no longer spends 10-20 minutes on `playwright install --with-deps` downloading ~150 packages
@@ -596,6 +602,8 @@ jobs:
   e2e-edge:
     name: "Application E2E on Edge (shard ${{ matrix.shard }}/2)"
     runs-on: ubuntu-24.04
+    # TS-245: a stuck job (a browser install once hung for 2 hours) is stopped after 30 minutes.
+    timeout-minutes: 30
     needs: validate
     strategy:
       fail-fast: false
@@ -632,6 +640,8 @@ jobs:
         # ubuntu-24.04 ships Edge preinstalled; this registers the channel with Playwright and
         # satisfies any OS deps rather than downloading a new browser binary, so it's noticeably
         # faster than the Firefox/WebKit equivalents (see TS-63's own spike findings).
+        # TS-245: this install once hung for 2 hours -- give up after 10 minutes instead.
+        timeout-minutes: 10
         run: pnpm exec playwright install --with-deps msedge
 
       - name: Generate ephemeral, non-secret app config for this CI run only
