@@ -1,5 +1,5 @@
 import { emailDelivered, emailMayHaveGone, hitRateLimit, undoRateLimitHit } from "@seatwise/db";
-import { accountEmailCounters } from "./rate-limit";
+import { accountEmailCounters, confirmationNetworkCounters } from "./rate-limit";
 import { sendVerificationEmail } from "./email-verification";
 
 type Hit = { allowed: boolean; windowStart: Date };
@@ -32,7 +32,9 @@ export function setSignupEmailForTests(fakes?: {
  * (the database busy) is logged and answered false -- it used to turn the made account into a 500.
  */
 export async function sendFirstConfirmationEmail(req: { headers: Headers }, user: { id: string; email: string }): Promise<boolean> {
-  const emailCounters = accountEmailCounters(req);
+  // TS-238: and this network's slice of the confirmations' shared share (5 a day per IPv4 /24 or
+  // IPv6 /48, real sends only), so one network can't use the share up for everyone.
+  const emailCounters = [...accountEmailCounters(req), ...confirmationNetworkCounters(req)];
   const hits: (Hit | null)[] = emailCounters.map(() => null);
   let givenBack = false;
   const giveBack = async () => {

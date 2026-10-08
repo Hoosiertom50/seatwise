@@ -132,26 +132,28 @@ test("TS-219: emails set off by guests' answers leave the owner's own share unto
 
 // --- 2. Accounts in their first week share one pool ---
 
-test("TS-219: accounts in their first week together use at most a quarter of the everyday allowance (60 of 240)", async () => {
-  assert.equal(dailyEmailLimits({}).newAccounts, 60);
+test("TS-219 / TS-240: accounts in their first week together use at most 0.4 of the everyday allowance (96 of 240)", async () => {
+  assert.equal(dailyEmailLimits({}).newAccounts, 96);
   for (let a = 0; a < 12; a++) newAccounts.add(`fresh-${a}`);
   await quietly(async () => {
-    // 12 fresh accounts, 5 each (well within each one's own 20): 60 go out...
+    // 12 fresh accounts, 8 each (well within each one's own 20): 96 go out...
     for (let a = 0; a < 12; a++) {
-      for (let i = 0; i < 5; i++) {
+      for (let i = 0; i < 8; i++) {
         assert.equal(await sendEmail(`g-${a}-${i}@example.invalid`, "s", "t", GMAIL, { account: `fresh-${a}` }), "sent");
       }
     }
     // ...then the next first-week account is refused, as Seatwise's limit...
     newAccounts.add("fresh-12");
     assert.equal(await sendEmail("g-12@example.invalid", "s", "t", GMAIL, { account: "fresh-12" }), "limited");
-    // ...as is an email a first-week owner's guests set off...
-    assert.equal(await sendEmail("p@example.invalid", "s", "t", GMAIL, { toWeddingMember: true, forGuestsOf: "fresh-0" }), "limited");
-    // ...while an older account's email still goes.
+    // ...but (TS-240) an email a first-week owner's guests set off, or a notification to the
+    // wedding's own members, isn't held to that share...
+    assert.equal(await sendEmail("p@example.invalid", "s", "t", GMAIL, { toWeddingMember: true, forGuestsOf: "fresh-0" }), "sent");
+    assert.equal(await sendEmail("p2@example.invalid", "s", "t", GMAIL, { toWeddingMember: true, account: "fresh-1" }), "sent");
+    // ...and an older account's email still goes.
     assert.equal(await sendEmail("g-old@example.invalid", "s", "t", GMAIL, { account: "old" }), "sent");
   });
-  assert.equal(counts.get("new-accounts"), 60, "refused ones were given back");
-  assert.equal(counts.get("everyday"), 61);
+  assert.equal(counts.get("new-accounts"), 96, "refused ones were given back");
+  assert.equal(counts.get("everyday"), 99);
   assert.equal(counts.get("to:planner:g-12@example.invalid"), 0, "nothing stays counted for a refused email");
 });
 

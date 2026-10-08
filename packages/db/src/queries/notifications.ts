@@ -1,6 +1,6 @@
 import { randomUUID } from "crypto";
 import { accountDailyEmailLimit, emailMayHaveGone, sendEmail, type EmailResult } from "../email";
-import { pool } from "../pool";
+import { beginTransaction, pool } from "../pool";
 import { claimCooldown, hitRateLimit, releaseCooldown, undoRateLimitHit } from "./rate-limit";
 import { appBaseUrl, emailSafeWeddingName, looksLikePhoneNumber, looksLikeWebAddress } from "@seatwise/shared";
 
@@ -30,8 +30,12 @@ export const NOTIFICATION_EMAILS_PER_WEDDING_WITHOUT_ACTOR = [
 // few fresh accounts can't use guests' answers (their own guests' links, submitted in turn) to
 // spend Seatwise's email allowance. TS-219: these no longer count toward the owner's share of the
 // everyday allowance (ACCOUNT_SHARE_OF_EVERYDAY in ../email.ts) -- see notificationEmailCharge.
-export const NOTIFICATION_EMAILS_PER_OWNER_WITHOUT_ACTOR = { limit: 60, windowSeconds: 86_400 } as const;
-export const NEW_OWNER_NOTIFICATION_EMAILS_WITHOUT_ACTOR = { limit: 20, windowSeconds: 86_400 } as const;
+// TS-241: 12 a day (5 in the account's first week), well under the site-wide share every wedding's
+// guests' answers draw from together (48, GUEST_ANSWERS_SHARE_OF_EVERYDAY in ../email.ts). At 60,
+// one owner -- or one busy wedding -- could use that whole share and stop RSVP emails to every
+// other wedding's planners for a day. Past it, answers still show in the app.
+export const NOTIFICATION_EMAILS_PER_OWNER_WITHOUT_ACTOR = { limit: 12, windowSeconds: 86_400 } as const;
+export const NEW_OWNER_NOTIFICATION_EMAILS_WITHOUT_ACTOR = { limit: 5, windowSeconds: 86_400 } as const;
 export const ownerNotificationEmailKey = (ownerId: string) => `email:notify-owner:86400:${ownerId}`;
 
 // TS-232: the notification emails one person's own actions set off have a daily allowance of their
@@ -290,6 +294,54 @@ export async function notifyWeddingCollaborators(
   }
 }
 
+/**
+ * TS-186 / TS-234: writes one in-app notification, only if the recipient is still the wedding's owner
+ * or a collaborator at this moment (their access row share-locked as it's checked, so a removal
+ * being saved right now is waited for and then seen). False when they aren't (nothing written).
+ * TS-237: in one transaction, locking in the same order as deleting a wedding -- the wedding (KEY
+ * SHARE), then the recipient's account, then their access row, then the INSERT. Before, the access
+ * row was locked first and the INSERT's own check then locked the wedding, the other way round from
+ * a wedding being deleted, so the two could deadlock (one was stopped by the database).
+ */
+export async function insertNotification(weddingId: string, recipientUserId: string, type: string, message: string): Promise<boolean> {
+  const client = await pool.connect();
+  try {
+    await beginTransaction(client);
+    const { rows: wedding } = await client.query<{ ownerId: string }>(
+      `SELECT "ownerId" FROM "weddings" WHERE id = $1 FOR KEY SHARE`,
+      [weddingId]
+    );
+    const { rows: recipient } = wedding[0]
+      ? await client.query(`SELECT 1 FROM "users" WHERE id = $1 FOR KEY SHARE`, [recipientUserId])
+      : { rows: [] };
+    let member = false;
+    if (wedding[0] && recipient[0]) {
+      member =
+        wedding[0].ownerId === recipientUserId ||
+        ((
+          await client.query(
+            `SELECT 1 FROM "wedding_collaborators" WHERE "weddingId" = $1 AND "userId" = $2 FOR KEY SHARE`,
+            [weddingId, recipientUserId]
+          )
+        ).rowCount ?? 0) > 0;
+    }
+    if (member) {
+      await client.query(
+        `INSERT INTO "notifications" (id, "weddingId", "recipientUserId", type, message)
+         VALUES ($1, $2, $3, $4::"NotificationType", $5)`,
+        [randomUUID(), weddingId, recipientUserId, type, message]
+      );
+    }
+    await client.query("COMMIT");
+    return member;
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
 const errorCode = (err: unknown) => {
   const code = (err as { code?: string } | null)?.code;
   return code ? `database error ${code}` : err instanceof Error ? err.message : String(err);
@@ -341,14 +393,7 @@ async function notifyEveryone(
     // checked, so a removal being saved at this very moment is waited for and then seen -- before,
     // the check didn't wait, and the person still got this one notification and email.
     try {
-      const { rowCount } = await pool.query(
-        `INSERT INTO "notifications" (id, "weddingId", "recipientUserId", type, message)
-         SELECT $1, $2, $3, $4::"NotificationType", $5
-         WHERE EXISTS (SELECT 1 FROM "weddings" WHERE id = $2 AND "ownerId" = $3)
-            OR EXISTS (SELECT 1 FROM "wedding_collaborators" WHERE "weddingId" = $2 AND "userId" = $3 FOR KEY SHARE)`,
-        [randomUUID(), weddingId, recipient.id, type, message]
-      );
-      if (rowCount) notified.push(recipient);
+      if (await insertNotification(weddingId, recipient.id, type, message)) notified.push(recipient);
     } catch (err) {
       // TS-194: 23503 -- their account (or the wedding) was deleted a moment ago; nothing to tell
       // them. Anything else is logged. Either way the rest still hear about it.
