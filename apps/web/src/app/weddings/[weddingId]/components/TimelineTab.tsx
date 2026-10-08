@@ -155,6 +155,11 @@ export function TimelineTab({ weddingId, canEdit }: { weddingId: string; canEdit
 
   async function onDelete(entryId: string) {
     const removed = entries.find((e) => e.id === entryId);
+    // TS-242: counted as a change the moment the row leaves the screen, not only once the DELETE
+    // answers -- a reorder's reload already on its way was read before the delete, and it put the
+    // entry back on screen. (Counted again below: a reload sent while the DELETE is on its way can
+    // still have it too.)
+    listChange.current++;
     setEntries((cur) => cur.filter((e) => e.id !== entryId));
     try {
       await api.delete(`/api/v1/weddings/${weddingId}/timeline-entries/${entryId}`);

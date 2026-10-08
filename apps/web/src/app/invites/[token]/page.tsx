@@ -70,6 +70,27 @@ export default function InviteAcceptPage() {
     }
   }
 
+  // TS-242: an invite that was already accepted. The existing accept POST answers {weddingId,
+  // alreadyAccepted} when this person accepted it (and still has access), so the wedding opens;
+  // for anyone else it answers "no longer valid", shown here. The GET still says only the status.
+  const [opening, setOpening] = useState(false);
+  const [openError, setOpenError] = useState<string | null>(null);
+  async function onOpenWedding() {
+    setOpenError(null);
+    setOpening(true);
+    try {
+      const { weddingId } = await api.post<{ weddingId: string }>(`/api/v1/invites/${token}/accept`);
+      router.push(`/weddings/${weddingId}`);
+    } catch (err) {
+      setOpenError(
+        err instanceof ApiError && err.status !== 0
+          ? err.message
+          : "Couldn't open the wedding. Check your connection and try again."
+      );
+      setOpening(false);
+    }
+  }
+
   if (loadError) {
     return (
       <main className="flex flex-1 items-center justify-center px-6">
@@ -121,6 +142,23 @@ export default function InviteAcceptPage() {
         {preview.status === "ACCEPTED" && (
           <p className="text-sm text-neutral-600 dark:text-neutral-300">This invite has already been accepted.</p>
         )}
+        {/* TS-242: if this person accepted it, a way straight into the wedding. The alert region is
+            on the page before its text changes. */}
+        {preview.status === "ACCEPTED" && signedIn && (
+          <>
+            <button
+              type="button"
+              onClick={() => void onOpenWedding()}
+              disabled={opening}
+              className="mt-4 w-full rounded-md bg-neutral-900 dark:bg-neutral-100 px-4 py-2 text-sm font-medium text-white dark:text-neutral-900 hover:bg-neutral-700 dark:hover:bg-neutral-300 disabled:opacity-50"
+            >
+              {opening ? "Opening..." : "Open the wedding"}
+            </button>
+            <p role="alert" className="mt-2 text-sm text-red-600 dark:text-red-400 empty:hidden">
+              {openError ?? ""}
+            </p>
+          </>
+        )}
         {preview.status === "MISMATCHED_ACCOUNT" && (
           <>
             <p className="text-sm text-neutral-600 dark:text-neutral-300">
@@ -141,6 +179,14 @@ export default function InviteAcceptPage() {
               </p>
             )}
           </>
+        )}
+        {/* TS-242: every state but a pending invite used to be a dead end for someone signed in. */}
+        {preview.status !== "PENDING" && signedIn && (
+          <div className="mt-4">
+            <Link href="/dashboard" className="text-sm underline">
+              Go to your dashboard
+            </Link>
+          </div>
         )}
 
         {preview.status === "PENDING" && (

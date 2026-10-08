@@ -137,6 +137,17 @@ export class CollaboratorsTabPage extends BasePage {
     ]);
   }
 
+  /** TS-246: chooses the new owner and presses Hand off, leaving the "are you sure?" question open. */
+  async openHandOffQuestion(personName: string): Promise<void> {
+    await this.page.getByLabel("New owner", { exact: true }).selectOption({ label: personName });
+    await this.page.getByRole("button", { name: "Hand off", exact: true }).click();
+  }
+
+  /** TS-246: the open hand-off question. */
+  handOffQuestion() {
+    return new ConfirmDelete(this.page).question();
+  }
+
   handOffSection() {
     return this.page.getByRole("heading", { name: "Hand off this wedding", exact: true });
   }

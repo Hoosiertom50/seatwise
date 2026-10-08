@@ -9,6 +9,7 @@ import {
 import { getAuthUser } from "@/lib/session";
 import { errorResponse, zodErrorResponse, concurrentChangeResponse, readJson, weddingDeletedResponse } from "@/lib/api-response";
 import { requireAccess } from "@/lib/access";
+import { vendorSameMomentResponse } from "@/lib/same-moment-answers";
 
 type Params = { params: Promise<{ weddingId: string; vendorId: string }> };
 
@@ -45,6 +46,9 @@ export async function PATCH(req: NextRequest, { params }: Params) {
     if (err instanceof VendorCategoryOtherError) {
       return errorResponse("Validation failed", 422, { categoryOther: [err.message] });
     }
+    // TS-242: a lost race said in vendor words -- it used to get the plan's "changed this plan".
+    const sameMoment = vendorSameMomentResponse(err);
+    if (sameMoment) return sameMoment;
     const conflict = concurrentChangeResponse(err);
     if (conflict) return conflict;
     throw err;
@@ -66,6 +70,9 @@ export async function DELETE(req: NextRequest, { params }: Params) {
     // TS-204: access dropped while it waited (403), or the wedding was deleted (404) -- nothing saved.
     const refused = weddingDeletedResponse(err);
     if (refused) return refused;
+    // TS-242: a lost race is "try again" (409), not a server error.
+    const sameMoment = vendorSameMomentResponse(err);
+    if (sameMoment) return sameMoment;
     throw err;
   }
   if (!deleted) return errorResponse("Vendor not found", 404);

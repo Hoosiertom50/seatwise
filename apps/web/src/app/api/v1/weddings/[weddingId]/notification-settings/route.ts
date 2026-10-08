@@ -53,5 +53,12 @@ export async function PATCH(req: NextRequest, { params }: Params) {
   const updated = await setEmailNotificationsEnabled(weddingId, user.id, parsed.data.emailNotificationsEnabled);
   if (!updated) return errorResponse("Wedding not found", 404);
 
-  return NextResponse.json({ ok: true });
+  // TS-237: with the settings revision the switch moved the wedding to, so the page that pressed it
+  // keeps its own count in step (its next settings save isn't refused as out of date).
+  return NextResponse.json({
+    ok: true,
+    emailNotificationsEnabled: parsed.data.emailNotificationsEnabled,
+    settingsRevision: updated.settingsRevision,
+    updatedAt: updated.updatedAt,
+  });
 }

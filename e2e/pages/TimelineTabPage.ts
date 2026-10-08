@@ -205,6 +205,26 @@ export class TimelineTabPage extends BasePage {
     await this.reorder(description, "DOWN");
   }
 
+  /** TS-242: the row for an entry, for checking it's (still) on screen. */
+  entryRowLocator(description: string) {
+    return this.entryRow(description);
+  }
+
+  /** TS-242: presses "Move earlier" and waits only for the move itself to be saved -- not for the
+   * list's reload, which a test may be holding back. */
+  async startMoveUp(description: string): Promise<void> {
+    await Promise.all([
+      this.page.waitForResponse((res) => res.request().method() === "POST" && this.isTimelineReorderRequest(res.url())),
+      this.upButton(description).click(),
+    ]);
+  }
+
+  /** TS-242: Remove, then "Yes" -- without waiting for the DELETE (a test may be holding it back). */
+  async startRemove(description: string): Promise<void> {
+    await this.removeButton(description).click();
+    await new ConfirmDelete(this.entryRow(description)).confirm();
+  }
+
   async isMoveUpEnabled(description: string): Promise<boolean> {
     return this.upButton(description).isEnabled();
   }

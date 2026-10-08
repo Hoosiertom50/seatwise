@@ -105,6 +105,19 @@ export async function createInvite(
       throw new InviteError("That person already owns this wedding.", "ALREADY_OWNER");
     }
 
+    // Re-inviting the same address supersedes any invite already pending for it, so there's never
+    // more than one active invite (and one live token) per email per wedding.
+    await client.query(
+      `UPDATE "wedding_invites" SET status = 'REVOKED'
+       WHERE "weddingId" = $1 AND lower(email) = $2 AND status = 'PENDING'`,
+      [weddingId, normalizedEmail]
+    );
+
+    // TS-242: checked after the revoke above, not before. Accepting doesn't wait for the wedding's
+    // lock, so an accept of the old invite could finish between an earlier check and the revoke --
+    // the revoke then skipped it (no longer pending) and a new invite went to someone who was by
+    // then a collaborator. The revoke waits for an accept that's under way, and this new statement
+    // sees what it saved. Refusing here rolls the revoke back.
     const { rows: existingCollabRows } = await client.query(
       `SELECT wc.id FROM "wedding_collaborators" wc
        JOIN "users" u ON u.id = wc."userId"
@@ -114,14 +127,6 @@ export async function createInvite(
     if (existingCollabRows[0]) {
       throw new InviteError("That person is already a collaborator on this wedding.", "ALREADY_COLLABORATOR");
     }
-
-    // Re-inviting the same address supersedes any invite already pending for it, so there's never
-    // more than one active invite (and one live token) per email per wedding.
-    await client.query(
-      `UPDATE "wedding_invites" SET status = 'REVOKED'
-       WHERE "weddingId" = $1 AND lower(email) = $2 AND status = 'PENDING'`,
-      [weddingId, normalizedEmail]
-    );
 
     const id = randomUUID();
     const token = randomBytes(32).toString("hex");
