@@ -56,6 +56,24 @@ export function emailSwitchRevision(current: number, answered: number): number |
   return answered === current + 1 ? answered : null;
 }
 
+/**
+ * TS-246 / TS-251: whether a box's save must be refused because its setting was saved elsewhere
+ * while it had typing in it -- the box was flagged (see boxesChangedUnderneath) and the value about
+ * to be saved isn't already the latest. The flags for `keys` are forgotten either way: the box
+ * shows the latest from then on, so its next change is a fresh one. The RSVP cutoff's "Save
+ * anyway" and "Change it" go through this too -- they used to skip it and leave the flag set.
+ */
+export function takeChangedFlags(
+  flags: Set<SettingsBoxKey>,
+  keys: SettingsBoxKey[],
+  toSave: string,
+  latest: string
+): boolean {
+  const hit = keys.some((k) => flags.has(k));
+  for (const k of keys) flags.delete(k);
+  return hit && toSave !== latest;
+}
+
 /** The same words the server uses when it refuses a stale settings save (409). */
 export const SETTINGS_CHANGED_ELSEWHERE_MESSAGE =
   "This wedding's settings changed since you opened them (maybe in another tab) — showing the latest. Your change wasn't saved; make it again if it's still needed.";

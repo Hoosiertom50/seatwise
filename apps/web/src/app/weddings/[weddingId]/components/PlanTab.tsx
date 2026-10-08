@@ -6,6 +6,7 @@ import { api, ApiError } from "@/lib/api-client";
 import { useSerialTasks } from "@/lib/serial-tasks";
 import { useUnsavedChanges } from "@/lib/unsaved-changes";
 import { inReadingOrder } from "@/lib/reading-order";
+import { focusIfLost } from "@/lib/focus-if-lost";
 import { PickThenActControl } from "@/components/PickThenActControl";
 import { PLAN_CHANGED_EVENT } from "./GettingStarted";
 import { undoPlanFor, mustSitGroup, undoWouldSplitGroup, undoSeatsBeforeFor, UNDO_SPLITS_GROUP_MESSAGE, type UndoPlan } from "@/lib/plan-undo";
@@ -576,6 +577,10 @@ export function PlanTab({
       }
     } finally {
       setGenerating(false);
+      // TS-255: confirmed from the "replaces the approved plan" question, which has gone -- focus
+      // goes back to Generate (disabled until now) rather than dropping to the page. When the
+      // question was asked again, its own button has focus and keeps it.
+      if (confirmedReplaceApproved) focusIfLost("generate-plan-button");
     }
   }
 
@@ -1035,6 +1040,7 @@ export function PlanTab({
         {canEdit && (
           <div className="flex min-w-0 max-w-full flex-col items-end gap-2">
             <button
+              id="generate-plan-button"
               onClick={() => void onGenerate()}
               disabled={generating || planChangesPending}
               className="min-h-11 rounded-md bg-neutral-900 dark:bg-neutral-100 px-4 py-2 text-sm font-medium text-white dark:text-neutral-900 hover:bg-neutral-700 dark:hover:bg-neutral-300 disabled:opacity-50"
@@ -1088,7 +1094,11 @@ export function PlanTab({
                   </button>
                   <button
                     type="button"
-                    onClick={() => setConfirmReplaceApproved(false)}
+                    onClick={() => {
+                      setConfirmReplaceApproved(false);
+                      // TS-255: back to the button that asked, not the page.
+                      focusIfLost("generate-plan-button");
+                    }}
                     className="min-h-11 rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800"
                   >
                     Cancel
@@ -1453,6 +1463,7 @@ export function PlanTab({
               </p>
               {canEdit && restorePreview?.sourceVersionNumber !== detail.versionNumber && (
                 <button
+                  id="restore-version-button"
                   onClick={onPreviewRestore}
                   disabled={previewingRestore}
                   className="rounded-md border border-neutral-300 dark:border-neutral-600 min-h-11 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50"
@@ -1512,7 +1523,11 @@ export function PlanTab({
                       {restoring ? "Restoring..." : "Confirm restore"}
                     </button>
                     <button
-                      onClick={() => setRestorePreview(null)}
+                      onClick={() => {
+                        setRestorePreview(null);
+                        // TS-255: back to "Restore version N...", which comes back in its place.
+                        focusIfLost("restore-version-button");
+                      }}
                       disabled={restoring}
                       className="rounded-md border border-neutral-300 dark:border-neutral-600 min-h-11 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50"
                     >
