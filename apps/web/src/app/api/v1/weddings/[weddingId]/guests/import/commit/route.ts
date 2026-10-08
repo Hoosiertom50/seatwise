@@ -52,13 +52,15 @@ async function commitImport(req: NextRequest, weddingId: string, user: UserRow, 
     );
   } catch (err) {
     // TS-92: a guest in the file was edited by someone else since the preview -- nothing saved.
+    // TS-241: every such refusal comes after the whole file and guest list were read (classifyRows),
+    // so it keeps its hourly count too -- giving it back let a full-size file be sent without limit.
     if (err instanceof GuestImportConflictError) {
-      return errorResponse(err.message, 409);
+      return refusedButCounted(errorResponse(err.message, 409));
     }
     // TS-209: with the rows that still have errors, so the screen can list them (it said "N rows
     // still have errors" and showed none).
     // TS-233: and, as a file refused after being read through, it still counts against the hourly
-    // limit (conflicts, busy and bad requests are still given back).
+    // limit (busy and bad requests are still given back; TS-241: conflicts are counted, above).
     if (err instanceof GuestImportError) {
       return refusedButCounted(
         NextResponse.json({ error: err.message, ...(err.rows ? { rows: err.rows } : {}) }, { status: 422 })

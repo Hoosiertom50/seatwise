@@ -14,6 +14,14 @@ export const PERSON_NAME_PATTERN = /^[\p{L}\p{M}][\p{L}\p{M} '.-]*$/u;
 export const PERSON_NAME_MESSAGE =
   "Can only contain letters, spaces, hyphens, apostrophes, and periods";
 
+// TS-243: Word, Outlook and the iPhone's Smart Punctuation type a curly apostrophe ("O’Brien"),
+// and copied text can hold a no-break space -- both used to be refused as "can only contain
+// letters...". Before the name rules run, ’ ‘ ʼ become a plain ' and a no-break space becomes a
+// space; the plain form is what's saved. (One character for one, so lengths don't change.)
+export function normalizePersonName(value: string): string {
+  return value.replace(/[’‘ʼ]/g, "'").replace(/ /g, " ");
+}
+
 // A wedding's name is a title, not a person's name -- "Alex & Jordan's Wedding", "Smith-Jones
 // Wedding, Est. 2026" -- so this allowlist is deliberately wider than PERSON_NAME_PATTERN: it
 // adds digits, ampersands, commas, and exclamation points on top of the same base set.

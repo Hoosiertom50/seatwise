@@ -11,6 +11,7 @@ import {
   NO_WEB_ADDRESS_MESSAGE,
   hasMixedScriptWord,
   NO_MIXED_SCRIPT_MESSAGE,
+  normalizePersonName,
 } from "./validation";
 import { parseGuestSide, parseGuestSideCode, sideMismatchMessage, guestSideLabel } from "./guest-side";
 import { hasForbiddenControlCharacter, CONTROL_CHARACTER_MESSAGE, LINE_BREAK_MESSAGE } from "./safe-text";
@@ -132,8 +133,12 @@ export function parseGuestImportRow(
     return false;
   }
 
-  const firstName = cellFor("firstName");
-  const lastName = cellFor("lastName");
+  // TS-243: a curly apostrophe or no-break space in a name is made plain (normalizePersonName), and
+  // the plain form is what is saved -- "O’Brien" used to stop the whole import.
+  const firstNameCell = cellFor("firstName");
+  const lastNameCell = cellFor("lastName");
+  const firstName = firstNameCell === undefined ? undefined : normalizePersonName(firstNameCell).trim();
+  const lastName = lastNameCell === undefined ? undefined : normalizePersonName(lastNameCell).trim();
   if (!firstName || !lastName) {
     errors.push("Missing required name (first and last name are both required).");
   } else {
