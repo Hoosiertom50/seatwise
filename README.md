@@ -240,8 +240,10 @@ should be live together, so the gap between them is as short as possible:
    unset PRODUCTION_DATABASE_URL PRODUCTION_ENCRYPTION_KEY
    ```
 
-   Every other script in `packages/db/prisma` (seed, cleanup, fill, make-large-test-wedding)
-   refuses to run against anything but a local database, whatever it's passed.
+   The test-data scripts in `packages/db/prisma` (seed, cleanup, fill, make-large-test-wedding,
+   local-test-data) refuse to run against anything but a local database, whatever they're
+   passed. TS-255: two scripts are different on purpose -- `copy-weddings-to-production`
+   writes to the database named by TARGET_DATABASE_URL, and `backup-real-weddings` only reads.
 5. Check the live site by hand (sign in, open a wedding, its seating plan).
 
    TS-215 / TS-223: publishing from the TS-160 release brings in the rolling 24-hour limits
