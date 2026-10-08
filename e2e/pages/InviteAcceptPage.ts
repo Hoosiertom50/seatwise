@@ -54,6 +54,21 @@ export class InviteAcceptPage extends BasePage {
     return this.page.getByRole("link", { name: "Log in", exact: true });
   }
 
+  /** TS-242: on an accepted invite, for someone signed in -- opens the wedding if they accepted it. */
+  openWeddingButton() {
+    return this.page.getByRole("button", { name: "Open the wedding", exact: true });
+  }
+
+  /** TS-242: why "Open the wedding" didn't open it (an alert region, there before it has text). */
+  openWeddingError() {
+    return this.page.locator("main").getByRole("alert").filter({ hasText: /\S/ });
+  }
+
+  /** TS-242: shown in every state but a pending invite, to anyone signed in. */
+  dashboardLink() {
+    return this.page.getByRole("link", { name: "Go to your dashboard", exact: true });
+  }
+
   /** TS-164: the message shown when accepting is refused (e.g. the account hasn't confirmed its email). */
   acceptError() {
     return this.page.locator("main p.text-red-600, main p.text-red-400");

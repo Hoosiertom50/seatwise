@@ -2303,10 +2303,12 @@ export async function setPlanVersionLabel(
   const client = await pool.connect();
   try {
     await beginTransaction(client);
-    await checkPlanVersionRevision(client, id, weddingId, expectedRevision);
-    // TS-204: the person's access read again under the plan's lock -- lowered or removed while
-    // this waited: refused, nothing saved.
+    // TS-204: the person's access read again inside the save -- lowered or removed while this
+    // waited: refused, nothing saved.
+    // TS-242: before the plan's lock, not after -- the wedding first, then its rows (as the timeline
+    // does since TS-234), so a wedding delete at the same moment can't leave each waiting for the other.
     if (actorAccess) await recheckActorAccess(client, weddingId, actorAccess);
+    await checkPlanVersionRevision(client, id, weddingId, expectedRevision);
 
     const { rows } = await client.query(
       `UPDATE "plan_versions" SET label = $1, revision = revision + 1 WHERE id = $2 AND "weddingId" = $3 RETURNING id`,
