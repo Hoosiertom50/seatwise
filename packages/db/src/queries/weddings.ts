@@ -397,23 +397,28 @@ export async function updateWeddingForOwner(
 // cascade reached them, and could deadlock with a rule being added or a group being moved (the
 // delete lost, with a server error). A deadlock that still happens is answered "try again" (409)
 // by the route.
-export async function deleteWeddingForOwner(id: string, ownerId: string): Promise<boolean> {
+// TS-255: "not-owner" when the wedding is still there but was handed off after the route's owner
+// check -- the screen must not take that for a delete that already happened ("gone").
+export async function deleteWeddingForOwner(
+  id: string,
+  ownerId: string
+): Promise<"deleted" | "gone" | "not-owner"> {
   const client = await pool.connect();
   try {
     await beginTransaction(client);
     const { rows } = await client.query(
-      `SELECT id FROM "weddings" WHERE id = $1 AND "ownerId" = $2 FOR NO KEY UPDATE`,
-      [id, ownerId]
+      `SELECT id, "ownerId" FROM "weddings" WHERE id = $1 FOR NO KEY UPDATE`,
+      [id]
     );
-    if (!rows[0]) {
+    if (!rows[0] || rows[0].ownerId !== ownerId) {
       await client.query("ROLLBACK");
-      return false;
+      return rows[0] ? "not-owner" : "gone";
     }
     await lockCurrentPlan(client, id);
     await lockRestrictedLists(client, id);
     const { rowCount } = await client.query(`DELETE FROM "weddings" WHERE id = $1 AND "ownerId" = $2`, [id, ownerId]);
     await client.query("COMMIT");
-    return (rowCount ?? 0) > 0;
+    return (rowCount ?? 0) > 0 ? "deleted" : "gone";
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});
     throw err;

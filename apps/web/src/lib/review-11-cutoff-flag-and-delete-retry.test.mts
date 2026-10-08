@@ -100,3 +100,38 @@ test("TS-253: other delete failures still show as errors", async () => {
   assert.equal(deleteCountsAsDone(new ApiError("Something went wrong", 500)), false);
   assert.equal(deleteCountsAsDone(new TypeError("Failed to fetch")), false);
 });
+
+// ---- TS-255: a wedding handed off between the owner check and the delete is not "deleted" ----
+
+test("TS-255: deleteWeddingForOwner tells a handed-off wedding apart from one already gone", async () => {
+  const db = await import("@seatwise/db");
+  const { pool, deleteWeddingForOwner } = db;
+  const realConnect = pool.connect.bind(pool);
+  const scripted = (row: Record<string, unknown> | undefined) => {
+    const statements: string[] = [];
+    (pool as unknown as { connect: unknown }).connect = async () => ({
+      query: async (sql: string) => {
+        const flat = sql.replace(/\s+/g, " ").trim();
+        statements.push(flat);
+        const rows = /FROM "weddings" WHERE id = \$1 FOR NO KEY UPDATE/.test(flat) && row ? [row] : [];
+        return { rows, rowCount: rows.length };
+      },
+      release: () => {},
+    });
+    return statements;
+  };
+  try {
+    let statements = scripted({ id: "w1", ownerId: "someone-else" });
+    assert.equal(await deleteWeddingForOwner("w1", "owner-1"), "not-owner");
+    assert.equal(statements.some((s) => s.startsWith("DELETE")), false);
+    statements = scripted(undefined);
+    assert.equal(await deleteWeddingForOwner("w1", "owner-1"), "gone");
+    assert.equal(statements.some((s) => s.startsWith("DELETE")), false);
+  } finally {
+    (pool as unknown as { connect: unknown }).connect = realConnect;
+  }
+});
+
+test("TS-255: a retried wedding delete answered 403 (handed off meanwhile) is an error, not deleted", () => {
+  assert.equal(deleteCountsAsDone(new ApiError("Only the wedding's owner can delete it — you aren't its owner any more.", 403)), false);
+});
