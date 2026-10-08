@@ -582,6 +582,11 @@ export class PlanTabPage extends BasePage {
     return this.page.getByTestId("export-unseated-warning");
   }
 
+  /** TS-250: the warning next to Export while guests need a new seat since the plan was approved. */
+  exportNeedsReassignmentWarning() {
+    return this.page.getByTestId("export-needs-reassignment-warning");
+  }
+
   /** TS-211: a failed export's message, shown next to the export buttons. */
   exportError(text: string | RegExp) {
     return this.page.getByRole("alert").filter({ hasText: text });

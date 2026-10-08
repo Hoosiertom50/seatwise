@@ -18,6 +18,9 @@ export interface ExportGuestRow {
   tableLabel: string;
   // TS-180: who's coming with them -- shown on the lookup list.
   plusOneNames?: string | null;
+  // TS-250: flagged "Needs reassignment" after approval -- tableLabel is the table they're at now,
+  // which no longer works for them. Never printed at that table (see splitFlagged).
+  needsReassignment?: boolean;
 }
 
 // TS-205: text widths at size 1, measured once per font and piece of text. Measuring lays the
@@ -122,6 +125,7 @@ function safeRow(fonts: Fonts, row: ExportGuestRow): ExportGuestRow {
     guestName: fonts.text(row.guestName),
     tableLabel: fonts.text(row.tableLabel),
     plusOneNames: row.plusOneNames ? fonts.text(row.plusOneNames) : null,
+    needsReassignment: row.needsReassignment,
   };
 }
 
@@ -131,6 +135,20 @@ export interface PdfExtras {
   generatedAt?: string;
   /** Attending guests with no seat in the plan. */
   unseated?: { guestName: string; plusOneNames?: string | null }[];
+  /** TS-250: guests whose seat needs changing, with the table they're at now. */
+  needsReassignment?: ExportGuestRow[];
+}
+
+/**
+ * TS-250: the rows that go at a table, and the guests listed under "Needs reassignment" instead --
+ * those passed in `extras` plus any row that carries the flag, so a flagged guest is never printed
+ * at the table that no longer works for them.
+ */
+export function splitFlagged(rows: ExportGuestRow[], extras: PdfExtras): { rows: ExportGuestRow[]; flagged: ExportGuestRow[] } {
+  return {
+    rows: rows.filter((r) => !r.needsReassignment),
+    flagged: [...(extras.needsReassignment ?? []), ...rows.filter((r) => r.needsReassignment)],
+  };
 }
 
 // TS-211: the generated date and time, small and grey at the top right of a page.
@@ -144,11 +162,64 @@ function drawGeneratedAt(page: PDFPage, fonts: Fonts, generatedAt: string | unde
 
 export const NOT_SEATED_HEADING = "Not seated";
 const NOT_SEATED_NOTE = "Coming, but not at a table in this plan yet:";
+// TS-250: the section for guests whose seat needs changing since the plan was approved.
+export const NEEDS_REASSIGNMENT_HEADING = "Needs reassignment";
+const NEEDS_REASSIGNMENT_NOTE = "Their table no longer works for them (it changed after approval) -- find them a new seat:";
+
+/** TS-250: "(was at Table 3)" -- the table a flagged guest is at now, printed after their name. */
+export function wasAtText(tableLabel: string): string {
+  return `(was at ${tableLabel})`;
+}
+
+/**
+ * TS-211: a section listing guests by name under a red heading with a count (TS-250: shared by "Not
+ * seated" and "Needs reassignment", which also says the table each guest was at). Starts a new page
+ * when there's no room for the heading. Returns the page and height it ended on.
+ */
+function drawGuestSection(
+  doc: PDFDocument,
+  page: PDFPage,
+  y: number,
+  fonts: Fonts,
+  heading: string,
+  note: string,
+  guests: { guestName: string; plusOneNames?: string | null; tableLabel?: string }[]
+): { page: PDFPage; y: number } {
+  if (guests.length === 0) return { page, y };
+  const lineHeight = 16;
+  const lineWidth = PAGE_WIDTH - MARGIN * 2 - 14;
+  if (y < MARGIN + 60) {
+    page = doc.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
+    y = PAGE_HEIGHT - MARGIN;
+  }
+  y -= 6;
+  page.drawText(`${heading} (${guests.length})`, { x: MARGIN, y, size: 13, font: fonts.bold, color: rgb(0.6, 0.1, 0.1) });
+  y -= 18;
+  page.drawText(fitText(fonts.regular, note, 10, PAGE_WIDTH - MARGIN * 2), { x: MARGIN, y, size: 10, font: fonts.regular, color: rgb(0.4, 0.4, 0.4) });
+  y -= lineHeight;
+  for (const g of guests) {
+    if (y < MARGIN) {
+      page = doc.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
+      y = PAGE_HEIGHT - MARGIN;
+    }
+    const name = fonts.text(g.guestName);
+    const text = g.plusOneNames ? `•  ${name}  + ${fonts.text(g.plusOneNames)}` : `•  ${name}`;
+    // TS-250: the table goes at the right, given up to 40% of the line (like the lookup list).
+    let tableWidth = 0;
+    if (g.tableLabel !== undefined) {
+      const was = fitText(fonts.regular, wasAtText(fonts.text(g.tableLabel)), 11, lineWidth * 0.4);
+      tableWidth = fonts.regular.widthOfTextAtSize(was, 11) + 16;
+      page.drawText(was, { x: PAGE_WIDTH - MARGIN - tableWidth + 16, y, size: 11, font: fonts.regular, color: rgb(0.4, 0.4, 0.4) });
+    }
+    page.drawText(fitText(fonts.regular, text, 11, lineWidth - tableWidth), { x: MARGIN + 14, y, size: 11, font: fonts.regular });
+    y -= lineHeight;
+  }
+  return { page, y };
+}
 
 /**
  * TS-211: the "Not seated" section -- every attending guest with no seat, so the door list and chart
- * never leave out someone who is coming. Starts a new page when there's no room for the heading.
- * Returns the page and height it ended on.
+ * never leave out someone who is coming.
  */
 function drawNotSeated(
   doc: PDFDocument,
@@ -157,28 +228,21 @@ function drawNotSeated(
   fonts: Fonts,
   unseated: PdfExtras["unseated"]
 ): { page: PDFPage; y: number } {
-  if (!unseated || unseated.length === 0) return { page, y };
-  const lineHeight = 16;
-  if (y < MARGIN + 60) {
-    page = doc.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
-    y = PAGE_HEIGHT - MARGIN;
-  }
-  y -= 6;
-  page.drawText(`${NOT_SEATED_HEADING} (${unseated.length})`, { x: MARGIN, y, size: 13, font: fonts.bold, color: rgb(0.6, 0.1, 0.1) });
-  y -= 18;
-  page.drawText(NOT_SEATED_NOTE, { x: MARGIN, y, size: 10, font: fonts.regular, color: rgb(0.4, 0.4, 0.4) });
-  y -= lineHeight;
-  for (const g of unseated) {
-    if (y < MARGIN) {
-      page = doc.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
-      y = PAGE_HEIGHT - MARGIN;
-    }
-    const name = fonts.text(g.guestName);
-    const text = g.plusOneNames ? `•  ${name}  + ${fonts.text(g.plusOneNames)}` : `•  ${name}`;
-    page.drawText(fitText(fonts.regular, text, 11, PAGE_WIDTH - MARGIN * 2 - 14), { x: MARGIN + 14, y, size: 11, font: fonts.regular });
-    y -= lineHeight;
-  }
-  return { page, y };
+  return drawGuestSection(doc, page, y, fonts, NOT_SEATED_HEADING, NOT_SEATED_NOTE, unseated ?? []);
+}
+
+/**
+ * TS-250: the "Needs reassignment" section -- guests whose table no longer works for them, with the
+ * table they were at, so nobody walks them to a seat that isn't really theirs.
+ */
+function drawNeedsReassignment(
+  doc: PDFDocument,
+  page: PDFPage,
+  y: number,
+  fonts: Fonts,
+  flagged: ExportGuestRow[]
+): { page: PDFPage; y: number } {
+  return drawGuestSection(doc, page, y, fonts, NEEDS_REASSIGNMENT_HEADING, NEEDS_REASSIGNMENT_NOTE, flagged);
 }
 
 function drawHeader(page: PDFPage, fonts: Fonts, title: string, weddingName: string, generatedAt?: string) {
@@ -251,7 +315,8 @@ export async function buildSeatingChartPdf(
     }
     y -= 10;
   }
-  // TS-211
+  // TS-250: guests whose seat needs changing, then (TS-211) guests with no seat.
+  ({ page, y } = drawNeedsReassignment(doc, page, y, fonts, extras.needsReassignment ?? []));
   drawNotSeated(doc, page, y, fonts, extras.unseated);
 
   return doc.save();
@@ -266,7 +331,9 @@ export async function buildLookupListPdf(
 ): Promise<Uint8Array> {
   const { doc, fonts } = await newDoc();
   weddingName = fonts.text(weddingName);
-  rows = rows.map((r) => safeRow(fonts, r));
+  // TS-250: a guest whose seat needs changing isn't listed with that table -- see below.
+  const { rows: seatedRows, flagged } = splitFlagged(rows, extras);
+  rows = seatedRows.map((r) => safeRow(fonts, r));
   let page = doc.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
   drawHeader(page, fonts, "Guest Lookup List", weddingName, extras.generatedAt);
   let y = PAGE_HEIGHT - MARGIN - 56;
@@ -297,6 +364,8 @@ export async function buildLookupListPdf(
     });
     y -= lineHeight;
   }
+  // TS-250: so whoever is on the door doesn't send a guest to a table that no longer works for them.
+  ({ page, y } = drawNeedsReassignment(doc, page, y - 8, fonts, flagged));
   // TS-211: so whoever is on the door finds a guest who is coming but has no table yet.
   drawNotSeated(doc, page, y - 8, fonts, extras.unseated);
 
@@ -343,7 +412,10 @@ export function fitCardName(font: PDFFont, name: string, maxWidth: number): { li
 // page. Sized generously (roughly 3.6in x 2.3in) for readability over cramming the max per page.
 export async function buildPlaceCardsPdf(rows: ExportGuestRow[], extras: PdfExtras = {}): Promise<Uint8Array> {
   const { doc, fonts } = await newDoc();
-  rows = rows.map((r) => safeRow(fonts, r));
+  // TS-250: no card for a guest whose table no longer works for them -- a card would send them
+  // there. They're listed on the last page instead (with the table they were at).
+  const { rows: seatedRows, flagged } = splitFlagged(rows, extras);
+  rows = seatedRows.map((r) => safeRow(fonts, r));
   const cols = 2;
   const rowsPerPage = 4;
   const cardW = (PAGE_WIDTH - MARGIN * 2) / cols;
@@ -401,14 +473,18 @@ export async function buildPlaceCardsPdf(rows: ExportGuestRow[], extras: PdfExtr
     indexOnPage++;
   }
 
-  if (rows.length === 0 && !extras.unseated?.length) {
+  const withoutCard = flagged.length > 0 || (extras.unseated?.length ?? 0) > 0;
+  if (rows.length === 0 && !withoutCard) {
     doc.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
   }
   // TS-211: guests with no seat get no card -- listed on a last page instead, so nobody is missed.
-  if (extras.unseated?.length) {
-    const last = doc.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
+  // TS-250: ...and so do guests whose seat needs changing, under their own heading.
+  if (withoutCard) {
+    let last = doc.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
     last.drawText(fonts.text("Place cards — guests without a card"), { x: MARGIN, y: PAGE_HEIGHT - MARGIN - 20, size: 18, font: fonts.bold });
-    drawNotSeated(doc, last, PAGE_HEIGHT - MARGIN - 44, fonts, extras.unseated);
+    let y = PAGE_HEIGHT - MARGIN - 44;
+    ({ page: last, y } = drawNeedsReassignment(doc, last, y, fonts, flagged));
+    drawNotSeated(doc, last, flagged.length > 0 ? y - 8 : y, fonts, extras.unseated);
   }
   // TS-211: the generated date and time on every page (cards have no header to carry it).
   // Just above the first row of cards.

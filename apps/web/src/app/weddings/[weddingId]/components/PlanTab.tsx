@@ -1437,6 +1437,8 @@ export function PlanTab({
               weddingId={weddingId}
               planVersionId={detail.id}
               unseatedCount={detail.unassignedGuestIds.length}
+              // TS-250: and a warning while guests need a new seat since approval.
+              needsReassignmentCount={detail.assignments.filter((a) => a.needsReassignment).length}
             />
           )}
 

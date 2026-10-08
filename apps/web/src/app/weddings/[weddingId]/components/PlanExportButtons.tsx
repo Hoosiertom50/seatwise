@@ -1,13 +1,14 @@
 "use client";
 
 import { useState } from "react";
-import { openPdfExport, unseatedExportWarning } from "@/lib/export-download";
+import { needsReassignmentExportWarning, openPdfExport, unseatedExportWarning } from "@/lib/export-download";
 
 // TS-211: the Seating plan tab's three PDF exports. Each is fetched as a file and opened in a new tab
 // -- a failure (signed out, the plan un-approved or replaced in another tab, a server error) is said
 // here, next to the buttons, instead of a tab of raw error text. And when the approved plan has
 // attending guests without a seat (added, or back to Attending, since it was approved), that's said
-// next to the buttons too: they're on the PDFs only under "Not seated".
+// next to the buttons too: they're on the PDFs only under "Not seated". TS-250: likewise for guests
+// whose seat needs changing since approval -- on the PDFs only under "Needs reassignment".
 const EXPORTS = [
   { kind: "chart", label: "Seating chart (PDF)", fileName: "seating-chart.pdf" },
   { kind: "lookup", label: "Guest lookup list (PDF)", fileName: "guest-lookup-list.pdf" },
@@ -18,14 +19,18 @@ export function PlanExportButtons({
   weddingId,
   planVersionId,
   unseatedCount,
+  needsReassignmentCount = 0,
 }: {
   weddingId: string;
   planVersionId: string;
   unseatedCount: number;
+  /** TS-250: guests flagged "Needs reassignment" in this plan. */
+  needsReassignmentCount?: number;
 }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const warning = unseatedExportWarning(unseatedCount);
+  const reassignWarning = needsReassignmentExportWarning(needsReassignmentCount);
 
   async function onExport(kind: (typeof EXPORTS)[number]["kind"], fileName: string) {
     if (busy !== null) return;
@@ -64,6 +69,11 @@ export function PlanExportButtons({
       {warning && (
         <p data-testid="export-unseated-warning" className="mt-2 text-sm text-amber-700 dark:text-amber-400">
           {warning}
+        </p>
+      )}
+      {reassignWarning && (
+        <p data-testid="export-needs-reassignment-warning" className="mt-2 text-sm text-amber-700 dark:text-amber-400">
+          {reassignWarning}
         </p>
       )}
       {error && (

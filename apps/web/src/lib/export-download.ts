@@ -15,6 +15,17 @@ export function unseatedExportWarning(count: number): string | null {
     : `${count} attending guests aren't seated, so they won't be at a table on these PDFs — they're listed under "Not seated". Seat them first for a complete chart.`;
 }
 
+/**
+ * TS-250: the warning shown next to Export while guests need a new seat (flagged "Needs
+ * reassignment" by a change made after the plan was approved).
+ */
+export function needsReassignmentExportWarning(count: number): string | null {
+  if (count <= 0) return null;
+  return count === 1
+    ? `1 guest needs a new seat because something changed after the plan was approved. On these PDFs they're listed under "Needs reassignment", not at a table, and get no place card. Give them a new seat first for a complete chart.`
+    : `${count} guests need a new seat because something changed after the plan was approved. On these PDFs they're listed under "Needs reassignment", not at a table, and get no place card. Give them a new seat first for a complete chart.`;
+}
+
 /** TS-211: the export URL with the viewer's time zone, for the date and time printed on a PDF. */
 export function exportUrl(path: string, timeZone?: string): string {
   let zone = timeZone;

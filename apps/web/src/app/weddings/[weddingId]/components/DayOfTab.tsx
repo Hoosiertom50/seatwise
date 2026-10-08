@@ -8,6 +8,7 @@ import { compareGuestNames } from "@/lib/guest-name-order";
 import { useUnsavedChanges } from "@/lib/unsaved-changes";
 import { PickThenActControl } from "@/components/PickThenActControl";
 import { tableChoicesFor, seatResultMessage } from "@/lib/day-of-choices";
+import { dayOfSeatStatus, dayOfSwapTableText, type DayOfSeat } from "@/lib/day-of-seat-status";
 import type {
   GuestDTO,
   PlanVersionDTO,
@@ -256,9 +257,15 @@ export function DayOfTab({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- TS-197: switchToCurrentPlan only uses setters and refs.
   }, [openPlanId, weddingId, loading, dayOfBusy]);
 
-  const tableLabelByGuestId = useMemo(() => {
-    const map = new Map<string, string>();
-    if (detail) for (const a of detail.assignments) map.set(a.guestId, a.tableLabel);
+  // TS-250: with whether the seat needs changing -- a flagged guest reads "Needs reassignment (at
+  // Table 3)", not "Seated at Table 3".
+  const seatByGuestId = useMemo(() => {
+    const map = new Map<string, DayOfSeat>();
+    if (detail) {
+      for (const a of detail.assignments) {
+        map.set(a.guestId, { tableLabel: a.tableLabel, needsReassignment: a.needsReassignment });
+      }
+    }
     return map;
   }, [detail]);
   const filteredGuests = useMemo(() => {
@@ -307,7 +314,8 @@ export function DayOfTab({
   const attendingSeatedGuests = useMemo(() => {
     if (!detail) return [];
     return detail.assignments
-      .map((a) => ({ id: a.guestId, name: a.guestName, tableLabel: a.tableLabel }))
+      // TS-250: "Table 3, needs a new seat" for a guest whose seat needs changing.
+      .map((a) => ({ id: a.guestId, name: a.guestName, tableLabel: dayOfSwapTableText(a) }))
       .sort((a, b) => a.name.localeCompare(b.name));
   }, [detail]);
 
@@ -674,7 +682,8 @@ export function DayOfTab({
       )}
       <ul className="flex flex-col gap-2">
         {filteredGuests.map((g) => {
-          const seatedAt = tableLabelByGuestId.get(g.id);
+          const seat = seatByGuestId.get(g.id);
+          const seatedAt = seat?.tableLabel;
           const notAttending = g.dayOfAttendance === "NOT_ATTENDING";
           // TS-191: the other tables with enough free seats for this guest's party.
           // TS-197: ...and for their whole must-sit-together group, by every rule the server checks.
@@ -695,12 +704,15 @@ export function DayOfTab({
                   {g.firstName} {g.lastName}
                   {g.headcount > 1 ? ` (+${g.headcount - 1})` : ""}
                 </p>
-                <p className="text-sm text-neutral-500 dark:text-neutral-400">
-                  {notAttending
-                    ? "Not attending"
-                    : seatedAt
-                      ? `Seated at ${seatedAt}`
-                      : "Unassigned"}
+                {/* TS-250: a guest whose seat needs changing says so (in amber), with the table they're at. */}
+                <p
+                  className={
+                    !notAttending && seat?.needsReassignment
+                      ? "text-sm font-medium text-amber-700 dark:text-amber-400"
+                      : "text-sm text-neutral-500 dark:text-neutral-400"
+                  }
+                >
+                  {dayOfSeatStatus(notAttending, seat)}
                 </p>
               </div>
               {canEdit && (
