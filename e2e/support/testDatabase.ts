@@ -955,7 +955,18 @@ export async function breakNotificationsFor(email: string): Promise<BrokenNotifi
   await testPool().query(`CREATE TRIGGER ${name} BEFORE INSERT ON "notifications" FOR EACH ROW EXECUTE FUNCTION ${name}()`);
   return {
     async restore() {
-      await testPool().query(`DROP TRIGGER IF EXISTS ${name} ON "notifications"`);
+      // TS-237: a notification is now saved in its own short transaction (wedding, user and
+      // membership locks first), so dropping the trigger while one is still being saved can
+      // deadlock; Postgres picks one to stop, and it may be this DROP. Try again a few times.
+      for (let attempt = 1; ; attempt++) {
+        try {
+          await testPool().query(`DROP TRIGGER IF EXISTS ${name} ON "notifications"`);
+          break;
+        } catch (err) {
+          if ((err as { code?: string }).code !== "40P01" || attempt >= 5) throw err;
+          await new Promise((resolve) => setTimeout(resolve, 200 * attempt));
+        }
+      }
       await testPool().query(`DROP FUNCTION IF EXISTS ${name}()`);
     },
   };

@@ -66,6 +66,7 @@ defineQualityTest(
     let guestBName = "";
     let tableAId = "";
     let tableCId = "";
+    let tableBIdForMove = "";
     let tableCLabel = "";
 
     await test.step("Arrange: two guests, three tables (one left empty for a later move), and a complete generated plan", async () => {
@@ -91,6 +92,7 @@ defineQualityTest(
       const seatedAt = (await weddingData.getPlanVersionDetail(managedWedding.id, planVersionId)).assignments.find(
         (a) => a.guestId === guestAId,
       )?.tableId;
+      tableBIdForMove = tableB.id;
       const target = seatedAt === tableC.id ? tableB : tableC;
       tableCId = target.id;
       tableCLabel = target.label;
@@ -169,6 +171,18 @@ defineQualityTest(
       });
 
       await test.step("Act + Assert: a post-approval manual move notifies the collaborator (TABLE_CHANGED)", async () => {
+        // TS-244: same-size guests are seated in guest-id order now, so the 1-seat Table C may already
+        // hold guest B -- move guest A to a table they aren't at that still has a free seat.
+        const detail = await weddingData.getPlanVersionDetail(managedWedding.id, planVersionId);
+        const seatedAt = detail.assignments.find((a) => a.guestId === guestAId)?.tableId;
+        const used = (id: string) => detail.assignments.filter((a) => a.tableId === id).length;
+        const roomy = [
+          { id: tableCId, label: tableCLabel, capacity: tableCId === tableBIdForMove ? 2 : 1 },
+          { id: tableBIdForMove, label: "Table B", capacity: 2 },
+          { id: tableAId, label: "Table A", capacity: 2 },
+        ].find((t) => t.id !== seatedAt && used(t.id) < t.capacity)!;
+        tableCId = roomy.id;
+        tableCLabel = roomy.label;
         const res = await weddingData.moveGuestAssignment(managedWedding.id, planVersionId, guestAId, tableCId);
         expect(res.status).toBe(200);
 
