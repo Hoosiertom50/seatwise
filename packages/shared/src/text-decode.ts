@@ -119,8 +119,18 @@ function hasUtf8LetterPairs(view: Uint8Array): boolean {
   return threeByteLetters > 1 && threeByteLetters > strayBytes;
 }
 
-/** TS-237: A1-BF in windows-1252 (the same as Latin-1) that aren't letters: ¡ ¢ £ « » ¿ … (not ª µ º). */
+// TS-248: the bytes 80-9F that windows-1252 uses for marks rather than letters: € ‚ „ … † ‡ ˆ ‰ ‹ ‘ ’
+// “ ” • – — ˜ ™ › (not ƒ Š Œ Ž š œ ž Ÿ, nor the five it leaves undefined).
+const WINDOWS_1252_MARKS_80_9F = new Set([
+  0x80, 0x82, 0x84, 0x85, 0x86, 0x87, 0x88, 0x89, 0x8b, 0x91, 0x92, 0x93, 0x94, 0x95, 0x96, 0x97, 0x98, 0x99, 0x9b,
+]);
+
+/**
+ * TS-237: A1-BF in windows-1252 (the same as Latin-1) that aren't letters: ¡ ¢ £ « » ¿ … (not ª µ º).
+ * TS-248: and the marks in 80-9F -- an ellipsis is 85, so "café … café …" was refused.
+ */
 function isWindows1252Punctuation(b: number): boolean {
+  if (WINDOWS_1252_MARKS_80_9F.has(b)) return true;
   return b >= 0xa1 && b <= 0xbf && b !== 0xaa && b !== 0xb5 && b !== 0xba;
 }
 
@@ -144,8 +154,40 @@ const MAC_ROMAN_NOT_LETTERS_AT_START = "ƒ‡ˆ‰†‹›";
 const MAC_ROMAN_IN_A_WORD = new RegExp(`\\p{L}[${MAC_ROMAN_NOT_LETTERS}]\\p{L}|\\p{Ll}[ŽŠŒŸ]|\\p{Lu}[ŽŠŒŸ]\\p{Ll}`, "u");
 // TS-243: and in a name, Mac ú is œ ("Jesœs", "Raœl"): œ between small letters counts, except
 // "œu" and "œi", which are French ("Lacœur", "Lœillet").
+// TS-254: and Mac ú after a capital too ("Nœria" for Núria) -- French œ after a capital is "Cœur",
+// "Bœuf". The rule for ’ between two small letters ("Mar’a" for María) moved below, since
+// "Ka’iulani" and "Ja’nae" are real Windows names; ‘ between two small letters ("No‘l" for Noël)
+// stays here. Also a small letter then ‘ or ’ at the end of a word -- Mac ë and í ("Zo‘" for Zoë,
+// "Mart’" for Martí), which used to be made a plain apostrophe and saved as "Zo'" -- but not inside a
+// quoted nickname ("Robert ‘Bob’"). And the Mac's own curly apostrophes, which windows-1252 shows as
+// Õ and Ô, inside a name ("OÕBrien", "DÔArcy", "KaÕiulani").
 const MAC_ROMAN_IN_A_NAME = new RegExp(
-  `\\p{Ll}[’‘]\\p{Ll}|\\p{L}[¿§]|(?<!\\p{L})[${MAC_ROMAN_NOT_LETTERS_AT_START}]\\p{L}|\\p{Ll}œ(?![ui])\\p{Ll}`,
+  [
+    `\\p{Ll}‘\\p{Ll}`,
+    `\\p{L}[¿§]`,
+    `(?<!\\p{L})[${MAC_ROMAN_NOT_LETTERS_AT_START}]\\p{L}`,
+    `\\p{L}œ(?![ui])\\p{Ll}`,
+    `(?<!['‘"“][\\p{L}\\p{M}]*)\\p{Ll}[’‘](?![\\p{L}\\p{M}])`,
+    `\\p{Ll}[ÕÔ]\\p{L}|\\p{Lu}[ÕÔ]\\p{Lu}\\p{Ll}`,
+  ].join("|"),
+  "u"
+);
+// TS-254: two Mac signs that real Windows names have too, so they count only when nothing else in
+// the file shows it's a Windows file (see WINDOWS_LETTERS):
+// - ’ between two small letters: Mac í ("Mar’a" for María), but also "Ka’iulani", "Ja’nae";
+// - š after a letter and before r h l n m s f d g b w z c: Mac ö ("Bjšrn", "Mšller", "Jšnsson").
+//   Czech and Croatian names have š too ("Kašpar", "Hašek", "Dušan", "Miloš"), nearly always before a
+//   vowel, k, p or t, or at the end of the word -- and such a file nearly always has other accented
+//   letters (á, é, í, ý), which are the Windows sign.
+const MAC_ROMAN_IN_A_NAME_UNLESS_WINDOWS = /\p{Ll}’\p{Ll}|\p{L}š[rhlnmsfdgbwzc]/u;
+// TS-254: a windows-1252 small accented letter after a small letter ("café", "Zoé"), or between a
+// capital and a small letter ("Müller") -- in a Mac file those bytes are capitals (Á É Í...), which
+// only show up that way in a word written in capitals ("MARTêN"). õ is left out: the Mac's dotless ı
+// is õ in windows-1252 ("Yõldõz"). Or ’ next to a capital ("O’Brien", "De’Andre"), which a Mac file
+// can't have (the Mac's own ’ is Õ in windows-1252).
+const WINDOWS_SMALL_ACCENTED = "à-ôø-ÿö";
+const WINDOWS_LETTERS = new RegExp(
+  `\\p{Ll}[${WINDOWS_SMALL_ACCENTED}]|\\p{Lu}[${WINDOWS_SMALL_ACCENTED}]\\p{Ll}|\\p{Lu}’|’\\p{Lu}`,
   "u"
 );
 // TS-243: Mac capitals Á Ó Ú È Í Î Ô Ò Â Ê Ë are small accented letters in windows-1252 (ç î ò é ê
@@ -158,11 +200,18 @@ const MAC_ROMAN_CAPITAL_READ_AS_SMALL = /(?<![\p{L}\p{M}'’‘])(?![a-z])\p{Ll}
 /**
  * TS-210: whether one cell (read as windows-1252) looks like it was saved in the older Mac format.
  * TS-243: `namesWithCapitals` -- whether the file's names start with capitals (see above).
+ * TS-254: `windowsFile` -- whether the file shows it's a Windows file (hasWindowsLetters).
  */
-export function looksLikeMacRoman(cell: string, isName = false, namesWithCapitals = true): boolean {
+export function looksLikeMacRoman(cell: string, isName = false, namesWithCapitals = true, windowsFile = false): boolean {
   if (MAC_ROMAN_IN_A_WORD.test(cell)) return true;
   if (!isName) return false;
+  if (!windowsFile && MAC_ROMAN_IN_A_NAME_UNLESS_WINDOWS.test(cell)) return true;
   return MAC_ROMAN_IN_A_NAME.test(cell) || (namesWithCapitals && MAC_ROMAN_CAPITAL_READ_AS_SMALL.test(cell));
+}
+
+/** TS-254: whether any cell in the file has a sign of windows-1252 text (WINDOWS_LETTERS). */
+export function hasWindowsLetters(rows: string[][]): boolean {
+  return rows.some((row) => row.some((cell) => WINDOWS_LETTERS.test(cell)));
 }
 
 /** TS-243: whether at least as many name cells start with a capital as with a small letter. */
@@ -190,10 +239,12 @@ export function findMacRomanCell(
   nameColumns: number[]
 ): { rowNumber: number; column: number } | null {
   const capitals = namesStartWithCapitals(rows, nameColumns);
+  // TS-254: every cell counts here, imported or not ("café" in a notes column).
+  const windowsFile = hasWindowsLetters(rows);
   for (let r = 0; r < rows.length; r++) {
     for (const c of columns) {
       const cell = rows[r][c];
-      if (cell && looksLikeMacRoman(cell, nameColumns.includes(c), capitals)) return { rowNumber: r + 1, column: c };
+      if (cell && looksLikeMacRoman(cell, nameColumns.includes(c), capitals, windowsFile)) return { rowNumber: r + 1, column: c };
     }
   }
   return null;

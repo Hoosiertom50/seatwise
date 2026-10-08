@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { FIELD_LIMITS } from "../field-limits";
 import { lengthFirst } from "./common";
-import { PERSON_NAME_PATTERN, PERSON_NAME_MESSAGE, looksLikeWebAddress, NO_WEB_ADDRESS_MESSAGE, hasMixedScriptWord, NO_MIXED_SCRIPT_MESSAGE } from "../validation";
+import { PERSON_NAME_PATTERN, PERSON_NAME_MESSAGE, looksLikeWebAddress, NO_WEB_ADDRESS_MESSAGE, hasMixedScriptWord, NO_MIXED_SCRIPT_MESSAGE, normalizePersonName } from "../validation";
 
 // TS-163: bcrypt only uses a password's first 72 bytes, so anything longer would be silently cut
 // short -- capped (in bytes, since one letter can take several) rather than quietly ignored.
@@ -24,7 +24,9 @@ export const signupSchema = z.object({
   // TS-156: the name goes into invite emails, so it's held to the same rule as a guest's name and
   // can't read as a web address.
   // TS-200: the length is checked first, and a name that's too long goes no further (lengthFirst).
-  name: lengthFirst(
+  // TS-248: a curly apostrophe ("O’Brien" from an iPhone) or a no-break space is made plain first,
+  // as for a guest's name (normalizePersonName); the plain form is what's saved.
+  name: z.string().transform(normalizePersonName).pipe(lengthFirst(
     FIELD_LIMITS.personName,
     z
       .string()
@@ -33,7 +35,7 @@ export const signupSchema = z.object({
       .refine((v) => !looksLikeWebAddress(v), NO_WEB_ADDRESS_MESSAGE)
       // TS-178: nor mix look-alike letters from different alphabets in one word.
       .refine((v) => !hasMixedScriptWord(v), NO_MIXED_SCRIPT_MESSAGE)
-  ),
+  )),
   email: z.string().max(FIELD_LIMITS.email).email("Enter a valid email address"),
   password: newPassword,
 });
