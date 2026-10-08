@@ -211,7 +211,19 @@ test("the 24-hour ceiling defaults to 240 everyday emails, with 60 more kept for
   // for invites and RSVP links; 15 of the resets are kept for locked-out accounts.
   // TS-219: accounts in their first week, together, a quarter of the everyday allowance. TS-240: 0.4 of it.
   // TS-232: guests' answers, from every wedding together, a fifth of it.
-  const defaults = { everyday: 240, resets: 60, confirmations: 60, unconfirmedResets: 24, accountShare: 60, plannerFloor: 48, lockedOutResets: 15, newAccounts: 96, guestAnswers: 48 };
+  // TS-249: first-week accounts' notifications to their weddings' members, together, a fifth of it.
+  const defaults = {
+    everyday: 240,
+    resets: 60,
+    confirmations: 60,
+    unconfirmedResets: 24,
+    accountShare: 60,
+    plannerFloor: 48,
+    lockedOutResets: 15,
+    newAccounts: 96,
+    guestAnswers: 48,
+    newAccountNotifications: 48,
+  };
   assert.deepEqual(dailyEmailLimits({}), defaults);
   assert.deepEqual(dailyEmailLimits({ EMAIL_DAILY_LIMIT: "100" }), {
     everyday: 100,
@@ -223,6 +235,7 @@ test("the 24-hour ceiling defaults to 240 everyday emails, with 60 more kept for
     lockedOutResets: 15,
     newAccounts: 40,
     guestAnswers: 20,
+    newAccountNotifications: 20,
   });
   assert.deepEqual(dailyEmailLimits({ EMAIL_DAILY_LIMIT: "nonsense" }), defaults);
   assert.equal(dailyEmailLimits({ EMAIL_DAILY_LIMIT: "2" }).confirmations, 1);

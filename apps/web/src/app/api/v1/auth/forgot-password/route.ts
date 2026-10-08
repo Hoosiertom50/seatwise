@@ -3,6 +3,7 @@ import { emailSafePersonName, forgotPasswordSchema } from "@seatwise/shared";
 import {
   createPasswordResetToken,
   discardPasswordResetToken,
+  markPasswordResetTokenUsed,
   findUserByEmail,
   hasUsablePasswordResetToken,
   peekRateLimit,
@@ -222,11 +223,34 @@ export async function POST(req: NextRequest) {
       // TS-171: one that never went out is cancelled, so asking again isn't answered "already sent".
       // TS-178 / TS-203: and it doesn't use up the email's or the network address's allowance --
       // given back (below) even if cancelling the link fails.
-      await discardPasswordResetToken(token);
+      await cancelUnsentLink(token);
     }
     return NextResponse.json(resetOutcome(true, result));
   } finally {
     if (!keepCounts) await giveBackAll();
+  }
+}
+
+/**
+ * TS-253: cancels a link whose email never went out. If deleting it fails, that's tried once more,
+ * then the link is marked used instead -- before, a failed delete left it working, so for an hour
+ * every new request was answered "already sent" though nothing had been. Never throws: the answer
+ * (the email wasn't sent) is the same either way, and only a database that can't be reached at all
+ * leaves the link in place (logged).
+ */
+async function cancelUnsentLink(token: string): Promise<void> {
+  const why = (err: unknown) => (err instanceof Error ? err.message : String(err));
+  for (const [cancel, what] of [
+    [discardPasswordResetToken, "delete"],
+    [discardPasswordResetToken, "delete (second try)"],
+    [markPasswordResetTokenUsed, "mark used"],
+  ] as const) {
+    try {
+      await cancel(token);
+      return;
+    } catch (err) {
+      console.error(`[forgot-password] couldn't ${what} an unsent reset link: ${why(err)}`);
+    }
   }
 }
 

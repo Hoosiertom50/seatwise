@@ -194,6 +194,13 @@ export const NEW_ACCOUNTS_SHARE_OF_EVERYDAY = 0.4;
 // the account's first week -- see NOTIFICATION_EMAILS_PER_OWNER_WITHOUT_ACTOR), so filling the 48
 // takes at least 4 established owners, or 10 first-week ones.
 export const GUEST_ANSWERS_SHARE_OF_EVERYDAY = 0.2;
+// TS-249 (Tom's decision, 10-08): emails first-week accounts set off to their weddings' own members
+// (comment, plan and access notifications), from every such account together, may use at most this
+// share of the everyday allowance (48 of 240). Since TS-240 they counted toward no site-wide share,
+// so a handful of fresh accounts notifying each other could fill the everyday allowance and stop
+// sign-up confirmations, resets and everyone's notifications for a day. Each account's own first-week
+// allowance (NEW_ACCOUNT_EMAILS_PER_DAY) is unchanged, and established accounts don't count here.
+export const NEW_ACCOUNT_NOTIFICATIONS_SHARE_OF_EVERYDAY = 0.2;
 
 export function dailyEmailLimits(env: EmailEnv = process.env): {
   everyday: number;
@@ -205,6 +212,7 @@ export function dailyEmailLimits(env: EmailEnv = process.env): {
   lockedOutResets: number;
   newAccounts: number;
   guestAnswers: number;
+  newAccountNotifications: number;
 } {
   const configured = Number(env.EMAIL_DAILY_LIMIT);
   const asked = Number.isInteger(configured) && configured > 0 ? configured : EVERYDAY_EMAILS_PER_24_HOURS;
@@ -220,6 +228,7 @@ export function dailyEmailLimits(env: EmailEnv = process.env): {
     lockedOutResets: Math.min(LOCKED_OUT_RESETS_RESERVED, RESET_EMAILS_PER_24_HOURS - 1),
     newAccounts: Math.max(1, Math.floor(everyday * NEW_ACCOUNTS_SHARE_OF_EVERYDAY)),
     guestAnswers: Math.max(1, Math.floor(everyday * GUEST_ANSWERS_SHARE_OF_EVERYDAY)),
+    newAccountNotifications: Math.max(1, Math.floor(everyday * NEW_ACCOUNT_NOTIFICATIONS_SHARE_OF_EVERYDAY)),
   };
 }
 
@@ -281,6 +290,14 @@ let guestAnswersCounter: DailyCounter = realGuestAnswersCounter;
 /** Tests only: replace the guests' answers' site-wide counter (pass nothing to restore it). */
 export function setGuestAnswersCounterForTests(fake?: DailyCounter): void {
   guestAnswersCounter = fake ?? realGuestAnswersCounter;
+}
+// TS-249: first-week accounts' notifications to their weddings' members, together
+// (NEW_ACCOUNT_NOTIFICATIONS_SHARE_OF_EVERYDAY) -- real sends only.
+const realNewAccountNotificationsCounter = rollingCounterFor("email:global:24h:new-account-notifications");
+let newAccountNotificationsCounter: DailyCounter = realNewAccountNotificationsCounter;
+/** Tests only: replace the first-week accounts' notifications counter (pass nothing to restore it). */
+export function setNewAccountNotificationsCounterForTests(fake?: DailyCounter): void {
+  newAccountNotificationsCounter = fake ?? realNewAccountNotificationsCounter;
 }
 // TS-219: whether an account is in its first week (see accountDailyEmailLimit).
 const realAccountIsNew = async (accountId: string) => (await accountDailyEmailLimit(accountId)).newAccount;
@@ -704,8 +721,12 @@ export async function sendEmail(
       // refused as Seatwise's limit. TS-240: only for what it sends to people outside its weddings
       // (invites, RSVP links) -- not notifications to the wedding's members, nor emails its guests'
       // answers set off, which used to let one busy new planner fill the share for everyone.
-      if (account && !toWeddingMember && (await accountIsNew(account))) {
-        if (!(await fits(newAccountsCounter, limits.newAccounts, "share for accounts in their first week"))) return "limited";
+      // TS-249: its notifications to its weddings' members have a combined share of their own.
+      if (account && (await accountIsNew(account))) {
+        const [counter, limit, what] = toWeddingMember
+          ? [newAccountNotificationsCounter, limits.newAccountNotifications, "share for first-week accounts' notifications"]
+          : [newAccountsCounter, limits.newAccounts, "share for accounts in their first week"];
+        if (!(await fits(counter, limit, what))) return "limited";
       }
       // TS-203: only invites and RSVP links (planner-sent, to someone outside the wedding) may use
       // the last part of the everyday allowance.

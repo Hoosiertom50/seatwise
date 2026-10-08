@@ -17,6 +17,7 @@ const {
   setSenderRecipientCounterForTests,
   setAccountIsNewForTests,
   setNewAccountsCounterForTests,
+  setNewAccountNotificationsCounterForTests,
   setUnlistedSendersForTests,
   setGuestAnswersCounterForTests,
   dailyEmailLimits,
@@ -75,6 +76,7 @@ beforeEach(() => {
   setSenderRecipientCounterForTests((account, to) => counter(`sender:${account}:${to}`));
   setAccountIsNewForTests(async (account) => newAccounts.has(account));
   setNewAccountsCounterForTests(counter("new-accounts"));
+  setNewAccountNotificationsCounterForTests(counter("new-account-notifications"));
   setUnlistedSendersForTests({ counter: (to) => counter(`unlisted:${to}`), listed: async (account, to) => listed.has(`${account}:${to}`) });
   setGuestAnswersCounterForTests(counter("guest-answers"));
 });
@@ -88,6 +90,7 @@ afterEach(() => {
   setSenderRecipientCounterForTests();
   setAccountIsNewForTests();
   setNewAccountsCounterForTests();
+  setNewAccountNotificationsCounterForTests();
   setUnlistedSendersForTests();
   setGuestAnswersCounterForTests();
   setSignupEmailForTests();
@@ -146,13 +149,14 @@ test("TS-219 / TS-240: accounts in their first week together use at most 0.4 of 
     newAccounts.add("fresh-12");
     assert.equal(await sendEmail("g-12@example.invalid", "s", "t", GMAIL, { account: "fresh-12" }), "limited");
     // ...but (TS-240) an email a first-week owner's guests set off, or a notification to the
-    // wedding's own members, isn't held to that share...
+    // wedding's own members, isn't held to that share (TS-249: the notification has a share of its own)...
     assert.equal(await sendEmail("p@example.invalid", "s", "t", GMAIL, { toWeddingMember: true, forGuestsOf: "fresh-0" }), "sent");
     assert.equal(await sendEmail("p2@example.invalid", "s", "t", GMAIL, { toWeddingMember: true, account: "fresh-1" }), "sent");
     // ...and an older account's email still goes.
     assert.equal(await sendEmail("g-old@example.invalid", "s", "t", GMAIL, { account: "old" }), "sent");
   });
   assert.equal(counts.get("new-accounts"), 96, "refused ones were given back");
+  assert.equal(counts.get("new-account-notifications"), 1);
   assert.equal(counts.get("everyday"), 99);
   assert.equal(counts.get("to:planner:g-12@example.invalid"), 0, "nothing stays counted for a refused email");
 });

@@ -26,24 +26,37 @@ export async function POST(req: NextRequest) {
   // TS-186: each count can be given back from exactly the window it was made in -- and all of them
   // are, when a later limit refuses the request.
   const counted: (() => Promise<void>)[] = [];
-  const giveBackAll = () => Promise.all(counted.splice(0).map((giveBack) => giveBack()));
-  for (const { key, limit, windowSeconds } of counters) {
-    const { limited, giveBack } = await countOr429(key, { limit, windowSeconds });
-    if (limited) {
-      await giveBackAll();
-      return limited;
+  // TS-248: every give-back is tried, even when one of them fails (each failure is logged).
+  const giveBackAll = async () => {
+    const settled = await Promise.allSettled(counted.splice(0).reverse().map((giveBack) => giveBack()));
+    for (const r of settled) {
+      if (r.status === "rejected") {
+        console.error(`[verification-email] couldn't give back a count: ${r.reason instanceof Error ? r.reason.message : String(r.reason)}`);
+      }
     }
-    counted.push(giveBack);
-  }
+  };
+  // TS-248: whatever is counted is given back on every way out that sends nothing -- a refusal, an
+  // unsent email, or an error part-way (a counter failing, say) -- like sign-up. It used to be kept
+  // when a counter threw, so the hits taken before it were used up with no email sent.
+  let keepCounts = false;
+  try {
+    for (const { key, limit, windowSeconds } of counters) {
+      const { limited, giveBack } = await countOr429(key, { limit, windowSeconds });
+      if (limited) return limited;
+      counted.push(giveBack);
+    }
 
-  const result = await sendVerificationEmail(user);
-  if (!emailDelivered(result)) {
+    const result = await sendVerificationEmail(user);
     // TS-178: nothing went out, so this try doesn't use up any of the allowances above. TS-203:
     // unless it may have gone out after all ("uncertain") -- then it stays counted.
-    if (!emailMayHaveGone(result)) await giveBackAll();
-    // TS-194: no email service set up is a 503 (the site can't send), not a passing hiccup.
-    const status = result === "limited" || result === "recipient-limited" ? 429 : result === "not-configured" ? 503 : 502;
-    return errorResponse(emailNotSentMessage(result), status);
+    keepCounts = emailMayHaveGone(result);
+    if (!emailDelivered(result)) {
+      // TS-194: no email service set up is a 503 (the site can't send), not a passing hiccup.
+      const status = result === "limited" || result === "recipient-limited" ? 429 : result === "not-configured" ? 503 : 502;
+      return errorResponse(emailNotSentMessage(result), status);
+    }
+    return NextResponse.json({ sent: true });
+  } finally {
+    if (!keepCounts) await giveBackAll();
   }
-  return NextResponse.json({ sent: true });
 }
