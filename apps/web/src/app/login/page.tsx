@@ -8,6 +8,7 @@ import type { AuthResponse } from "@seatwise/shared";
 import { safeNextPath, withCurrentNext } from "@/lib/safe-next";
 // TS-193: the same limits the server checks (packages/shared/src/field-limits.ts).
 import { FIELD_LIMITS } from "@seatwise/shared";
+import { announceSignedIn } from "@/lib/session-sync";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -22,6 +23,9 @@ export default function LoginPage() {
     setLoading(true);
     try {
       await api.post<AuthResponse>("/api/v1/auth/login", { email, password });
+      // TS-229: other open pages (e.g. one showing the session-expired notice that opened this tab)
+      // re-check their session at once instead of on their next poll.
+      announceSignedIn();
       // TS-109: back to wherever sent the user here (e.g. the session-expired notice), else the
       // dashboard. Read at submit time rather than via useSearchParams, which would force this
       // whole page behind a Suspense boundary for one query value.
