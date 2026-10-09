@@ -37,7 +37,10 @@ export function decodeCsvFile(bytes: ArrayBuffer | Uint8Array): { text: string; 
     return { text: new TextDecoder("utf-8").decode(view), encoding: "utf-8" };
   }
   try {
-    return { text: new TextDecoder("utf-8", { fatal: true }).decode(view), encoding: "utf-8" };
+    const text = new TextDecoder("utf-8", { fatal: true }).decode(view);
+    // TS-256: a Windows file that happens to be valid UTF-8 ("café »" -> "caf項") -- see below.
+    if (isWindowsFrenchSpacingOnly(view)) return { text: new TextDecoder("windows-1252").decode(view), encoding: "windows-1252" };
+    return { text, encoding: "utf-8" };
   } catch {
     // TS-210: mostly UTF-8 with a stray byte -- windows-1252 would garble every accented letter.
     if (hasUtf8LetterPairs(view)) throw new CsvEncodingError(MIXED_ENCODING_MESSAGE);
@@ -119,6 +122,31 @@ function hasUtf8LetterPairs(view: Uint8Array): boolean {
   return threeByteLetters > 1 && threeByteLetters > strayBytes;
 }
 
+/**
+ * TS-256: whether every non-ASCII character in a file that is valid UTF-8 is really a windows-1252
+ * small accented letter (E0-EF: à-ï), a no-break space and a punctuation mark, straight after a plain
+ * letter ("café »", bytes E9 A0 BB) -- which UTF-8 reads as one rare CJK, Hangul or Mongolian
+ * character stuck to a Latin word ("caf項"). A real UTF-8 file with Chinese, Japanese or Korean
+ * names has characters with other second bytes, next to each other, after a comma or space -- so
+ * any one of those, or any other non-ASCII byte at all, keeps the file UTF-8.
+ */
+function isWindowsFrenchSpacingOnly(view: Uint8Array): boolean {
+  let found = false;
+  for (let i = 0; i < view.length; i++) {
+    const b = view[i];
+    if (b < 0x80) continue;
+    const before = view[i - 1];
+    const plainLetterBefore = before !== undefined && ((before >= 0x41 && before <= 0x5a) || (before >= 0x61 && before <= 0x7a));
+    if (b >= 0xe0 && b <= 0xef && plainLetterBefore && view[i + 1] === 0xa0 && view[i + 2] !== undefined && isWindows1252Punctuation(view[i + 2])) {
+      found = true;
+      i += 2;
+      continue;
+    }
+    return false;
+  }
+  return found;
+}
+
 // TS-248: the bytes 80-9F that windows-1252 uses for marks rather than letters: € ‚ „ … † ‡ ˆ ‰ ‹ ‘ ’
 // “ ” • – — ˜ ™ › (not ƒ Š Œ Ž š œ ž Ÿ, nor the five it leaves undefined).
 const WINDOWS_1252_MARKS_80_9F = new Set([
@@ -179,7 +207,22 @@ const MAC_ROMAN_IN_A_NAME = new RegExp(
 //   Czech and Croatian names have š too ("Kašpar", "Hašek", "Dušan", "Miloš"), nearly always before a
 //   vowel, k, p or t, or at the end of the word -- and such a file nearly always has other accented
 //   letters (á, é, í, ý), which are the Windows sign.
-const MAC_ROMAN_IN_A_NAME_UNLESS_WINDOWS = /\p{Ll}’\p{Ll}|\p{L}š[rhlnmsfdgbwzc]/u;
+// TS-256: three more, each kept to spots the real names never use:
+// - ’ between two vowels is the Hawaiian ʻokina ("Ka’iulani", "Hawai’i") -- Mac í nearly always
+//   follows a consonant ("Mar’a", "Garc’a"), so only that counts now (rare "Isaías" is the cost);
+// - š before tt, tz, th, pf or pp: Mac ö ("Gšttsche", "Tšpfer", "Gštz") -- Czech never writes
+//   those. And "šle" no longer counts, so Czech "Hašler" imports ("Mšller" still has "ll");
+// - õ after a, or after another õ, with only consonants between, and not before a vowel: the Mac's
+//   Turkish dotless ı ("Yõldõz", "Aydõn", "Sarõ"). Estonian õ is nearly always in a name's first
+//   syllable ("Tõnis", "Mõttus", "Rõõmus"), and Portuguese õ always before e ("Simões", "Camões").
+const MAC_ROMAN_IN_A_NAME_UNLESS_WINDOWS = new RegExp(
+  [
+    `[^\\P{Ll}aeiou]’\\p{Ll}|\\p{Ll}’[^\\P{Ll}aeiou]`,
+    `\\p{L}š(?:(?!le)[rhlnmsfdgbwzc]|tt|tz|th|pf|pp)`,
+    `[aAõ][b-df-hj-np-tv-z]+õ(?![aeiouõ])`,
+  ].join("|"),
+  "u"
+);
 // TS-254: a windows-1252 small accented letter after a small letter ("café", "Zoé"), or between a
 // capital and a small letter ("Müller") -- in a Mac file those bytes are capitals (Á É Í...), which
 // only show up that way in a word written in capitals ("MARTêN"). õ is left out: the Mac's dotless ı
