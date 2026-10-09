@@ -19,3 +19,12 @@ export function leaveCountsAsDone(err: unknown): boolean {
 export function deleteCountsAsDone(err: unknown): boolean {
   return err instanceof ApiError && err.status === 404;
 }
+
+/**
+ * TS-258: the "Delete this wedding" confirm box takes as many characters as the wedding's name
+ * has. A name saved before today's limit, or longer for any other reason, could never be typed in
+ * full in a box capped at the limit, so that wedding couldn't be deleted.
+ */
+export function deleteConfirmMaxLength(limit: number, weddingName: string): number {
+  return Math.max(limit, weddingName.length);
+}

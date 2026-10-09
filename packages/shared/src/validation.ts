@@ -43,14 +43,23 @@ export const WEDDING_NAME_MESSAGE =
 // - any part, then a dot with spaces around it (or the word "dot"), then one of a shorter list of
 //   endings that aren't also name parts -- so "Ana B. De Souza", "J. Link" and "J. R. Smith" still
 //   pass.
+//
+// TS-258: the ending could also be spelled out with spaces between its letters ("evil . c o m"),
+// which reads as a web address once the spaces are taken out. The spaced-dot check now allows
+// spaces between the ending's letters too; it still needs a dot (or "dot") and a whole ending
+// after it, so "Lee . Kim", "St. Pierre" and "J. R. R. Smith" pass.
 const DOMAIN_ENDINGS = "com|net|org|info|biz|io|co|ly|app|xyz|top|site|online|shop|store|link|click|live|club|vip|icu|ru|cn|tk|gg";
 const SPACED_DOMAIN_ENDINGS = "com|net|org|info|biz|xyz|site|online|shop|click|icu|ru|cn";
 const DOT = String.raw`[.\u3002\uFF0E\uFF61]`; // a period, or one of the look-alike dots
+// TS-258: "com" becomes c\s*o\s*m, so "c o m" is caught as well.
+const SPACED_LETTER_ENDINGS = SPACED_DOMAIN_ENDINGS.split("|")
+  .map((ending) => [...ending].join(String.raw`\s*`))
+  .join("|");
 export const WEB_ADDRESS_LIKE = new RegExp(
   [
     String.raw`[\p{L}\p{N}][\p{L}\p{N}-]*[\p{L}\p{N}]${DOT}\p{L}{2,}`,
     String.raw`[\p{L}\p{N}]${DOT}(?:${DOMAIN_ENDINGS})(?![\p{L}\p{N}])`,
-    String.raw`[\p{L}\p{N}](?:\s*${DOT}\s*|\s+dot\s+)(?:${SPACED_DOMAIN_ENDINGS})(?![\p{L}\p{N}])`,
+    String.raw`[\p{L}\p{N}](?:\s*${DOT}\s*|\s+dot\s+)(?:${SPACED_LETTER_ENDINGS})(?![\p{L}\p{N}])`,
   ].join("|"),
   "iu"
 );

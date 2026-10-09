@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { ConfirmDeleteButton } from "@/components/ConfirmDeleteButton";
 import { CommitSelect } from "@/components/CommitSelect";
 import { api, ApiError, apiErrorMessage, isItemGoneError } from "@/lib/api-client";
-import { deleteCountsAsDone, leaveCountsAsDone } from "@/lib/leave-wedding";
+import { deleteConfirmMaxLength, deleteCountsAsDone, leaveCountsAsDone } from "@/lib/leave-wedding";
 import type {
   CollaboratorDTO,
   CollaboratorPermission,
@@ -1468,7 +1468,8 @@ export function CollaboratorsTab({
           </label>
           <div className="flex flex-wrap items-center gap-2">
             <input
-              maxLength={FIELD_LIMITS.weddingName}
+              // TS-258: room for the whole saved name, even one longer than today's limit.
+              maxLength={deleteConfirmMaxLength(FIELD_LIMITS.weddingName, wedding.name)}
               id="delete-wedding-confirm"
               className="min-w-0 flex-1 rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 text-sm"
               value={deleteConfirmName}

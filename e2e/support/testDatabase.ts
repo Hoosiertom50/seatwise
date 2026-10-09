@@ -1031,6 +1031,20 @@ export async function plantOldGuestText(
 }
 
 /**
+ * TS-258: gives a test wedding a name the app's forms refuse today but older data can hold -- one
+ * longer than the 200-character limit. Test weddings only.
+ */
+export async function plantOldWeddingName(weddingId: string, name: string): Promise<void> {
+  const { rowCount } = await testPool().query(
+    `UPDATE "weddings" w SET name = $2
+     FROM "users" u
+     WHERE w.id = $1 AND u.id = w."ownerId" AND u.email LIKE $3`,
+    [weddingId, name, TEST_EMAIL_PATTERN],
+  );
+  if (!rowCount) throw new Error(`testDatabase: no test wedding ${weddingId}.`);
+}
+
+/**
  * TS-221: removes a test wedding's plan version the way pruning does once a wedding has many
  * versions (wedding-caps.ts pruneOldPlanVersions) -- only one that is neither current nor approved
  * -- so a test can check what a screen does when the version it has open disappears, without making

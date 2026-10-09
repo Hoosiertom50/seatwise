@@ -116,9 +116,9 @@ test("TS-254: real windows-1252 š names (Kašpar, Hašek, Dušan, Miloš, Kriš
     // A file with no other accented letter at all -- the strictest case.
     assert.deepEqual(importOne(windows1252(`First name,Last name\r\n${first},Smith\r\n`)), { firstName: first, lastName: "Smith" }, first);
   }
-  // "Hašler" looks like a Mac ö, so on its own it's refused -- but with any other Windows letter in
-  // the file (here "Tomáš") it's imported.
-  assert.equal(importOne(windows1252("First name,Last name\r\nKarel,Hašler\r\n")), "refused");
+  // "Hašler" is imported with any other Windows letter in the file (here "Tomáš").
+  // TS-256: and on its own too now ("šle" no longer counts as Mac ö).
+  assert.deepEqual(importOne(windows1252("First name,Last name\r\nKarel,Hašler\r\n")), { firstName: "Karel", lastName: "Hašler" });
   assert.deepEqual(importOne(windows1252("First name,Last name\r\nKarel,Hašler\r\nTomáš,Novak\r\n")), {
     firstName: "Karel",
     lastName: "Hašler",

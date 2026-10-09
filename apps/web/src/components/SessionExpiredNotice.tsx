@@ -7,6 +7,7 @@ import { api, ApiError, SESSION_EXPIRED_EVENT, SESSION_RESTORED_EVENT } from "@/
 import { loginUrlReturningTo } from "@/lib/safe-next";
 // TS-193: the same limits the server checks (packages/shared/src/field-limits.ts).
 import { FIELD_LIMITS } from "@seatwise/shared";
+import { announceSignedIn, watchForSignIn } from "@/lib/session-sync";
 
 // TS-109: an expired session used to surface as "Your access to this wedding has been removed"
 // (the wedding page treated a 401 like a 404) and tore the page down. This says what actually
@@ -38,6 +39,14 @@ export function SessionExpiredNotice() {
     };
   }, []);
 
+  // TS-229: while the notice shows, re-check the session the moment another page signs in, or this
+  // page is shown again or regains focus -- rather than waiting for a poll (some pages have none).
+  // A successful check fires SESSION_RESTORED_EVENT (api-client), which hides the notice.
+  useEffect(() => {
+    if (!expired) return;
+    return watchForSignIn(() => api.get("/api/v1/auth/me"));
+  }, [expired]);
+
   // Signing in (or up) is exactly what this notice asks for -- never shown on those pages.
   if (!expired || pathname === "/login" || pathname === "/signup") return null;
 
@@ -48,6 +57,8 @@ export function SessionExpiredNotice() {
     try {
       // A successful sign-in fires SESSION_RESTORED_EVENT (api-client), which hides this notice.
       await api.post("/api/v1/auth/login", { email, password });
+      // TS-229: and other open pages showing this notice pick the new session up at once.
+      announceSignedIn();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't sign in.");
     } finally {

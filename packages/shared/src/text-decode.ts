@@ -36,13 +36,22 @@ export function decodeCsvFile(bytes: ArrayBuffer | Uint8Array): { text: string; 
   if (view.length >= 3 && view[0] === 0xef && view[1] === 0xbb && view[2] === 0xbf) {
     return { text: new TextDecoder("utf-8").decode(view), encoding: "utf-8" };
   }
+  let text: string | null = null;
   try {
-    return { text: new TextDecoder("utf-8", { fatal: true }).decode(view), encoding: "utf-8" };
+    text = new TextDecoder("utf-8", { fatal: true }).decode(view);
   } catch {
-    // TS-210: mostly UTF-8 with a stray byte -- windows-1252 would garble every accented letter.
-    if (hasUtf8LetterPairs(view)) throw new CsvEncodingError(MIXED_ENCODING_MESSAGE);
-    return { text: new TextDecoder("windows-1252").decode(view), encoding: "windows-1252" };
+    // Not valid UTF-8: handled below.
   }
+  if (text !== null) {
+    // TS-256: a file that could be a Windows "café »" (valid UTF-8 by chance, read as "caf項") or a
+    // real UTF-8 "Lee項" -- the bytes can't tell them apart, so neither is guessed: it's refused with
+    // the "save it as CSV UTF-8" message (that adds the UTF-8 mark, which is always read as UTF-8).
+    if (isWindowsFrenchSpacingOnly(view)) throw new CsvEncodingError(AMBIGUOUS_ENCODING_MESSAGE);
+    return { text, encoding: "utf-8" };
+  }
+  // TS-210: mostly UTF-8 with a stray byte -- windows-1252 would garble every accented letter.
+  if (hasUtf8LetterPairs(view)) throw new CsvEncodingError(MIXED_ENCODING_MESSAGE);
+  return { text: new TextDecoder("windows-1252").decode(view), encoding: "windows-1252" };
 }
 
 /** TS-198: a file read as windows-1252 whose letters show it was really saved in the older Mac encoding. */
@@ -50,6 +59,10 @@ export class CsvEncodingError extends Error {}
 
 export const MAC_ENCODING_MESSAGE =
   "Some letters in this file couldn't be read correctly (it looks like an older Mac format) — save it as 'CSV UTF-8' and choose it again.";
+
+// TS-256
+export const AMBIGUOUS_ENCODING_MESSAGE =
+  "Some letters in this file couldn't be read for certain (the file's text format is unclear) — save it as 'CSV UTF-8' and choose it again.";
 
 // TS-210
 export const MIXED_ENCODING_MESSAGE =
@@ -119,6 +132,29 @@ function hasUtf8LetterPairs(view: Uint8Array): boolean {
   return threeByteLetters > 1 && threeByteLetters > strayBytes;
 }
 
+/**
+ * TS-256: whether every non-ASCII character in a file that is valid UTF-8 could just as well be a
+ * windows-1252 small accented letter (E0-EF: à-ï), a no-break space and a punctuation mark ("é »",
+ * bytes E9 A0 BB) -- which UTF-8 reads as one CJK character ("caf頻", or "頻" at the start of a cell).
+ * Such a file can't be told apart from a real UTF-8 one, so decodeCsvFile refuses it rather than
+ * guess. A real UTF-8 file with Chinese, Japanese or Korean names has characters with other second
+ * bytes too, so any one of those, or any other non-ASCII byte at all, keeps the file UTF-8.
+ */
+function isWindowsFrenchSpacingOnly(view: Uint8Array): boolean {
+  let found = false;
+  for (let i = 0; i < view.length; i++) {
+    const b = view[i];
+    if (b < 0x80) continue;
+    if (b >= 0xe0 && b <= 0xef && view[i + 1] === 0xa0 && view[i + 2] !== undefined && isWindows1252Punctuation(view[i + 2])) {
+      found = true;
+      i += 2;
+      continue;
+    }
+    return false;
+  }
+  return found;
+}
+
 // TS-248: the bytes 80-9F that windows-1252 uses for marks rather than letters: € ‚ „ … † ‡ ˆ ‰ ‹ ‘ ’
 // “ ” • – — ˜ ™ › (not ƒ Š Œ Ž š œ ž Ÿ, nor the five it leaves undefined).
 const WINDOWS_1252_MARKS_80_9F = new Set([
@@ -179,7 +215,22 @@ const MAC_ROMAN_IN_A_NAME = new RegExp(
 //   Czech and Croatian names have š too ("Kašpar", "Hašek", "Dušan", "Miloš"), nearly always before a
 //   vowel, k, p or t, or at the end of the word -- and such a file nearly always has other accented
 //   letters (á, é, í, ý), which are the Windows sign.
-const MAC_ROMAN_IN_A_NAME_UNLESS_WINDOWS = /\p{Ll}’\p{Ll}|\p{L}š[rhlnmsfdgbwzc]/u;
+// TS-256: three more, each kept to spots the real names never use:
+// - ’ between two vowels is the Hawaiian ʻokina ("Ka’iulani", "Hawai’i") -- Mac í nearly always
+//   follows a consonant ("Mar’a", "Garc’a"), so only that counts now (rare "Isaías" is the cost);
+// - š before tt, tz, th, pf or pp: Mac ö ("Gšttsche", "Tšpfer", "Gštz") -- Czech never writes
+//   those. And "šle" no longer counts, so Czech "Hašler" imports ("Mšller" still has "ll");
+// - õ after a, or after another õ, with only consonants between, and not before a vowel: the Mac's
+//   Turkish dotless ı ("Yõldõz", "Aydõn", "Sarõ"). Estonian õ is nearly always in a name's first
+//   syllable ("Tõnis", "Mõttus", "Rõõmus"), and Portuguese õ always before e ("Simões", "Camões").
+const MAC_ROMAN_IN_A_NAME_UNLESS_WINDOWS = new RegExp(
+  [
+    `[^\\P{Ll}aeiou]’\\p{Ll}|\\p{Ll}’[^\\P{Ll}aeiou]`,
+    `\\p{L}š(?:(?!le)[rhlnmsfdgbwzc]|tt|tz|th|pf|pp)`,
+    `[aAõ][b-df-hj-np-tv-z]+õ(?![aeiouõ])`,
+  ].join("|"),
+  "u"
+);
 // TS-254: a windows-1252 small accented letter after a small letter ("café", "Zoé"), or between a
 // capital and a small letter ("Müller") -- in a Mac file those bytes are capitals (Á É Í...), which
 // only show up that way in a word written in capitals ("MARTêN"). õ is left out: the Mac's dotless ı
