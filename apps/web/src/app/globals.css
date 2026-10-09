@@ -12,8 +12,32 @@
   color-scheme: light dark;
 }
 
+/* TS-257: the Appearance setting puts data-theme="light" or "dark" on <html>; with no choice saved
+   (Match my device) there's no data-theme and the device decides, as before. Tailwind's `dark:`
+   classes follow the same rule. */
+@custom-variant dark {
+  &:where([data-theme="dark"], [data-theme="dark"] *) {
+    @slot;
+  }
+  @media (prefers-color-scheme: dark) {
+    &:where(html:not([data-theme]), html:not([data-theme]) *) {
+      @slot;
+    }
+  }
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  --background: #0a0a0a;
+  --foreground: #ededed;
+  color-scheme: dark;
+}
+
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme]) {
     --background: #0a0a0a;
     --foreground: #ededed;
   }

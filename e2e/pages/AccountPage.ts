@@ -29,6 +29,14 @@ export class AccountPage extends BasePage {
     return this.getHelpSection().getByRole("link", { name: "Email support", exact: true });
   }
 
+  /** TS-257: the Appearance section and its three choices. */
+  appearanceSection() {
+    return this.page.getByRole("region", { name: "Appearance", exact: true });
+  }
+  appearanceChoice(label: "Match my device" | "Light" | "Dark") {
+    return this.appearanceSection().getByRole("radio", { name: label, exact: true });
+  }
+
   message(text: string | RegExp) {
     return typeof text === "string" ? this.page.getByText(text, { exact: true }) : this.page.getByText(text);
   }

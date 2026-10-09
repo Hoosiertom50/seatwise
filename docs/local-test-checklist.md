@@ -144,7 +144,7 @@ Don't mix up Priya Shah (the commenter account) with **Priya Natarajan**, who is
 - **Two people at once.** Some tests need two people signed in at the same time. Use two different browsers (for example Chrome and Firefox), or one normal window and one private window.
 - **Safari and the Tab key.** Safari skips buttons and links when you press Tab, until you turn on: **Safari → Settings → Advanced → "Press Tab to highlight each item"**.
 - **Firefox and the Tab key.** On a Mac, Firefox follows a Mac setting. Turn on: **System Settings → Keyboard → "Keyboard navigation"**.
-- **Dark mode.** Mac: **System Settings → Appearance → Dark**. iPhone: **Settings → Display & Brightness → Dark**. Seatwise follows whichever is set.
+- **Light and dark.** Seatwise follows the device unless you pick otherwise. To set the device: Mac **System Settings → Appearance**, iPhone **Settings → Display & Brightness**. To pick inside Seatwise: **Your account → Appearance** (section 20 tests it).
 - **iPhone address.** On the iPhone, use the address from the setup sheet (it looks like `http://192.168.1.23:3000`) instead of `http://localhost:3000`. The same goes for any link the app shows you: replace `localhost` with that number.
 - **Tick the boxes** as you go. At the end of each section, write down anything that looked odd, even if it worked.
 
@@ -514,12 +514,24 @@ Set up Safari and Firefox first (see "Before you start"). Use only the keyboard:
 - [ ] **19.3** Open a question with the keyboard: **Remove** on a guest, and **Hand off**. Press **Escape**.
   You should see: the question closes, nothing changes, and the outline is back on the button you started from. Open it again and press Return on **Cancel**: same result.
 
-## 20. Dark mode
+## 20. Light and dark (the Appearance setting)
 
 - [ ] **20.1** Switch the Mac and the iPhone to Dark. Look at the dashboard, every tab of the wedding, **Log in**, **Account**, an RSVP page, the vendor page, the bell list and the questions (Remove, Hand off).
   You should see: everything is readable. No bright white boxes, no invisible text, and the Tab-key outline is still visible.
 - [ ] **20.2** In dark mode, download the three seating plan PDFs.
   You should see: normal PDFs with a white background.
+- [ ] **20.3** Leave the Mac in Dark. Sign in as the owner, click **Account** (top right of the dashboard) to open **Your account**.
+  You should see: an **Appearance** section with three choices: **Match my device**, **Light** and **Dark**. **Match my device** is picked, and the page is dark.
+- [ ] **20.4** Click **Light**.
+  You should see: the whole page turns light at once, with no reload. Reload the page: it stays light and **Light** is still picked.
+- [ ] **20.5** With **Light** picked, look at the dashboard, every tab of the wedding, the bell list and the questions (Remove, Hand off), as in 20.1.
+  You should see: everything is readable on white. Coloured words and labels (green **Approved**, red errors, the amber "Needs reassignment" in Day-of, yellow notes) are easy to read. Greyed-out buttons and hint text in empty boxes can still be seen. The Tab-key outline is visible.
+- [ ] **20.6** Open a second tab on the dashboard. In the first tab (**Your account**), click **Dark**.
+  You should see: both tabs turn dark within a moment, without reloading.
+- [ ] **20.7** Click **Match my device**. Then switch the Mac to Light in System Settings.
+  You should see: Seatwise follows the Mac again, so it turns light. Switch the Mac back to how you like it.
+- [ ] **20.8** On the iPhone, pick **Light** in **Your account → Appearance**.
+  You should see: the phone shows Seatwise light even if the phone is set to Dark. The Mac is not affected: the choice is kept on each device separately. Set the phone back to **Match my device**.
 
 ---
 

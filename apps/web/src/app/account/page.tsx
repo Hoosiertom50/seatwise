@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { api, ApiError } from "@/lib/api-client";
 import { ConfirmDeleteButton } from "@/components/ConfirmDeleteButton";
+import { AppearanceSetting } from "@/components/AppearanceSetting";
 import { SUPPORT_EMAIL, SUPPORT_MAILTO, SUPPORT_PROMISE } from "@/lib/support";
 // TS-193: the same limits the server checks (packages/shared/src/field-limits.ts).
 import { FIELD_LIMITS } from "@seatwise/shared";
@@ -118,6 +119,9 @@ export default function AccountPage() {
       <p className="mb-8 break-words text-sm text-neutral-600 dark:text-neutral-300 [overflow-wrap:anywhere]">
         Signed in as {user.name} (<span className="break-all">{user.email}</span>)
       </p>
+
+      {/* TS-257 */}
+      <AppearanceSetting />
 
       {/* TS-100 */}
       <section aria-labelledby="get-help" className="mb-6 rounded-lg border border-neutral-200 dark:border-neutral-700 p-4">
