@@ -36,16 +36,22 @@ export function decodeCsvFile(bytes: ArrayBuffer | Uint8Array): { text: string; 
   if (view.length >= 3 && view[0] === 0xef && view[1] === 0xbb && view[2] === 0xbf) {
     return { text: new TextDecoder("utf-8").decode(view), encoding: "utf-8" };
   }
+  let text: string | null = null;
   try {
-    const text = new TextDecoder("utf-8", { fatal: true }).decode(view);
-    // TS-256: a Windows file that happens to be valid UTF-8 ("café »" -> "caf項") -- see below.
-    if (isWindowsFrenchSpacingOnly(view)) return { text: new TextDecoder("windows-1252").decode(view), encoding: "windows-1252" };
-    return { text, encoding: "utf-8" };
+    text = new TextDecoder("utf-8", { fatal: true }).decode(view);
   } catch {
-    // TS-210: mostly UTF-8 with a stray byte -- windows-1252 would garble every accented letter.
-    if (hasUtf8LetterPairs(view)) throw new CsvEncodingError(MIXED_ENCODING_MESSAGE);
-    return { text: new TextDecoder("windows-1252").decode(view), encoding: "windows-1252" };
+    // Not valid UTF-8: handled below.
   }
+  if (text !== null) {
+    // TS-256: a file that could be a Windows "café »" (valid UTF-8 by chance, read as "caf項") or a
+    // real UTF-8 "Lee項" -- the bytes can't tell them apart, so neither is guessed: it's refused with
+    // the "save it as CSV UTF-8" message (that adds the UTF-8 mark, which is always read as UTF-8).
+    if (isWindowsFrenchSpacingOnly(view)) throw new CsvEncodingError(AMBIGUOUS_ENCODING_MESSAGE);
+    return { text, encoding: "utf-8" };
+  }
+  // TS-210: mostly UTF-8 with a stray byte -- windows-1252 would garble every accented letter.
+  if (hasUtf8LetterPairs(view)) throw new CsvEncodingError(MIXED_ENCODING_MESSAGE);
+  return { text: new TextDecoder("windows-1252").decode(view), encoding: "windows-1252" };
 }
 
 /** TS-198: a file read as windows-1252 whose letters show it was really saved in the older Mac encoding. */
@@ -53,6 +59,10 @@ export class CsvEncodingError extends Error {}
 
 export const MAC_ENCODING_MESSAGE =
   "Some letters in this file couldn't be read correctly (it looks like an older Mac format) — save it as 'CSV UTF-8' and choose it again.";
+
+// TS-256
+export const AMBIGUOUS_ENCODING_MESSAGE =
+  "Some letters in this file couldn't be read for certain (the file's text format is unclear) — save it as 'CSV UTF-8' and choose it again.";
 
 // TS-210
 export const MIXED_ENCODING_MESSAGE =

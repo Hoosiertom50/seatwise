@@ -5,7 +5,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-const { decodeCsvFile, looksLikeMacRoman, MAC_ENCODING_MESSAGE } = await import("../../../../packages/shared/src/text-decode");
+const { decodeCsvFile, looksLikeMacRoman, MAC_ENCODING_MESSAGE, AMBIGUOUS_ENCODING_MESSAGE } = await import("../../../../packages/shared/src/text-decode");
 const { parseCsv } = await import("../../../../packages/shared/src/csv");
 const { parseGuestImportRow } = await import("../../../../packages/shared/src/guest-import-row");
 const { prepareImportCsv } = await import("./guest-import-client");
@@ -46,17 +46,23 @@ function importOne(bytes: Uint8Array): "refused" | { firstName: string; lastName
 
 // --- a) a Windows file that happens to be valid UTF-8 ----------------------------------------------
 
-test("TS-256: a Windows file whose only accents are 'é »' (valid UTF-8 by chance) is read as windows-1252, not 'caf項'", () => {
-  for (const notes of ["café »", "« Pas de café »", "thé ¡ café ¿", "voilà » oui", "café … thé »"]) {
-    const text = `First name,Last name,Notes\r\nAna,Lee,${notes}\r\n`;
-    const bytes = windows1252(text);
-    if (!notes.includes("«")) assert.doesNotThrow(() => new TextDecoder("utf-8", { fatal: true }).decode(bytes), notes);
-    const read = decodeCsvFile(bytes);
-    assert.equal(read.encoding, "windows-1252", notes);
-    assert.equal(read.text, text, notes);
+test("TS-256: a file that could be Windows 'café »' or UTF-8 'Lee項' is refused with the CSV UTF-8 message, never guessed", () => {
+  const refused = (bytes: Uint8Array) => assert.throws(() => decodeCsvFile(bytes), { message: AMBIGUOUS_ENCODING_MESSAGE });
+  // Windows files whose only accents are "é »" -- valid UTF-8 by chance ("caf項" if read as UTF-8).
+  // (\u00a0 is the no-break space French puts before » ¡ ¿.)
+  for (const notes of ["café\u00a0»", "thé\u00a0¡ café\u00a0¿", "voilà\u00a0» oui", "café\u00a0… thé\u00a0»"]) {
+    const bytes = windows1252(`First name,Last name,Notes\r\nAna,Lee,${notes}\r\n`);
+    assert.doesNotThrow(() => new TextDecoder("utf-8", { fatal: true }).decode(bytes), notes);
+    refused(bytes);
   }
-  // The exact case from the ticket: E9 A0 BB after "caf".
-  assert.equal(decodeCsvFile(windows1252("Notes\r\ncafé »\r\n")).text, "Notes\r\ncafé »\r\n");
+  // The same bytes from a real UTF-8 file: a CJK character glued to a Latin word. Reading it as
+  // windows-1252 would save "Leeé …" without a word -- so it's refused too.
+  refused(utf8("First name,Last name,Notes\r\nAna,Lee,Lee項\r\n"));
+  refused(utf8("First name,Last name\r\nAna,Lee項\r\n"));
+  // Saved again as "CSV UTF-8" (with the UTF-8 mark), both read exactly.
+  const bom = (b: Uint8Array) => new Uint8Array([0xef, 0xbb, 0xbf, ...b]);
+  assert.equal(decodeCsvFile(bom(utf8("Notes\r\ncafé\u00a0»\r\n"))).text, "Notes\r\ncafé\u00a0»\r\n");
+  assert.equal(decodeCsvFile(bom(utf8("Notes\r\nLee項\r\n"))).text, "Notes\r\nLee項\r\n");
 });
 
 test("TS-256: real UTF-8 files with Chinese, Japanese and Korean names are still read as UTF-8", () => {
