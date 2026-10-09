@@ -59,6 +59,13 @@ test("TS-256: a file that could be Windows 'café »' or UTF-8 'Lee項' is refus
   // windows-1252 would save "Leeé …" without a word -- so it's refused too.
   refused(utf8("First name,Last name,Notes\r\nAna,Lee,Lee項\r\n"));
   refused(utf8("First name,Last name\r\nAna,Lee項\r\n"));
+  // And at the start of a cell or after a digit: Windows "é »" would read as UTF-8 "頻", and a file
+  // whose only CJK is one such character alone can't be told apart either.
+  refused(windows1252("First name,Last name,Notes\r\nAna,Lee,é\u00a0»\r\n"));
+  refused(windows1252("First name,Last name,Notes\r\nAna,Lee,2é\u00a0»\r\n"));
+  refused(utf8("First name,Last name\r\nAna,項\r\n"));
+  refused(utf8("First name,Last name\r\nAna,렀\r\n"));
+  refused(utf8("First name,Last name\r\nAna 項,Lee\r\n"));
   // Saved again as "CSV UTF-8" (with the UTF-8 mark), both read exactly.
   const bom = (b: Uint8Array) => new Uint8Array([0xef, 0xbb, 0xbf, ...b]);
   assert.equal(decodeCsvFile(bom(utf8("Notes\r\ncafé\u00a0»\r\n"))).text, "Notes\r\ncafé\u00a0»\r\n");
@@ -70,11 +77,11 @@ test("TS-256: real UTF-8 files with Chinese, Japanese and Korean names are still
     "First name,Last name\r\n小明,王\r\n华,李\r\n",
     "First name,Last name\r\n花子,山田\r\n",
     "First name,Last name\r\n민준,김\r\n",
-    // One CJK character alone in a cell -- even one in the same range as "é »" (項 is E9 A0 85).
-    "First name,Last name\r\nAna,項\r\n",
-    "First name,Last name\r\nAna,렀\r\n",
-    // A Latin name and a CJK name in one cell, with a space between.
-    "First name,Last name\r\nAna 項,Lee\r\n",
+    // A CJK character in the same range as "é »" (項 is E9 A0 85) is fine next to other CJK.
+    "First name,Last name\r\nAna,項\r\nBo,王\r\n",
+    "First name,Last name\r\nAna,렀\r\nBo,김\r\n",
+    // A Latin name and a CJK name in one cell, with a space between, next to other CJK.
+    "First name,Last name\r\nAna 項,Lee\r\nBo,王\r\n",
     // "é »" bytes after a letter, but the file has other UTF-8 too.
     "First name,Last name\r\nJosé,Lee項\r\n",
     "First name,Last name\r\nAna,Lee項\r\nBo,王\r\n",

@@ -133,21 +133,19 @@ function hasUtf8LetterPairs(view: Uint8Array): boolean {
 }
 
 /**
- * TS-256: whether every non-ASCII character in a file that is valid UTF-8 is really a windows-1252
- * small accented letter (E0-EF: à-ï), a no-break space and a punctuation mark, straight after a plain
- * letter ("café »", bytes E9 A0 BB) -- which UTF-8 reads as one rare CJK, Hangul or Mongolian
- * character stuck to a Latin word ("caf項"). A real UTF-8 file with Chinese, Japanese or Korean
- * names has characters with other second bytes, next to each other, after a comma or space -- so
- * any one of those, or any other non-ASCII byte at all, keeps the file UTF-8.
+ * TS-256: whether every non-ASCII character in a file that is valid UTF-8 could just as well be a
+ * windows-1252 small accented letter (E0-EF: à-ï), a no-break space and a punctuation mark ("é »",
+ * bytes E9 A0 BB) -- which UTF-8 reads as one CJK character ("caf頻", or "頻" at the start of a cell).
+ * Such a file can't be told apart from a real UTF-8 one, so decodeCsvFile refuses it rather than
+ * guess. A real UTF-8 file with Chinese, Japanese or Korean names has characters with other second
+ * bytes too, so any one of those, or any other non-ASCII byte at all, keeps the file UTF-8.
  */
 function isWindowsFrenchSpacingOnly(view: Uint8Array): boolean {
   let found = false;
   for (let i = 0; i < view.length; i++) {
     const b = view[i];
     if (b < 0x80) continue;
-    const before = view[i - 1];
-    const plainLetterBefore = before !== undefined && ((before >= 0x41 && before <= 0x5a) || (before >= 0x61 && before <= 0x7a));
-    if (b >= 0xe0 && b <= 0xef && plainLetterBefore && view[i + 1] === 0xa0 && view[i + 2] !== undefined && isWindows1252Punctuation(view[i + 2])) {
+    if (b >= 0xe0 && b <= 0xef && view[i + 1] === 0xa0 && view[i + 2] !== undefined && isWindows1252Punctuation(view[i + 2])) {
       found = true;
       i += 2;
       continue;
