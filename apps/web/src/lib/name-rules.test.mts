@@ -5,8 +5,11 @@ import assert from "node:assert/strict";
 import { hasMixedScriptWord, looksLikePhoneNumber, looksLikeWebAddress } from "../../../../packages/shared/src/validation";
 import { signupSchema, resetPasswordSchema } from "../../../../packages/shared/src/schemas/auth";
 import { createGuestSchema } from "../../../../packages/shared/src/schemas/guest";
-import { createWeddingSchema, updateWeddingSchema } from "../../../../packages/shared/src/schemas/wedding";
+import { createWeddingSchema, updateWeddingSchema, weddingNameField } from "../../../../packages/shared/src/schemas/wedding";
 import { duplicateWeddingSchema } from "../../../../packages/shared/src/schemas/template";
+import { parseCsv } from "../../../../packages/shared/src/csv";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 test("domain-looking text is caught", () => {
   for (const v of ["evil.com", "Verify at evil.example", "seatwise.support now", "WWW.EVIL.CO", "go to bit.ly"]) {
@@ -192,4 +195,61 @@ test("the name rules still accept the real names people use", () => {
     assert.equal(ok(v), true, v);
   }
   for (const v of ["x.com", "seatwise-help-a.com", "evil. com"]) assert.equal(ok(v), false, v);
+});
+
+// TS-258: a web address whose ending is spelled with spaces between its letters.
+test("a web address with spaces between the letters of its ending is caught", () => {
+  for (const v of [
+    "evil . c o m",
+    "e v i l . c o m",
+    "evil.c o m",
+    "evil . n e t",
+    "evil . C O M",
+    "visit x . o r g today",
+    "evil dot c o m",
+  ]) {
+    assert.equal(looksLikeWebAddress(v), true, v);
+  }
+  const base = { email: "a@example.invalid", password: "long-enough-pw" };
+  assert.equal(signupSchema.safeParse({ ...base, name: "e v i l . c o m" }).success, false);
+  assert.equal(weddingNameField.safeParse("evil . c o m").success, false);
+});
+
+// TS-258: real names with periods and spaces still pass.
+test("real names with periods and spaces still pass the spaced-letters check", () => {
+  for (const v of [
+    "St. Pierre",
+    "Jean-Luc St. Pierre",
+    "Mary Ann",
+    "J. R. R. Smith",
+    "Dr. Who",
+    "Ó Súilleabháin",
+    "Lee . Kim",
+    "Bo. Coleman",
+    "Ana B. Orgel",
+    "Ana B. Netherton",
+    "Ana B. Co Morgan",
+    "Ana B. Ne Thompson",
+  ]) {
+    assert.equal(looksLikeWebAddress(v), false, v);
+  }
+});
+
+// TS-258: every name in the sample guest import file still passes.
+test("every name in docs/sample-guest-import.csv still passes the web-address check", () => {
+  const csv = readFileSync(fileURLToPath(new URL("../../../../docs/sample-guest-import.csv", import.meta.url)), "utf8");
+  const { headers, rows } = parseCsv(csv.replace(/^﻿/, ""));
+  const first = headers.indexOf("First Name");
+  const last = headers.indexOf("Last Name");
+  const plusOnes = headers.indexOf("Plus-ones");
+  assert.ok(first >= 0 && last >= 0 && plusOnes >= 0, headers.join("|"));
+  const names: string[] = [];
+  for (const row of rows) {
+    names.push(row[first], row[last], `${row[first]} ${row[last]}`.trim());
+    for (const p of (row[plusOnes] ?? "").split(",")) if (p.trim()) names.push(p.trim());
+  }
+  assert.ok(names.length >= 60);
+  for (const name of names.filter((n) => n && n.trim())) {
+    assert.equal(looksLikeWebAddress(name), false, name);
+  }
 });

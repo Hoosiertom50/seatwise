@@ -10,6 +10,7 @@ type Params = { params: Promise<{ weddingId: string }> };
 
 const SETTINGS_CONFLICT_MESSAGE =
   "This wedding's settings changed since you opened them (maybe in another tab) — showing the latest. Your change wasn't saved; make it again if it's still needed.";
+const NO_LONGER_OWNER_MESSAGE = "Only the wedding's owner can change these settings — you aren't its owner any more.";
 
 export async function GET(req: NextRequest, { params }: Params) {
   const user = await getAuthUser(req);
@@ -58,9 +59,14 @@ export async function PATCH(req: NextRequest, { params }: Params) {
   const saved = await updateWeddingForOwner(weddingId, user.id, changes, expectedRevision);
   // TS-214: the settings changed since this copy was loaded (another tab, most likely) -- nothing
   // was saved; the latest settings come back so the screen can show them.
+  // TS-258: the latest settings are read with their owner in the same row; someone who handed the
+  // wedding off a moment ago is told so, and never gets the new owner's note.
   if (saved === "CONFLICT") {
+    const latest = await getWeddingById(weddingId);
+    if (!latest) return errorResponse("Wedding not found", 404);
+    if (latest.ownerId !== user.id) return errorResponse(NO_LONGER_OWNER_MESSAGE, 403);
     return NextResponse.json(
-      { error: SETTINGS_CONFLICT_MESSAGE, wedding: await getWeddingById(weddingId) },
+      { error: SETTINGS_CONFLICT_MESSAGE, wedding: weddingForViewer(latest, user.id) },
       { status: 409 }
     );
   }
@@ -74,7 +80,7 @@ export async function PATCH(req: NextRequest, { params }: Params) {
   if (saved === "NOT_FOUND") {
     const wedding = await getWeddingById(weddingId);
     return wedding
-      ? errorResponse("Only the wedding's owner can change these settings — you aren't its owner any more.", 403)
+      ? errorResponse(NO_LONGER_OWNER_MESSAGE, 403)
       : errorResponse("Wedding not found", 404);
   }
   // TS-209 (Copilot review): saved by now -- if reading it back fails, the answer is still success:
@@ -83,7 +89,8 @@ export async function PATCH(req: NextRequest, { params }: Params) {
   const warnings: string[] = [];
   const wedding = await afterSave("reading the wedding back", () => getWeddingById(weddingId), warnings, SAVED_BUT_NOT_REFRESHED, null);
   return NextResponse.json({
-    wedding: wedding ?? {
+    // TS-258: handed off just after the save, the read-back leaves out the new owner's note.
+    wedding: (wedding && weddingForViewer(wedding, user.id)) ?? {
       ...access.wedding,
       ...changes,
       settingsRevision: (expectedRevision ?? access.wedding.settingsRevision) + 1,
