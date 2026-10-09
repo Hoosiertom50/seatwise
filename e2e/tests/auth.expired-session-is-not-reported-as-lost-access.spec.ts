@@ -71,10 +71,21 @@ defineQualityTest(
       // TS-170: the link opens a new tab, so this page -- and anything typed on it -- stays put.
       const tab = await detailPage.clickSignInAgain();
       await tab.waitForURL((url) => url.pathname === "/login" && url.searchParams.get("next") === `/weddings/${weddingId}`);
+      // TS-229: this page re-checks its session as soon as the new tab signs in (BroadcastChannel),
+      // and again when it is brought back to the front -- wait for this page's first signed-in
+      // answer rather than a fixed time. Started before signing in so the immediate re-check isn't
+      // missed. (WebKit once kept sending no cookie from this page for a while after the new tab
+      // signed in; a re-check on focus, or the 4-second access poll, still gets there.)
+      const pickedUp = page.waitForResponse(
+        (res) => new URL(res.url()).pathname.startsWith("/api/v1/") && res.status() === 200,
+        { timeout: 15_000 },
+      );
       await new LoginPage(tab).login(email, password);
       await tab.waitForURL(`/weddings/${weddingId}`);
       await expect(new WeddingDetailPage(tab).heading()).toHaveText(weddingName);
       await tab.close();
+      await page.bringToFront();
+      await pickedUp;
       expect(new URL(page.url()).pathname).toBe(`/weddings/${weddingId}`);
       await expect(detailPage.sessionExpiredNotice()).toHaveCount(0, { timeout: 10_000 });
     });
