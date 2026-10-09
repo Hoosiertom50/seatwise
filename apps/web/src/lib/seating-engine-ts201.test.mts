@@ -150,6 +150,12 @@ test("the repair can move two groups to seat everyone", () => {
 
 // The repair's budget counts work done (including comparing guests against must-not lists), so a
 // huge rule list can't make Generate slow. Before, this took over 2 seconds.
+// TS-256: a fixed "under 2 seconds" failed once on a busy machine (the run normally takes ~0.2 s).
+// Load slows every run on the machine alike, so this compares against a baseline timed right
+// alongside it: the same 800 guests with a tenth of the rules. Work that grows in step with the rule
+// list keeps the ratio near 10x or below (about 4x today); the old engine's blow-up made it about
+// 37x (~6 s against ~0.16 s). Runs alternate and the median of five is used, so one stall doesn't
+// decide it. The loose absolute cap only catches a hang.
 test("800 guests with 300,000 must-not rules still generate quickly", () => {
   let seed = 201;
   const rnd = () => {
@@ -169,10 +175,30 @@ test("800 guests with 300,000 must-not rules still generate quickly", () => {
     }
   }
   assert.equal(rels.length, 300_000);
-  const started = performance.now();
-  const result = generateSeatingPlan(guests, rels, tables);
-  const ms = performance.now() - started;
-  assert.ok(ms < 2000, `took ${Math.round(ms)} ms`);
+  // TS-256: the baseline -- the same guests and tables with the first tenth of the rules.
+  const baselineRels = rels.slice(0, 30_000);
+
+  const timed = (r: EngineRelationship[]) => {
+    const started = performance.now();
+    const result = generateSeatingPlan(guests, r, tables);
+    return { ms: performance.now() - started, result };
+  };
+  const median = (xs: number[]) => [...xs].sort((x, y) => x - y)[Math.floor(xs.length / 2)];
+  timed(baselineRels); // warm-up, so compiling the engine isn't counted against either side
+  const full: number[] = [];
+  const base: number[] = [];
+  let result = timed(rels).result;
+  for (let i = 0; i < 5; i++) {
+    base.push(timed(baselineRels).ms);
+    const run = timed(rels);
+    full.push(run.ms);
+    result = run.result;
+  }
+  const fullMs = median(full);
+  const baseMs = Math.max(median(base), 1);
+  const detail = `300,000 rules: ${Math.round(fullMs)} ms; 30,000 rules: ${Math.round(baseMs)} ms`;
+  assert.ok(fullMs / baseMs < 15, `grew much faster than the rule list -- ${detail}`);
+  assert.ok(fullMs < 10_000, `took far too long -- ${detail}`);
   assert.ok(result.unassignedGuestIds.length > 0);
   const seatedAt = new Map(result.assignments.map((a) => [a.guestId, a.tableId]));
   for (const r of rels) {
