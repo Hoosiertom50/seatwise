@@ -23,7 +23,10 @@ function browserStorage(): Storage | null {
 const sameTabListeners = new Set<() => void>();
 function subscribe(onChange: () => void) {
   const onStorage = (e: StorageEvent) => {
-    if (e.key === APPEARANCE_STORAGE_KEY || e.key === null) onChange();
+    if (e.key === APPEARANCE_STORAGE_KEY || e.key === null) {
+      unsavedChoice = null;
+      onChange();
+    }
   };
   sameTabListeners.add(onChange);
   window.addEventListener("storage", onStorage);
@@ -32,18 +35,21 @@ function subscribe(onChange: () => void) {
     window.removeEventListener("storage", onStorage);
   };
 }
-const currentChoice = () => readAppearance(browserStorage());
+// When this browser won't save the choice (blocked site data), it still applies to this page, and
+// the buttons show it rather than the saved value.
+let unsavedChoice: Appearance | null = null;
+const currentChoice = () => unsavedChoice ?? readAppearance(browserStorage());
 const choiceBeforeLoad = (): Appearance => "system";
+
+function chooseAppearance(value: Appearance) {
+  unsavedChoice = saveAppearance(browserStorage(), value) ? null : value;
+  applyAppearance(document.documentElement, value);
+  sameTabListeners.forEach((l) => l());
+}
 
 // TS-257: Light, Dark or Match my device -- applied at once, kept in this browser only.
 export function AppearanceSetting() {
   const choice = useSyncExternalStore(subscribe, currentChoice, choiceBeforeLoad);
-
-  function onChange(value: Appearance) {
-    saveAppearance(browserStorage(), value);
-    applyAppearance(document.documentElement, value);
-    sameTabListeners.forEach((l) => l());
-  }
 
   return (
     <section aria-labelledby="appearance" className="mb-6 rounded-lg border border-neutral-200 dark:border-neutral-700 p-4">
@@ -63,7 +69,7 @@ export function AppearanceSetting() {
                 name="appearance"
                 value={c.value}
                 checked={choice === c.value}
-                onChange={() => onChange(c.value)}
+                onChange={() => chooseAppearance(c.value)}
               />
               {c.label}
             </label>

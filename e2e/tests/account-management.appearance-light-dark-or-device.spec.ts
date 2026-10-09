@@ -80,3 +80,38 @@ defineQualityTest(
     await otherTab.close();
   },
 );
+
+defineQualityTest(
+  {
+    id: "account-management.appearance-light-dark-or-device.blocked-storage-still-applies",
+    title: "when the browser won't save the Appearance choice, it still applies to the page and the chosen button stays picked",
+    objective:
+      "Confirms that with saving to browser storage refused (blocked site data), choosing Dark still darkens the page and Dark stays the picked choice instead of jumping back to Match my device.",
+    expectedOutcome: "With storage writes refused, clicking Dark gives a dark background and the Dark radio is checked; Match my device is not.",
+    requirementIds: ["REQ-NON-FUNCTIONAL"],
+    tags: ["@mutating", "@feature:account", "@risk:low", "@suite:regression"],
+  },
+  async ({ account, page }) => {
+    void account;
+    const accountPage = new AccountPage(page);
+
+    await test.step("Arrange: the browser refuses to save anything to storage, and the device is light", async () => {
+      await page.addInitScript(() => {
+        const refuse = () => {
+          throw new DOMException("blocked", "SecurityError");
+        };
+        Storage.prototype.setItem = refuse;
+        Storage.prototype.removeItem = refuse;
+      });
+      await page.emulateMedia({ colorScheme: "light" });
+      await accountPage.goto();
+    });
+
+    await test.step("Choosing Dark darkens the page and Dark stays picked", async () => {
+      await accountPage.appearanceChoice("Dark").check();
+      await expect.poll(() => pageBackground(page)).toBe(DARK_BACKGROUND);
+      await expect(accountPage.appearanceChoice("Dark")).toBeChecked();
+      await expect(accountPage.appearanceChoice("Match my device")).not.toBeChecked();
+    });
+  },
+);

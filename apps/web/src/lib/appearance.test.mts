@@ -48,7 +48,9 @@ test("TS-257: storage that's missing or refuses (private window) never breaks th
   };
   assert.equal(readAppearance(refusing), "system");
   assert.equal(readAppearance(null), "system");
-  assert.doesNotThrow(() => saveAppearance(refusing, "dark"));
+  assert.equal(saveAppearance(refusing, "dark"), false);
+  assert.equal(saveAppearance(null, "dark"), false);
+  assert.equal(saveAppearance(memoryStorage(), "dark"), true);
 });
 
 test("TS-257: the choice is shown as data-theme on <html>, and none for match the device", () => {
@@ -57,6 +59,10 @@ test("TS-257: the choice is shown as data-theme on <html>, and none for match th
   assert.equal(root.dataset.theme, "light");
   applyAppearance(root, "system");
   assert.equal(root.dataset.theme, undefined);
+});
+
+test("TS-257: the boot script uses the same storage key as the setting", () => {
+  assert.ok(APPEARANCE_BOOT_SCRIPT.includes(`var k=${JSON.stringify(APPEARANCE_STORAGE_KEY)};`));
 });
 
 test("TS-257: the boot script applies a saved choice before the page is drawn and follows other tabs", () => {

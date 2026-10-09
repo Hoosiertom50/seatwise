@@ -29,12 +29,15 @@ export function readAppearance(storage: StorageLike | null | undefined): Appeara
   }
 }
 
-export function saveAppearance(storage: StorageLike | null | undefined, value: Appearance): void {
+// Returns whether the choice was saved; when it wasn't, it still applies to this page.
+export function saveAppearance(storage: StorageLike | null | undefined, value: Appearance): boolean {
+  if (!storage) return false;
   try {
-    if (value === "system") storage?.removeItem(APPEARANCE_STORAGE_KEY);
-    else storage?.setItem(APPEARANCE_STORAGE_KEY, value);
+    if (value === "system") storage.removeItem(APPEARANCE_STORAGE_KEY);
+    else storage.setItem(APPEARANCE_STORAGE_KEY, value);
+    return true;
   } catch {
-    // Not saved, but still applied to this page.
+    return false;
   }
 }
 
@@ -45,4 +48,7 @@ export function applyAppearance(root: { dataset: DOMStringMap }, value: Appearan
 
 // Runs in <head> before the page is drawn, so a saved choice never flashes the other theme first.
 // It also keeps every open tab in step: a change saved in one tab arrives as a "storage" event.
-export const APPEARANCE_BOOT_SCRIPT = `(function(){var k=${JSON.stringify(APPEARANCE_STORAGE_KEY)};function a(v){var r=document.documentElement;if(v==="light"||v==="dark")r.setAttribute("data-theme",v);else r.removeAttribute("data-theme");}try{a(localStorage.getItem(k));}catch(e){}window.addEventListener("storage",function(e){if(e.key===k||e.key===null)a(e.newValue);});})();`;
+// A fixed string -- nothing is built into it -- with the storage key written out; a unit test checks
+// it matches APPEARANCE_STORAGE_KEY.
+export const APPEARANCE_BOOT_SCRIPT =
+  '(function(){var k="seatwise-appearance";function a(v){var r=document.documentElement;if(v==="light"||v==="dark")r.setAttribute("data-theme",v);else r.removeAttribute("data-theme");}try{a(localStorage.getItem(k));}catch(e){}window.addEventListener("storage",function(e){if(e.key===k||e.key===null)a(e.newValue);});})();';
