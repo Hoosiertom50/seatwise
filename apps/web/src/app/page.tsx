@@ -6,7 +6,7 @@ export default function Home() {
       <h1 className="text-4xl font-semibold tracking-tight">Seatwise</h1>
       <p className="max-w-md text-neutral-600 dark:text-neutral-300">
         Build your guest list, define who has to sit together, and let Seatwise generate a
-        seating chart that respects every rule.
+        seating chart that always follows your must-rules and does its best with the rest.
       </p>
       <div className="flex gap-3">
         <Link

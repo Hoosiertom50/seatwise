@@ -25,7 +25,8 @@
 //   pnpm --filter @seatwise/db fill-wedding-details            # dry run, prints a preview
 //   pnpm --filter @seatwise/db fill-wedding-details --confirm  # actually writes
 
-import "./load-env";
+// TS-172: local databases only (see local-only.ts).
+import "./local-only";
 
 import {
   pool,

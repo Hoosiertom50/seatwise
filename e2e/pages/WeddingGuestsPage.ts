@@ -4,7 +4,7 @@
  * app's stable `id`s on the add-guest form (`guest-first-name`, etc.) are used directly.
  */
 
-import { expect } from "@playwright/test";
+import { expect, type Response } from "@playwright/test";
 import { BasePage } from "./BasePage.js";
 import { GuestRow } from "../components/GuestRow.js";
 
@@ -19,7 +19,7 @@ export interface AddGuestInput {
 
 export class WeddingGuestsPage extends BasePage {
   private guestsTabButton() {
-    return this.page.getByRole("button", { name: "Guests", exact: true });
+    return this.page.getByRole("tab", { name: "Guests", exact: true });
   }
 
   private firstNameInput() {
@@ -81,7 +81,12 @@ export class WeddingGuestsPage extends BasePage {
    * still collapsed (a no-op once open). */
   async openMoreDetails(): Promise<void> {
     const toggle = this.page.getByRole("button", { name: /^\+ More details/ });
-    if (await toggle.count()) await toggle.click();
+    if (await toggle.count()) {
+      await toggle.click();
+      // TS-191: opening it moves focus to its first box a moment later -- waited for, so whatever the
+      // test does next (a Tab-order walk, say) starts after that and isn't overtaken by it.
+      await expect(this.page.getByLabel("Party / household", { exact: true })).toBeFocused();
+    }
   }
 
   /** TS-112: whether the optional fields are currently showing. */
@@ -164,11 +169,13 @@ export class WeddingGuestsPage extends BasePage {
 
   /** TS-92: confirms a preview the server is expected to refuse (e.g. a guest in it changed since
    * the preview) -- waits for the commit response itself, since no success summary will appear. */
-  async confirmImportExpectingRefusal(): Promise<void> {
-    await Promise.all([
+  // TS-198: hands back that response, so a test can read the refusal.
+  async confirmImportExpectingRefusal(): Promise<Response> {
+    const [response] = await Promise.all([
       this.page.waitForResponse((res) => res.url().includes("/guests/import/commit") && res.request().method() === "POST"),
       this.confirmImportButton().click(),
     ]);
+    return response;
   }
 
   // TS-118: the import form's helpers and guards.
@@ -185,6 +192,30 @@ export class WeddingGuestsPage extends BasePage {
   async chooseImportFile(csvContent: string, name = "guests.csv"): Promise<void> {
     await this.importFileInput().setInputFiles({ name, mimeType: "text/csv", buffer: Buffer.from(csvContent, "utf-8") });
   }
+  /** TS-190: uploads a file's exact bytes (e.g. one saved in Excel's older Windows encoding) and
+   * requests a preview. */
+  async importGuestsFileBytesAndPreview(bytes: Buffer, name = "guests.csv"): Promise<void> {
+    await this.importFileInput().setInputFiles({ name, mimeType: "text/csv", buffer: bytes });
+    await this.previewImportButton().click();
+    await this.confirmImportButton().waitFor();
+  }
+  /** TS-190: chooses a file's exact bytes without previewing it. */
+  async chooseImportFileBytes(bytes: Buffer, name = "guests.csv"): Promise<void> {
+    await this.importFileInput().setInputFiles({ name, mimeType: "text/csv", buffer: bytes });
+  }
+  /** TS-190: the preview's summary line ("N new, N updating, N unchanged, ..."). */
+  importPreviewSummaryText() {
+    return this.page.getByText(/ new, \d+ updating, /);
+  }
+  /** TS-190: a preview row, by the guest's name in it. */
+  importPreviewRow(fullName: string) {
+    return this.page.locator("li").filter({ hasText: /^Row \d+/ }).filter({ hasText: fullName });
+  }
+  /** TS-198: a preview row by its row number -- for a row with an error, which may show no name.
+   * TS-225: the spreadsheet's numbering (the header is row 1, so the first guest is row 2). */
+  importPreviewRowNumber(rowNumber: number) {
+    return this.page.locator("li").filter({ hasText: new RegExp(`^Row ${rowNumber}(?!\\d)`) });
+  }
   /** TS-140: a column-mapping select, by its field label (e.g. "First name *"). */
   importMappingSelect(label: string | RegExp) {
     return this.page.getByLabel(label);
@@ -192,11 +223,38 @@ export class WeddingGuestsPage extends BasePage {
   previewImportButtonLocator() {
     return this.previewImportButton();
   }
+  /** TS-191: the file chooser itself, the import's Cancel button, and a preview's summary line --
+   * for checking what can be changed while a preview is being checked. */
+  importFileInputLocator() {
+    return this.importFileInput();
+  }
+  cancelImportButton() {
+    return this.page.getByRole("button", { name: "Cancel", exact: true });
+  }
+  importPreviewSummary() {
+    return this.page.getByText(/^\d+ new, \d+ updating,/);
+  }
+  /** TS-191: an import error line (a refused file, a failed preview), matched by its text. */
+  importError(text: string | RegExp) {
+    return this.page.getByRole("alert").filter({ hasText: text });
+  }
   async cancelImport(): Promise<void> {
     await this.page.getByRole("button", { name: "Cancel", exact: true }).click();
   }
   importMappingHeading() {
     return this.page.getByText(/ — map columns to guest fields:$/);
+  }
+  /** TS-180: the preview rows for guests changed in Seatwise since the file was exported. */
+  importChangedSinceExportRows() {
+    return this.page.locator("li").filter({ hasText: "Changed in Seatwise since this file was exported" });
+  }
+  /** TS-180: the box that lets those guests be overwritten anyway. */
+  overwriteChangedCheckbox() {
+    return this.page.getByRole("checkbox", { name: /^Overwrite guests changed since the export/ });
+  }
+  /** TS-180: the Confirm import button, to read the number of guests it will import. */
+  confirmImportButtonLocator() {
+    return this.confirmImportButton();
   }
 
   /** Returns a GuestRow component object scoped to the row matching this full name. Does not
@@ -215,10 +273,56 @@ export class WeddingGuestsPage extends BasePage {
     return new GuestRow(this.page.locator("li").filter({ hasText: fullName }));
   }
 
+  /** TS-217: every guest's editable notes box / email box on the tab (Owner and Edit only). */
+  allNotesBoxes() {
+    return this.page.locator('textarea[aria-label^="Notes for "]');
+  }
+  allEmailBoxes() {
+    return this.page.locator('input[aria-label^="Email for "]');
+  }
+  /** TS-217: the value the first notes box has the moment it appears on the page -- to check it never
+   * shows up empty before the real note arrives. */
+  async firstNotesBoxValueWhenItAppears(timeout: number): Promise<string> {
+    const handle = await this.page.waitForFunction(
+      () => {
+        const box = document.querySelector<HTMLTextAreaElement>('textarea[aria-label^="Notes for "]');
+        return box ? { value: box.value } : null;
+      },
+      undefined,
+      { timeout },
+    );
+    return ((await handle.jsonValue()) as { value: string }).value;
+  }
+  /** TS-217: any text on the page, e.g. to check a private note isn't shown anywhere. */
+  textOnPage(text: string) {
+    return this.page.getByText(text);
+  }
+
   guestRow(fullName: string): GuestRow {
     const li = this.page.locator("li").filter({
       has: this.page.locator(`input[aria-label="First name for ${fullName}"]`),
     });
     return new GuestRow(li);
+  }
+
+  /** TS-177: the guest list's heading, "Guests (N invitations · N people invited · N attending)" (TS-214). */
+  guestListHeading() {
+    return this.page.getByRole("heading", { name: /^Guests \(/ });
+  }
+
+  /** TS-170: the "Export guest list (CSV)" control. TS-211: a button now -- it fetches the file
+   * and says inline when it can't. */
+  exportCsvLink() {
+    return this.page.getByRole("button", { name: "Export guest list (CSV)", exact: true });
+  }
+
+  /** TS-211: a failed CSV export's message, shown next to the button. */
+  exportCsvError(text: string | RegExp) {
+    return this.page.getByRole("alert").filter({ hasText: text });
+  }
+
+  /** TS-235: the choices in a guest row's Side list (named "Side for <name>"), as shown. */
+  async rowSideChoices(guestName: string): Promise<string[]> {
+    return this.page.getByRole("combobox", { name: `Side for ${guestName}`, exact: true }).locator("option").allInnerTexts();
   }
 }

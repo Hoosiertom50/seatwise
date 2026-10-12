@@ -10,7 +10,8 @@
  * ("share a plan," "reply to a comment," "after approval, change a table/guest/attendance/status")
  * against the actual `NotificationType` values that exist (PLAN_SHARED, COMMENT_REPLY,
  * TABLE_CHANGED, GUEST_ADDED, GUEST_REMOVED, ATTENDANCE_CHANGED, STATUS_CHANGED), confirms a
- * *top-level* comment does NOT notify (only a reply does), confirms the real "post-approval only"
+ * *top-level* comment notifies the others as COMMENT_ADDED (TS-213, Tom's decision -- it used to
+ * notify no one) and a reply as COMMENT_REPLY, confirms the real "post-approval only"
  * gating that TABLE_CHANGED/GUEST_ADDED/GUEST_REMOVED/ATTENDANCE_CHANGED all share (a Draft
  * plan's own constant churn would otherwise spam every collaborator), and confirms the
  * `emailNotificationsEnabled` toggle affects only the (unobservable, see below) email attempt --
@@ -30,7 +31,8 @@
 
 import { request as playwrightRequest } from "@playwright/test";
 import { expect, defineQualityTest, test } from "../fixtures/index.js";
-import { signUpFreshAccount } from "../support/auth.js";
+import { signUpFreshAccount, signUpFreshAccountInNewContext } from "../support/auth.js";
+import { breakNotificationsFor } from "../support/testDatabase.js";
 import { getEnv } from "../support/env.js";
 import { uniquePersonName } from "../data/ids.js";
 
@@ -48,11 +50,11 @@ async function notifications(ctx: { get: (url: string) => Promise<{ json(): Prom
 defineQualityTest(
   {
     id: "collaboration.notification-triggers-fire-for-defined-events.share-reply-and-post-approval-changes-notify-the-right-recipient",
-    title: "sharing a plan, replying to a comment, and post-approval table/guest/attendance/status changes each notify the right collaborator in-app; a top-level comment and any pre-approval change notify no one; and disabling email never blocks the action or the in-app notification",
+    title: "sharing a plan, a new comment, replying to a comment, and post-approval table/guest/attendance/status changes each notify the right collaborator in-app; any pre-approval change notifies no one; and disabling email never blocks the action or the in-app notification",
     objective:
-      "Confirms PLAN_SHARED fires on share-for-review, COMMENT_REPLY fires only on a reply (never a top-level comment) and goes to the other party, and TABLE_CHANGED/GUEST_ADDED/GUEST_REMOVED/ATTENDANCE_CHANGED/STATUS_CHANGED all fire correctly for their respective post-approval actions -- while the same table-change action taken before approval notifies no one. Also confirms disabling a wedding's emailNotificationsEnabled setting leaves both the action's own success and its in-app notification completely unaffected.",
+      "Confirms PLAN_SHARED fires on share-for-review, COMMENT_ADDED fires on a new top-level comment (TS-213, Tom's decision) and COMMENT_REPLY only on a reply, each going to the other party, and TABLE_CHANGED/GUEST_ADDED/GUEST_REMOVED/ATTENDANCE_CHANGED/STATUS_CHANGED all fire correctly for their respective post-approval actions -- while the same table-change action taken before approval notifies no one. Also confirms disabling a wedding's emailNotificationsEnabled setting leaves both the action's own success and its in-app notification completely unaffected.",
     expectedOutcome:
-      "Each trigger produces exactly the expected NotificationType and message for its recipient (the party who did NOT perform the action). A top-level comment and a pre-approval table move produce no new notification. After emailNotificationsEnabled is turned off, a further status change still returns 200 and still produces a new in-app STATUS_CHANGED notification.",
+      "Each trigger produces exactly the expected NotificationType and message for its recipient (the party who did NOT perform the action). A top-level comment produces one COMMENT_ADDED for the collaborator (none for its writer, and no COMMENT_REPLY); a pre-approval table move produces no new notification. After emailNotificationsEnabled is turned off, a further status change still returns 200 and still produces a new in-app STATUS_CHANGED notification.",
     requirementIds: ["REQ-COLLABORATION-NOTIFICATIONS"],
     tags: ["@mutating", "@feature:collaboration", "@risk:critical", "@suite:regression"],
   },
@@ -64,6 +66,7 @@ defineQualityTest(
     let guestBName = "";
     let tableAId = "";
     let tableCId = "";
+    let tableBIdForMove = "";
     let tableCLabel = "";
 
     await test.step("Arrange: two guests, three tables (one left empty for a later move), and a complete generated plan", async () => {
@@ -75,15 +78,24 @@ defineQualityTest(
       guestBName = `${guestB.firstName} ${guestB.lastName}`;
 
       const tableA = await weddingData.createTable(managedWedding.id, { label: "Table A", capacity: 2 });
-      await weddingData.createTable(managedWedding.id, { label: "Table B", capacity: 2 });
+      const tableB = await weddingData.createTable(managedWedding.id, { label: "Table B", capacity: 2 });
       const tableC = await weddingData.createTable(managedWedding.id, { label: "Table C", capacity: 1 });
       tableAId = tableA.id;
-      tableCId = tableC.id;
-      tableCLabel = tableC.label;
 
       const generated = await weddingData.generatePlanVersion(managedWedding.id);
       expect(generated.isComplete).toBe(true);
       planVersionId = generated.id;
+
+      // TS-189: a move to the table a guest is already at changes nothing and notifies no one, so the
+      // later move takes guest A to whichever of Table C / Table B they aren't at (the engine may
+      // put them at either) -- a real move. Table A keeps room for the Draft-stage move back.
+      const seatedAt = (await weddingData.getPlanVersionDetail(managedWedding.id, planVersionId)).assignments.find(
+        (a) => a.guestId === guestAId,
+      )?.tableId;
+      tableBIdForMove = tableB.id;
+      const target = seatedAt === tableC.id ? tableB : tableC;
+      tableCId = target.id;
+      tableCLabel = target.label;
     });
 
     const baseURL = getEnv().APP_URL;
@@ -108,7 +120,9 @@ defineQualityTest(
       });
 
       let commentId = "";
-      await test.step("Act + Assert: a top-level comment (the owner, on guestA) notifies no one", async () => {
+      // TS-213 (Tom's decision): a new comment thread now notifies the others too (COMMENT_ADDED) --
+      // before, only replies did.
+      await test.step("Act + Assert: a top-level comment (the owner, on guestA) notifies the collaborator (COMMENT_ADDED), not the writer", async () => {
         const before = await notifications(collabCtx);
         const res = await context.request.post(`/api/v1/weddings/${managedWedding.id}/comments`, {
           data: { targetType: "GUEST", guestId: guestAId, body: "Is this seat confirmed?" },
@@ -117,9 +131,16 @@ defineQualityTest(
         commentId = ((await res.json()) as { comment: { id: string } }).comment.id;
 
         const after = await notifications(collabCtx);
+        const added = after.filter((n) => n.type === "COMMENT_ADDED");
+        expect(added).toHaveLength(before.filter((n) => n.type === "COMMENT_ADDED").length + 1);
+        expect(added[0].message).toContain(`New comment on "Guest: ${guestAName}"`);
+        expect(added[0].message).toContain("Is this seat confirmed?");
+        // It isn't a reply.
         expect(after.filter((n) => n.type === "COMMENT_REPLY")).toHaveLength(
           before.filter((n) => n.type === "COMMENT_REPLY").length,
         );
+        const ownerNotifs = await notifications(context.request);
+        expect(ownerNotifs.find((n) => n.type === "COMMENT_ADDED" && n.message.includes("Is this seat confirmed?"))).toBeFalsy();
       });
 
       await test.step("Act + Assert: the collaborator replying to that comment notifies the owner (COMMENT_REPLY), the other party -- not the replier", async () => {
@@ -143,12 +164,25 @@ defineQualityTest(
         expect(res.status).toBe(200);
 
         const collabNotifs = await notifications(collabCtx);
-        const match = collabNotifs.find((n) => n.type === "STATUS_CHANGED" && n.message.includes("APPROVED"));
+        const match = collabNotifs.find((n) => n.type === "STATUS_CHANGED" && n.message.includes("approved"));
         expect(match).toBeTruthy();
-        expect(match!.message).toBe("The seating plan status changed to APPROVED.");
+        // TS-177: in words, not the status code.
+        expect(match!.message).toBe("The seating plan was approved.");
       });
 
       await test.step("Act + Assert: a post-approval manual move notifies the collaborator (TABLE_CHANGED)", async () => {
+        // TS-244: same-size guests are seated in guest-id order now, so the 1-seat Table C may already
+        // hold guest B -- move guest A to a table they aren't at that still has a free seat.
+        const detail = await weddingData.getPlanVersionDetail(managedWedding.id, planVersionId);
+        const seatedAt = detail.assignments.find((a) => a.guestId === guestAId)?.tableId;
+        const used = (id: string) => detail.assignments.filter((a) => a.tableId === id).length;
+        const roomy = [
+          { id: tableCId, label: tableCLabel, capacity: tableCId === tableBIdForMove ? 2 : 1 },
+          { id: tableBIdForMove, label: "Table B", capacity: 2 },
+          { id: tableAId, label: "Table A", capacity: 2 },
+        ].find((t) => t.id !== seatedAt && used(t.id) < t.capacity)!;
+        tableCId = roomy.id;
+        tableCLabel = roomy.label;
         const res = await weddingData.moveGuestAssignment(managedWedding.id, planVersionId, guestAId, tableCId);
         expect(res.status).toBe(200);
 
@@ -199,7 +233,7 @@ defineQualityTest(
         const toDraft = await weddingData.setPlanVersionStatus(managedWedding.id, planVersionId, "DRAFT");
         expect(toDraft.status).toBe(200);
         const collabNotifsAfterDraft = await notifications(collabCtx);
-        expect(collabNotifsAfterDraft.find((n) => n.type === "STATUS_CHANGED" && n.message.includes("DRAFT"))).toBeTruthy();
+        expect(collabNotifsAfterDraft.find((n) => n.type === "STATUS_CHANGED" && n.message.includes("moved back to draft"))).toBeTruthy();
 
         const beforeCount = collabNotifsAfterDraft.filter((n) => n.type === "TABLE_CHANGED").length;
         const move = await weddingData.moveGuestAssignment(managedWedding.id, planVersionId, guestAId, tableAId);
@@ -217,14 +251,14 @@ defineQualityTest(
         expect(settingsRes.status()).toBe(200);
 
         const beforeCount = (await notifications(collabCtx)).filter(
-          (n) => n.type === "STATUS_CHANGED" && n.message.includes("APPROVED"),
+          (n) => n.type === "STATUS_CHANGED" && n.message.includes("approved"),
         ).length;
 
         const reApprove = await weddingData.setPlanVersionStatus(managedWedding.id, planVersionId, "APPROVED");
         expect(reApprove.status).toBe(200);
 
         const afterCount = (await notifications(collabCtx)).filter(
-          (n) => n.type === "STATUS_CHANGED" && n.message.includes("APPROVED"),
+          (n) => n.type === "STATUS_CHANGED" && n.message.includes("approved"),
         ).length;
         expect(afterCount, "the in-app notification must still be delivered with email notifications disabled").toBe(
           beforeCount + 1,
@@ -232,6 +266,57 @@ defineQualityTest(
       });
     } finally {
       await collabCtx.dispose();
+    }
+  },
+);
+
+defineQualityTest(
+  {
+    id: "collaboration.notification-triggers-fire-for-defined-events.a-failed-notification-never-fails-the-saved-change",
+    title: "when notifying one collaborator fails (their account deleted a moment ago), the change is still saved and reported as saved, and everyone else is still notified",
+    objective:
+      "Confirms (TS-194) that notifications are best effort: with writing a notification for one collaborator failing the way it does when their account was just deleted, sharing the plan for review and approving it both return 200, adding a guest after approval returns 201, and the other collaborator still gets PLAN_SHARED, STATUS_CHANGED and GUEST_ADDED -- while the failing collaborator gets nothing and no error reaches the planner.",
+    expectedOutcome:
+      "Share for review: 200; approve: 200; add guest: 201 with the guest saved. The working collaborator has PLAN_SHARED, STATUS_CHANGED and GUEST_ADDED notifications; the failing one has none.",
+    requirementIds: ["REQ-COLLABORATION-NOTIFICATIONS"],
+    tags: ["@mutating", "@feature:collaboration", "@risk:high", "@suite:regression"],
+  },
+  async ({ managedWedding, weddingData, context, browser }, testInfo) => {
+    const w = managedWedding.id;
+    await weddingData.createGuest(w, uniquePersonName(testInfo.workerIndex));
+    await weddingData.createTable(w, { label: "Table A", capacity: 4 });
+    const generated = await weddingData.generatePlanVersion(w);
+    expect(generated.isComplete).toBe(true);
+
+    const gone = await signUpFreshAccountInNewContext(browser, testInfo.workerIndex, "notify-gone");
+    const present = await signUpFreshAccountInNewContext(browser, testInfo.workerIndex, "notify-present");
+    let broken: Awaited<ReturnType<typeof breakNotificationsFor>> | undefined;
+    try {
+      await weddingData.addCollaborator(w, gone.email, "EDIT");
+      await weddingData.addCollaborator(w, present.email, "EDIT");
+      broken = await breakNotificationsFor(gone.email);
+
+      await test.step("Sharing and approving the plan are saved and reported as saved", async () => {
+        expect((await weddingData.setPlanVersionStatus(w, generated.id, "IN_REVIEW")).status).toBe(200);
+        expect((await weddingData.setPlanVersionStatus(w, generated.id, "APPROVED")).status).toBe(200);
+      });
+
+      await test.step("Adding a guest after approval is saved and reported as saved", async () => {
+        const res = await context.request.post(`/api/v1/weddings/${w}/guests`, { data: uniquePersonName(testInfo.workerIndex) });
+        expect(res.status()).toBe(201);
+        const { guest } = (await res.json()) as { guest: { id: string } };
+        expect(guest.id).toBeTruthy();
+      });
+
+      await test.step("The other collaborator was still told about each; the failing one has nothing", async () => {
+        const types = (await notifications(present.context.request)).map((n) => n.type);
+        expect(types).toEqual(expect.arrayContaining(["PLAN_SHARED", "STATUS_CHANGED", "GUEST_ADDED"]));
+        expect(await notifications(gone.context.request)).toHaveLength(0);
+      });
+    } finally {
+      await broken?.restore();
+      await gone.context.close();
+      await present.context.close();
     }
   },
 );

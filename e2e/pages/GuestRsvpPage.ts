@@ -66,7 +66,8 @@ export class GuestRsvpPage extends BasePage {
   }
 
   notFoundMessage() {
-    return this.page.getByText("This RSVP link doesn't exist.", { exact: true });
+    // TS-177: also shown for an older link once the couple made a new one.
+    return this.page.getByText(/^This RSVP link isn't active\./);
   }
 
   closedMessage() {
@@ -74,17 +75,39 @@ export class GuestRsvpPage extends BasePage {
   }
 
   successBanner() {
-    return this.page.getByText(
-      "Thanks — your RSVP has been recorded. You can come back to this link any time to update it.",
-      { exact: true },
-    );
+    // TS-177: the rest of the line says until when the answer can be changed.
+    return this.page.getByText(/^Thanks — your RSVP has been recorded\. You can come back to this link to change it/);
   }
 
   /** Whether the whole form is disabled -- true once RSVP responses have closed (the enclosing
    * `<fieldset disabled>`), checked against the headcount input as a representative field rather
    * than every single one. */
   async isFormDisabled(): Promise<boolean> {
-    return this.headcountInput().isDisabled();
+    // TS-191: the attending button rather than the party size -- the party size isn't shown for a
+    // guest who hasn't answered.
+    return this.attendingButton().isDisabled();
+  }
+
+  /** TS-191: which answer is shown as picked -- null when neither is. */
+  async chosenAnswer(): Promise<"CONFIRMED" | "DECLINED" | null> {
+    if ((await this.attendingButton().getAttribute("aria-pressed")) === "true") return "CONFIRMED";
+    if ((await this.decliningButton().getAttribute("aria-pressed")) === "true") return "DECLINED";
+    return null;
+  }
+
+  /** TS-191: a closed page for a guest who never answered says so. */
+  noResponseOnFile() {
+    return this.page.getByText("No response on file.", { exact: true });
+  }
+
+  /** TS-191: the message shown when Submit is pressed before picking an answer. */
+  chooseAnswerFirstError() {
+    return this.page.getByRole("alert").filter({ hasText: /^Choose “Joyfully attending” or “Regretfully declining” first\.$/ });
+  }
+
+  /** TS-191: presses Submit without waiting for anything to be sent (it may be refused on the page). */
+  async pressSubmit(): Promise<void> {
+    await this.submitButton().click();
   }
 
   /**
@@ -127,14 +150,15 @@ export class GuestRsvpPage extends BasePage {
    */
   private async setAttending(attending: "CONFIRMED" | "DECLINED"): Promise<void> {
     const button = attending === "CONFIRMED" ? this.attendingButton() : this.decliningButton();
-    const confirmedFieldsExpected = attending === "CONFIRMED";
     const deadline = Date.now() + 15_000;
-    const matchesExpected = async () => (await this.headcountInput().count()) > 0 === confirmedFieldsExpected;
+    // TS-191: checked on the chosen button itself. A guest who hasn't answered starts with neither
+    // choice picked and no party-size box, so "the box isn't there" no longer proves Decline took.
+    const matchesExpected = async () => (await button.getAttribute("aria-pressed")) === "true";
     let lastConfirmedFieldsPresent: boolean | undefined;
     while (Date.now() < deadline) {
       await button.click();
       lastConfirmedFieldsPresent = (await this.headcountInput().count()) > 0;
-      if (lastConfirmedFieldsPresent === confirmedFieldsExpected) {
+      if (await matchesExpected()) {
         // Finding #2: don't trust an instantaneous match -- a stale double-fetch response can
         // still be in flight and clobber it moments later. Re-check after a settle window (well
         // past the ~100ms the diagnostic script observed the revert land in) before returning; if
@@ -178,11 +202,52 @@ export class GuestRsvpPage extends BasePage {
     if (input.notes !== undefined) {
       await this.notesInput().fill(input.notes);
     }
-    await Promise.all([
+    await this.submitAsShown();
+  }
+
+  /** TS-174: picks attending/declining on its own, for a test that fills the form step by step. */
+  async choose(attending: "CONFIRMED" | "DECLINED"): Promise<void> {
+    await this.setAttending(attending);
+  }
+
+  /** TS-174: types a party size (only shown while attending). */
+  async fillPartySize(headcount: number): Promise<void> {
+    await this.headcountInput().fill(String(headcount));
+  }
+
+  /** TS-174: types who's coming along (only shown while the party is bigger than one). */
+  async fillPlusOneNames(names: string): Promise<void> {
+    await this.plusOneNamesInput().fill(names);
+  }
+
+  /** TS-174: ticks "need an accessible seat" (only shown while attending). */
+  async checkAccessibleSeat(): Promise<void> {
+    await this.accessibleTableCheckbox().check();
+  }
+
+  /** TS-174: the plus-one names field (shown only while the party is bigger than one). */
+  plusOneNamesField() {
+    return this.plusOneNamesInput();
+  }
+
+  /** Submits the form as it stands; TS-174: returns what the page actually sent. */
+  async submitAsShown(): Promise<Record<string, unknown>> {
+    const [response] = await Promise.all([
       this.page.waitForResponse(
         (res) => res.request().method() === "POST" && /\/api\/v1\/rsvp\/[^/]+$/.test(new URL(res.url()).pathname),
       ),
       this.submitButton().click(),
     ]);
+    return response.request().postDataJSON() as Record<string, unknown>;
+  }
+
+  /** TS-166: shown when the page couldn't load (as opposed to the link not existing). */
+  tryAgainButton() {
+    return this.page.getByRole("button", { name: "Try again", exact: true });
+  }
+
+  /** TS-170: empties the party-size box (a guest deleting the number before changing their mind). */
+  async clearPartySize(): Promise<void> {
+    await this.headcountInput().fill("");
   }
 }

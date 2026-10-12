@@ -42,11 +42,20 @@
 // wedding never reaches them. Critically, they are matched on the marker ONLY, never on
 // `sourceWeddingId IS NULL`: a template legitimately orphaned by a real planner deleting its source
 // wedding is a supported product state, not test residue, and must never be swept.
+//
+// TS-215: so are the notification-breaking triggers and functions a killed run can leave behind
+// (named pw_fail_notify_<test account id>, matched on that exact shape -- see sweepNotificationTriggers).
+//
+// TS-192: rate-limit counters the run left behind are cleared too -- only rows whose key holds a
+// made-up test network address (198.18.x.x / 198.19.x.x, from uniqueTestAddress), a test account's
+// email (@example.invalid) or a test account's id. Those can only have come from this suite, and
+// leaving them for a day meant a later run that happened to reuse an address started out limited.
+// Same guards as everything else here: never production, only a local database, dry run honoured.
 
 import { Pool } from "pg";
 import { getEnv } from "./env";
-import { resolveIsProduction } from "./productionGuard";
-import { TEST_DATA_MARKER } from "../data/ids";
+import { isLocalDatabaseUrl, resolveIsProduction } from "./productionGuard";
+import { TEST_ADDRESS_PREFIXES, TEST_DATA_MARKER } from "../data/ids";
 import { TEST_ACCOUNT_EMAIL_DOMAIN } from "./auth";
 import { resolveDatabaseUrl } from "./testDatabase";
 
@@ -59,8 +68,69 @@ interface SweepRow {
   name: string;
 }
 
+/** TS-215: exactly the names breakNotificationsFor (testDatabase.ts) gives its trigger and function. */
+export const TEST_TRIGGER_NAME = /^pw_fail_notify_[0-9a-f]{32}$/;
+
+/**
+ * TS-215: drops the triggers and functions testDatabase.ts's breakNotificationsFor makes. The test
+ * removes them in its own `finally`, but a run killed part-way never gets there, and every later
+ * notification for that account then failed in the local database. Only names matching
+ * TEST_TRIGGER_NAME exactly (a test account's id), so nothing else can be touched. Logged, never
+ * fails the run.
+ */
+async function sweepNotificationTriggers(pool: Pool, dryRun: boolean): Promise<void> {
+  try {
+    const { rows: triggers } = await pool.query<{ name: string }>(
+      `SELECT t.tgname AS name FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid
+       WHERE c.relname = 'notifications' AND NOT t.tgisinternal AND t.tgname LIKE 'pw\\_fail\\_notify\\_%'`,
+    );
+    const { rows: functions } = await pool.query<{ name: string }>(
+      `SELECT p.proname AS name FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+       WHERE n.nspname = current_schema() AND p.proname LIKE 'pw\\_fail\\_notify\\_%'`,
+    );
+    const triggerNames = triggers.map((t) => t.name).filter((n) => TEST_TRIGGER_NAME.test(n));
+    const functionNames = functions.map((f) => f.name).filter((n) => TEST_TRIGGER_NAME.test(n));
+    if (triggerNames.length === 0 && functionNames.length === 0) return;
+    if (dryRun) {
+      console.log(`[teardown-sweep] DRY RUN -- ${triggerNames.length} test trigger(s) and ${functionNames.length} test function(s) would be dropped.`);
+      return;
+    }
+    for (const name of triggerNames) await pool.query(`DROP TRIGGER IF EXISTS ${name} ON "notifications"`);
+    for (const name of functionNames) await pool.query(`DROP FUNCTION IF EXISTS ${name}()`);
+    console.log(`[teardown-sweep] Dropped ${triggerNames.length} test trigger(s) and ${functionNames.length} test function(s).`);
+  } catch (err) {
+    console.warn(`[teardown-sweep] Test trigger sweep failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+/** TS-215: projects that never touch the database (no app, no browser). */
+const DATABASE_FREE_PROJECTS = new Set(["framework-unit", "unit"]);
+
+/**
+ * TS-215: the projects named on the command line (`--project=x` or `--project x`), or null when
+ * none were (every project runs). Playwright runs this teardown for any run, whatever projects it
+ * selects -- so a quick unit-test run used to sweep away every test account while a browser run in
+ * another terminal was still using them.
+ */
+export function selectedProjects(argv: readonly string[]): string[] | null {
+  const names: string[] = [];
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg.startsWith("--project=")) names.push(arg.slice("--project=".length));
+    else if (arg === "--project" && i + 1 < argv.length) names.push(argv[++i]);
+  }
+  return names.length > 0 ? names : null;
+}
+
+/** TS-215: true when only database-free projects were selected -- then there's nothing to sweep. */
+export function onlyDatabaseFreeProjects(argv: readonly string[]): boolean {
+  const names = selectedProjects(argv);
+  return names !== null && names.every((n) => DATABASE_FREE_PROJECTS.has(n));
+}
+
 export default async function globalTeardown(): Promise<void> {
   const dryRun = process.env.PW_TEARDOWN_SWEEP === DRY_RUN_VALUE;
+  if (onlyDatabaseFreeProjects(process.argv)) return;
 
   let pool: Pool | undefined;
   try {
@@ -78,8 +148,17 @@ export default async function globalTeardown(): Promise<void> {
       console.warn("[teardown-sweep] SKIPPED: no DATABASE_URL in the environment or the root .env.");
       return;
     }
+    // TS-172: only ever a local (or CI) database.
+    if (!isLocalDatabaseUrl(connectionString)) {
+      console.warn("[teardown-sweep] REFUSED: DATABASE_URL isn't a local database.");
+      return;
+    }
 
     pool = new Pool({ connectionString });
+
+    // TS-215: notification-breaking triggers (testDatabase.ts's breakNotificationsFor) left by a run
+    // killed before the test's own `finally` put things back.
+    await sweepNotificationTriggers(pool, dryRun);
 
     // Guard 1: marker match only. This predicate is the whole safety model -- it is the single
     // place that decides a row may be deleted, and it can only ever match names ids.ts produced.
@@ -104,7 +183,21 @@ export default async function globalTeardown(): Promise<void> {
       [TEST_ACCOUNT_EMAIL_DOMAIN],
     );
 
-    if (weddings.length === 0 && templates.length === 0 && users.length === 0) {
+    // TS-192: counters keyed on a test address, a test email or a test account's id. Keys end in
+    // ":<address>", ":<email>" or ":<user id>" (apps/web/src/lib/rate-limit.ts); ids are generated
+    // by the database and hold no LIKE wildcards.
+    const counterPatterns = [
+      ...TEST_ADDRESS_PREFIXES.map((prefix) => `%:${prefix}%`),
+      `%${TEST_ACCOUNT_EMAIL_DOMAIN}%`,
+      ...users.map((u) => `%:${u.id}`),
+    ];
+    const { rows: counterRows } = await pool.query<{ n: number }>(
+      `SELECT COUNT(*)::int AS n FROM "rate_limit_counters" WHERE key LIKE ANY($1::text[])`,
+      [counterPatterns],
+    );
+    const counters = counterRows[0]?.n ?? 0;
+
+    if (weddings.length === 0 && templates.length === 0 && users.length === 0 && counters === 0) {
       console.log("[teardown-sweep] Nothing to sweep -- no test-created rows remain.");
       return;
     }
@@ -113,7 +206,8 @@ export default async function globalTeardown(): Promise<void> {
     if (dryRun) {
       console.log(
         `[teardown-sweep] DRY RUN -- ${weddings.length} wedding(s), ${templates.length} template(s) and ` +
-          `${users.length} test account(s) would be deleted. Unset PW_TEARDOWN_SWEEP to actually delete them.`,
+          `${users.length} test account(s) and ${counters} test rate-limit counter(s) would be deleted. ` +
+          `Unset PW_TEARDOWN_SWEEP to actually delete them.`,
       );
       for (const row of weddings.slice(0, 5)) console.log(`  wedding:  "${row.name}" (${row.id})`);
       if (weddings.length > 5) console.log(`  ... and ${weddings.length - 5} more weddings`);
@@ -143,14 +237,26 @@ export default async function globalTeardown(): Promise<void> {
     // TS-103: accounts last. User is the root of the cascade, so this also catches any wedding or
     // template belonging to a test account that the marker-scoped statements above did not match
     // (e.g. a row created before the marker existed, or one named outside ids.ts entirely).
+    // TS-187: the database no longer deletes a wedding along with its owner's account (ON DELETE
+    // RESTRICT), so any wedding a test account still owns goes first.
+    await pool.query(
+      `DELETE FROM "weddings" WHERE "ownerId" IN (SELECT id FROM "users" WHERE email LIKE '%' || $1)`,
+      [TEST_ACCOUNT_EMAIL_DOMAIN],
+    );
     const { rowCount: usersDeleted } = await pool.query(
       `DELETE FROM "users" WHERE email LIKE '%' || $1`,
       [TEST_ACCOUNT_EMAIL_DOMAIN],
     );
+    // TS-192: the run's rate-limit counters (see the note at the top).
+    const { rowCount: countersDeleted } = await pool.query(
+      `DELETE FROM "rate_limit_counters" WHERE key LIKE ANY($1::text[])`,
+      [counterPatterns],
+    );
 
     console.log(
       `[teardown-sweep] Deleted ${weddingsDeleted ?? 0} marker-tagged wedding(s), ` +
-        `${templatesDeleted ?? 0} template(s) and ${usersDeleted ?? 0} test account(s).`,
+        `${templatesDeleted ?? 0} template(s), ${usersDeleted ?? 0} test account(s) and ` +
+        `${countersDeleted ?? 0} test rate-limit counter(s).`,
     );
   } catch (err) {
     // Guard 4: never fail the run over cleanup.

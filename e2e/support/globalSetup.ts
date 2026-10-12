@@ -19,6 +19,7 @@
 // read-only selection can ever get past this.
 import { getEnv } from "./env";
 import { assertMutationAllowed, selectionMayMutate } from "./productionGuard";
+import { TEST_ADDRESS_RUN_ENV, newTestAddressRunBlock } from "../data/ids";
 
 export default function globalSetup(): void {
   const env = getEnv();
@@ -29,4 +30,9 @@ export default function globalSetup(): void {
     hasMutatingSelection,
     env,
   });
+
+  // TS-192: one random starting block of test network addresses for the whole run. Environment
+  // variables set here reach every worker, so uniqueTestAddress (e2e/data/ids.ts) can give each
+  // worker process its own block without the workers talking to each other.
+  process.env[TEST_ADDRESS_RUN_ENV] ??= newTestAddressRunBlock();
 }

@@ -5,6 +5,9 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { api, ApiError, SESSION_EXPIRED_EVENT, SESSION_RESTORED_EVENT } from "@/lib/api-client";
 import { loginUrlReturningTo } from "@/lib/safe-next";
+// TS-193: the same limits the server checks (packages/shared/src/field-limits.ts).
+import { FIELD_LIMITS } from "@seatwise/shared";
+import { announceSignedIn, watchForSignIn } from "@/lib/session-sync";
 
 // TS-109: an expired session used to surface as "Your access to this wedding has been removed"
 // (the wedding page treated a 401 like a 404) and tore the page down. This says what actually
@@ -36,6 +39,14 @@ export function SessionExpiredNotice() {
     };
   }, []);
 
+  // TS-229: while the notice shows, re-check the session the moment another page signs in, or this
+  // page is shown again or regains focus -- rather than waiting for a poll (some pages have none).
+  // A successful check fires SESSION_RESTORED_EVENT (api-client), which hides the notice.
+  useEffect(() => {
+    if (!expired) return;
+    return watchForSignIn(() => api.get("/api/v1/auth/me"));
+  }, [expired]);
+
   // Signing in (or up) is exactly what this notice asks for -- never shown on those pages.
   if (!expired || pathname === "/login" || pathname === "/signup") return null;
 
@@ -46,6 +57,8 @@ export function SessionExpiredNotice() {
     try {
       // A successful sign-in fires SESSION_RESTORED_EVENT (api-client), which hides this notice.
       await api.post("/api/v1/auth/login", { email, password });
+      // TS-229: and other open pages showing this notice pick the new session up at once.
+      announceSignedIn();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't sign in.");
     } finally {
@@ -70,6 +83,7 @@ export function SessionExpiredNotice() {
           Email
         </label>
         <input
+          maxLength={FIELD_LIMITS.email}
           id="reauth-email"
           type="email"
           autoComplete="email"
@@ -83,6 +97,7 @@ export function SessionExpiredNotice() {
           Password
         </label>
         <input
+          maxLength={FIELD_LIMITS.password}
           id="reauth-password"
           type="password"
           autoComplete="current-password"
@@ -99,8 +114,10 @@ export function SessionExpiredNotice() {
         >
           {signingIn ? "Signing in…" : "Sign in here"}
         </button>
-        <Link href={loginUrlReturningTo(here)} className="underline hover:no-underline">
-          or use the sign-in page
+        {/* TS-170: in a new tab -- this page keeps whatever was being typed when the session ran
+            out, and it picks up the new session once you've signed in there. */}
+        <Link href={loginUrlReturningTo(here)} target="_blank" rel="noopener" className="underline hover:no-underline">
+          or use the sign-in page (opens a new tab)
         </Link>
       </form>
       {error && <p className="mt-1 text-center text-red-700 dark:text-red-400">{error}</p>}

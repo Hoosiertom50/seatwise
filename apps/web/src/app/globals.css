@@ -12,8 +12,32 @@
   color-scheme: light dark;
 }
 
+/* TS-257: the Appearance setting puts data-theme="light" or "dark" on <html>; with no choice saved
+   (Match my device) there's no data-theme and the device decides, as before. Tailwind's `dark:`
+   classes follow the same rule. */
+@custom-variant dark {
+  &:where([data-theme="dark"], [data-theme="dark"] *) {
+    @slot;
+  }
+  @media (prefers-color-scheme: dark) {
+    &:where(html:not([data-theme]), html:not([data-theme]) *) {
+      @slot;
+    }
+  }
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  --background: #0a0a0a;
+  --foreground: #ededed;
+  color-scheme: dark;
+}
+
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme]) {
     --background: #0a0a0a;
     --foreground: #ededed;
   }
@@ -29,5 +53,20 @@
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  /* TS-175: the Geist font the layout loads (this used to say Arial, so Geist was never used). */
+  font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
+}
+
+/* TS-175: an iPhone zooms the whole page in when a form field under 16px is focused, and every
+   field here was 14px -- including the guest's RSVP page. Phone-width screens get 16px fields. */
+@media (max-width: 640px) {
+  /* (Not file pickers: nothing is typed into them, and they size themselves from their own text.) */
+  input:not([type="file"]),
+  select,
+  textarea {
+    font-size: 16px !important;
+    /* The larger text mustn't make a field (a drop-down sizes itself to its longest choice)
+       wider than the space it's in -- on Linux's wider fonts one pushed the page sideways. */
+    max-width: 100%;
+  }
 }

@@ -1,5 +1,9 @@
 import { z } from "zod";
-import { PERSON_NAME_PATTERN, PERSON_NAME_MESSAGE } from "../validation";
+// TS-180: free text refuses hidden control characters (see ../safe-text).
+import { safeText } from "../safe-text";
+import { FIELD_LIMITS } from "../field-limits";
+import { expectedRevisionField, lengthFirst } from "./common";
+import { PERSON_NAME_PATTERN, PERSON_NAME_MESSAGE, looksLikeWebAddress, NO_WEB_ADDRESS_MESSAGE, hasMixedScriptWord, NO_MIXED_SCRIPT_MESSAGE, normalizePersonName } from "../validation";
 
 export const guestTierEnum = z.enum(["VIP", "FAMILY", "FRIEND", "PLUS_ONE", "OTHER"]);
 export type GuestTier = z.infer<typeof guestTierEnum>;
@@ -39,44 +43,51 @@ export type GuestSide = z.infer<typeof guestSideEnum>;
 export const ageCategoryEnum = z.enum(["ADULT", "CHILD", "INFANT"]);
 export type AgeCategory = z.infer<typeof ageCategoryEnum>;
 
+function guestNameField(requiredMessage: string) {
+  // TS-243: ’ ‘ ʼ and the no-break space are made plain first (see normalizePersonName).
+  return z.string().transform(normalizePersonName).pipe(lengthFirst(
+    FIELD_LIMITS.personName,
+    z
+      .string()
+      .min(1, requiredMessage)
+      .regex(PERSON_NAME_PATTERN, PERSON_NAME_MESSAGE)
+      // TS-163: a guest's name goes into their RSVP email, so -- like a planner's name (TS-156) --
+      // it can't read as a web address that the email app would turn into a link.
+      .refine((v) => !looksLikeWebAddress(v), NO_WEB_ADDRESS_MESSAGE)
+      // TS-178: nor mix look-alike letters from different alphabets in one word.
+      .refine((v) => !hasMixedScriptWord(v), NO_MIXED_SCRIPT_MESSAGE)
+  ));
+}
+
 export const createGuestSchema = z.object({
-  firstName: z
-    .string()
-    .trim()
-    .min(1, "First name is required")
-    .max(100)
-    .regex(PERSON_NAME_PATTERN, PERSON_NAME_MESSAGE),
-  lastName: z
-    .string()
-    .trim()
-    .min(1, "Last name is required")
-    .max(100)
-    .regex(PERSON_NAME_PATTERN, PERSON_NAME_MESSAGE),
-  partyName: z.string().max(200).optional().nullable(),
+  // TS-200: the length is checked first, and a name that's too long goes no further (lengthFirst).
+  firstName: guestNameField("First name is required"),
+  lastName: guestNameField("Last name is required"),
+  partyName: safeText(FIELD_LIMITS.partyName).optional().nullable(),
   headcount: z.number().int().min(1).max(20).default(1),
   tier: guestTierEnum.default("OTHER"),
   rsvpStatus: rsvpStatusEnum.default("PENDING"),
   requiresAccessibleTable: z.boolean().default(false),
   isLocked: z.boolean().default(false),
   dayOfAttendance: dayOfAttendanceEnum.default("ATTENDING"),
-  notes: z.string().max(2000).optional().nullable(),
+  notes: safeText(FIELD_LIMITS.guestNotes, { multiline: true }).optional().nullable(),
   side: guestSideEnum.default("BOTH"),
   ageCategory: ageCategoryEnum.default("ADULT"),
   // TS-17 (FR-12.4): optional -- lets a planner send/resend this guest their own RSVP link. An
   // empty string (a form field left blank) is treated the same as omitting it entirely, not as an
   // invalid email.
   email: z
-    .union([z.string().trim().max(200).email("Not a valid email address"), z.literal(""), z.null()])
+    .union([z.string().trim().max(FIELD_LIMITS.email).email("Not a valid email address"), z.literal(""), z.null()])
     .optional()
     .transform((v) => (v === "" ? null : v)),
   // TS-17 (FR-12.1): free-text "who's coming with you", only meaningful when headcount > 1.
-  plusOneNames: z.string().max(500).optional().nullable(),
+  plusOneNames: safeText(FIELD_LIMITS.plusOneNames, { multiline: true }).optional().nullable(),
 });
 export type CreateGuestInput = z.infer<typeof createGuestSchema>;
 
 // FR-7.7, extended to guests: every edit accepts the revision the client last saw, so the server
 // can detect a save that landed on top of a newer one instead of silently overwriting it.
-const expectedRevisionField = z.number().int().nonnegative().optional();
+// TS-174: bounded to what the database can store (see ./common).
 
 export const updateGuestSchema = createGuestSchema.partial().extend({
   expectedRevision: expectedRevisionField,

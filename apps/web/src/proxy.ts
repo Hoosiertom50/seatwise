@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { AUTH_COOKIE_NAME, setAuthCookie, signToken, verifyToken } from "@/lib/auth";
-import { RENEWED_TOKEN_HEADER, shouldRenew } from "@/lib/session-renewal";
+import { RENEWED_TOKEN_HEADER, sessionIdFor, shouldRenew } from "@/lib/session-renewal";
+import { BODY_TOO_LARGE_MESSAGE, declaresBodyTooLarge, isNonJsonBody } from "@/lib/json-body";
 
 // TS-94: sliding session renewal. Runs ahead of every /api/v1 request; when the caller's token is
 // valid but old enough (see session-renewal.ts), the response carries a freshly issued one -- as a
@@ -30,6 +31,14 @@ export async function proxy(req: NextRequest) {
     email: claims.email,
     authTime: claims.authTime,
     sessionVersion: claims.sessionVersion,
+    // TS-204: the same session, so "Log out" on this device still ends the renewed token. This
+    // doesn't look up whether the session was ended (no database here, so the proxy stays cheap
+    // and can run wherever the host puts it) -- instead an ended session stays on the ended list
+    // until any token renewal could issue has expired (revokedSessionKeepUntil), and every route's
+    // getAuthSession refuses it for that whole time.
+    // A token from before session ids keeps one worked out from its sign-in (sessionIdFor), not a
+    // new random one per renewal.
+    sessionId: await sessionIdFor(claims),
   });
   const response = NextResponse.next();
   if (bearer) response.headers.set(RENEWED_TOKEN_HEADER, renewed);
@@ -48,9 +57,18 @@ function refuseCrossSiteWrite(req: NextRequest): NextResponse | null {
   if (req.headers.get("sec-fetch-site") === "cross-site") {
     return NextResponse.json({ error: "Requests from other sites aren't accepted." }, { status: 403 });
   }
-  const type = req.headers.get("content-type");
-  if (type && !type.toLowerCase().startsWith("application/json")) {
+  // TS-172: a request with a body must say it's JSON. One with no Content-Type at all used to get
+  // through -- and a cross-site "no-cors" request can send a body without one, which (in browsers
+  // that don't send Sec-Fetch-Site) the routes would still have read as JSON. A write with no body
+  // (Generate, log out) needs no type. TS-179: the rule lives in json-body.ts, shared with readJson.
+  if (isNonJsonBody(req.headers)) {
     return NextResponse.json({ error: "Send this request as JSON." }, { status: 415 });
+  }
+  // TS-200: nor be bigger than any real request (see MAX_JSON_BODY_BYTES) -- refused by its
+  // Content-Length before any route reads it. readJson() also stops reading a body without one
+  // once it passes the limit.
+  if (declaresBodyTooLarge(req.headers)) {
+    return NextResponse.json({ error: BODY_TOO_LARGE_MESSAGE }, { status: 413 });
   }
   return null;
 }

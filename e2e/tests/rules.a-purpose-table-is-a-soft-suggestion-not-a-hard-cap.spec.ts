@@ -11,9 +11,9 @@
  *
  * Test 1 uses three Child guests and two Adult guests against a 2-seat "Kids Table" (Age
  * Category = Child) and a 3-seat plain table (zero slack, five guests total): the criterion's +6
- * bonus per matching guest always beats every other table's neutral 0, so the first two Child
- * guests (by the app's own guest-list ORDER BY lastName, firstName -- controlled here via last
- * name prefixes) fill the Kids Table, and the third Child guest overflows to the plain table
+ * bonus per matching guest always beats every other table's neutral 0, so two of the three Child
+ * guests (which two follows guest ids since TS-244, not names) fill the Kids Table, and the third
+ * Child guest overflows to the plain table
  * alongside both Adults, generation completing successfully throughout.
  *
  * Test 2 uses zero Child guests at all and two Adults against a 1-seat Kids Table and a 1-seat
@@ -98,12 +98,13 @@ defineQualityTest(
       return (await res.json()) as GenerateResponse;
     });
 
-    await test.step("Assert: the first two children are at the Kids Table, the third child and both adults are at the other table, and the plan is complete", async () => {
+    await test.step("Assert: two of the three children are at the Kids Table, the third child and both adults are at the other table, and the plan is complete", async () => {
       expect(body.planVersion.isComplete).toBe(true);
       const tableOf = (id: string) => body.planVersion.assignments.find((a) => a.guestId === id)?.tableId;
-      expect(tableOf(idKid1)).toBe(kidsTableId);
-      expect(tableOf(idKid2)).toBe(kidsTableId);
-      expect(tableOf(idKid3)).toBe(otherTableId);
+      // TS-244: which two children get the Kids Table follows guest ids now, not names.
+      const kidTables = [idKid1, idKid2, idKid3].map(tableOf);
+      expect(kidTables.filter((t) => t === kidsTableId)).toHaveLength(2);
+      expect(kidTables.filter((t) => t === otherTableId)).toHaveLength(1);
       expect(tableOf(idAdult1)).toBe(otherTableId);
       expect(tableOf(idAdult2)).toBe(otherTableId);
     });

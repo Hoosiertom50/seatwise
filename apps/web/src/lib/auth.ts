@@ -1,13 +1,50 @@
 import { SignJWT, jwtVerify } from "jose";
 import type { NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
+import { isPlaceholderSecret, normalizeSecretForCheck, sameSecret } from "@seatwise/shared";
+import { appBaseUrl } from "./app-url";
 
 const JWT_SECRET = process.env.JWT_SECRET;
 
-function getSecretKey() {
-  if (!JWT_SECRET) {
-    throw new Error("JWT_SECRET environment variable is not set");
+// TS-179: values copied from the README or .env.example (or obvious stand-ins) that must never
+// sign real sessions -- anyone who has read this public repo would know them.
+// TS-192: the list now lives in @seatwise/shared and is shared with the ENCRYPTION_KEY check
+// (packages/db/src/crypto.ts), so it also covers the published development encryption key.
+const MIN_SECRET_LENGTH = 32;
+
+/**
+ * TS-179: why this JWT_SECRET can't be used, or null if it's fine. In production (which includes
+ * `next build && next start`, as CI runs it -- CI generates a 64-character secret per run) a missing,
+ * short or placeholder secret is refused. Outside production only a missing one is, so local
+ * development keeps working with the README's example value.
+ */
+export function jwtSecretProblem(
+  secret: string | undefined,
+  nodeEnv: string | undefined,
+  encryptionKey?: string | undefined
+): string | null {
+  if (!secret) return "JWT_SECRET environment variable is not set";
+  if (nodeEnv !== "production") return null;
+  if (isPlaceholderSecret(secret)) {
+    return "JWT_SECRET is still a placeholder value -- set it to a long random value (e.g. openssl rand -hex 32).";
   }
+  // TS-204: one value for both would mean anyone who learns either can do what both protect.
+  if (sameSecret(secret, encryptionKey)) {
+    return "JWT_SECRET is the same as ENCRYPTION_KEY -- give each its own long random value (e.g. openssl rand -hex 32).";
+  }
+  // TS-204: measured without surrounding quotes or invisible characters a paste can add.
+  if (normalizeSecretForCheck(secret).length < MIN_SECRET_LENGTH) {
+    return `JWT_SECRET is shorter than ${MIN_SECRET_LENGTH} characters -- set it to a long random value (e.g. openssl rand -hex 32).`;
+  }
+  return null;
+}
+
+function getSecretKey() {
+  // TS-172 only logged a short secret; TS-179 refuses it (and a placeholder) in production, the same
+  // way ENCRYPTION_KEY is refused (packages/db/src/crypto.ts). Checked on use, not at import, so
+  // `next build` doesn't need the secret.
+  const problem = jwtSecretProblem(JWT_SECRET, process.env.NODE_ENV, process.env.ENCRYPTION_KEY);
+  if (problem) throw new Error(problem);
   return new TextEncoder().encode(JWT_SECRET);
 }
 
@@ -30,23 +67,40 @@ export const AUTH_COOKIE_NAME = "seatwise_token";
 // issue (a settle-wait candidate fix was tried and disproved first -- see the TS-62 spike branch's
 // own commit history for that ruled-out iteration).
 //
-// Derived from APP_URL instead -- the same env var and fallback the rsvp-link and invites routes
-// already use for this app's own canonical URL (apps/web/src/app/api/v1/weddings/[weddingId]/
-// guests/[guestId]/rsvp-link/route.ts, .../invites/route.ts) -- so this reflects the scheme the app
-// is actually being served over rather than guessing from the build mode. Unset in CI (defaults to
-// the same "http://localhost:3000" those two routes fall back to), so this resolves to `false`
-// there; a real deployment already sets APP_URL to its own https:// origin for those two routes, so
-// this resolves to `true` there with no new config needed.
+// Derived from the app's own address instead (TS-178: appBaseUrl in ./app-url, the same one every
+// emailed link uses), so this reflects the scheme the app is actually being served over rather than
+// guessing from the build mode. In CI that's http://localhost:3000, so this resolves to `false`
+// there; a real deployment sets APP_URL to its own https:// origin, so this resolves to `true`.
 let warnedNoAppUrl = false;
-export function isSecureCookieContext(): boolean {
-  // TS-149: on a real deployment APP_URL must be set, or the cookie quietly loses Secure and
-  // emailed links point at localhost -- say so loudly in the logs.
-  if (!process.env.APP_URL && process.env.NETLIFY && !warnedNoAppUrl) {
-    warnedNoAppUrl = true;
-    console.error("APP_URL is not set: session cookies won't be marked Secure and emailed links will be wrong.");
+
+// TS-223: "Log out on all devices" from a tab whose own session had already ended.
+export const ALREADY_SIGNED_OUT_EVERYWHERE_MESSAGE =
+  "You're already signed out here — sign in again, then use Log out on all devices.";
+
+/** TS-225: whether an address is https:// (any capitals); something that isn't an address at all
+ * (only possible locally, where APP_URL is used as typed) isn't. */
+export function secureScheme(address: string): boolean {
+  try {
+    return new URL(address).protocol === "https:";
+  } catch {
+    return false;
   }
-  const appUrl = process.env.APP_URL || "http://localhost:3000";
-  return appUrl.startsWith("https://");
+}
+
+export function isSecureCookieContext(): boolean {
+  try {
+    // TS-225: the scheme as a browser reads it -- "HTTPS://..." used to fail a startsWith check and
+    // leave the cookie without Secure.
+    return secureScheme(appBaseUrl());
+  } catch (err) {
+    // TS-149 / TS-178: a production build without a proper APP_URL -- say so loudly in the logs,
+    // and keep the cookie Secure (the safe choice for a real site) rather than failing every sign-in.
+    if (!warnedNoAppUrl) {
+      warnedNoAppUrl = true;
+      console.error(`${err instanceof Error ? err.message : String(err)} Session cookies stay Secure; emailed links won't work.`);
+    }
+    return true;
+  }
 }
 
 export interface TokenPayload {
@@ -60,12 +114,20 @@ export interface TokenPayload {
   // version is older than the account's current one has been ended (password reset, log out).
   // Absent on tokens issued before TS-155 -- treated as 0.
   sessionVersion?: number;
+  // TS-204: this session's own id (claim "sid"), so "Log out" can end just this one (see
+  // revokeSession in packages/db). A new one is made at sign-in; renewal (proxy.ts) keeps it.
+  // Absent on tokens issued before TS-204.
+  sessionId?: string;
 }
 
-export interface VerifiedToken extends TokenPayload {
+export interface VerifiedToken extends Omit<TokenPayload, "sessionId"> {
   issuedAt: number;
   authTime: number;
   sessionVersion: number;
+  /** TS-204: null on a token issued before sessions had their own id. */
+  sessionId: string | null;
+  /** TS-204: when the token expires (seconds since epoch). */
+  expiresAt: number;
 }
 
 // TS-94: a token is valid for 30 days from when it was *issued*, and an active session keeps being
@@ -84,7 +146,12 @@ export async function verifyPassword(password: string, hash: string): Promise<bo
 
 export async function signToken(payload: TokenPayload): Promise<string> {
   const now = Math.floor(Date.now() / 1000);
-  return new SignJWT({ email: payload.email, authTime: payload.authTime ?? now, sv: payload.sessionVersion ?? 0 })
+  return new SignJWT({
+    email: payload.email,
+    authTime: payload.authTime ?? now,
+    sv: payload.sessionVersion ?? 0,
+    sid: payload.sessionId ?? crypto.randomUUID(),
+  })
     .setProtectedHeader({ alg: "HS256" })
     .setSubject(payload.sub)
     .setIssuedAt(now)
@@ -94,12 +161,15 @@ export async function signToken(payload: TokenPayload): Promise<string> {
 
 export async function verifyToken(token: string): Promise<VerifiedToken | null> {
   try {
-    const { payload } = await jwtVerify(token, getSecretKey());
+    // TS-172: only the algorithm Seatwise signs with is accepted.
+    const { payload } = await jwtVerify(token, getSecretKey(), { algorithms: ["HS256"] });
     if (typeof payload.sub !== "string" || typeof payload.email !== "string") return null;
     const issuedAt = typeof payload.iat === "number" ? payload.iat : 0;
     const authTime = typeof payload.authTime === "number" ? payload.authTime : issuedAt;
     const sessionVersion = typeof payload.sv === "number" ? payload.sv : 0;
-    return { sub: payload.sub, email: payload.email, issuedAt, authTime, sessionVersion };
+    const sessionId = typeof payload.sid === "string" && payload.sid.length > 0 ? payload.sid : null;
+    const expiresAt = typeof payload.exp === "number" ? payload.exp : issuedAt + AUTH_TOKEN_TTL_SECONDS;
+    return { sub: payload.sub, email: payload.email, issuedAt, authTime, sessionVersion, sessionId, expiresAt };
   } catch {
     return null;
   }
@@ -116,4 +186,12 @@ export function setAuthCookie(response: NextResponse, token: string): void {
     path: "/",
     maxAge: AUTH_TOKEN_TTL_SECONDS,
   });
+}
+
+// TS-172: the session token goes back in a sign-in response's body only to a client that keeps it
+// itself (the mobile app, which says so with this header). A web page gets it only as the
+// httpOnly cookie -- a copy in the body is something a script injected into the page could read.
+export const BEARER_CLIENT_HEADER = "x-seatwise-client";
+export function wantsBearerToken(req: { headers: Headers }): boolean {
+  return req.headers.get(BEARER_CLIENT_HEADER) === "mobile";
 }

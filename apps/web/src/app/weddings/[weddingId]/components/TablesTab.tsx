@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { ConfirmDeleteButton } from "@/components/ConfirmDeleteButton";
+import { ConfirmDeleteButton, focusNeighbour, rowNeighbours } from "@/components/ConfirmDeleteButton";
 import { api, ApiError, apiErrorMessage } from "@/lib/api-client";
 import type {
   GuestDTO,
@@ -15,6 +15,12 @@ import type {
 } from "@seatwise/shared";
 import { compareTableLabels, GUEST_TIER_LABELS, type GuestTier } from "@seatwise/shared";
 import { useUnsavedChanges } from "@/lib/unsaved-changes";
+import { useSerialTasks } from "@/lib/serial-tasks";
+import { OPEN_EDIT_MESSAGE } from "@/lib/display-format";
+import { inReadingOrder } from "@/lib/reading-order";
+import { sameSeats, seatedHeadcountByTable, type SeatForCount } from "@/lib/table-counts";
+// TS-193: the same limits the server checks (packages/shared/src/field-limits.ts).
+import { FIELD_LIMITS } from "@seatwise/shared";
 
 const SHAPES: TableShape[] = ["ROUND", "RECTANGULAR", "SQUARE", "OVAL", "OTHER"];
 
@@ -120,11 +126,63 @@ export function TablesTab({
   ];
 
   const [tables, setTables] = useState<SeatingTableDTO[]>([]);
+  // TS-166: a table's quick saves (lock, accessible, single-side, position) run one at a time, each
+  // with the table's latest confirmed revision -- ticking two boxes quickly used to send the same
+  // revision twice, and the second was refused as "edited elsewhere".
+  const queueTableSave = useSerialTasks();
+  const tableRevisions = useRef(new Map<string, number>());
+  useEffect(() => {
+    for (const t of tables) {
+      const known = tableRevisions.current.get(t.id);
+      if (known === undefined || t.revision > known) tableRevisions.current.set(t.id, t.revision);
+    }
+  }, [tables]);
+  // TS-209: the list as it is now, for patchTable below.
+  const tablesRef = useRef(tables);
+  useEffect(() => {
+    tablesRef.current = tables;
+  }, [tables]);
+  function patchTable<T extends { table: SeatingTableDTO }>(id: string, body: Record<string, unknown>): Promise<T> {
+    return queueTableSave(async () => {
+      const sentRevision = tableRevisions.current.get(id);
+      const res = await api.patch<T>(`/api/v1/weddings/${weddingId}/tables/${id}`, {
+        ...body,
+        expectedRevision: sentRevision,
+      });
+      // TS-209: a saved change whose table couldn't be read back comes without it (and with a
+      // warning). The tables are read again for it, so the next save is sent with the table's new
+      // revision (the old one got it refused as "edited elsewhere").
+      if (!res.table) {
+        const reread = await api
+          .get<{ tables: SeatingTableDTO[] }>(`/api/v1/weddings/${weddingId}/tables`)
+          .then((r) => r.tables.find((t) => t.id === id) ?? null)
+          .catch(() => null);
+        if (reread) {
+          tableRevisions.current.set(id, reread.revision);
+          return { ...res, table: reread } as T;
+        }
+        // Couldn't read it either: the table as it was here, with this change's own table fields
+        // (not the required-guest list or the "save anyway" flags), stands in for it until the next
+        // load, and the save moved its revision on by one (only a change to the table's own fields
+        // does -- a required-guest list alone doesn't).
+        const known = tablesRef.current.find((t) => t.id === id);
+        if (!known) return res;
+        const tableFields = Object.fromEntries(Object.entries(body).filter(([k]) => k in known));
+        const revision =
+          sentRevision !== undefined && Object.keys(tableFields).length > 0 ? sentRevision + 1 : sentRevision ?? known.revision;
+        tableRevisions.current.set(id, revision);
+        return { ...res, table: { ...known, ...tableFields, revision } } as T;
+      }
+      tableRevisions.current.set(id, res.table.revision);
+      return res;
+    });
+  }
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState<"list" | "floorplan">("list");
 
   const [label, setLabel] = useState("");
-  const [capacity, setCapacity] = useState(8);
+  // TS-182: number boxes keep what was typed, so clearing one to type a new number doesn't show 0.
+  const [capacity, setCapacity] = useState("8");
   const [purpose, setPurpose] = useState("");
   const [isRestricted, setIsRestricted] = useState(false);
   const [isAccessible, setIsAccessible] = useState(false);
@@ -136,14 +194,44 @@ export function TablesTab({
   const [error, setError] = useState<string | null>(null);
   // TS-124: a table with guests seated at it in the current plan is only removed after the
   // planner confirms, from the server's own count.
-  const [confirmRemoval, setConfirmRemoval] = useState<{ id: string; message: string } | null>(null);
+  // TS-195: with the number of seated guests the message named, sent back on "Remove anyway".
+  const [confirmRemoval, setConfirmRemoval] = useState<{ id: string; message: string; seatedCount?: number } | null>(null);
   const [tableWarnings, setTableWarnings] = useState<string[]>([]);
   // TS-120: the one table (if any) whose row is open for editing.
   const [editingId, setEditingId] = useState<string | null>(null);
+  // TS-175: whether the open edit form has actually been changed -- just opening it isn't unsaved
+  // input (it used to bring up "you have unsaved changes" on its own).
+  const [editDirty, setEditDirty] = useState(false);
+  // TS-191: "Remove anyway" is working (a second press used to send the removal twice).
+  const [removingAnyway, setRemovingAnyway] = useState(false);
+  // TS-191: closes the open edit and puts focus back on that table's Edit button.
+  function closeEdit(id: string | null) {
+    setEditingId(null);
+    setEditDirty(false);
+    if (id) {
+      setTimeout(() => {
+        // TS-199: only if focus went with the closed form -- after a save that took a moment, the
+        // planner may already be somewhere else, and is left there.
+        const active = document.activeElement;
+        const lost = !active || active === document.body || !active.isConnected;
+        const button = document.getElementById(`edit-table-button-${id}`);
+        if (lost && button && button.isConnected) button.focus();
+      }, 0);
+    }
+  }
+  // TS-191: Edit access taken away while a table's edit was open -- it can't be saved any more, so
+  // it closes (and stops counting as unsaved).
+  useEffect(() => {
+    if (canEdit) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- TS-191: closes the edit form when Edit access goes.
+    setEditingId(null);
+    setEditDirty(false);
+    setConfirmRemoval(null);
+  }, [canEdit]);
 
   // FR-4.2: quick-create a standard set of tables in one action.
-  const [qcCount, setQcCount] = useState(12);
-  const [qcCapacity, setQcCapacity] = useState(8);
+  const [qcCount, setQcCount] = useState("12");
+  const [qcCapacity, setQcCapacity] = useState("8");
   const [qcShape, setQcShape] = useState<TableShape>("ROUND");
   const [qcPrefix, setQcPrefix] = useState("Table");
   const [qcCreating, setQcCreating] = useState(false);
@@ -152,47 +240,77 @@ export function TablesTab({
   // reusable template -- see save-as-template's own route comment for why EDIT access is enough.
   const [templateName, setTemplateName] = useState("");
   const [savingTemplate, setSavingTemplate] = useState(false);
-  const [savedTemplate, setSavedTemplate] = useState<SeatingTemplateDTO | null>(null);
+  // TS-216: what "Save as template" says once it's saved -- the server may have saved it but not
+  // been able to read it back (template: null), and then it says so instead of naming the tables.
+  const [savedTemplateNotice, setSavedTemplateNotice] = useState<string | null>(null);
   // TS-159: tell the page this tab has input that leaving it would lose.
-  useUnsavedChanges("tables", !!(label.trim() || purpose.trim() || templateName.trim() || editingId));
+  // TS-182: only while the forms are there (they're hidden without Edit access).
+  useUnsavedChanges("tables", canEdit && !!(label.trim() || purpose.trim() || templateName.trim() || (editingId && editDirty)));
 
   // TS-91: add a saved template's tables to this existing wedding (additive -- nothing already
   // here changes). The template list loads the first time the section is opened.
   const [myTemplates, setMyTemplates] = useState<SeatingTemplateDTO[] | null>(null);
+  // TS-182: the list couldn't be loaded -- it used to say "Loading your templates…" for good.
+  const [templatesFailed, setTemplatesFailed] = useState(false);
   const [applyTemplateId, setApplyTemplateId] = useState("");
   const [applyingTemplate, setApplyingTemplate] = useState(false);
   const [appliedMessage, setAppliedMessage] = useState<string | null>(null);
 
   // FR-4.5: capacity overview needs the current plan version's assignments, purely to display --
   // never used for anything that affects seating logic.
-  const [assignedHeadcountByTable, setAssignedHeadcountByTable] = useState<Record<string, number>>({});
+  // TS-235: the current plan's seats are kept, and the counts worked out from them and the live
+  // guest list at each render (they used to be worked out once, on load, and went stale).
+  const [currentSeats, setCurrentSeats] = useState<SeatForCount[]>([]);
+  const currentPlanId = useRef<string | null>(null);
+  const seatsRequest = useRef(0);
+  const seatsLanded = useRef(0);
+
+  // TS-235: the current plan's seats. The plan already known is read directly; when it's no longer
+  // current (or can't be read), the list is read again to find the one that is.
+  async function fetchCurrentSeats(): Promise<{ planId: string | null; seats: SeatForCount[] }> {
+    const known = currentPlanId.current;
+    let plan: PlanVersionDetailDTO | null = null;
+    if (known) {
+      plan = await api
+        .get<{ planVersion: PlanVersionDetailDTO }>(`/api/v1/weddings/${weddingId}/plan-versions/${known}`)
+        .then((r) => (r.planVersion.isCurrent ? r.planVersion : null))
+        .catch(() => null);
+    }
+    if (!plan) {
+      const versionsRes = await api.get<{ planVersions: PlanVersionDTO[] }>(`/api/v1/weddings/${weddingId}/plan-versions`);
+      // FR-5.6 (TS-8): a Comparison Draft can have a higher versionNumber than Current without
+      // replacing it, so the first (newest) row here isn't reliably Current anymore -- the
+      // capacity overview must reflect Current's assignments specifically, by isCurrent.
+      const currentId = versionsRes.planVersions.find((v) => v.isCurrent)?.id ?? versionsRes.planVersions[0]?.id;
+      if (currentId) {
+        plan = (await api.get<{ planVersion: PlanVersionDetailDTO }>(`/api/v1/weddings/${weddingId}/plan-versions/${currentId}`))
+          .planVersion;
+      }
+    }
+    return {
+      planId: plan?.id ?? null,
+      seats: (plan?.assignments ?? []).map((a) => ({ guestId: a.guestId, tableId: a.tableId, notAttending: a.notAttending })),
+    };
+  }
+
+  function takeSeats(request: number, fresh: { planId: string | null; seats: SeatForCount[] }) {
+    // An older request that came back after a newer one landed is ignored.
+    if (request < seatsLanded.current) return;
+    seatsLanded.current = request;
+    currentPlanId.current = fresh.planId;
+    setCurrentSeats((cur) => (sameSeats(cur, fresh.seats) ? cur : fresh.seats));
+  }
 
   useEffect(() => {
     (async () => {
       try {
-        const [tablesRes, versionsRes] = await Promise.all([
+        const request = ++seatsRequest.current;
+        const [tablesRes, seats] = await Promise.all([
           api.get<{ tables: SeatingTableDTO[] }>(`/api/v1/weddings/${weddingId}/tables`),
-          api.get<{ planVersions: PlanVersionDTO[] }>(`/api/v1/weddings/${weddingId}/plan-versions`),
+          fetchCurrentSeats(),
         ]);
         setTables(tablesRes.tables);
-        // FR-5.6 (TS-8): a Comparison Draft can have a higher versionNumber than Current without
-        // replacing it, so the first (newest) row here isn't reliably Current anymore -- the
-        // capacity overview must reflect Current's assignments specifically, by isCurrent.
-        const currentId =
-          versionsRes.planVersions.find((v) => v.isCurrent)?.id ?? versionsRes.planVersions[0]?.id;
-        if (currentId) {
-          const detail = await api.get<{ planVersion: PlanVersionDetailDTO }>(
-            `/api/v1/weddings/${weddingId}/plan-versions/${currentId}`
-          );
-          const byGuestId = new Map(guests.map((g) => [g.id, g]));
-          const counts: Record<string, number> = {};
-          for (const a of detail.planVersion.assignments) {
-            const guest = byGuestId.get(a.guestId);
-            if (!guest) continue;
-            counts[a.tableId] = (counts[a.tableId] ?? 0) + guest.headcount;
-          }
-          setAssignedHeadcountByTable(counts);
-        }
+        takeSeats(request, seats);
       } catch {
         setError("Couldn't load tables.");
       } finally {
@@ -202,8 +320,35 @@ export function TablesTab({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [weddingId]);
 
+  // TS-235: the current plan's seats every 4 seconds while this tab is open (as the Plan tab does
+  // for its tables), so a plan generated, a guest moved or a seat freed elsewhere shows here.
+  useEffect(() => {
+    const interval = setInterval(async () => {
+      const request = ++seatsRequest.current;
+      try {
+        takeSeats(request, await fetchCurrentSeats());
+      } catch {
+        // Best effort -- the next tick tries again.
+      }
+    }, 4000);
+    return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- TS-235: the helpers only use setters and refs.
+  }, [weddingId]);
+
+  const assignedHeadcountByTable = seatedHeadcountByTable(
+    currentSeats,
+    guests,
+    tables.map((t) => t.id)
+  );
+
   async function onAdd(e: React.FormEvent) {
     e.preventDefault();
+    // TS-199: an emptied Capacity box was sent as 0 and refused with a message that didn't say
+    // which box -- now it says so before anything is sent.
+    if (capacity.trim() === "") {
+      setError("Capacity: enter how many seats the table has.");
+      return;
+    }
     setError(null);
     setAdding(true);
     try {
@@ -211,7 +356,7 @@ export function TablesTab({
         `/api/v1/weddings/${weddingId}/tables`,
         {
           label,
-          capacity,
+          capacity: Number(capacity),
           purpose: purpose || null,
           isRestricted,
           isAccessible,
@@ -221,9 +366,10 @@ export function TablesTab({
           shape,
         }
       );
-      setTables([...tables, table].sort((a, b) => compareTableLabels(a.label, b.label)));
+      // TS-166: built from the list as it is now, so another change made meanwhile isn't lost.
+      setTables((cur) => [...cur, table].sort((a, b) => compareTableLabels(a.label, b.label)));
       setLabel("");
-      setCapacity(8);
+      setCapacity("8");
       setPurpose("");
       setIsRestricted(false);
       setIsAccessible(false);
@@ -240,14 +386,28 @@ export function TablesTab({
 
   async function onQuickCreate(e: React.FormEvent) {
     e.preventDefault();
+    // TS-199: as above, an emptied box says which one.
+    if (qcCount.trim() === "") {
+      setError("How many: enter how many tables to make.");
+      return;
+    }
+    if (qcCapacity.trim() === "") {
+      setError("Seats each: enter how many seats each table has.");
+      return;
+    }
     setError(null);
     setQcCreating(true);
     try {
-      const { tables: created } = await api.post<{ tables: SeatingTableDTO[] }>(
+      const res = await api.post<{ tables: SeatingTableDTO[] | null; warnings?: string[] }>(
         `/api/v1/weddings/${weddingId}/tables/quick-create`,
-        { count: qcCount, capacity: qcCapacity, shape: qcShape, labelPrefix: qcPrefix }
+        { count: Number(qcCount), capacity: Number(qcCapacity), shape: qcShape, labelPrefix: qcPrefix }
       );
-      setTables([...tables, ...created].sort((a, b) => compareTableLabels(a.label, b.label)));
+      // TS-216: the server's notes are shown, and when the new tables didn't come back the list is
+      // fetched again rather than left as it was (it looked as if nothing had been added).
+      setTableWarnings(res.warnings ?? []);
+      const created = res.tables;
+      if (created) setTables((cur) => [...cur, ...created].sort((a, b) => compareTableLabels(a.label, b.label)));
+      else void refetchTables();
     } catch (err) {
       setError(apiErrorMessage(err, [], "Couldn't create those tables."));
     } finally {
@@ -261,15 +421,22 @@ export function TablesTab({
   async function onSaveAsTemplate(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
-    setSavedTemplate(null);
+    setSavedTemplateNotice(null);
     setSavingTemplate(true);
     try {
-      const { template } = await api.post<{ template: SeatingTemplateDTO }>(
+      // TS-216: template is null when it was saved but couldn't be read back just then.
+      const { template } = await api.post<{ template: SeatingTemplateDTO | null; warnings?: string[] }>(
         `/api/v1/weddings/${weddingId}/save-as-template`,
         { name: templateName }
       );
-      setSavedTemplate(template);
+      setSavedTemplateNotice(
+        template
+          ? `Saved “${template.name}” (${template.tableCount} table${template.tableCount === 1 ? "" : "s"}) — pick it when creating a new wedding from your dashboard.`
+          : `Saved “${templateName.trim()}” — refresh the page to see it.`
+      );
       setTemplateName("");
+      // TS-182: "Add tables from a template" shows the new one straight away.
+      if (myTemplates !== null || templatesFailed) void loadMyTemplates(true);
     } catch (err) {
       setError(apiErrorMessage(err, [], "Couldn't save that template."));
     } finally {
@@ -277,14 +444,27 @@ export function TablesTab({
     }
   }
 
-  async function loadMyTemplates() {
-    if (myTemplates) return;
+  // TS-216: the table list fetched again after a change whose answer didn't include it. Best
+  // effort -- the server's note already says to refresh if this fails too.
+  async function refetchTables() {
+    try {
+      const { tables: fresh } = await api.get<{ tables: SeatingTableDTO[] }>(`/api/v1/weddings/${weddingId}/tables`);
+      setTables(fresh);
+    } catch {
+      // The warning shown says to refresh the page.
+    }
+  }
+
+  async function loadMyTemplates(force = false) {
+    if (myTemplates && !force) return;
+    setTemplatesFailed(false);
     try {
       const { templates } = await api.get<{ templates: SeatingTemplateDTO[] }>(`/api/v1/templates`);
       setMyTemplates(templates);
-      if (templates[0]) setApplyTemplateId(templates[0].id);
-    } catch (err) {
-      setError(apiErrorMessage(err, [], "Couldn't load your templates."));
+      // Keeps the one already picked, if it's still there.
+      setApplyTemplateId((cur) => (templates.some((t) => t.id === cur) ? cur : (templates[0]?.id ?? "")));
+    } catch {
+      setTemplatesFailed(true);
     }
   }
 
@@ -295,11 +475,16 @@ export function TablesTab({
     setAppliedMessage(null);
     setApplyingTemplate(true);
     try {
-      const res = await api.post<{ addedCount: number; tables: SeatingTableDTO[] }>(
+      const res = await api.post<{ addedCount: number; tables: SeatingTableDTO[] | null; warnings?: string[] }>(
         `/api/v1/weddings/${weddingId}/apply-template`,
         { templateId: applyTemplateId }
       );
-      setTables(res.tables);
+      // TS-209: null when the tables were added but the list couldn't be read back just then.
+      // TS-216: then the server's note is shown and the list fetched again -- before, the old list
+      // stayed on screen under "Added 4 tables".
+      setTableWarnings(res.warnings ?? []);
+      if (res.tables) setTables(res.tables);
+      else void refetchTables();
       const name = myTemplates?.find((t) => t.id === applyTemplateId)?.name ?? "the template";
       setAppliedMessage(
         `Added ${res.addedCount} table${res.addedCount === 1 ? "" : "s"} from “${name}”. Tables already here weren't changed.`
@@ -311,20 +496,35 @@ export function TablesTab({
     }
   }
 
-  async function onRemove(id: string, confirmed = false) {
+  // TS-195: `confirmedSeatedCount` is how many seated guests the person agreed to leave unassigned
+  // -- if that's changed by the time it's removed, the server asks again with the new number.
+  async function onRemove(id: string, confirmed = false, confirmedSeatedCount?: number) {
     setError(null);
+    if (confirmed) setRemovingAnyway(true);
     try {
-      await api.delete(`/api/v1/weddings/${weddingId}/tables/${id}${confirmed ? "?confirm=true" : ""}`);
+      const query = confirmed
+        ? `?confirm=true${confirmedSeatedCount !== undefined ? `&seatedCount=${confirmedSeatedCount}` : ""}`
+        : "";
+      await api.delete(`/api/v1/weddings/${weddingId}/tables/${id}${query}`);
       setConfirmRemoval(null);
       setTables((current) => current.filter((t) => t.id !== id));
+      // TS-235: its seats go at once -- "Assigned" used to keep counting the guests seated there.
+      setCurrentSeats((cur) => cur.filter((s) => s.tableId !== id));
+      // TS-191: a removed table's open edit goes with it -- it used to keep counting as unsaved,
+      // with no form left on screen to save or cancel. (The form also reports "not changed" as it
+      // closes; see TableEditForm.)
+      setEditingId((cur) => (cur === id ? null : cur));
     } catch (err) {
       // TS-124: guests are seated here -- ask rather than silently unseat them.
       if (err instanceof ApiError && err.status === 409 && err.data?.needsConfirmation) {
-        setConfirmRemoval({ id, message: err.message });
+        const seatedCount = typeof err.data?.seatedCount === "number" ? (err.data.seatedCount as number) : undefined;
+        setConfirmRemoval({ id, message: err.message, seatedCount });
         return;
       }
       setConfirmRemoval(null);
       setError(apiErrorMessage(err, [], "Couldn't remove that table."));
+    } finally {
+      if (confirmed) setRemovingAnyway(false);
     }
   }
 
@@ -340,19 +540,15 @@ export function TablesTab({
 
   async function onToggleLock(id: string, isLocked: boolean) {
     const prev = tables;
-    const expectedRevision = prev.find((t) => t.id === id)?.revision;
     setTables((cur) => cur.map((t) => (t.id === id ? { ...t, isLocked } : t)));
     try {
-      const { table } = await api.patch<{ table: SeatingTableDTO }>(
-        `/api/v1/weddings/${weddingId}/tables/${id}`,
-        { isLocked, expectedRevision }
-      );
+      const { table } = await patchTable<{ table: SeatingTableDTO }>(id, { isLocked });
       setTables((cur) => cur.map((t) => (t.id === id ? table : t)));
     } catch (err) {
       const fresh = conflictTable(err);
       if (fresh) {
         setTables((cur) => cur.map((t) => (t.id === id ? fresh : t)));
-        setError(`"${fresh.label}" was just edited elsewhere — showing the latest. Try again if you still want to make this change.`);
+        setError(`"${fresh.label}" changed since you loaded it (maybe in another tab, or by someone else) — showing the latest. Try again if you still want to make this change.`);
       } else {
         // TS-151: put back only this table -- other rows may have changed meanwhile.
         setTables((cur) => cur.map((t) => (t.id === id ? (prev.find((p) => p.id === id) ?? t) : t)));
@@ -366,20 +562,16 @@ export function TablesTab({
   // this just surfaces whatever warning message came back.
   async function onToggleAccessible(id: string, next: boolean) {
     const prev = tables;
-    const expectedRevision = prev.find((t) => t.id === id)?.revision;
     setTables((cur) => cur.map((t) => (t.id === id ? { ...t, isAccessible: next } : t)));
     try {
-      const res = await api.patch<{ table: SeatingTableDTO; warnings: string[] }>(
-        `/api/v1/weddings/${weddingId}/tables/${id}`,
-        { isAccessible: next, expectedRevision }
-      );
+      const res = await patchTable<{ table: SeatingTableDTO; warnings: string[] }>(id, { isAccessible: next });
       setTables((cur) => cur.map((t) => (t.id === id ? res.table : t)));
       setTableWarnings(res.warnings ?? []);
     } catch (err) {
       const fresh = conflictTable(err);
       if (fresh) {
         setTables((cur) => cur.map((t) => (t.id === id ? fresh : t)));
-        setError(`"${fresh.label}" was just edited elsewhere — showing the latest. Try again if you still want to make this change.`);
+        setError(`"${fresh.label}" changed since you loaded it (maybe in another tab, or by someone else) — showing the latest. Try again if you still want to make this change.`);
       } else {
         // TS-151: put back only this table -- other rows may have changed meanwhile.
         setTables((cur) => cur.map((t) => (t.id === id ? (prev.find((p) => p.id === id) ?? t) : t)));
@@ -392,19 +584,15 @@ export function TablesTab({
   // a hard-rule reassignment side effect, so there's nothing else to surface here.
   async function onToggleSingleSideOnly(id: string, next: boolean) {
     const prev = tables;
-    const expectedRevision = prev.find((t) => t.id === id)?.revision;
     setTables((cur) => cur.map((t) => (t.id === id ? { ...t, singleSideOnly: next } : t)));
     try {
-      const { table } = await api.patch<{ table: SeatingTableDTO }>(
-        `/api/v1/weddings/${weddingId}/tables/${id}`,
-        { singleSideOnly: next, expectedRevision }
-      );
+      const { table } = await patchTable<{ table: SeatingTableDTO }>(id, { singleSideOnly: next });
       setTables((cur) => cur.map((t) => (t.id === id ? table : t)));
     } catch (err) {
       const fresh = conflictTable(err);
       if (fresh) {
         setTables((cur) => cur.map((t) => (t.id === id ? fresh : t)));
-        setError(`"${fresh.label}" was just edited elsewhere — showing the latest. Try again if you still want to make this change.`);
+        setError(`"${fresh.label}" changed since you loaded it (maybe in another tab, or by someone else) — showing the latest. Try again if you still want to make this change.`);
       } else {
         // TS-151: put back only this table -- other rows may have changed meanwhile.
         setTables((cur) => cur.map((t) => (t.id === id ? (prev.find((p) => p.id === id) ?? t) : t)));
@@ -415,13 +603,9 @@ export function TablesTab({
 
   async function onMove(id: string, x: number, y: number) {
     const before = tables.find((t) => t.id === id);
-    const expectedRevision = before?.revision;
     setTables((cur) => cur.map((t) => (t.id === id ? { ...t, positionX: x, positionY: y } : t)));
     try {
-      const { table } = await api.patch<{ table: SeatingTableDTO }>(
-        `/api/v1/weddings/${weddingId}/tables/${id}`,
-        { positionX: x, positionY: y, expectedRevision }
-      );
+      const { table } = await patchTable<{ table: SeatingTableDTO }>(id, { positionX: x, positionY: y });
       // FR-7.7: sync the server's incremented revision back so the *next* drag's expectedRevision
       // is still accurate -- without this, every move after the first would be rejected as stale.
       setTables((cur) => cur.map((t) => (t.id === id ? table : t)));
@@ -433,7 +617,7 @@ export function TablesTab({
       if (fresh) {
         setTables((cur) => cur.map((t) => (t.id === id ? fresh : t)));
         setError(
-          `"${fresh.label}" was moved by someone else just before you — showing where they put it. Drag it again if you still want it moved.`
+          `"${fresh.label}" was moved since you loaded it (maybe in another tab, or by someone else) — showing where it is now. Drag it again if you still want it moved.`
         );
       } else {
         // TS-110: put the table back where the server still has it -- leaving it at the dropped
@@ -457,7 +641,7 @@ export function TablesTab({
     <div>
       {!canEdit && (
         <p className="mb-4 rounded-md bg-neutral-100 dark:bg-neutral-800 px-3 py-2 text-sm text-neutral-600 dark:text-neutral-300">
-          You have view-only access to this wedding's tables — adding, editing, and moving tables
+          You have view-only access to this wedding&apos;s tables — adding, editing, and moving tables
           is turned off.
         </p>
       )}
@@ -473,6 +657,7 @@ export function TablesTab({
             Table name
           </label>
           <input
+            maxLength={FIELD_LIMITS.tableLabel}
             id="table-name"
             className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
             placeholder="Table 1"
@@ -486,13 +671,15 @@ export function TablesTab({
             Capacity
           </label>
           <input
+            inputMode="numeric"
             id="table-capacity"
             type="number"
             min={1}
             max={50}
+            required
             className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
             value={capacity}
-            onChange={(e) => setCapacity(Number(e.target.value))}
+            onChange={(e) => setCapacity(e.target.value)}
           />
         </div>
         <div>
@@ -518,6 +705,7 @@ export function TablesTab({
             Purpose (optional)
           </label>
           <input
+            maxLength={FIELD_LIMITS.tablePurpose}
             id="table-purpose"
             className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
             placeholder="e.g. Kids table, Head table"
@@ -620,13 +808,15 @@ export function TablesTab({
               How many
             </label>
             <input
+              inputMode="numeric"
               id="qc-count"
               type="number"
               min={1}
               max={100}
+              required
               className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1.5 text-sm"
               value={qcCount}
-              onChange={(e) => setQcCount(Number(e.target.value))}
+              onChange={(e) => setQcCount(e.target.value)}
             />
           </div>
           <div>
@@ -634,13 +824,15 @@ export function TablesTab({
               Seats each
             </label>
             <input
+              inputMode="numeric"
               id="qc-capacity"
               type="number"
               min={1}
               max={50}
+              required
               className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1.5 text-sm"
               value={qcCapacity}
-              onChange={(e) => setQcCapacity(Number(e.target.value))}
+              onChange={(e) => setQcCapacity(e.target.value)}
             />
           </div>
           <div>
@@ -665,6 +857,7 @@ export function TablesTab({
               Name prefix
             </label>
             <input
+              maxLength={FIELD_LIMITS.tableLabelPrefix}
               id="qc-prefix"
               className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1.5 text-sm"
               value={qcPrefix}
@@ -699,6 +892,7 @@ export function TablesTab({
               Template name
             </label>
             <input
+              maxLength={FIELD_LIMITS.templateName}
               id="template-name"
               className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1.5 text-sm"
               placeholder="e.g. Standard reception layout"
@@ -715,13 +909,10 @@ export function TablesTab({
             {savingTemplate ? "Saving..." : "Save as template"}
           </button>
         </form>
-        {savedTemplate && (
-          <p className="mt-2 text-sm text-green-700 dark:text-green-400">
-            Saved &ldquo;{savedTemplate.name}&rdquo; ({savedTemplate.tableCount} table
-            {savedTemplate.tableCount === 1 ? "" : "s"}) — pick it when creating a new wedding from
-            your dashboard.
-          </p>
-        )}
+        {/* TS-216: always there, only its text changes (TS-212), so the result is announced. */}
+        <p role="status" className="mt-2 text-sm text-green-700 empty:hidden dark:text-green-400">
+          {savedTemplateNotice ?? ""}
+        </p>
       </details>
 
       {/* TS-91: the other half of reusable layouts -- until now a template could only be picked
@@ -738,7 +929,14 @@ export function TablesTab({
           wedding. Tables already here stay exactly as they are; a name that&apos;s already taken
           gets a number added.
         </p>
-        {myTemplates === null ? (
+        {templatesFailed ? (
+          <p role="alert" className="text-sm text-red-600 dark:text-red-400">
+            Couldn&apos;t load your templates.{" "}
+            <button type="button" onClick={() => void loadMyTemplates(true)} className="underline hover:no-underline">
+              Try again
+            </button>
+          </p>
+        ) : myTemplates === null ? (
           <p className="text-sm text-neutral-500 dark:text-neutral-400">Loading your templates…</p>
         ) : myTemplates.length === 0 ? (
           <p className="text-sm text-neutral-500 dark:text-neutral-400">
@@ -773,12 +971,13 @@ export function TablesTab({
             </button>
           </form>
         )}
-        {appliedMessage && <p className="mt-2 text-sm text-green-700 dark:text-green-400">{appliedMessage}</p>}
+        {/* TS-216: always there, only its text changes (TS-212). */}
+        <p role="status" className="mt-2 text-sm text-green-700 empty:hidden dark:text-green-400">{appliedMessage ?? ""}</p>
       </details>
         </>
       )}
 
-      {error && <p className="mb-4 text-sm text-red-600 dark:text-red-400">{error}</p>}
+      {error && <p role="alert" className="mb-4 text-sm text-red-600 dark:text-red-400">{error}</p>}
       {tableWarnings.length > 0 && (
         <div className="mb-4 rounded-md border border-amber-200 bg-amber-50 dark:bg-amber-950 p-3 text-sm text-amber-800 dark:text-amber-300">
           {tableWarnings.map((w, i) => (
@@ -804,7 +1003,8 @@ export function TablesTab({
           <p className="text-lg font-medium">{totalAssigned}</p>
         </div>
         <div>
-          <p className="text-neutral-500 dark:text-neutral-400">Remaining capacity</p>
+          {/* TS-177: seats left after everyone attending, not after who's seated (each table row's "remaining"). */}
+          <p className="text-neutral-500 dark:text-neutral-400">Spare seats (after everyone attending)</p>
           <p className={`text-lg font-medium ${shortfall > 0 ? "text-red-600 dark:text-red-400" : ""}`}>
             {totalCapacity - attendingHeadcount}
           </p>
@@ -824,12 +1024,14 @@ export function TablesTab({
         <div className="flex gap-1 rounded-md border border-neutral-300 dark:border-neutral-600 p-0.5 text-sm">
           <button
             onClick={() => setView("list")}
+            aria-pressed={view === "list"}
             className={`rounded px-2 py-1 ${view === "list" ? "bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900" : "hover:bg-neutral-50 dark:hover:bg-neutral-800"}`}
           >
             List
           </button>
           <button
             onClick={() => setView("floorplan")}
+            aria-pressed={view === "floorplan"}
             className={`rounded px-2 py-1 ${view === "floorplan" ? "bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900" : "hover:bg-neutral-50 dark:hover:bg-neutral-800"}`}
           >
             Floor plan
@@ -858,8 +1060,9 @@ export function TablesTab({
                 key={t.id}
                 className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-neutral-200 dark:border-neutral-700 px-4 py-3"
               >
-                <div>
-                  <p className="font-medium">
+                {/* TS-191: a long unbroken name wraps instead of running off a phone screen. */}
+                <div className="min-w-0">
+                  <p className="break-words font-medium [overflow-wrap:anywhere]">
                     {t.label}
                     <span className="ml-2 rounded bg-neutral-100 dark:bg-neutral-800 px-1.5 py-0.5 text-xs text-neutral-600 dark:text-neutral-300">
                       {t.shape.charAt(0) + t.shape.slice(1).toLowerCase()}
@@ -877,19 +1080,19 @@ export function TablesTab({
                     {t.isLocked && (
                       <span
                         className="ml-2 rounded bg-neutral-800 dark:bg-neutral-700 px-1.5 py-0.5 text-xs text-white"
-                        title="Locked — automated seating won't assign new guests here."
+                        title="Locked: new plans keep the people already here and seat nobody new here."
                       >
                         locked
                       </span>
                     )}
                     {t.singleSideOnly && (
-                      <span className="ml-2 rounded bg-purple-50 px-1.5 py-0.5 text-xs text-purple-700">
+                      <span className="ml-2 rounded bg-purple-50 dark:bg-purple-950 px-1.5 py-0.5 text-xs text-purple-700 dark:text-purple-300">
                         single-side only
                       </span>
                     )}
                     {t.purposeCriterionType && (
                       <span
-                        className="ml-2 rounded bg-emerald-50 px-1.5 py-0.5 text-xs text-emerald-700"
+                        className="ml-2 rounded bg-emerald-50 dark:bg-emerald-950 px-1.5 py-0.5 text-xs text-emerald-700 dark:text-emerald-300"
                         title="A soft preference for generation — never blocks anyone else from being seated here."
                       >
                         favors {criterionValueLabel(t.purposeCriterionType, t.purposeCriterionValue, SIDE_VALUES)}
@@ -905,8 +1108,11 @@ export function TablesTab({
                   {canEdit ? (
                     <>
                       <label className="flex items-center gap-1.5 text-sm">
+                        {/* TS-212: each row's controls name their table -- a screen reader's list
+                            read "Accessible, Accessible…" and "Lock, Lock…". */}
                         <input
                           type="checkbox"
+                          aria-label={`Accessible: ${t.label}`}
                           checked={t.isAccessible}
                           onChange={(e) => onToggleAccessible(t.id, e.target.checked)}
                         />
@@ -915,6 +1121,7 @@ export function TablesTab({
                       <label className="flex items-center gap-1.5 text-sm">
                         <input
                           type="checkbox"
+                          aria-label={`Single-side: ${t.label}`}
                           checked={t.singleSideOnly}
                           onChange={(e) => onToggleSingleSideOnly(t.id, e.target.checked)}
                         />
@@ -922,16 +1129,26 @@ export function TablesTab({
                       </label>
                       <button
                         onClick={() => onToggleLock(t.id, !t.isLocked)}
-                        title="Locking reserves this table for its current guests during automated seating."
+                        aria-label={`${t.isLocked ? "Unlock" : "Lock"} ${t.label}`}
+                        title="Locked: new plans keep the people already here and seat nobody new here."
                         className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800"
                       >
                         {t.isLocked ? "Unlock" : "Lock"}
                       </button>
                       <button
                         onClick={() => {
+                          // TS-182: opening another table used to throw away a changed open edit.
+                          // TS-212: and pressing this table's own Edit again closed it, throwing away
+                          // what was changed -- it now asks to Save or Cancel first, too.
+                          if (editingId && editDirty) {
+                            setError(OPEN_EDIT_MESSAGE);
+                            return;
+                          }
                           setError(null);
                           setEditingId(editingId === t.id ? null : t.id);
+                          setEditDirty(false);
                         }}
+                        id={`edit-table-button-${t.id}`}
                         aria-label={`Edit ${t.label}`}
                         aria-expanded={editingId === t.id}
                         className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800"
@@ -941,8 +1158,9 @@ export function TablesTab({
                       {/* TS-136: always asks first. If guests are seated here, the server then asks
                           again with how many (TS-124) before anyone is unseated. */}
                       <ConfirmDeleteButton
+                        id={`table-${t.id}-remove`}
                         ariaLabel={`Remove ${t.label}`}
-                        question={`Remove the table "${t.label}"? This can't be undone.`}
+                        question={`Remove the table "${t.label}"? Anyone seated at it, in the current plan or in saved past versions, loses that seat. This can't be undone.`}
                         confirmLabel="Yes, remove table"
                         onConfirm={() => onRemove(t.id)}
                       />
@@ -954,23 +1172,25 @@ export function TablesTab({
                 {editingId === t.id && (
                   <TableEditForm
                     table={t}
+                    save={(body) => patchTable<{ table: SeatingTableDTO; warnings?: string[] }>(t.id, body)}
+                    onDirtyChange={setEditDirty}
                     guests={guests}
                     sideValues={SIDE_VALUES}
-                    weddingId={weddingId}
                     onSaved={(saved, warnings) => {
                       setTables((current) => current.map((x) => (x.id === saved.id ? saved : x)));
                       setTableWarnings(warnings);
-                      setEditingId(null);
+                      // TS-191: also clears "changed" and puts focus back on Edit.
+                      closeEdit(t.id);
                     }}
                     onConflict={(fresh, message) => {
                       setTables((current) => current.map((x) => (x.id === fresh.id ? fresh : x)));
-                      setEditingId(null);
+                      closeEdit(t.id);
                       setError(
                         message ??
-                          `"${fresh.label}" was just edited elsewhere — showing the latest. Open Edit again to make your change.`
+                          `"${fresh.label}" changed since you loaded it (maybe in another tab, or by someone else) — showing the latest. Open Edit again to make your change.`
                       );
                     }}
-                    onCancel={() => setEditingId(null)}
+                    onCancel={() => closeEdit(t.id)}
                   />
                 )}
                 {confirmRemoval?.id === t.id && (
@@ -980,14 +1200,30 @@ export function TablesTab({
                   >
                     <span className="flex-1">{confirmRemoval.message}</span>
                     <button
-                      onClick={() => onRemove(t.id, true)}
-                      className="rounded-md bg-red-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-red-800"
+                      onClick={(e) => {
+                        // TS-212: if the table goes, focus moves to the next row (or the one before,
+                        // or the list's heading) -- it used to drop to the top of the page.
+                        const neighbours = rowNeighbours(e.currentTarget);
+                        void onRemove(t.id, true, confirmRemoval.seatedCount).then(() => {
+                          setTimeout(() => {
+                            const active = document.activeElement;
+                            if (!active || active === document.body || !active.isConnected) focusNeighbour(neighbours);
+                          }, 0);
+                        });
+                      }}
+                      disabled={removingAnyway}
+                      className="rounded-md bg-red-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-red-800 disabled:opacity-50"
                     >
-                      Remove anyway
+                      {removingAnyway ? "Removing…" : "Remove anyway"}
                     </button>
                     <button
-                      onClick={() => setConfirmRemoval(null)}
-                      className="rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800"
+                      onClick={() => {
+                        setConfirmRemoval(null);
+                        // TS-212: back to the table's Remove button.
+                        setTimeout(() => document.getElementById(`table-${t.id}-remove`)?.focus(), 0);
+                      }}
+                      disabled={removingAnyway}
+                      className="rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50"
                     >
                       Keep table
                     </button>
@@ -1037,8 +1273,30 @@ function FloorPlan({
     return localPositions[t.id] ?? { x: t.positionX ?? 40, y: t.positionY ?? 40 };
   }
 
+  // TS-199: the tables are listed in reading order of their saved spots (see inReadingOrder), so
+  // Tab follows the room. While a table is being moved -- dragged, or moved with the arrow keys
+  // until it's left -- the order is held as it was: moving the focused table within the list
+  // would knock focus off it mid-move.
+  const [heldOrder, setHeldOrder] = useState<string[] | null>(null);
+  const savedOrder = inReadingOrder(tables, (t) => ({ x: t.positionX ?? 40, y: t.positionY ?? 40 })).map((t) => t.id);
+  const orderIds = heldOrder
+    ? [...heldOrder.filter((id) => savedOrder.includes(id)), ...savedOrder.filter((id) => !heldOrder.includes(id))]
+    : savedOrder;
+  const tableById = new Map(tables.map((t) => [t.id, t]));
+  const orderedTables = orderIds.map((id) => tableById.get(id)!);
+  function holdOrder() {
+    setHeldOrder((cur) => cur ?? orderIds);
+  }
+  function releaseOrder() {
+    setHeldOrder(null);
+  }
+
   function onPointerDown(e: React.PointerEvent<HTMLDivElement>, t: SeatingTableDTO) {
     if (!canEdit) return;
+    // TS-212: only the main button drags -- a right-click (or Ctrl-click on a Mac, which is the
+    // same) used to pick the table up too.
+    if (e.button !== 0 || (e.pointerType === "mouse" && e.ctrlKey)) return;
+    holdOrder();
     const el = e.currentTarget;
     el.setPointerCapture(e.pointerId);
     const rect = el.getBoundingClientRect();
@@ -1049,11 +1307,18 @@ function FloorPlan({
 
   function onPointerMove(e: React.PointerEvent<HTMLDivElement>) {
     if (!dragId.current || !containerRef.current) return;
+    // TS-212: the button was let go somewhere the release wasn't seen (outside the window, say) --
+    // the drag ends where the table is now, rather than the table following the pointer.
+    if (e.pointerType === "mouse" && e.buttons === 0) {
+      void onPointerUp();
+      return;
+    }
     const containerRect = containerRef.current.getBoundingClientRect();
     let x = e.clientX - containerRect.left - dragOffset.current.x;
     let y = e.clientY - containerRect.top - dragOffset.current.y;
     x = Math.max(0, Math.min(x, containerRect.width - dragSize.current.width));
     y = Math.max(0, Math.min(y, containerRect.height - dragSize.current.height));
+    // (containerRect is the whole canvas, not the visible part -- see the canvas below.)
     setLocalPositions((prev) => ({ ...prev, [dragId.current!]: { x, y } }));
   }
 
@@ -1062,8 +1327,19 @@ function FloorPlan({
     const id = dragId.current;
     const pos = localPositions[id];
     dragId.current = null;
-    if (!pos) return;
+    // TS-199: a click without a drag, or once the drop has saved, lets the list follow the room
+    // again -- unless the table is being dragged again by then, or still has focus (a click
+    // focuses it; it's released when focus leaves, see onBlur).
+    const releaseIfDone = () => {
+      const focusInside = !!containerRef.current?.contains(document.activeElement);
+      if (dragId.current === null && keyboardSave.current === null && !focusInside) releaseOrder();
+    };
+    if (!pos) {
+      releaseIfDone();
+      return;
+    }
     await onMove(id, Math.round(pos.x), Math.round(pos.y));
+    releaseIfDone();
     // TS-110: the drag-time override has done its job once the save settles. Dropping it means the
     // table renders from `tables` again -- the saved position on success, the reverted one on
     // failure, or the other collaborator's on a 409 -- instead of sticking wherever it was dropped.
@@ -1082,6 +1358,7 @@ function FloorPlan({
     const id = dragId.current;
     if (!id) return;
     dragId.current = null;
+    releaseOrder(); // TS-199
     setLocalPositions((prev) => {
       const next = { ...prev };
       delete next[id];
@@ -1119,7 +1396,10 @@ function FloorPlan({
     const d = delta[e.key];
     if (!d) return;
     e.preventDefault();
+    holdOrder(); // TS-199: until the table is left (see onBlur below).
     const size = sizeForShape(t.shape);
+    // TS-175: kept within the canvas, not the visible part of it -- on a phone a table beyond the
+    // screen's width used to jump back into view on the first arrow press.
     const bounds = containerRef.current.getBoundingClientRect();
     const from = positionFor(t);
     const to = {
@@ -1143,15 +1423,28 @@ function FloorPlan({
           ? "Drag a table to arrange the room, or select it with Tab and move it with the arrow keys (Shift for bigger steps). Position is saved automatically and never affects seating rules or generation."
           : "View-only — dragging tables to rearrange the room is turned off for your access level."}
       </p>
+      {/* TS-175: the room scrolls inside its box (as on the Plan tab) instead of being cut off at
+          the screen's edge, so on a phone every table can still be reached. */}
+      {/* TS-212: Chrome 130+ and Firefox make a scrolling box a Tab stop of its own. With tables to
+          Tab to it isn't needed (focusing a table scrolls it into view), so it's taken out; view-only,
+          it's the only way to scroll by keyboard, so it's a named region. */}
+      <div
+        {...(canEdit ? { tabIndex: -1 } : { role: "region", "aria-label": "Room floor plan, scrollable", tabIndex: 0 })}
+        style={{ width: "100%", maxWidth: width }}
+        className="overflow-auto rounded-lg border border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-900"
+      >
       <div
         ref={containerRef}
+        // TS-199: named, so the room can be found as one area (e.g. to check its Tab order).
+        role="group"
+        aria-label="Room floor plan"
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
         onPointerCancel={onPointerCancel}
-        style={{ width: "100%", height, maxWidth: width }}
-        className="relative overflow-hidden rounded-lg border border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-900"
+        style={{ width, height }}
+        className="relative"
       >
-        {tables.map((t) => {
+        {orderedTables.map((t) => {
           const pos = positionFor(t);
           const assigned = assignedHeadcountByTable[t.id] ?? 0;
           const over = assigned > t.capacity;
@@ -1167,6 +1460,8 @@ function FloorPlan({
               onKeyDown={(e) => onKeyDown(e, t)}
               onBlur={() => {
                 if (keyboardSave.current?.id === t.id) void flushKeyboardMove();
+                // TS-199: left the table -- the list follows the room again (unless mid-drag).
+                if (!dragId.current) releaseOrder();
               }}
               style={{ left: pos.x, top: pos.y, ...sizeForShape(t.shape) }}
               className={`absolute flex select-none flex-col items-center justify-center border-2 bg-white dark:bg-neutral-900 p-1 text-center text-xs shadow-sm outline-none focus-visible:ring-4 focus-visible:ring-blue-500 ${
@@ -1187,6 +1482,7 @@ function FloorPlan({
           );
         })}
       </div>
+      </div>
       <p aria-live="polite" className="sr-only">
         {announcement}
       </p>
@@ -1202,17 +1498,20 @@ function FloorPlan({
 // flagged Needs Reassignment. Nobody is unseated by an edit.
 function TableEditForm({
   table,
+  save,
+  onDirtyChange,
   guests,
   sideValues,
-  weddingId,
   onSaved,
   onConflict,
   onCancel,
 }: {
   table: SeatingTableDTO;
+  /** TS-175: saves through the tab's table queue, so it can't race the row's quick saves. */
+  save: (body: Record<string, unknown>) => Promise<{ table: SeatingTableDTO; warnings?: string[] }>;
+  onDirtyChange: (dirty: boolean) => void;
   guests: GuestDTO[];
   sideValues: { value: string; label: string }[];
-  weddingId: string;
   onSaved: (table: SeatingTableDTO, warnings: string[]) => void;
   // A 409 (someone else's edit landed first) or a 422 partial save (the table saved, its guest
   // list didn't): either way the row shows the table as it now is, with the server's message.
@@ -1220,7 +1519,7 @@ function TableEditForm({
   onCancel: () => void;
 }) {
   const [label, setLabel] = useState(table.label);
-  const [capacity, setCapacity] = useState(table.capacity);
+  const [capacity, setCapacity] = useState(String(table.capacity));
   const [shape, setShape] = useState<TableShape>(table.shape);
   const [purpose, setPurpose] = useState(table.purpose ?? "");
   const [criterionType, setCriterionType] = useState<TablePurposeCriterionType | "">(table.purposeCriterionType ?? "");
@@ -1230,35 +1529,53 @@ function TableEditForm({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const idBase = `edit-table-${table.id}`;
-
   const criterionOptions =
     criterionType === "SIDE"
       ? sideValues
       : criterionType === "TIER"
         ? TIER_VALUES.map((v) => ({ value: v, label: GUEST_TIER_LABELS[v] }))
         : AGE_CATEGORY_VALUES.map((v) => ({ value: v, label: v.charAt(0) + v.slice(1).toLowerCase() }));
+  const listDiffers =
+    requiredGuestIds.length !== table.requiredGuestIds.length ||
+    requiredGuestIds.some((id) => !table.requiredGuestIds.includes(id));
+  const dirty =
+    label !== table.label ||
+    capacity !== String(table.capacity) ||
+    shape !== table.shape ||
+    purpose !== (table.purpose ?? "") ||
+    criterionType !== (table.purposeCriterionType ?? "") ||
+    // TS-199: compared as it would be saved -- a criterion picked with its value list left alone
+    // shows (and saves) the first option, so that's what counts, not the empty box behind it.
+    (criterionType ? criterionValue || criterionOptions[0]?.value || "" : "") !== (table.purposeCriterionValue ?? "") ||
+    isRestricted !== table.isRestricted ||
+    listDiffers;
+  useEffect(() => {
+    onDirtyChange(dirty);
+  }, [dirty, onDirtyChange]);
+  // TS-191: however the form closes (saved, cancelled, its table removed, Edit access gone), what
+  // was in it no longer counts as unsaved.
+  useEffect(() => () => onDirtyChange(false), [onDirtyChange]);
+  // TS-191: opening the form puts focus in its first box.
+  useEffect(() => {
+    document.getElementById(`${idBase}-label`)?.focus();
+  }, [idBase]);
 
   async function onSave(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
     setSaving(true);
     try {
-      const listChanged =
-        isRestricted &&
-        (requiredGuestIds.length !== table.requiredGuestIds.length ||
-          requiredGuestIds.some((id) => !table.requiredGuestIds.includes(id)));
-      const { table: saved, warnings } = await api.patch<{ table: SeatingTableDTO; warnings?: string[] }>(
-        `/api/v1/weddings/${weddingId}/tables/${table.id}`,
+      const listChanged = isRestricted && listDiffers;
+      const { table: saved, warnings } = await save(
         {
           label: label.trim(),
-          capacity,
+          capacity: Number(capacity),
           shape,
           purpose: purpose.trim() || null,
           purposeCriterionType: criterionType || null,
           purposeCriterionValue: criterionType ? criterionValue || criterionOptions[0]?.value || null : null,
           isRestricted,
           ...(listChanged ? { requiredGuestIds } : {}),
-          expectedRevision: table.revision,
         }
       );
       const allWarnings = warnings ?? [];
@@ -1283,18 +1600,19 @@ function TableEditForm({
     >
       <div>
         <label htmlFor={`${idBase}-label`} className="mb-1 block text-sm font-medium">Table name</label>
-        <input id={`${idBase}-label`} className={field} value={label} onChange={(e) => setLabel(e.target.value)} required maxLength={100} />
+        <input id={`${idBase}-label`} className={field} value={label} onChange={(e) => setLabel(e.target.value)} required maxLength={FIELD_LIMITS.tableLabel} />
       </div>
       <div>
         <label htmlFor={`${idBase}-capacity`} className="mb-1 block text-sm font-medium">Seats</label>
         <input
+          inputMode="numeric"
           id={`${idBase}-capacity`}
           type="number"
           min={1}
           max={50}
           className={field}
           value={capacity}
-          onChange={(e) => setCapacity(Number(e.target.value))}
+          onChange={(e) => setCapacity(e.target.value)}
           required
         />
       </div>
@@ -1310,7 +1628,7 @@ function TableEditForm({
       </div>
       <div>
         <label htmlFor={`${idBase}-purpose`} className="mb-1 block text-sm font-medium">Purpose (optional)</label>
-        <input id={`${idBase}-purpose`} className={field} value={purpose} onChange={(e) => setPurpose(e.target.value)} maxLength={200} />
+        <input id={`${idBase}-purpose`} className={field} value={purpose} onChange={(e) => setPurpose(e.target.value)} maxLength={FIELD_LIMITS.tablePurpose} />
       </div>
       <div className="sm:col-span-2">
         <label htmlFor={`${idBase}-criterion`} className="mb-1 block text-sm font-medium">Favors</label>
@@ -1376,7 +1694,7 @@ function TableEditForm({
           </div>
         )}
       </div>
-      {error && <p className="text-sm text-red-600 dark:text-red-400 sm:col-span-2">{error}</p>}
+      {error && <p role="alert" className="text-sm text-red-600 dark:text-red-400 sm:col-span-2">{error}</p>}
       <div className="flex gap-2 sm:col-span-2">
         <button
           type="submit"

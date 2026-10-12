@@ -1,30 +1,61 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ConfirmDeleteButton } from "@/components/ConfirmDeleteButton";
 import { api, ApiError, apiErrorMessage } from "@/lib/api-client";
 import type { TimelineEntryDTO } from "@seatwise/shared";
 import { useUnsavedChanges } from "@/lib/unsaved-changes";
+import { OPEN_EDIT_MESSAGE, REFRESH_FAILED_MESSAGE } from "@/lib/display-format";
+// TS-193: the same limits the server checks (packages/shared/src/field-limits.ts).
+import { FIELD_LIMITS } from "@seatwise/shared";
+// TS-214: entries after midnight ("next day") are listed after the wedding day's own.
+import { compareTimelineEntries, sameTimelineSlot, timelineTimeLabel, PICK_A_TIME_MESSAGE } from "@seatwise/shared";
+import { focusIfLost } from "@/lib/focus-if-lost";
 
 // TS-18 (Day-Of Timeline / Run-of-Show, FR-13.1/FR-13.2): a per-wedding, chronological schedule of
 // day-of events -- its own record, entirely independent of guests/tables/rules/seating plans.
-// Entries are always listed by (time, sortOrder) from the server, so this component never sorts
-// client-side; "reorder" only ever moves an entry among others sharing its exact same time.
+// Entries are always listed by (time, sortOrder) from the server; after a change here the list is
+// put in the same order with compareTimelineEntries. "Reorder" only ever moves an entry among others
+// sharing its exact same time (TS-214: on the same day).
+// TS-212: after the edit box swaps back to the row (Save, Cancel), or opens, focus goes to a stable
+// control by id -- it used to drop to the page, so the next Tab started from the top. Only if focus
+// was lost (someone who has clicked elsewhere keeps their place) -- see lib/focus-if-lost.ts.
+
 export function TimelineTab({ weddingId, canEdit }: { weddingId: string; canEdit: boolean }) {
   const [entries, setEntries] = useState<TimelineEntryDTO[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const [time, setTime] = useState("");
+  // TS-214: "After midnight (next day)".
+  const [nextDay, setNextDay] = useState(false);
   const [description, setDescription] = useState("");
   const [adding, setAdding] = useState(false);
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editTime, setEditTime] = useState("");
+  const [editNextDay, setEditNextDay] = useState(false);
   const [editDescription, setEditDescription] = useState("");
   // TS-159: tell the page this tab has input that leaving it would lose.
-  useUnsavedChanges("timeline", !!(description.trim() || editingId));
+  // TS-166: a time picked for a new entry counts too.
+  // TS-175: an open edit box counts only once something in it has changed.
+  const editingEntry = entries.find((e) => e.id === editingId);
+  const editChanged =
+    !!editingEntry &&
+    (editTime !== editingEntry.time || editNextDay !== editingEntry.nextDay || editDescription !== editingEntry.description);
+  // TS-182: only while the forms are there (they're hidden without Edit access).
+  useUnsavedChanges("timeline", canEdit && !!(time || nextDay || description.trim() || editChanged));
   const [saving, setSaving] = useState(false);
+  // TS-191: a reorder is on its way -- the arrows wait for it (quick presses used to send moves
+  // based on an order that was about to change).
+  const [reordering, setReordering] = useState(false);
+  // TS-191: Edit access taken away while an entry's edit was open -- it can't be saved any more,
+  // so it closes (and stops counting as unsaved).
+  useEffect(() => {
+    if (canEdit) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- TS-191: closes the edit box when Edit access goes.
+    setEditingId(null);
+  }, [canEdit]);
 
   useEffect(() => {
     api
@@ -41,12 +72,15 @@ export function TimelineTab({ weddingId, canEdit }: { weddingId: string; canEdit
     try {
       const { entry } = await api.post<{ entry: TimelineEntryDTO }>(
         `/api/v1/weddings/${weddingId}/timeline-entries`,
-        { time, description }
+        { time, nextDay, description }
       );
-      setEntries(
-        [...entries, entry].sort((a, b) => a.time.localeCompare(b.time) || a.sortOrder - b.sortOrder)
+      // TS-166: built from the list as it is now, so another change made meanwhile isn't lost.
+      listChange.current++; // TS-199
+      setEntries((cur) =>
+        [...cur, entry].sort(compareTimelineEntries)
       );
       setTime("");
+      setNextDay(false);
       setDescription("");
     } catch (err) {
       setError(apiErrorMessage(err, [], "Couldn't add that timeline entry."));
@@ -56,12 +90,26 @@ export function TimelineTab({ weddingId, canEdit }: { weddingId: string; canEdit
   }
 
   function startEdit(entry: TimelineEntryDTO) {
+    // TS-182: opening another entry used to throw away a changed open edit without a word.
+    if (editChanged && editingId !== entry.id) {
+      setError(OPEN_EDIT_MESSAGE);
+      return;
+    }
+    setError(null);
     setEditingId(entry.id);
     setEditTime(entry.time);
+    setEditNextDay(entry.nextDay);
     setEditDescription(entry.description);
+    focusIfLost(`timeline-${entry.id}-edit-time`);
   }
 
   async function onSaveEdit(entryId: string) {
+    // TS-214: a cleared time box can't be saved -- said in the app's own 12-hour words (the server
+    // used to answer "HH:MM (24-hour)").
+    if (!editTime) {
+      setError(PICK_A_TIME_MESSAGE);
+      return;
+    }
     setSaving(true);
     setError(null);
     try {
@@ -69,29 +117,35 @@ export function TimelineTab({ weddingId, canEdit }: { weddingId: string; canEdit
         `/api/v1/weddings/${weddingId}/timeline-entries/${entryId}`,
         {
           time: editTime,
+          nextDay: editNextDay,
           description: editDescription,
           // TS-92: the version this edit is based on -- a stale one is refused, never overwrites.
           expectedRevision: entries.find((e) => e.id === entryId)?.revision,
         }
       );
-      setEntries(
-        entries
+      // TS-182: applied to the list as it is now, so an entry added or removed meanwhile stays.
+      listChange.current++; // TS-199
+      setEntries((cur) =>
+        cur
           .map((e) => (e.id === entryId ? entry : e))
-          .sort((a, b) => a.time.localeCompare(b.time) || a.sortOrder - b.sortOrder)
+          .sort(compareTimelineEntries)
       );
       setEditingId(null);
+      // TS-212: back to this entry's Edit button (wherever the new time put it).
+      focusIfLost(`timeline-${entryId}-edit`);
     } catch (err) {
       // TS-92: someone else changed this entry first. Show their version and say plainly that
       // this edit was not saved -- the edit box closes so the stale text can't be mistaken for
       // what's on record.
       const fresh = err instanceof ApiError && err.status === 409 ? (err.data?.entry as TimelineEntryDTO | undefined) : undefined;
       if (fresh) {
-        setEntries(
-          entries
+        setEntries((cur) =>
+          cur
             .map((e) => (e.id === entryId ? fresh : e))
-            .sort((a, b) => a.time.localeCompare(b.time) || a.sortOrder - b.sortOrder)
+            .sort(compareTimelineEntries)
         );
         setEditingId(null);
+        focusIfLost(`timeline-${entryId}-edit`);
       }
       setError(apiErrorMessage(err, [], "Couldn't save that change."));
     } finally {
@@ -100,42 +154,86 @@ export function TimelineTab({ weddingId, canEdit }: { weddingId: string; canEdit
   }
 
   async function onDelete(entryId: string) {
-    const prev = entries;
-    setEntries(entries.filter((e) => e.id !== entryId));
+    const removed = entries.find((e) => e.id === entryId);
+    // TS-242: counted as a change the moment the row leaves the screen, not only once the DELETE
+    // answers -- a reorder's reload already on its way was read before the delete, and it put the
+    // entry back on screen. (Counted again below: a reload sent while the DELETE is on its way can
+    // still have it too.)
+    listChange.current++;
+    setEntries((cur) => cur.filter((e) => e.id !== entryId));
     try {
       await api.delete(`/api/v1/weddings/${weddingId}/timeline-entries/${entryId}`);
-    } catch {
-      setEntries(prev);
-      setError("Couldn't remove that timeline entry.");
+      listChange.current++; // TS-199
+    } catch (err) {
+      if (removed)
+        setEntries((cur) =>
+          [...cur, removed].sort(compareTimelineEntries)
+        );
+      // TS-209: the server's own reason. An entry already removed counts as removed (see api-client).
+      setError(apiErrorMessage(err, [], "Couldn't remove that timeline entry."));
     }
   }
 
   // FR-13.2: only ever reshuffles entries that share this entry's exact same time -- a no-op
   // (entry unchanged) if it's already first/last within that tied group.
   async function onReorder(entryId: string, direction: "UP" | "DOWN") {
+    if (reordering) return;
     setError(null);
+    setReordering(true);
     try {
-      const { entry } = await api.post<{ entry: TimelineEntryDTO }>(
-        `/api/v1/weddings/${weddingId}/timeline-entries/${entryId}/reorder`,
-        { direction }
-      );
-      // The move can affect two rows (this one and its swapped neighbor) -- simplest correct
-      // approach is to refetch the full list rather than guess at the neighbor's new sortOrder.
-      const res = await api.get<{ entries: TimelineEntryDTO[] }>(
-        `/api/v1/weddings/${weddingId}/timeline-entries`
-      );
-      setEntries(res.entries);
-      void entry;
-    } catch (err) {
-      setError(apiErrorMessage(err, [], "Couldn't reorder that entry."));
+      await reorderAndReload(entryId, direction);
+    } finally {
+      setReordering(false);
+      // TS-199: an arrow that can't be used any more (the entry is now first or last at its time)
+      // is turned off, which dropped keyboard focus to the top of the page. Focus goes to the
+      // entry's other arrow instead.
+      setTimeout(() => {
+        const pressed = document.getElementById(`timeline-${entryId}-${direction}`) as HTMLButtonElement | null;
+        const other = document.getElementById(`timeline-${entryId}-${direction === "UP" ? "DOWN" : "UP"}`) as HTMLButtonElement | null;
+        const active = document.activeElement;
+        const lost = !active || active === document.body || !active.isConnected;
+        if (pressed && !pressed.disabled) {
+          if (lost) pressed.focus();
+        } else if (other && !other.disabled && (lost || active === pressed)) other.focus();
+      }, 0);
     }
   }
 
-  function formatTime(hhmm: string): string {
-    const [h, m] = hhmm.split(":").map(Number);
-    const period = h < 12 ? "AM" : "PM";
-    const h12 = h % 12 === 0 ? 12 : h % 12;
-    return `${h12}:${String(m).padStart(2, "0")} ${period}`;
+  // TS-199: each change to the list gets a number; a reload that comes back after a newer change
+  // (an edit, an add or a remove made while it was on its way) is dropped instead of putting the
+  // older list back over it.
+  const listChange = useRef(0);
+
+  async function reorderAndReload(entryId: string, direction: "UP" | "DOWN") {
+    try {
+      await api.post<{ entry: TimelineEntryDTO }>(
+        `/api/v1/weddings/${weddingId}/timeline-entries/${entryId}/reorder`,
+        { direction }
+      );
+    } catch (err) {
+      setError(apiErrorMessage(err, [], "Couldn't reorder that entry."));
+      return;
+    }
+    // The move can affect two rows (this one and its swapped neighbor) -- simplest correct
+    // approach is to refetch the full list rather than guess at the neighbor's new sortOrder.
+    // TS-182: in its own try -- the move was saved even if this reload fails, and it used to say
+    // "Couldn't reorder" when it had.
+    // TS-199: if something newer changed the list meanwhile, this answer is out of date -- ask again
+    // (a fresh answer has both changes) rather than show it.
+    try {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const seq = ++listChange.current;
+        const res = await api.get<{ entries: TimelineEntryDTO[] }>(
+          `/api/v1/weddings/${weddingId}/timeline-entries`
+        );
+        if (seq === listChange.current) {
+          setEntries(res.entries);
+          return;
+        }
+      }
+    } catch {
+      setError(REFRESH_FAILED_MESSAGE);
+    }
   }
 
   if (loading) return <p className="text-sm text-neutral-500 dark:text-neutral-400">Loading timeline...</p>;
@@ -144,7 +242,7 @@ export function TimelineTab({ weddingId, canEdit }: { weddingId: string; canEdit
     <div>
       {!canEdit && (
         <p className="mb-4 rounded-md bg-neutral-100 dark:bg-neutral-800 px-3 py-2 text-sm text-neutral-600 dark:text-neutral-300">
-          You have view-only access to this wedding's timeline — adding, editing, and reordering
+          You have view-only access to this wedding&apos;s timeline — adding, editing, and reordering
           entries is turned off.
         </p>
       )}
@@ -173,6 +271,7 @@ export function TimelineTab({ weddingId, canEdit }: { weddingId: string; canEdit
                 Event
               </label>
               <input
+                maxLength={FIELD_LIMITS.timelineDescription}
                 id="entry-description"
                 className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
                 placeholder="e.g. Ceremony begins"
@@ -181,6 +280,16 @@ export function TimelineTab({ weddingId, canEdit }: { weddingId: string; canEdit
                 required
               />
             </div>
+            {/* TS-214: an entry after midnight is listed after the wedding day's own entries. */}
+            <label className="flex items-center gap-2 text-sm sm:col-span-2">
+              <input
+                id="entry-next-day"
+                type="checkbox"
+                checked={nextDay}
+                onChange={(e) => setNextDay(e.target.checked)}
+              />
+              After midnight (next day)
+            </label>
             <button
               type="submit"
               disabled={adding}
@@ -192,7 +301,7 @@ export function TimelineTab({ weddingId, canEdit }: { weddingId: string; canEdit
         </>
       )}
 
-      {error && <p className="mb-4 text-sm text-red-600 dark:text-red-400">{error}</p>}
+      {error && <p role="alert" className="mb-4 text-sm text-red-600 dark:text-red-400">{error}</p>}
 
       <h2 className="mb-3 text-lg font-medium">Run of show ({entries.length})</h2>
       {entries.length === 0 ? (
@@ -200,8 +309,9 @@ export function TimelineTab({ weddingId, canEdit }: { weddingId: string; canEdit
       ) : (
         <ul className="flex flex-col gap-2">
           {entries.map((entry, i) => {
-            const sameTimeAbove = i > 0 && entries[i - 1].time === entry.time;
-            const sameTimeBelow = i < entries.length - 1 && entries[i + 1].time === entry.time;
+            // TS-214: the same time on the same day (12:30 AM next day isn't "the same" as 12:30 AM).
+            const sameTimeAbove = i > 0 && sameTimelineSlot(entries[i - 1], entry);
+            const sameTimeBelow = i < entries.length - 1 && sameTimelineSlot(entries[i + 1], entry);
             return (
               <li
                 key={entry.id}
@@ -210,13 +320,25 @@ export function TimelineTab({ weddingId, canEdit }: { weddingId: string; canEdit
                 {editingId === entry.id ? (
                   <div className="flex flex-1 flex-wrap items-center gap-2">
                     <input
+                      id={`timeline-${entry.id}-edit-time`}
                       type="time"
                       aria-label="Edit time"
                       className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm"
                       value={editTime}
                       onChange={(e) => setEditTime(e.target.value)}
+                      required
                     />
+                    <label className="flex items-center gap-1 text-sm">
+                      <input
+                        type="checkbox"
+                        aria-label="Edit: after midnight (next day)"
+                        checked={editNextDay}
+                        onChange={(e) => setEditNextDay(e.target.checked)}
+                      />
+                      Next day
+                    </label>
                     <input
+                      maxLength={FIELD_LIMITS.timelineDescription}
                       aria-label="Edit description"
                       className="flex-1 rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm"
                       value={editDescription}
@@ -230,7 +352,10 @@ export function TimelineTab({ weddingId, canEdit }: { weddingId: string; canEdit
                       Save
                     </button>
                     <button
-                      onClick={() => setEditingId(null)}
+                      onClick={() => {
+                        setEditingId(null);
+                        focusIfLost(`timeline-${entry.id}-edit`);
+                      }}
                       className="rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800"
                     >
                       Cancel
@@ -238,35 +363,47 @@ export function TimelineTab({ weddingId, canEdit }: { weddingId: string; canEdit
                   </div>
                 ) : (
                   <>
-                    <div>
-                      <p className="font-medium">{formatTime(entry.time)}</p>
-                      <p className="text-sm text-neutral-500 dark:text-neutral-400">{entry.description}</p>
+                    {/* TS-199: a long description wraps instead of pushing the row off a phone screen. */}
+                    <div className="min-w-0">
+                      <p className="font-medium">{timelineTimeLabel(entry.time, entry.nextDay)}</p>
+                      <p className="break-words text-sm text-neutral-500 dark:text-neutral-400 [overflow-wrap:anywhere]">{entry.description}</p>
                     </div>
                     {canEdit && (
                       <div className="flex flex-wrap items-center gap-2">
                         <button
+                          id={`timeline-${entry.id}-UP`}
                           onClick={() => onReorder(entry.id, "UP")}
                           disabled={!sameTimeAbove}
+                          // TS-191: busy while a reorder is on its way (still focusable, so the keyboard keeps its place)
+                          aria-disabled={reordering || undefined}
+                          // TS-175: names that say which entry, for screen readers ("↑" alone said nothing).
+                          aria-label={`Move ${entry.description} earlier`}
                           title="Move earlier among entries at this same time"
-                          className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-30"
+                          className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-30 aria-disabled:opacity-50"
                         >
                           ↑
                         </button>
                         <button
+                          id={`timeline-${entry.id}-DOWN`}
                           onClick={() => onReorder(entry.id, "DOWN")}
                           disabled={!sameTimeBelow}
+                          aria-disabled={reordering || undefined}
+                          aria-label={`Move ${entry.description} later`}
                           title="Move later among entries at this same time"
-                          className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-30"
+                          className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-30 aria-disabled:opacity-50"
                         >
                           ↓
                         </button>
                         <button
+                          id={`timeline-${entry.id}-edit`}
                           onClick={() => startEdit(entry)}
+                          aria-label={`Edit ${entry.description}`}
                           className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800"
                         >
                           Edit
                         </button>
                         <ConfirmDeleteButton
+                          id={`timeline-${entry.id}-remove`}
                           ariaLabel={`Remove ${entry.description}`}
                           question={`Remove "${entry.description}" from the timeline? This can't be undone.`}
                           confirmLabel="Yes, remove entry"

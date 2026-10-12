@@ -6,6 +6,9 @@ import Link from "next/link";
 import { api, ApiError } from "@/lib/api-client";
 import type { AuthResponse } from "@seatwise/shared";
 import { safeNextPath, withCurrentNext } from "@/lib/safe-next";
+// TS-193: the same limits the server checks (packages/shared/src/field-limits.ts).
+import { FIELD_LIMITS } from "@seatwise/shared";
+import { announceSignedIn } from "@/lib/session-sync";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -20,6 +23,9 @@ export default function LoginPage() {
     setLoading(true);
     try {
       await api.post<AuthResponse>("/api/v1/auth/login", { email, password });
+      // TS-229: other open pages (e.g. one showing the session-expired notice that opened this tab)
+      // re-check their session at once instead of on their next poll.
+      announceSignedIn();
       // TS-109: back to wherever sent the user here (e.g. the session-expired notice), else the
       // dashboard. Read at submit time rather than via useSearchParams, which would force this
       // whole page behind a Suspense boundary for one query value.
@@ -42,7 +48,10 @@ export default function LoginPage() {
               Email
             </label>
             <input
+              maxLength={FIELD_LIMITS.email}
               id="login-email"
+              // TS-175: lets the browser and password managers fill these in.
+              autoComplete="email"
               type="email"
               className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
               value={email}
@@ -55,7 +64,9 @@ export default function LoginPage() {
               Password
             </label>
             <input
+              maxLength={FIELD_LIMITS.password}
               id="login-password"
+              autoComplete="current-password"
               type="password"
               className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
               value={password}
@@ -67,7 +78,7 @@ export default function LoginPage() {
           <Link href="/forgot-password" className="-mt-2 self-end text-sm underline">
             Forgot password?
           </Link>
-          {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}
+          {error && <p role="alert" className="text-sm text-red-600 dark:text-red-400">{error}</p>}
           <button
             type="submit"
             disabled={loading}

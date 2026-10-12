@@ -26,7 +26,7 @@ defineQualityTest(
     objective:
       "Confirms View and Comment collaborators get guests (and the CSV export) without private notes while Edit and the owner see them; that an RSVP above the planner's party size is refused with a clear message, one at or below it is accepted (including changing back up), and a planner raising the party size raises the limit; that each RSVP creates an 'RSVP' notification for the owner; that changing a guest's email to a different address replaces their RSVP link and emails it; and that the owner can set the date and venue from the Collaborators tab and see the date on the dashboard.",
     expectedOutcome:
-      "View/Comment see notes and rsvpNotes as null and blank CSV note cells; Edit/owner see 'Nut allergy'. RSVP of 3 against a party of 2 gets 422 'up to 2 people'; 1 then 2 succeed; after the planner sets 4, 4 succeeds. The owner has RSVP_RECEIVED notifications. After the email change the old link reads NOT_FOUND, a new link works, and the response says it was emailed. The dashboard shows 9/18/2027 after saving the date.",
+      "View/Comment see notes and rsvpNotes as null and blank CSV note cells; Edit/owner see 'Nut allergy'. RSVP of 3 against a party of 2 gets 422 'up to 2 people'; 1 then 2 succeed; after the planner sets 4, 4 succeeds. The owner has RSVP_RECEIVED notifications. After the email change the old link reads NOT_FOUND, a new link works, and the response says it was emailed. The dashboard shows 09-18-2027 after saving the date.",
     requirementIds: ["REQ-NON-FUNCTIONAL"],
     tags: ["@mutating", "@feature:guests", "@feature:rsvp", "@feature:collaboration", "@risk:high", "@suite:regression"],
   },
@@ -127,7 +127,7 @@ defineQualityTest(
       await tab.saveDateAndVenue("2027-09-18", "Harbor Pavilion");
       const dashboard = new DashboardPage(page);
       await dashboard.goto();
-      await expect(dashboard.weddingLink(managedWedding.name)).toContainText("9/18/2027");
+      await expect(dashboard.weddingLink(managedWedding.name)).toContainText("09-18-2027");
       const { wedding } = (await (await context.request.get(`/api/v1/weddings/${w}`)).json()) as {
         wedding: { eventDate: string; venueName: string };
       };

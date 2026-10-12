@@ -1,11 +1,15 @@
 import { z } from "zod";
+import { FIELD_LIMITS } from "../field-limits";
+import { expectedRevisionField } from "./common";
+// TS-243: free text refuses hidden control characters and line breaks (see ../safe-text).
+import { safeText } from "../safe-text";
 import type { SideMixing } from "./wedding";
 
 export type PlanVersionStatusValue = "DRAFT" | "IN_REVIEW" | "APPROVED";
 
 // FR-7.7: every plan-version write accepts the revision the client last saw, so the server can
 // detect a save that landed on top of a newer one instead of silently overwriting it.
-const expectedRevisionField = z.number().int().nonnegative().optional();
+// TS-174: bounded to what the database can store (see ./common).
 
 export const planVersionStatusSchema = z.object({
   status: z.enum(["DRAFT", "IN_REVIEW", "APPROVED"]),
@@ -15,8 +19,10 @@ export const planVersionStatusSchema = z.object({
 // FR-9.4/TS-10: a plan version's label is a free-text nickname ("Family-approved draft",
 // "Post-RSVP final") to tell versions apart at a glance beyond the auto-incrementing number.
 // Empty string clears the label back to none.
+// TS-243: the same text rules as every other label -- before, a NUL character was a server error,
+// and direction-flipping marks and line breaks were saved.
 export const setPlanVersionLabelSchema = z.object({
-  label: z.string().trim().max(100),
+  label: safeText(FIELD_LIMITS.planVersionLabel),
   expectedRevision: expectedRevisionField,
 });
 export type SetPlanVersionLabelInput = z.infer<typeof setPlanVersionLabelSchema>;
@@ -57,11 +63,16 @@ export interface PlanVersionAssignmentDTO {
   tableId: string;
   tableLabel: string;
   needsReassignment: boolean;
+  /** TS-221: an older version's seat held by a guest since marked not attending. */
+  notAttending?: boolean;
 }
 
 export interface PlanVersionDetailDTO extends PlanVersionDTO {
   assignments: PlanVersionAssignmentDTO[];
   unassignedGuestIds: string[];
+  /** TS-207: the unassigned guests' names (a guest added on another screen may not be in this
+   * screen's guest list yet). */
+  unassignedGuests?: { id: string; name: string }[];
   warnings: string[];
   modifiedSinceApproval: ModifiedSinceApprovalDTO;
 }
@@ -70,8 +81,19 @@ export interface PlanVersionDetailDTO extends PlanVersionDTO {
 // Current version (replacing whichever was Current before) or a non-replacing Comparison Draft.
 // Defaults to true so existing callers that don't send a body keep the old "always current"
 // behavior.
+// TS-237: the approved current version the person confirmed replacing, or null when they weren't
+// asked (their page showed no approved plan). If the current plan is approved and this doesn't name
+// it, nothing is saved and the screen asks again (409).
+const replacesApprovedVersionIdField = z.string().min(1).max(100).nullable().optional();
+
 export const generatePlanVersionSchema = z.object({
   makeCurrent: z.boolean().optional(),
+  replacesApprovedVersionId: replacesApprovedVersionIdField,
+});
+
+// TS-237: a restore's body -- only the confirmation above.
+export const restorePlanVersionSchema = z.object({
+  replacesApprovedVersionId: replacesApprovedVersionIdField,
 });
 export type GeneratePlanVersionInput = z.infer<typeof generatePlanVersionSchema>;
 
@@ -129,8 +151,32 @@ export const moveGuestAssignmentSchema = z.object({
   // button; only the undo/redo stack calls it directly today).
   tableId: z.string().min(1).nullable(),
   expectedRevision: expectedRevisionField,
+  // TS-208: with tableId null, unseat only these members of the guest's must-sit-together group
+  // (undo of seating a guest whose partner was already at that table keeps the partner seated).
+  onlyGuestIds: z.array(z.string().min(1).max(64)).max(500).optional(),
+  // TS-228: sent by Undo when it puts a group back at a table -- where each member of the guest's
+  // must-sit-together group (as the screen saw it) sat before the move being undone. The server
+  // works the group out again under the plan's lock and refuses (UNDO_SPLITS_GROUP_MESSAGE) if
+  // anyone in it wasn't at that table then -- e.g. a must-sit rule added a moment before the undo.
+  undoSeatsBefore: z
+    .record(z.string().min(1).max(64), z.string().min(1).max(64))
+    .refine((seats) => Object.keys(seats).length <= 500, "Too many seats.")
+    .optional(),
 });
 export type MoveGuestAssignmentInput = z.infer<typeof moveGuestAssignmentSchema>;
+
+/** TS-221: what Undo says when putting the move back would split a must-sit-together group. */
+export const UNDO_SPLITS_GROUP_MESSAGE = "Can't undo — that would split a must-sit-together group.";
+
+/**
+ * TS-221 / TS-228: true when sending `group` (everyone who moves together) to `undoTableId` would
+ * put someone at a table they weren't at before the move -- the group was split then, so moving it
+ * back together isn't an undo. `seatsBefore`: guest id -> table before the move (unseated: absent).
+ * Used by the Seating plan tab and again by the server, under the plan's lock.
+ */
+export function undoSplitsGroup(group: readonly string[], seatsBefore: Readonly<Record<string, string>>, undoTableId: string): boolean {
+  return group.some((g) => (Object.prototype.hasOwnProperty.call(seatsBefore, g) ? seatsBefore[g] : null) !== undoTableId);
+}
 
 // FR-8.1 (Day-Of Mode): swap two guests' (or their forced-together units') tables in one move.
 export const swapGuestAssignmentsSchema = z.object({
@@ -154,6 +200,8 @@ export interface RestorePreviewDTO {
   droppedGuests: { guestId: string; guestName: string; reason: string }[];
   unassignedGuestIds: string[];
   isComplete: boolean;
+  // TS-177: of keptCount, how many will be flagged Needs Reassignment once restored.
+  needsFixingCount: number;
   warnings: string[];
 }
 
@@ -171,6 +219,8 @@ export interface GuestComparisonEntryDTO {
   toTableId: string | null;
   toTableLabel: string | null;
   status: GuestComparisonStatus;
+  /** TS-235: set (true) when the guest is marked not attending now -- left out of the summary counts. */
+  notAttending?: true;
 }
 
 export interface PlanVersionComparisonSummaryRefDTO {
@@ -184,6 +234,7 @@ export interface PlanVersionComparisonDTO {
   from: PlanVersionComparisonSummaryRefDTO;
   to: PlanVersionComparisonSummaryRefDTO;
   guests: GuestComparisonEntryDTO[];
+  // TS-235: guests not attending now aren't counted.
   summary: {
     movedCount: number;
     addedCount: number;

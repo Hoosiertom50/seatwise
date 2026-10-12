@@ -6,6 +6,8 @@ import Link from "next/link";
 import { api, ApiError } from "@/lib/api-client";
 import type { AuthResponse } from "@seatwise/shared";
 import { safeNextPath, withCurrentNext } from "@/lib/safe-next";
+// TS-193: the same limits the server checks (packages/shared/src/field-limits.ts).
+import { FIELD_LIMITS } from "@seatwise/shared";
 
 export default function SignupPage() {
   const router = useRouter();
@@ -51,7 +53,10 @@ export default function SignupPage() {
               Name
             </label>
             <input
+              maxLength={FIELD_LIMITS.personName}
               id="signup-name"
+              // TS-175: lets the browser and password managers fill these in.
+              autoComplete="name"
               className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
               value={name}
               onChange={(e) => setName(e.target.value)}
@@ -63,7 +68,9 @@ export default function SignupPage() {
               Email
             </label>
             <input
+              maxLength={FIELD_LIMITS.email}
               id="signup-email"
+              autoComplete="email"
               type="email"
               className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
               value={email}
@@ -76,7 +83,9 @@ export default function SignupPage() {
               Password
             </label>
             <input
+              maxLength={FIELD_LIMITS.password}
               id="signup-password"
+              autoComplete="new-password"
               type="password"
               className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
               value={password}
@@ -89,7 +98,7 @@ export default function SignupPage() {
               At least 8 characters.
             </p>
           </div>
-          {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}
+          {error && <p role="alert" className="text-sm text-red-600 dark:text-red-400">{error}</p>}
           <button
             type="submit"
             disabled={loading}

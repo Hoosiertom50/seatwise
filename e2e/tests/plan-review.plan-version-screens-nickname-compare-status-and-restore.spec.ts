@@ -21,7 +21,7 @@ defineQualityTest(
     objective:
       "Confirms that the score explanation toggles; that a nickname can be cancelled, added and renamed, and a rename based on a stale version is refused; that comparing two versions shows a moved/added/removed/unchanged summary and comparing a version with itself is refused with 'Choose two different plan versions to compare.'; that status can go In review → Draft and Approved → In review; and that a past version shows its read-only notice with no status buttons, its restore preview can be cancelled with no version created, and confirming creates a new current version.",
     expectedOutcome:
-      "The toggle reads 'Hide calculation' then 'How is this calculated?'. Cancel leaves no label; Save stores 'Option A', then 'Option B'; a stale save shows the 'someone else's change landed first' message. The comparison summary appears, and the same-version comparison shows the refusal. The API status reads DRAFT after Move back to draft and IN_REVIEW after Reopen for review. On v1: the past-version notice shows, there are no status buttons, Cancel leaves the version count unchanged, and Confirm restore adds a version that is current.",
+      "The toggle reads 'Hide calculation' then 'How is this calculated?'. Cancel leaves no label; Save stores 'Option A', then 'Option B'; a stale save shows the 'changed since you loaded it (maybe in another tab, or by someone else)' message. The comparison summary appears, and the same-version comparison shows the refusal. The API status reads DRAFT after Move back to draft and IN_REVIEW after Reopen for review. On v1: the past-version notice shows, there are no status buttons, Cancel leaves the version count unchanged, and Confirm restore adds a version that is current.",
     requirementIds: ["REQ-PLAN-REVIEW-STATUS"],
     tags: ["@mutating", "@feature:seating-plan", "@risk:normal", "@suite:regression"],
   },
@@ -66,7 +66,7 @@ defineQualityTest(
       });
       expect(theirs.ok()).toBe(true);
       await plan.setNickname("Mine");
-      await expect(plan.message(/^This plan changed since you loaded it — someone else's change landed first\./)).toBeVisible();
+      await expect(plan.message(/^This plan changed since you loaded it \(maybe in another tab, or by someone else\)\./)).toBeVisible();
       expect((await current()).label).toBe("Theirs");
       await plan.cancelNicknameEdit();
     });

@@ -28,7 +28,8 @@
 //   pnpm --filter @seatwise/db cleanup-test-templates            # dry run, prints a preview
 //   pnpm --filter @seatwise/db cleanup-test-templates --confirm  # actually deletes
 
-import "./load-env";
+// TS-172: local databases only (see local-only.ts).
+import "./local-only";
 import { pool } from "../src/index";
 
 /** Mirrors TEST_DATA_MARKER in e2e/data/ids.ts. Kept as a literal because packages/ deliberately

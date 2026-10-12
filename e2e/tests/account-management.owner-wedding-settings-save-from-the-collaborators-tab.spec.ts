@@ -36,14 +36,16 @@ defineQualityTest(
       ((await (await context.request.get(`/api/v1/weddings/${w}`)).json()) as { wedding: WeddingSettings }).wedding;
     await settings.goto(w);
 
-    await test.step("Rename, and a name with disallowed characters or a blank one is refused with the saved name put back", async () => {
+    await test.step("Rename, and a name with disallowed characters or a blank one is refused (the typed name stays to fix, nothing is saved)", async () => {
       const newName = `${managedWedding.name} - renamed`;
       await settings.setAndLeave(settings.weddingNameInput(), newName);
       await expect.poll(async () => (await saved()).name).toBe(newName);
 
       await settings.setAndLeave(settings.weddingNameInput(), `${newName} (oops)`);
       await expect(settings.message(/^Can only contain letters, numbers, spaces, and common punctuation/)).toBeVisible();
-      await expect(settings.weddingNameInput()).toHaveValue(newName);
+      // TS-199: a refused value stays in the box (with the reason) for the owner to fix; nothing is saved.
+      await expect(settings.weddingNameInput()).toHaveValue(`${newName} (oops)`);
+      expect((await saved()).name).toBe(newName);
 
       await settings.setAndLeave(settings.weddingNameInput(), "   ");
       await expect(settings.message("Wedding name can't be blank.")).toBeVisible();

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { resolveComment, CommentError } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
-import { errorResponse } from "@/lib/api-response";
+import { errorResponse, weddingDeletedResponse } from "@/lib/api-response";
 import { requireAccess } from "@/lib/access";
 
 type Params = { params: Promise<{ weddingId: string; commentId: string }> };
@@ -21,12 +21,15 @@ export async function POST(req: NextRequest, { params }: Params) {
   const canEdit = access.accessLevel === "OWNER" || access.accessLevel === "EDIT";
 
   try {
-    const comment = await resolveComment(weddingId, commentId, user.id, canEdit);
+    const comment = await resolveComment(weddingId, commentId, user.id, canEdit, access.actor);
     return NextResponse.json({ ok: true, comment });
   } catch (err) {
     if (err instanceof CommentError) {
       return errorResponse(err.message, err.code === "NOT_FOUND" ? 404 : 403);
     }
+    // TS-204: access dropped while it waited (403), or the wedding was deleted (404) -- nothing saved.
+    const refused = weddingDeletedResponse(err);
+    if (refused) return refused;
     throw err;
   }
 }

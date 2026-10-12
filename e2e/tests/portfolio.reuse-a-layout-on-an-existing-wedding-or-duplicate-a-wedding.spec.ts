@@ -26,7 +26,7 @@ defineQualityTest(
     objective:
       "Confirms adding a template to an existing wedding appends its tables with shapes and positions intact, renames a clashing label instead of duplicating it, and leaves existing tables unchanged; and that duplicating a wedding from the dashboard opens a new wedding with the same tables, positions, shapes and side-mixing, and no guests.",
     expectedOutcome:
-      "After applying, the wedding has its original table unchanged plus the template's tables, one relabelled 'Table 1 (2)'. After duplicating, the browser is on the new wedding, named '<source> (copy)', whose tables match the source's labels, shapes and positions, with 0 guests.",
+      "After applying, the wedding has its original table unchanged plus the template's tables, one relabelled 'Table 1 (2)'. After duplicating, the browser is on the new wedding, named '<source> - copy' (TS-168: parentheses aren't allowed in wedding names), whose tables match the source's labels, shapes and positions, with 0 guests.",
     requirementIds: ["REQ-REUSABLE-TEMPLATES", "REQ-PLANNER-PORTFOLIO"],
     tags: ["@mutating", "@feature:templates", "@risk:normal", "@suite:regression"],
   },
@@ -75,7 +75,7 @@ defineQualityTest(
       weddingData.trackWedding(copyId);
 
       const wedding = ((await (await context.request.get(`/api/v1/weddings/${copyId}`)).json()) as { wedding: { name: string } }).wedding;
-      expect(wedding.name).toBe(`${source.name} (copy)`);
+      expect(wedding.name).toBe(`${source.name} - copy`);
       const shape = (ts: TableRow[]) =>
         ts.map((t) => ({ label: t.label, shape: t.shape, x: t.positionX, y: t.positionY, capacity: t.capacity })).sort((a, b) => a.label.localeCompare(b.label));
       expect(shape(await tablesOf(copyId))).toEqual(shape(await tablesOf(source.id)));

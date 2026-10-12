@@ -2,7 +2,8 @@
  * TS-46 (REQ-DAY-OF-TIMELINE) — page object for the wedding detail page's Timeline tab
  * (apps/web/src/app/weddings/[weddingId]/components/TimelineTab.tsx): a per-wedding chronological
  * run-of-show, entirely independent of guests/tables/rules/seating plans. Entries are always
- * listed by (time, sortOrder) from the server -- this component never sorts client-side -- so a
+ * listed by (time, sortOrder) from the server (TS-214: next-day entries last; after a change the
+ * component re-sorts the same way) -- so a
  * test drives ordering entirely through what's added/edited/reordered, never a client re-sort.
  * Selectors are kept private per the framework's raw-selector-in-test lint rule.
  */
@@ -12,7 +13,7 @@ import { ConfirmDelete } from "../components/ConfirmDelete.js";
 
 export class TimelineTabPage extends BasePage {
   private timelineTabButton() {
-    return this.page.getByRole("button", { name: "Timeline", exact: true });
+    return this.page.getByRole("tab", { name: "Timeline", exact: true });
   }
 
   private addTimeInput() {
@@ -32,7 +33,8 @@ export class TimelineTabPage extends BasePage {
   }
 
   private editButton(description: string) {
-    return this.entryRow(description).getByRole("button", { name: "Edit", exact: true });
+    // TS-175: buttons are named for their entry ("Edit <description>", "Move <description> earlier").
+    return this.entryRow(description).getByRole("button", { name: `Edit ${description}`, exact: true });
   }
   // Not row-scoped, deliberately: once Edit is clicked, TimelineTab.tsx replaces that row's own
   // description text with these very inputs -- so a row locator keyed on the (now-gone) plain
@@ -48,10 +50,10 @@ export class TimelineTabPage extends BasePage {
     return this.page.getByRole("button", { name: "Save", exact: true });
   }
   private upButton(description: string) {
-    return this.entryRow(description).getByRole("button", { name: "↑", exact: true });
+    return this.entryRow(description).getByRole("button", { name: `Move ${description} earlier`, exact: true });
   }
   private downButton(description: string) {
-    return this.entryRow(description).getByRole("button", { name: "↓", exact: true });
+    return this.entryRow(description).getByRole("button", { name: `Move ${description} later`, exact: true });
   }
   private removeButton(description: string) {
     return this.entryRow(description).getByRole("button", { name: /^Remove / });
@@ -97,16 +99,16 @@ export class TimelineTabPage extends BasePage {
     return this.addDescriptionInput();
   }
   allEditButtons() {
-    return this.page.getByRole("button", { name: "Edit", exact: true });
+    return this.page.getByRole("button", { name: /^Edit / });
   }
   allRemoveButtons() {
     return this.page.getByRole("button", { name: /^Remove / });
   }
   allMoveUpButtons() {
-    return this.page.getByRole("button", { name: "↑", exact: true });
+    return this.page.getByRole("button", { name: /^Move .* earlier$/ });
   }
   allMoveDownButtons() {
-    return this.page.getByRole("button", { name: "↓", exact: true });
+    return this.page.getByRole("button", { name: /^Move .* later$/ });
   }
 
   /**
@@ -147,9 +149,11 @@ export class TimelineTabPage extends BasePage {
    * (`onAdd`'s own state reset, confirming its `.then()` has actually run) before returning -- so
    * a caller can immediately call `addEntry` again without racing this submission's own async
    * completion against the next one's form fill. */
-  async addEntry(time: string, description: string): Promise<void> {
+  // TS-214: `nextDay` ticks "After midnight (next day)".
+  async addEntry(time: string, description: string, nextDay = false): Promise<void> {
     await this.addTimeInput().fill(time);
     await this.addDescriptionInput().fill(description);
+    if (nextDay) await this.page.getByLabel("After midnight (next day)", { exact: true }).check();
     await Promise.all([
       this.page.waitForResponse(
         (res) => res.request().method() === "POST" && this.isTimelineEntriesCollectionRequest(res.url()),
@@ -199,6 +203,26 @@ export class TimelineTabPage extends BasePage {
 
   async moveDown(description: string): Promise<void> {
     await this.reorder(description, "DOWN");
+  }
+
+  /** TS-242: the row for an entry, for checking it's (still) on screen. */
+  entryRowLocator(description: string) {
+    return this.entryRow(description);
+  }
+
+  /** TS-242: presses "Move earlier" and waits only for the move itself to be saved -- not for the
+   * list's reload, which a test may be holding back. */
+  async startMoveUp(description: string): Promise<void> {
+    await Promise.all([
+      this.page.waitForResponse((res) => res.request().method() === "POST" && this.isTimelineReorderRequest(res.url())),
+      this.upButton(description).click(),
+    ]);
+  }
+
+  /** TS-242: Remove, then "Yes" -- without waiting for the DELETE (a test may be holding it back). */
+  async startRemove(description: string): Promise<void> {
+    await this.removeButton(description).click();
+    await new ConfirmDelete(this.entryRow(description)).confirm();
   }
 
   async isMoveUpEnabled(description: string): Promise<boolean> {

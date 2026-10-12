@@ -11,7 +11,7 @@ export type CommentTargetType = "GUEST" | "TABLE" | "TIMELINE_ENTRY";
 
 export class CommentsTabPage extends BasePage {
   private commentsTabButton() {
-    return this.page.getByRole("button", { name: "Comments", exact: true });
+    return this.page.getByRole("tab", { name: "Comments", exact: true });
   }
 
   private targetTypeSelect() {
@@ -57,6 +57,24 @@ export class CommentsTabPage extends BasePage {
     await this.page.getByRole("button", { name: "Post comment", exact: true }).waitFor();
   }
 
+  /** TS-223: fills the form and presses Post comment without waiting for a save (it may be refused before sending). */
+  async submitComment(targetType: CommentTargetType, targetLabel: string, body: string): Promise<void> {
+    await this.targetTypeSelect().selectOption(targetType);
+    await this.targetSelect(targetType).selectOption({ label: targetLabel });
+    await this.commentTextArea().fill(body);
+    await this.postCommentButton().click();
+  }
+
+  /** TS-223: an error message on the tab (role=alert) holding `text`. */
+  errorMessage(text: string | RegExp) {
+    return this.page.getByRole("alert").filter({ hasText: text });
+  }
+
+  /** TS-221: the comment box, to start (or clear) a draft. */
+  async typeDraft(text: string): Promise<void> {
+    await this.commentTextArea().fill(text);
+  }
+
   /** The `<li>` for one top-level comment thread, located by its own posted body text. */
   threadByBody(body: string) {
     return this.page.locator("li").filter({ hasText: body });
@@ -64,7 +82,8 @@ export class CommentsTabPage extends BasePage {
 
   // TS-118: replying to and resolving a thread through the UI.
   replyOpener(threadBody: string) {
-    return this.threadByBody(threadBody).first().getByRole("button", { name: "Reply", exact: true });
+    // TS-212: the button names the comment it replies to ("Reply to Ann's comment on Table 1").
+    return this.threadByBody(threadBody).first().getByRole("button", { name: /^Reply to / });
   }
 
   async reply(threadBody: string, text: string): Promise<void> {
@@ -100,7 +119,12 @@ export class CommentsTabPage extends BasePage {
   }
 
   async resolve(threadBody: string): Promise<void> {
-    await this.threadByBody(threadBody).first().getByRole("button", { name: "Resolve", exact: true }).click();
+    await this.resolveButton(threadBody).click();
+  }
+
+  /** TS-212: the thread's Resolve button (its name says whose comment, on what). */
+  resolveButton(threadBody: string) {
+    return this.threadByBody(threadBody).first().getByRole("button", { name: /^Resolve / });
   }
 
   resolvedBadge(threadBody: string) {

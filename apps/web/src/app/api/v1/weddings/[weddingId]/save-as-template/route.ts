@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { saveWeddingAsTemplateSchema } from "@seatwise/shared";
-import { createTemplateFromWedding } from "@seatwise/db";
+import { createTemplateFromWedding, type UserRow } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
-import { errorResponse, zodErrorResponse } from "@/lib/api-response";
-import { requireAccess } from "@/lib/access";
+import { errorResponse, zodErrorResponse, concurrentChangeResponse, readJson } from "@/lib/api-response";
+import { SAVED_BUT_NOT_REFRESHED } from "@/lib/post-save";
+import { requireAccess, type GrantedAccess } from "@/lib/access";
+import { limitedWeddingWork } from "@/lib/rate-limit";
 
 type Params = { params: Promise<{ weddingId: string }> };
 
@@ -19,10 +21,29 @@ export async function POST(req: NextRequest, { params }: Params) {
   const access = await requireAccess(weddingId, user.id, "EDIT");
   if ("error" in access) return access.error;
 
-  const body = await req.json().catch(() => null);
+  // TS-205: an hourly limit per account on saving templates.
+  return limitedWeddingWork("saveTemplate", user.id, () => saveTemplate(req, weddingId, user, access));
+}
+
+async function saveTemplate(req: NextRequest, weddingId: string, user: UserRow, access: GrantedAccess): Promise<Response> {
+
+  // TS-204: readJson refuses a non-JSON or oversized body (413), even one sent without a Content-Length.
+  const json = await readJson(req);
+  if (!json.ok) return json.response;
+  const body = json.body;
   const parsed = saveWeddingAsTemplateSchema.safeParse(body);
   if (!parsed.success) return zodErrorResponse(parsed.error);
 
-  const template = await createTemplateFromWedding(user.id, weddingId, parsed.data.name);
-  return NextResponse.json({ template }, { status: 201 });
+  // TS-209: a wedding deleted while this was saved is a 404 (it was a server error), and the database
+  // being too busy says nothing was saved. Once saved, the answer is a success -- with a warning when
+  // the new template couldn't be read back.
+  try {
+    // TS-204: access read again before the wedding is copied.
+    const template = await createTemplateFromWedding(user.id, weddingId, parsed.data.name, access.actor);
+    return NextResponse.json({ template, warnings: template ? [] : [SAVED_BUT_NOT_REFRESHED] }, { status: 201 });
+  } catch (err) {
+    const handled = concurrentChangeResponse(err);
+    if (handled) return handled;
+    throw err;
+  }
 }

@@ -1,8 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { submitGuestRsvpSchema, type GuestRsvpPreviewDTO, isRsvpCutoffPast } from "@seatwise/shared";
-import { getGuestByRsvpToken, hashLinkToken, submitGuestRsvp, RsvpSubmissionError, resyncGuestSeat, notifyWeddingCollaborators } from "@seatwise/db";
-import { errorResponse, zodErrorResponse } from "@/lib/api-response";
-import { clientAddress, rateLimitOr429, RSVP_LIMITS } from "@/lib/rate-limit";
+import {
+  CHANGED_RSVP_EMAILS_PER_GUEST_PER_DAY,
+  getGuestByRsvpToken,
+  hashLinkToken,
+  submitGuestRsvp,
+  RsvpSubmissionError,
+  notifyWeddingCollaborators,
+} from "@seatwise/db";
+import { errorResponse, zodErrorResponse, readJson } from "@/lib/api-response";
+import { networkRateLimitOr429, rateLimitOr429, RSVP_LIMITS, RSVP_LINK_TOO_MANY_SUBMITS, rsvpNetworkCounters } from "@/lib/rate-limit";
 
 type Params = { params: Promise<{ token: string }> };
 
@@ -26,7 +33,8 @@ const NO_STORE = { "Cache-Control": "no-store" };
 export async function GET(req: NextRequest, { params }: Params) {
   const { token } = await params;
   // TS-98: this endpoint needs no sign-in, so it's rate-limited per network address.
-  const limited = await rateLimitOr429(`rsvp:addr:${clientAddress(req)}`, RSVP_LIMITS.perAddress);
+  // TS-219: and for IPv6, per /48 as well.
+  const limited = await networkRateLimitOr429(rsvpNetworkCounters(req));
   if (limited) return limited;
   const guest = await getGuestByRsvpToken(token);
 
@@ -61,22 +69,59 @@ export async function POST(req: NextRequest, { params }: Params) {
   // TS-98: per network address, and per guest link -- so neither one flooding source nor one
   // leaked link can hammer a guest's record.
   const limited =
-    (await rateLimitOr429(`rsvp:addr:${clientAddress(req)}`, RSVP_LIMITS.perAddress)) ??
+    // TS-219: and for IPv6, per /48 as well.
+    (await networkRateLimitOr429(rsvpNetworkCounters(req))) ??
     // TS-160: keyed by the link's hash, so the counters table never holds a working link either.
-    (await rateLimitOr429(`rsvp:submit:${hashLinkToken(token)}`, RSVP_LIMITS.submitsPerLink));
+    // TS-177: this one counts submits on the link from anywhere, so the message can't say "from here".
+    (await rateLimitOr429(
+      `rsvp:submit:${hashLinkToken(token)}`,
+      RSVP_LIMITS.submitsPerLink,
+      RSVP_LINK_TOO_MANY_SUBMITS
+    ));
   if (limited) return limited;
 
-  const body = await req.json().catch(() => null);
+  // TS-204: readJson refuses a non-JSON or oversized body (413), even one sent without a Content-Length.
+  const json = await readJson(req);
+  if (!json.ok) return json.response;
+  const body = json.body;
   const parsed = submitGuestRsvpSchema.safeParse(body);
   if (!parsed.success) return zodErrorResponse(parsed.error);
 
+  let guest: Awaited<ReturnType<typeof submitGuestRsvp>>;
   try {
     const { notes, ...rest } = parsed.data;
-    const guest = await submitGuestRsvp(token, { ...rest, rsvpNotes: notes });
-    // TS-134: a guest who now needs an accessible seat, or is bringing more people than their
-    // table has room for, is flagged Needs Reassignment -- exactly as a planner's own edit would --
-    // instead of silently staying where they no longer fit.
-    await resyncGuestSeat(guest.weddingId, guest.id);
+    // TS-174: the answer, the attendance change a changed answer brings (TS-167/TS-169: declining
+    // gives up the seat, confirming again after declining means waiting for one) and the re-check
+    // of their seat (TS-134) are all one transaction inside submitGuestRsvp -- saved together or
+    // not at all.
+    guest = await submitGuestRsvp(token, { ...rest, rsvpNotes: notes });
+  } catch (err) {
+    if (err instanceof RsvpSubmissionError) {
+      return errorResponse(err.message, err.code === "NOT_FOUND" ? 404 : err.code === "OVER_PARTY_SIZE" ? 422 : 409);
+    }
+    // TS-174: lost a race with another change to the same wedding (the database broke a deadlock,
+    // or something it pointed at was removed). It all rolled back, so nothing was saved -- say so
+    // and let the guest send it again, rather than a server error.
+    const code = (err as { code?: string } | null)?.code;
+    if (code === "40P01" || code === "40001" || code === "23503") {
+      return errorResponse("Something changed at the same moment, so your RSVP wasn't saved — nothing was changed. Please send it again.", 409);
+    }
+    throw err;
+  }
+
+  // TS-174: from here on the RSVP is saved. Telling the planner is best effort: a failure is logged,
+  // never reported to the guest as their RSVP failing.
+  try {
+    const changedAnswer = guest.previousRsvpStatus !== guest.rsvpStatus;
+    // TS-174: only say a seat was freed when they actually had one.
+    const seatNote =
+      guest.attendanceChange === "NOT_ATTENDING"
+        ? guest.seatFreed
+          ? " Their seat has been freed."
+          : ""
+        : guest.attendanceChange === "ATTENDING"
+          ? " They need a seat."
+          : "";
     // TS-154 (Tom's decision #2): the planner and collaborators hear about every response.
     const answer =
       guest.rsvpStatus === "CONFIRMED"
@@ -84,12 +129,23 @@ export async function POST(req: NextRequest, { params }: Params) {
         : guest.rsvpStatus === "DECLINED"
           ? "can't make it"
           : "updated their RSVP";
-    await notifyWeddingCollaborators(guest.weddingId, null, "RSVP_RECEIVED", `${guest.firstName} ${guest.lastName} ${answer}.`);
-    return NextResponse.json({ ok: true });
+    // TS-163: everyone is emailed about a guest's response at most once an hour, however often
+    // their link is submitted; each response still shows in the app.
+    // TS-169: a changed answer is emailed (the once-an-hour key only holds back repeats), so the
+    // planner's inbox never shows "coming" when they've since declined.
+    // TS-186 (Tom's decision): but at most 3 changed answers per guest per day -- after that the
+    // change only shows in the app, so one guest flipping their answer can't flood the planners.
+    await notifyWeddingCollaborators(
+      guest.weddingId,
+      null,
+      "RSVP_RECEIVED",
+      `${guest.firstName} ${guest.lastName} ${answer}.${seatNote}`,
+      changedAnswer
+        ? { emailAtMost: { key: `email:rsvp-changed:day:${guest.id}`, ...CHANGED_RSVP_EMAILS_PER_GUEST_PER_DAY } }
+        : { emailOncePer: { key: `email:rsvp-notify:${guest.id}`, windowSeconds: 3600 } }
+    );
   } catch (err) {
-    if (err instanceof RsvpSubmissionError) {
-      return errorResponse(err.message, err.code === "NOT_FOUND" ? 404 : err.code === "OVER_PARTY_SIZE" ? 422 : 409);
-    }
-    throw err;
+    console.error("RSVP saved, but notifying the planner failed:", err);
   }
+  return NextResponse.json({ ok: true });
 }

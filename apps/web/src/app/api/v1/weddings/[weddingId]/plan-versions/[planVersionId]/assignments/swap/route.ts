@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { swapGuestAssignmentsSchema } from "@seatwise/shared";
 import { swapGuestAssignments, SwapError, PlanVersionConflictError, PlanVersionNotFoundError } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
-import { errorResponse, zodErrorResponse } from "@/lib/api-response";
+import { errorResponse, zodErrorResponse, concurrentChangeResponse, readJson } from "@/lib/api-response";
 import { requireAccess } from "@/lib/access";
 
 type Params = { params: Promise<{ weddingId: string; planVersionId: string }> };
@@ -19,7 +19,10 @@ export async function POST(req: NextRequest, { params }: Params) {
   const access = await requireAccess(weddingId, user.id, "EDIT");
   if ("error" in access) return access.error;
 
-  const body = await req.json().catch(() => null);
+  // TS-204: readJson refuses a non-JSON or oversized body (413), even one sent without a Content-Length.
+  const json = await readJson(req);
+  if (!json.ok) return json.response;
+  const body = json.body;
   const parsed = swapGuestAssignmentsSchema.safeParse(body);
   if (!parsed.success) return zodErrorResponse(parsed.error);
 
@@ -30,7 +33,9 @@ export async function POST(req: NextRequest, { params }: Params) {
       parsed.data.guestAId,
       parsed.data.guestBId,
       user.id,
-      parsed.data.expectedRevision
+      parsed.data.expectedRevision,
+      // TS-204: read again under the plan's lock.
+      access.actor
     );
     return NextResponse.json({ planVersion, warnings });
   } catch (err) {
@@ -42,8 +47,12 @@ export async function POST(req: NextRequest, { params }: Params) {
       );
     }
     if (err instanceof SwapError) {
+      // TS-197: see the assignments route -- a newer plan comes back with the refusal.
+      if (err.planVersion) return NextResponse.json({ error: err.message, planVersion: err.planVersion }, { status: 409 });
       return errorResponse(err.message, 409);
     }
+    const conflict = concurrentChangeResponse(err);
+    if (conflict) return conflict;
     throw err;
   }
 }

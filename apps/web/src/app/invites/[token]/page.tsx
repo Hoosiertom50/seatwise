@@ -6,6 +6,7 @@ import Link from "next/link";
 import { api, ApiError } from "@/lib/api-client";
 import type { InvitePreviewDTO } from "@seatwise/shared";
 import { loginUrlReturningTo } from "@/lib/safe-next";
+import { EmailVerificationNotice } from "@/components/EmailVerificationNotice";
 
 // FR-1.4a: the invite accept page. Deliberately shows nothing about the wedding unless the
 // invite is genuinely PENDING and (once we know who's signed in) the address matches -- an
@@ -13,12 +14,26 @@ import { loginUrlReturningTo } from "@/lib/safe-next";
 export default function InviteAcceptPage() {
   const { token } = useParams<{ token: string }>();
   const router = useRouter();
+  const [signOutError, setSignOutError] = useState<string | null>(null);
+  async function onSignOutAndReturn() {
+    setSignOutError(null);
+    try {
+      await api.post("/api/v1/auth/logout");
+    } catch {
+      setSignOutError("Couldn't sign out — check your connection and try again.");
+      return;
+    }
+    router.replace(loginUrlReturningTo(`/invites/${token}`));
+  }
 
   const [preview, setPreview] = useState<InvitePreviewDTO | null>(null);
   const [currentUserEmail, setCurrentUserEmail] = useState<string | null | undefined>(undefined);
   const [loading, setLoading] = useState(true);
   const [accepting, setAccepting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // TS-166: the invite couldn't be loaded (as opposed to not existing) -- shown with a Try again.
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [loadAttempt, setLoadAttempt] = useState(0);
 
   useEffect(() => {
     (async () => {
@@ -29,14 +44,19 @@ export default function InviteAcceptPage() {
         ]);
         setPreview(previewRes.invite);
         setCurrentUserEmail(meRes ? meRes.user.email : null);
-      } catch {
-        setPreview({ status: "NOT_FOUND" });
-        setCurrentUserEmail(null);
+      } catch (err) {
+        // TS-166: a link that doesn't exist comes back as status NOT_FOUND, never an error -- an
+        // error here is a failed load (connection, server, too many attempts), not a dead link.
+        setLoadError(
+          err instanceof ApiError && err.status !== 0
+            ? err.message
+            : "We couldn't load this invite just now. Check your connection and try again."
+        );
       } finally {
         setLoading(false);
       }
     })();
-  }, [token]);
+  }, [token, loadAttempt]);
 
   async function onAccept() {
     setError(null);
@@ -50,6 +70,49 @@ export default function InviteAcceptPage() {
     }
   }
 
+  // TS-242: an invite that was already accepted. The existing accept POST answers {weddingId,
+  // alreadyAccepted} when this person accepted it (and still has access), so the wedding opens;
+  // for anyone else it answers "no longer valid", shown here. The GET still says only the status.
+  const [opening, setOpening] = useState(false);
+  const [openError, setOpenError] = useState<string | null>(null);
+  async function onOpenWedding() {
+    setOpenError(null);
+    setOpening(true);
+    try {
+      const { weddingId } = await api.post<{ weddingId: string }>(`/api/v1/invites/${token}/accept`);
+      router.push(`/weddings/${weddingId}`);
+    } catch (err) {
+      setOpenError(
+        err instanceof ApiError && err.status !== 0
+          ? err.message
+          : "Couldn't open the wedding. Check your connection and try again."
+      );
+      setOpening(false);
+    }
+  }
+
+  if (loadError) {
+    return (
+      <main className="flex flex-1 items-center justify-center px-6">
+        <div className="w-full max-w-sm text-center">
+          <h1 className="mb-4 text-2xl font-semibold">Wedding invite</h1>
+          <p className="text-sm text-neutral-600 dark:text-neutral-300">{loadError}</p>
+          <button
+            type="button"
+            onClick={() => {
+              setLoadError(null);
+              setLoading(true);
+              setLoadAttempt((n) => n + 1);
+            }}
+            className="mt-4 rounded-md border border-neutral-300 dark:border-neutral-600 px-4 py-2 text-sm font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800"
+          >
+            Try again
+          </button>
+        </div>
+      </main>
+    );
+  }
+
   if (loading || !preview) {
     return <main className="flex flex-1 items-center justify-center text-neutral-500 dark:text-neutral-400">Loading...</main>;
   }
@@ -60,12 +123,16 @@ export default function InviteAcceptPage() {
     <main className="flex flex-1 items-center justify-center px-6">
       <div className="w-full max-w-sm text-center">
         <h1 className="mb-4 text-2xl font-semibold">Wedding invite</h1>
+        {/* TS-164: an account must confirm its email before it can accept. */}
+        {signedIn && <EmailVerificationNotice />}
 
         {preview.status === "NOT_FOUND" && (
           <p className="text-sm text-neutral-600 dark:text-neutral-300">This invite link doesn&apos;t exist.</p>
         )}
         {preview.status === "REVOKED" && (
-          <p className="text-sm text-neutral-600 dark:text-neutral-300">This invite has been revoked by the wedding&apos;s owner.</p>
+          <p className="text-sm text-neutral-600 dark:text-neutral-300">{/* TS-177: also what an older link shows once a newer invite was sent -- not only a cancelled one. */}
+            This invite link is no longer active. If you were sent a newer invite, use the link in that email; otherwise
+            ask the person who invited you for a new one.</p>
         )}
         {preview.status === "EXPIRED" && (
           <p className="text-sm text-neutral-600 dark:text-neutral-300">
@@ -75,11 +142,51 @@ export default function InviteAcceptPage() {
         {preview.status === "ACCEPTED" && (
           <p className="text-sm text-neutral-600 dark:text-neutral-300">This invite has already been accepted.</p>
         )}
+        {/* TS-242: if this person accepted it, a way straight into the wedding. The alert region is
+            on the page before its text changes. */}
+        {preview.status === "ACCEPTED" && signedIn && (
+          <>
+            <button
+              type="button"
+              onClick={() => void onOpenWedding()}
+              disabled={opening}
+              className="mt-4 w-full rounded-md bg-neutral-900 dark:bg-neutral-100 px-4 py-2 text-sm font-medium text-white dark:text-neutral-900 hover:bg-neutral-700 dark:hover:bg-neutral-300 disabled:opacity-50"
+            >
+              {opening ? "Opening..." : "Open the wedding"}
+            </button>
+            <p role="alert" className="mt-2 text-sm text-red-600 dark:text-red-400 empty:hidden">
+              {openError ?? ""}
+            </p>
+          </>
+        )}
         {preview.status === "MISMATCHED_ACCOUNT" && (
-          <p className="text-sm text-neutral-600 dark:text-neutral-300">
-            This invite was sent to a different email address than the account you&apos;re signed
-            in with. Sign out and sign in with the invited address to accept it.
-          </p>
+          <>
+            <p className="text-sm text-neutral-600 dark:text-neutral-300">
+              This invite was sent to a different email address than the account you&apos;re signed
+              in with. Sign out and sign in with the invited address to accept it.
+            </p>
+            {/* TS-175: the button the message asks for -- signs out, then comes back here. */}
+            <button
+              type="button"
+              onClick={() => void onSignOutAndReturn()}
+              className="mt-4 rounded-md bg-neutral-900 dark:bg-neutral-100 px-4 py-2 text-sm font-medium text-white dark:text-neutral-900 hover:bg-neutral-700 dark:hover:bg-neutral-300"
+            >
+              Sign out and use the invited address
+            </button>
+            {signOutError && (
+              <p role="alert" className="mt-2 text-sm text-red-600 dark:text-red-400">
+                {signOutError}
+              </p>
+            )}
+          </>
+        )}
+        {/* TS-242: every state but a pending invite used to be a dead end for someone signed in. */}
+        {preview.status !== "PENDING" && signedIn && (
+          <div className="mt-4">
+            <Link href="/dashboard" className="text-sm underline">
+              Go to your dashboard
+            </Link>
+          </div>
         )}
 
         {preview.status === "PENDING" && (
@@ -90,14 +197,14 @@ export default function InviteAcceptPage() {
               {preview.permissionLevel?.toLowerCase()} access.
             </p>
             {preview.invitedEmail ? (
-              <p className="mb-6 text-xs text-neutral-400 dark:text-neutral-500">Invited: {preview.invitedEmail}</p>
+              <p className="mb-6 break-all text-xs text-neutral-500 dark:text-neutral-400">Invited: {preview.invitedEmail}</p>
             ) : (
               <div className="mb-6" />
             )}
 
             {signedIn ? (
               <>
-                {error && <p className="mb-3 text-sm text-red-600 dark:text-red-400">{error}</p>}
+                {error && <p role="alert" className="mb-3 text-sm text-red-600 dark:text-red-400">{error}</p>}
                 <button
                   onClick={onAccept}
                   disabled={accepting}

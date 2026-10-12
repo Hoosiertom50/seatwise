@@ -12,7 +12,7 @@ import { ConfirmDelete } from "../components/ConfirmDelete.js";
 
 export class TablesTabPage extends BasePage {
   private tablesTabButton() {
-    return this.page.getByRole("button", { name: "Tables", exact: true });
+    return this.page.getByRole("tab", { name: "Tables", exact: true });
   }
 
   // TS-51 (REQ-REUSABLE-TEMPLATES): the "Save as a reusable template" `<details>` section.
@@ -96,7 +96,8 @@ export class TablesTabPage extends BasePage {
   }
 
   async remainingCapacity(): Promise<number> {
-    return Number(await this.statValue("Remaining capacity").innerText());
+    // TS-177: labelled "Spare seats (after everyone attending)".
+    return Number(await this.statValue("Spare seats (after everyone attending)").innerText());
   }
 
   /** The non-blocking shortfall warning ("Short N seat(s) for everyone attending — ..."), only
@@ -110,6 +111,11 @@ export class TablesTabPage extends BasePage {
   // user-meaningful handle, so boxes are matched by that title's leading label.
   async openFloorPlan(): Promise<void> {
     await this.page.getByRole("button", { name: "Floor plan", exact: true }).click();
+  }
+
+  /** TS-199: the room itself (the canvas holding the table boxes), e.g. to walk its Tab order. */
+  floorPlanRegion() {
+    return this.page.getByRole("group", { name: "Room floor plan", exact: true });
   }
 
   /** Any message the tab shows the user (e.g. its red error banner), matched by its text -- a
@@ -128,7 +134,7 @@ export class TablesTabPage extends BasePage {
 
   /** TS-124: the in-row question shown when guests are seated at the table being removed. */
   removalConfirmation() {
-    return this.page.getByRole("alert").filter({ hasText: "in the current plan. Removing it will leave them unassigned." });
+    return this.page.getByRole("alert").filter({ hasText: "in the current plan. Removing it will leave them unassigned" });
   }
 
   async confirmTableRemoval(): Promise<void> {
@@ -268,5 +274,35 @@ export class TablesTabPage extends BasePage {
     await this.templateNameInput().fill(name);
     await this.saveAsTemplateButton().click();
     await expect(this.page.getByText(`Saved “${name}”`, { exact: false })).toBeVisible();
+  }
+
+  /** TS-216: the "Save as template" result line (a live region), matched by its text. */
+  templateSavedNotice(text: string | RegExp) {
+    return this.page.getByRole("status").filter({ hasText: text });
+  }
+
+  /** TS-166: a table's row in the list (found by its Remove button). */
+  tableRow(label: string) {
+    return this.page.locator("li").filter({ has: this.removeTableButton(label) });
+  }
+
+  /** TS-166: the row's "Accessible" and "Single-side" checkboxes. */
+  accessibleCheckbox(label: string) {
+    // TS-212: the checkboxes name their table ("Accessible: Table 1").
+    return this.tableRow(label).getByRole("checkbox", { name: `Accessible: ${label}`, exact: true });
+  }
+
+  singleSideCheckbox(label: string) {
+    return this.tableRow(label).getByRole("checkbox", { name: `Single-side: ${label}`, exact: true });
+  }
+
+  /** TS-235: a table row's "X/Y seated (Z remaining)" line. */
+  seatedText(label: string) {
+    return this.tableRow(label).getByText(/^\d+\/\d+ seated \(/);
+  }
+
+  /** TS-166: any error shown on the Tables tab. */
+  errorText() {
+    return this.page.locator("p.text-red-600, p.text-red-400");
   }
 }

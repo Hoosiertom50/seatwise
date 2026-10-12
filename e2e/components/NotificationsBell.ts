@@ -18,9 +18,10 @@ export class NotificationsBell {
     return this.bell().locator("span");
   }
 
-  /** The open panel, found by its "Notifications" heading. */
+  /** The open panel. TS-199: a named region (it's pinned to the screen edges on a phone, so it is
+   * no longer always `absolute`). */
   panel(): Locator {
-    return this.page.locator("div.absolute").filter({ has: this.page.getByText("Notifications", { exact: true }) });
+    return this.page.getByRole("region", { name: "Notifications", exact: true });
   }
 
   async toggle(): Promise<void> {

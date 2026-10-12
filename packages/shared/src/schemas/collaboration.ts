@@ -1,4 +1,7 @@
 import { z } from "zod";
+// TS-180: free text refuses hidden control characters (see ../safe-text).
+import { safeText } from "../safe-text";
+import { FIELD_LIMITS } from "../field-limits";
 
 // TS-13 (Collaboration & Notifications, FR-10.x): View/Comment/Edit collaborator access, plus
 // comments attached to a guest or table and in-app notifications.
@@ -12,7 +15,7 @@ export const collaboratorRoleEnum = z.enum(["COUPLE", "COLLABORATOR"]);
 export type CollaboratorRole = z.infer<typeof collaboratorRoleEnum>;
 
 export const addCollaboratorSchema = z.object({
-  email: z.string().email("Enter a valid email address"),
+  email: z.string().max(FIELD_LIMITS.email).email("Enter a valid email address"),
   permissionLevel: collaboratorPermissionEnum.default("VIEW"),
   role: collaboratorRoleEnum.default("COLLABORATOR"),
 });
@@ -44,7 +47,7 @@ export interface CollaboratorDTO {
 export const createInviteSchema = z.object({
   // TS-123: trimmed before it is validated, so a pasted address with a stray space is accepted
   // (createInvite then lowercases it) rather than refused as invalid.
-  email: z.string().trim().email("Enter a valid email address"),
+  email: z.string().trim().max(FIELD_LIMITS.email).email("Enter a valid email address"),
   permissionLevel: collaboratorPermissionEnum.default("VIEW"),
   role: collaboratorRoleEnum.default("COLLABORATOR"),
 });
@@ -98,7 +101,11 @@ export const createCommentSchema = z
     guestId: z.string().optional().nullable(),
     tableId: z.string().optional().nullable(),
     timelineEntryId: z.string().optional().nullable(),
-    body: z.string().min(1, "Comment can't be empty").max(4000),
+    // TS-198: a comment of only spaces and line breaks is empty too (it used to post a blank comment).
+    body: safeText(FIELD_LIMITS.comment, { multiline: true, required: "Comment can't be empty" }).refine(
+      (v) => v.trim() !== "",
+      "Comment can't be empty"
+    ),
     parentCommentId: z.string().optional().nullable(),
   })
   .refine(
@@ -155,6 +162,9 @@ export const notificationTypeEnum = z.enum([
   "STATUS_CHANGED",
   // TS-154
   "RSVP_RECEIVED",
+  // TS-213: a new comment thread, and a wedding handed to you.
+  "COMMENT_ADDED",
+  "OWNERSHIP_TRANSFERRED",
 ]);
 export type NotificationType = z.infer<typeof notificationTypeEnum>;
 
@@ -173,3 +183,8 @@ export const setEmailNotificationsSchema = z.object({
   emailNotificationsEnabled: z.boolean(),
 });
 export type SetEmailNotificationsInput = z.infer<typeof setEmailNotificationsSchema>;
+
+// TS-213: one member's own "Email me about this wedding" switch (anyone with access, for themselves).
+export const setMyEmailNotificationsSchema = z.object({
+  myEmailNotificationsEnabled: z.boolean(),
+});

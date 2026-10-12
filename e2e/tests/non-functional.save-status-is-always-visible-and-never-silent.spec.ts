@@ -33,7 +33,7 @@ defineQualityTest(
     objective:
       "Confirms an inline edit's save is visible while in flight and once confirmed; that a server-refused save and a save whose connection drops are both reported as not saved with the reason (the latter only after automatic retries); that a single dropped connection is recovered by retry and persists; and that the indicator reports offline and recovers.",
     expectedOutcome:
-      "Slow save: 'Saving…' then 'All changes saved'. Injected 500: 'Not saved: <message>', back to 'All changes saved' once dismissed. Dropped connection: 3 attempts then 'Not saved: Couldn't reach Seatwise…'. One-off drop: 2 attempts, 'All changes saved', and the server holds the new value. Offline: the offline message, gone once back online.",
+      "Slow save: 'Saving…' then 'All changes saved'. Injected 500: 'Not saved: <message>', and nothing at all once dismissed (TS-206: never 'All changes saved' for a change that wasn't). Dropped connection: 3 attempts then 'Not saved: Couldn't reach Seatwise…'. One-off drop: 2 attempts, 'All changes saved', and the server holds the new value. Offline: the offline message, gone once back online.",
     requirementIds: ["REQ-NON-FUNCTIONAL", "REQ-GUEST-LIST-MANAGEMENT"],
     tags: ["@mutating", "@feature:non-functional", "@risk:high", "@suite:regression"],
   },
@@ -71,10 +71,10 @@ defineQualityTest(
       await expect(detailPage.saveStatus()).toContainText("Not saved: Simulated outage while saving the guest.");
       expect(fault.hits).toBe(1); // an HTTP error is an answer, never retried
       await fault.clear();
-      // The failed edit was already undone on screen, so once dismissed the screen matches the
-      // server again -- back to the last confirmed state, not a blank.
+      // TS-206: once dismissed the header shows nothing -- it used to say "All changes saved",
+      // though the change that failed was never saved.
       await detailPage.dismissSaveError();
-      await expect(detailPage.saveStatus()).toHaveText("All changes saved");
+      await expect(detailPage.saveStatus()).toHaveText("");
     });
 
     await test.step("Act + Assert: a save whose connection keeps dropping is retried, then reported as not saved", async () => {

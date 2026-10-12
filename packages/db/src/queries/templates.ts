@@ -1,6 +1,8 @@
 import { randomUUID } from "crypto";
-import { pool } from "../pool";
-import { compareTableLabels } from "@seatwise/shared";
+import { pool, beginTransaction } from "../pool";
+import { compareTableLabels, cutToLimit } from "@seatwise/shared";
+import { lockWeddingRow, recheckActorAccess, WeddingDeletedError, type ActorAccess } from "./wedding-lock";
+import { assertWeddingHasRoom } from "./wedding-caps";
 
 // TS-19 (FR-14.1/FR-14.2): a template is a reusable snapshot of a wedding's table layout plus its
 // "rule-shape" (the wedding's Side-Mixing setting). It deliberately never stores anything
@@ -47,11 +49,16 @@ export interface SeatingTemplateDetail extends SeatingTemplateRow {
 export class TemplateNotFoundError extends Error {}
 
 const SELECT_TEMPLATE = `
-  SELECT st.id, st."ownerId", st.name, st."sourceWeddingId", w.name AS "sourceWeddingName",
+  SELECT st.id, st."ownerId", st.name, w.id AS "sourceWeddingId", w.name AS "sourceWeddingName",
          st."sideMixing", st."createdAt", st."updatedAt",
          COALESCE(tc.count, 0)::int AS "tableCount"
   FROM "seating_templates" st
+  -- TS-172: the wedding a template came from is shown only while the template's owner can still
+  -- open that wedding (owner or collaborator). An Edit collaborator who saved a template and was
+  -- later removed used to keep seeing the wedding's current name.
   LEFT JOIN "weddings" w ON w.id = st."sourceWeddingId"
+    AND (w."ownerId" = st."ownerId"
+      OR EXISTS (SELECT 1 FROM "wedding_collaborators" wc WHERE wc."weddingId" = w.id AND wc."userId" = st."ownerId"))
   LEFT JOIN (
     SELECT "templateId", COUNT(*) AS count FROM "seating_template_tables" GROUP BY "templateId"
   ) tc ON tc."templateId" = st.id
@@ -67,19 +74,24 @@ const TEMPLATE_TABLE_COLUMNS = `id, "templateId", label, capacity, "isRestricted
 export async function createTemplateFromWedding(
   ownerId: string,
   weddingId: string,
-  name: string
-): Promise<SeatingTemplateDetail> {
+  name: string,
+  /** TS-204: the access the request was let in with -- read again before the wedding is copied. */
+  actor?: ActorAccess
+): Promise<SeatingTemplateDetail | null> {
   const templateId = randomUUID();
   const client = await pool.connect();
   try {
-    await client.query("BEGIN");
+    await beginTransaction(client);
+    // TS-204: the person's access read again first -- removed a moment ago: nothing copied.
+    if (actor) await recheckActorAccess(client, weddingId, actor);
 
     const { rows: weddingRows } = await client.query(
       `SELECT "sideMixing" FROM "weddings" WHERE id = $1`,
       [weddingId]
     );
     const wedding = weddingRows[0];
-    if (!wedding) throw new TemplateNotFoundError("Wedding not found.");
+    // TS-209: said as the wedding being deleted (404), like every other save into a deleted wedding.
+    if (!wedding) throw new WeddingDeletedError();
 
     await client.query(
       `INSERT INTO "seating_templates" (id, "ownerId", name, "sourceWeddingId", "sideMixing", "updatedAt")
@@ -129,15 +141,25 @@ export async function createTemplateFromWedding(
 
     await client.query("COMMIT");
   } catch (err) {
-    await client.query("ROLLBACK");
+    await client.query("ROLLBACK").catch(() => {});
+    // TS-209: the wedding was deleted while this was being saved -- its row is gone, so the
+    // template's link to it (seating_templates_sourceWeddingId_fkey) is refused. Said as such (404),
+    // not a server error.
+    const e = err as { code?: string; constraint?: string } | null;
+    if (e?.code === "23503" && /_sourceWeddingId_fkey$/.test(e.constraint ?? "")) throw new WeddingDeletedError();
     throw err;
   } finally {
     client.release();
   }
 
-  const created = await getTemplateForOwner(templateId, ownerId);
-  if (!created) throw new Error("Failed to load template after creating it");
-  return created;
+  // TS-209: the template is saved -- reading it back can't turn that into an error. Without it
+  // (deleted at once, or the read failed), the caller is told it's saved but couldn't be shown.
+  try {
+    return await getTemplateForOwner(templateId, ownerId);
+  } catch (err) {
+    console.error("Template saved, but reading it back failed:", err);
+    return null;
+  }
 }
 
 export async function listTemplatesForOwner(ownerId: string): Promise<SeatingTemplateRow[]> {
@@ -193,10 +215,15 @@ interface LayoutTable {
 
 // A label already used in the wedding gets " (2)", " (3)"… so two tables are never both called
 // "Table 1" -- every other attribute is copied as-is.
+// TS-180: a table name is at most 100 characters, so a long name is shortened to make room for the
+// number (it used to run past the limit, which the table's own edit form then refused).
+const MAX_TABLE_LABEL = 100;
 function uniqueLabel(label: string, taken: Set<string>): string {
   if (!taken.has(label)) return label;
   for (let n = 2; ; n++) {
-    const candidate = `${label} (${n})`;
+    const suffix = ` (${n})`;
+    // TS-198: cut between whole characters, so an emoji at the cut isn't split in half.
+    const candidate = `${cutToLimit(label, MAX_TABLE_LABEL - suffix.length).trimEnd()}${suffix}`;
     if (!taken.has(candidate)) return candidate;
   }
 }
@@ -204,8 +231,17 @@ function uniqueLabel(label: string, taken: Set<string>): string {
 async function insertLayoutTables(
   client: import("pg").PoolClient,
   weddingId: string,
-  tables: LayoutTable[]
+  tables: LayoutTable[],
+  actor?: ActorAccess
 ): Promise<number> {
+  // TS-195: the wedding's lock first (FOR NO KEY UPDATE), so a template added in two tabs at once,
+  // or alongside a quick-create, takes turns -- each reads the labels the other just saved, and no
+  // two tables end up with the same name. Also stops here, as "this wedding was deleted", if it was.
+  await lockWeddingRow(client, weddingId);
+  // TS-204: the person's access read again under that lock; TS-205: and the wedding's table cap --
+  // before, adding a template saved from the same wedding doubled its tables every time.
+  if (actor) await recheckActorAccess(client, weddingId, actor);
+  await assertWeddingHasRoom(client, weddingId, "tables", tables.length);
   const { rows: existing } = await client.query<{ label: string }>(
     `SELECT label FROM "seating_tables" WHERE "weddingId" = $1`,
     [weddingId]
@@ -234,11 +270,13 @@ async function insertLayoutTables(
 export async function addTemplateTablesToWedding(
   weddingId: string,
   templateId: string,
-  userId: string
+  userId: string,
+  /** TS-204: the access the request was let in with -- read again under the wedding's lock. */
+  actor?: ActorAccess
 ): Promise<number> {
   const client = await pool.connect();
   try {
-    await client.query("BEGIN");
+    await beginTransaction(client);
     const { rows: owned } = await client.query(
       `SELECT 1 FROM "seating_templates" WHERE id = $1 AND "ownerId" = $2`,
       [templateId, userId]
@@ -248,11 +286,11 @@ export async function addTemplateTablesToWedding(
       `SELECT ${LAYOUT_COLUMNS} FROM "seating_template_tables" WHERE "templateId" = $1 ORDER BY "sortOrder"`,
       [templateId]
     );
-    const added = await insertLayoutTables(client, weddingId, rows);
+    const added = await insertLayoutTables(client, weddingId, rows, actor);
     await client.query("COMMIT");
     return added;
   } catch (err) {
-    await client.query("ROLLBACK");
+    await client.query("ROLLBACK").catch(() => {});
     throw err;
   } finally {
     client.release();
@@ -270,13 +308,13 @@ export async function duplicateWeddingLayout(
 ): Promise<string | null> {
   const client = await pool.connect();
   try {
-    await client.query("BEGIN");
+    await beginTransaction(client);
     const { rows: src } = await client.query(
       `SELECT "venueName", "sideMixing", "sideLabel1", "sideLabel2" FROM "weddings" WHERE id = $1 AND "ownerId" = $2`,
       [sourceWeddingId, ownerId]
     );
     if (!src[0]) {
-      await client.query("ROLLBACK");
+      await client.query("ROLLBACK").catch(() => {});
       return null;
     }
     const id = randomUUID();
@@ -293,7 +331,7 @@ export async function duplicateWeddingLayout(
     await client.query("COMMIT");
     return id;
   } catch (err) {
-    await client.query("ROLLBACK");
+    await client.query("ROLLBACK").catch(() => {});
     throw err;
   } finally {
     client.release();

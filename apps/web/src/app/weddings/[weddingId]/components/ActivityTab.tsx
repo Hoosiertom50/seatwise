@@ -1,5 +1,6 @@
 "use client";
 
+import { formatDateTime } from "@/lib/display-format";
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api-client";
 import type { ActivityEntryDTO } from "@seatwise/shared";
@@ -10,6 +11,10 @@ const ACTION_LABELS: Record<string, string> = {
   STATUS_CHANGE: "Status change",
   ATTENDANCE_CHANGE: "Attendance",
   RESTORE: "Restored",
+  SEATING_RECHECK: "Seating re-check",
+  // TS-177: these showed as raw code words.
+  GENERATE: "Generated",
+  TABLE_REMOVED: "Table removed",
 };
 
 // FR-10.1: a single chronological log across every plan version of this wedding — who did what,
@@ -34,7 +39,8 @@ export function ActivityTab({ weddingId }: { weddingId: string }) {
     <div>
       <h2 className="mb-1 text-lg font-medium">Activity</h2>
       <p className="mb-4 text-sm text-neutral-500 dark:text-neutral-400">
-        Every change across every version of this wedding&apos;s seating plan, newest first.
+        {/* TS-177: the list is capped (packages/db activity.ts). */}
+        The latest changes across every version of this wedding&apos;s seating plan (up to 200), newest first.
       </p>
       {entries.length === 0 ? (
         <p className="text-sm text-neutral-500 dark:text-neutral-400">Nothing has happened yet.</p>
@@ -48,10 +54,11 @@ export function ActivityTab({ weddingId }: { weddingId: string }) {
                   <span className="ml-2 font-normal text-neutral-500 dark:text-neutral-400">v{e.versionNumber}</span>
                 </span>
                 <span className="text-xs text-neutral-500 dark:text-neutral-400">
-                  {new Date(e.createdAt).toLocaleString()}
+                  {formatDateTime(e.createdAt)}
                 </span>
               </div>
-              <p className="mt-1 text-sm text-neutral-700 dark:text-neutral-300">{e.description}</p>
+              {/* TS-199: a long description (a long guest or table name) wraps on a phone. */}
+              <p className="mt-1 break-words text-sm text-neutral-700 dark:text-neutral-300 [overflow-wrap:anywhere]">{e.description}</p>
               {e.actorName && <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">by {e.actorName}</p>}
             </li>
           ))}

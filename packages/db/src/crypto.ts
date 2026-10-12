@@ -1,4 +1,5 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "crypto";
+import { DEV_ONLY_ENCRYPTION_KEY, isPlaceholderSecret } from "@seatwise/shared";
 
 // NFR-9.3b: guest personal data — specifically the free-text notes field, where dietary and
 // accessibility details actually live — is encrypted at rest, not just relied on to sit behind a
@@ -19,20 +20,35 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes } from "crypt
 // loud and immediate. The key is read on first use rather than at import, so `next build` (which
 // imports server code) doesn't need the secret. It must never change once real data exists: a
 // lost or changed key leaves every note saved so far unreadable.
-const DEV_ONLY_KEY = "dev-only-encryption-key-change-in-production-9d2f7a1c";
+// TS-192: the key itself lives in @seatwise/shared next to the other known placeholders, so the
+// production check below (and the JWT_SECRET check) can refuse it by name.
+const DEV_ONLY_KEY = DEV_ONLY_ENCRYPTION_KEY;
 const MIN_KEY_LENGTH = 32;
 
 let cached: { source: string; key: Buffer } | null = null;
 
+/**
+ * TS-192: why this ENCRYPTION_KEY can't be used, or null if it's fine. In production a missing or
+ * short key is refused (TS-127), and so is a known placeholder -- the .env.example value, the
+ * README's stand-ins or the published development key -- which would otherwise pass the length
+ * check and encrypt real guest notes with a key everyone can read.
+ */
+export function encryptionKeyProblem(key: string | undefined, nodeEnv: string | undefined): string | null {
+  if (nodeEnv !== "production") return null;
+  if (!key) return "ENCRYPTION_KEY is not set -- refusing to encrypt guest notes with the development key in production.";
+  if (isPlaceholderSecret(key)) {
+    return "ENCRYPTION_KEY is still a placeholder value -- refusing to encrypt guest notes with it. Set it to a long random value (e.g. openssl rand -hex 32).";
+  }
+  if (key.length < MIN_KEY_LENGTH) {
+    return `ENCRYPTION_KEY is too short (needs at least ${MIN_KEY_LENGTH} characters) -- refusing to encrypt guest notes with it.`;
+  }
+  return null;
+}
+
 function encryptionKey(): Buffer {
   const configured = process.env.ENCRYPTION_KEY;
-  if (process.env.NODE_ENV === "production" && (!configured || configured.length < MIN_KEY_LENGTH)) {
-    throw new Error(
-      configured
-        ? `ENCRYPTION_KEY is too short (needs at least ${MIN_KEY_LENGTH} characters) -- refusing to encrypt guest notes with it.`
-        : "ENCRYPTION_KEY is not set -- refusing to encrypt guest notes with the development key in production."
-    );
-  }
+  const problem = encryptionKeyProblem(configured, process.env.NODE_ENV);
+  if (problem) throw new Error(problem);
   const source = configured || DEV_ONLY_KEY;
   if (cached?.source !== source) cached = { source, key: keyFromSecret(source) };
   return cached.key;

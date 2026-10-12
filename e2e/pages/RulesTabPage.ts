@@ -11,7 +11,7 @@ export type RuleType = "MUST_SIT_TOGETHER" | "MUST_NOT_SIT_TOGETHER" | "PREFER_N
 
 export class RulesTabPage extends BasePage {
   private rulesTabButton() {
-    return this.page.getByRole("button", { name: "Seating rules", exact: true });
+    return this.page.getByRole("tab", { name: "Seating rules", exact: true });
   }
 
   private guestASelect() {
@@ -66,6 +66,12 @@ export class RulesTabPage extends BasePage {
     if (guestBFullName) await this.guestBSelect().selectOption({ label: guestBFullName });
     await this.addRuleButton().click();
   }
+  /** TS-181: the tab's error line (a role="alert" paragraph), e.g. a rule the API refused. Scoped
+   * to the paragraph so Next.js's own route announcer (also role="alert") never matches. */
+  errorAlert() {
+    return this.page.locator('p[role="alert"]');
+  }
+
   message(text: string | RegExp) {
     return typeof text === "string" ? this.page.getByText(text, { exact: true }) : this.page.getByText(text);
   }

@@ -1,8 +1,34 @@
 import { NextRequest, NextResponse } from "next/server";
-import { forgotPasswordSchema } from "@seatwise/shared";
-import { createPasswordResetToken, findUserByEmail, sendEmail, PASSWORD_RESET_TTL_MINUTES, retireOlderResetTokens, emailDelivered } from "@seatwise/db";
-import { zodErrorResponse } from "@/lib/api-response";
-import { clientAddress, rateLimitOr429, PASSWORD_RESET_LIMITS } from "@/lib/rate-limit";
+import { emailSafePersonName, forgotPasswordSchema } from "@seatwise/shared";
+import {
+  createPasswordResetToken,
+  discardPasswordResetToken,
+  markPasswordResetTokenUsed,
+  findUserByEmail,
+  hasUsablePasswordResetToken,
+  peekRateLimit,
+  sendEmail,
+  PASSWORD_RESET_TTL_MINUTES,
+  retireOlderResetTokens,
+  emailDelivered,
+  emailMayHaveGone,
+  lastPasswordResetAt,
+  newestResetMayGo,
+  newestResetWaitSeconds,
+  claimNewestResetSlot,
+} from "@seatwise/db";
+import { readJson, zodErrorResponse } from "@/lib/api-response";
+import {
+  accountEmailCounters,
+  accountSignInLocked,
+  clientAddress,
+  confirmedResetNetworkCounters,
+  countOr429,
+  PASSWORD_RESET_LIMITS,
+  tooManyAttemptsMessage,
+  unconfirmedResetNetworkCounters,
+} from "@/lib/rate-limit";
+import { appBaseUrl } from "@/lib/app-url";
 import { resetOutcome } from "@/lib/password-reset-outcome";
 
 // TS-142: "Forgot password?" -- emails a single-use, 1-hour reset link to an existing account.
@@ -11,27 +37,251 @@ import { resetOutcome } from "@/lib/password-reset-outcome";
 // emailed to an address without an account. TS-145: and only say "sent" when it really was.
 // Rate-limited per address and per email so it can't flood an inbox.
 export async function POST(req: NextRequest) {
-  const limited = await rateLimitOr429(`pw-reset:addr:${clientAddress(req)}`, PASSWORD_RESET_LIMITS.requestsPerAddress);
-  if (limited) return limited;
+  const address = clientAddress(req);
+  // TS-186: what this request has counted so far, so all of it is given back on any return that
+  // sends no email.
+  const counted: (() => Promise<void>)[] = [];
+  // TS-237: every give-back is tried, even when one of them fails (each failure is logged) -- it
+  // used to stop at the first one that failed, leaving the rest counted.
+  const giveBackAll = async () => {
+    const settled = await Promise.allSettled(counted.splice(0).reverse().map((giveBack) => giveBack()));
+    for (const r of settled) {
+      if (r.status === "rejected") {
+        console.error(`[forgot-password] couldn't give back a count: ${r.reason instanceof Error ? r.reason.message : String(r.reason)}`);
+      }
+    }
+  };
+  const count = async (key: string, limits: { limit: number; windowSeconds: number }) => {
+    const { limited, giveBack } = await countOr429(key, limits);
+    if (limited) {
+      await giveBackAll();
+      return limited;
+    }
+    counted.push(giveBack);
+    return null;
+  };
 
-  const parsed = forgotPasswordSchema.safeParse(await req.json().catch(() => null));
+  const limited =
+    (await count(`pw-reset:addr:${address}`, PASSWORD_RESET_LIMITS.requestsPerAddress)) ??
+    // TS-168: and per day, so one source can't spend the day's reset allowance on other people.
+    (await count(`pw-reset:addr:day:${address}`, PASSWORD_RESET_LIMITS.requestsPerAddressDay));
+  if (limited) return limited;
+  // TS-186: these two count requests from the network address, sent or not, so they stay counted.
+  counted.length = 0;
+
+  // TS-179: refuses a body that isn't JSON (415) here too, not only in proxy.ts.
+  const json = await readJson(req);
+  if (!json.ok) return json.response;
+  const parsed = forgotPasswordSchema.safeParse(json.body);
   if (!parsed.success) return zodErrorResponse(parsed.error);
   const email = parsed.data.email;
-
-  const perEmail = await rateLimitOr429(`pw-reset:email:${email.toLowerCase()}`, PASSWORD_RESET_LIMITS.requestsPerEmail);
-  if (perEmail) return perEmail;
-
   const user = await findUserByEmail(email);
+  // TS-186: nothing is emailed without an account, so nothing is counted against the email either.
   if (!user) return NextResponse.json(resetOutcome(false, null));
 
-  const token = await createPasswordResetToken(user.id);
-  const appUrl = process.env.APP_URL || "http://localhost:3000";
-  const result = await sendEmail(
-    user.email,
-    "Reset your Seatwise password",
-    `Hi ${user.name},\n\nSomeone (hopefully you) asked to reset your Seatwise password. Choose a new one here:\n\n${appUrl}/reset-password/${token}\n\nThis link works once, for ${PASSWORD_RESET_TTL_MINUTES} minutes. If you didn't ask for this, you can ignore this email -- your password hasn't changed.`
+  // TS-171: while the last link sent still works (it lasts an hour), asking again sends nothing
+  // new and cancels nothing -- the answer is the same as when it was sent. Otherwise anyone could
+  // use up the person's resets for the day (each new link used to cancel the one before).
+  if (await hasUsablePasswordResetToken(user.id)) return NextResponse.json(resetOutcome(true, "already-sent"));
+
+  // TS-178: the link is built from the app's own address (see lib/app-url) -- worked out before
+  // anything is counted.
+  const appUrl = appBaseUrl();
+
+  // TS-178: only an account that has confirmed its address is treated as the address's owner.
+  // Anyone can sign up with someone else's address, so for an unconfirmed account a reset is an
+  // everyday email (from its own share of the day, and within the address's daily share), and the
+  // name typed at sign-up isn't put in front of whoever owns the inbox.
+  const confirmed = user.emailVerifiedAt !== null;
+
+  // TS-186: whether this network address has any account emails left today is checked first,
+  // without counting anything -- so a source that has used up its own allowance can't go on using
+  // up the per-email limits below (and with them the owner's resets for the day).
+  // TS-203: the address's /48 too, for IPv6 (see accountEmailCounters).
+  // TS-230: and for a confirmed account, the network's count of those resets (5 a day per IPv4 /24
+  // or IPv6 /48), so a few networks can't use up the confirmed accounts' shared reset budget.
+  // TS-238: and for an unconfirmed account, the network's count of those (also 5 a day per /24 or
+  // /48), so one network can no longer use up the unconfirmed accounts' shared 24.
+  const networkCounters = [
+    ...accountEmailCounters(req),
+    ...(confirmed ? confirmedResetNetworkCounters(req) : unconfirmedResetNetworkCounters(req)),
+  ];
+  const tooManyFromHere = await firstFullCounter(networkCounters);
+  if (tooManyFromHere) return tooManyFromHere;
+
+  const emailKey = email.toLowerCase();
+  // TS-168: at most a handful of reset emails to one inbox a day, however they're asked for.
+  // TS-178 / TS-186: while the account is locked by the sign-in limits, a higher daily limit
+  // applies -- otherwise someone could lock the owner out with wrong passwords and then use up the
+  // day's resets too, leaving them no way in until tomorrow. It's still a limit, so the inbox
+  // can't be flooded either. The 15-minute limit, and "already sent" while a link still works,
+  // hold either way.
+  const locked = await accountSignInLocked(email);
+  // TS-230: a confirmed account's resets come out of a budget shared by every confirmed account, so
+  // it may draw only 3 a day (unless it's locked out, when the higher limit still applies).
+  const perEmailDay = locked
+    ? PASSWORD_RESET_LIMITS.requestsPerEmailDayWhileLocked
+    : confirmed
+      ? PASSWORD_RESET_LIMITS.requestsPerConfirmedEmailDay
+      : PASSWORD_RESET_LIMITS.requestsPerEmailDay;
+  // TS-219: once the day's counts for this address are full, the newest reset still goes out if
+  // none has gone to the account for a few hours (NEWEST_RESET_AFTER_SECONDS) -- so whoever signed up
+  // with someone else's address can't use those counts up and keep the address's owner from the
+  // reset that lets them take the account back. It isn't counted on them then.
+  // TS-230: only for an account that hasn't confirmed its address -- the case it was meant for. For a
+  // confirmed one it let an outsider's own accounts draw more from the shared reset budget.
+  // TS-228: the quiet spell alone was checked separately from the reset, so requests sent at the same
+  // moment could all pass it; now only the one that claims the account's slot may go past the counts
+  // (given back below if nothing is sent).
+  let mayGoAnyway = false;
+  // TS-232: how long until the newest-reset rule would let one go, for the wait the 429 gives.
+  let newestResetWait: number | null = null;
+  // TS-237: whatever is counted from here on is given back on every way out that sends nothing --
+  // a refusal, an unsent email, or an error part-way (a counter or the link failing) -- and kept
+  // only when the email went out or may have ("uncertain").
+  let keepCounts = false;
+  try {
+    if (!confirmed) {
+      const lastResetAt = await lastPasswordResetAt(user.id);
+      if (newestResetMayGo(lastResetAt)) {
+        const slot = await claimNewestResetSlot(user.id);
+        if (slot.claimed) {
+          mayGoAnyway = true;
+          counted.push(slot.release);
+        } else {
+          newestResetWait = slot.retryAfterSeconds;
+        }
+      } else {
+        newestResetWait = newestResetWaitSeconds(lastResetAt);
+      }
+    }
+    let overForEmail = await count(`pw-reset:email:${emailKey}`, PASSWORD_RESET_LIMITS.requestsPerEmail);
+    if (!overForEmail) {
+      const day = await countOr429(`pw-reset:email:day:${emailKey}`, perEmailDay);
+      if (!day.limited) counted.push(day.giveBack);
+      else if (!mayGoAnyway) {
+        await giveBackAll();
+        overForEmail = sooner(day.limited, newestResetWait, perEmailDay.windowSeconds);
+      }
+    }
+    // TS-171: counted with sign-ups and "Resend link" from the same address -- only when an email
+    // is really about to go out.
+    for (const { key, limit, windowSeconds } of networkCounters) {
+      overForEmail ??= await count(key, { limit, windowSeconds });
+    }
+    if (overForEmail) return overForEmail;
+
+    const token = await createPasswordResetToken(user.id);
+    // TS-168: the account's name only goes into the email if it passes today's name rules.
+    const safeName = confirmed ? emailSafePersonName(user.name) : null;
+    const resetGreeting = safeName ? `Hi ${safeName}` : "Hi";
+    const result = await sendEmail(
+      user.email,
+      "Reset your Seatwise password",
+      `${resetGreeting},\n\nSomeone (hopefully you) asked to reset your Seatwise password. Choose a new one here:\n\n${appUrl}/reset-password/${token}\n\nThis link works once, for ${PASSWORD_RESET_TTL_MINUTES} minutes. If you didn't ask for this, you can ignore this email -- your password hasn't changed.`,
+      process.env,
+      // TS-163 / TS-186: a confirmed account's reset comes out of the resets' own daily budget, so
+      // it still goes out when the everyday limit is reached; an unconfirmed account's is an
+      // everyday email, from its own smaller share.
+      // TS-203: a locked-out account may also use the resets kept for that.
+      // TS-219: and an unconfirmed account's newest reset after a quiet few hours may go past the
+      // address's count (see mayGoAnyway). TS-238: and past a full unconfirmed accounts' share.
+      confirmed
+        ? { essential: true, lockedOut: locked }
+        : {
+            unconfirmedReset: true,
+            newestReset: mayGoAnyway,
+            // TS-238: drawn from the resets' own budget only when the unconfirmed accounts' share is
+            // full -- and then it goes on this network's slice of that budget (TS-230's 5 a day per
+            // /24 or /48), so the newest-reset rule can't let a network draw on it past its 5.
+            beforeResetsBudget: async () => {
+              for (const { key, limit, windowSeconds } of confirmedResetNetworkCounters(req)) {
+                const { limited, giveBack } = await countOr429(key, { limit, windowSeconds });
+                if (limited) return false;
+                counted.push(giveBack);
+              }
+              return true;
+            },
+          }
+    );
+    // TS-203 / TS-237: the counts stay only when the email went out or may have.
+    keepCounts = emailMayHaveGone(result);
+    // TS-153: older links are cancelled only once this one has gone out.
+    if (emailDelivered(result)) {
+      // TS-232: the email has gone, so a failure here (the database busy) is logged and the answer is
+      // still "sent" -- it used to be "Something went wrong" with the link already in the inbox. The
+      // older links then simply run out within the hour.
+      try {
+        await retireOlderResetTokens(user.id, token);
+      } catch (err) {
+        console.error(`[forgot-password] reset sent, but older links weren't cancelled: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    } else if (result === "uncertain") {
+      // TS-203: the mail server went quiet after it may have taken the email -- it may well arrive,
+      // so its link is kept working (and the counts stay). Older links are kept too, in case it didn't.
+    } else {
+      // TS-171: one that never went out is cancelled, so asking again isn't answered "already sent".
+      // TS-178 / TS-203: and it doesn't use up the email's or the network address's allowance --
+      // given back (below) even if cancelling the link fails.
+      await cancelUnsentLink(token);
+    }
+    return NextResponse.json(resetOutcome(true, result));
+  } finally {
+    if (!keepCounts) await giveBackAll();
+  }
+}
+
+/**
+ * TS-253: cancels a link whose email never went out. If deleting it fails, that's tried once more,
+ * then the link is marked used instead -- before, a failed delete left it working, so for an hour
+ * every new request was answered "already sent" though nothing had been. Never throws: the answer
+ * (the email wasn't sent) is the same either way, and only a database that can't be reached at all
+ * leaves the link in place (logged).
+ */
+async function cancelUnsentLink(token: string): Promise<void> {
+  const why = (err: unknown) => (err instanceof Error ? err.message : String(err));
+  for (const [cancel, what] of [
+    [discardPasswordResetToken, "delete"],
+    [discardPasswordResetToken, "delete (second try)"],
+    [markPasswordResetTokenUsed, "mark used"],
+  ] as const) {
+    try {
+      await cancel(token);
+      return;
+    } catch (err) {
+      console.error(`[forgot-password] couldn't ${what} an unsent reset link: ${why(err)}`);
+    }
+  }
+}
+
+/**
+ * TS-186 / TS-238: a ready 429 for the first of `counters` that is already full, or null -- only
+ * looks; counts nothing.
+ */
+async function firstFullCounter(counters: { key: string; limit: number; windowSeconds: number }[]): Promise<NextResponse | null> {
+  for (const { key, limit, windowSeconds } of counters) {
+    const ownAllowance = await peekRateLimit(key, limit, windowSeconds);
+    if (!ownAllowance.allowed) {
+      return NextResponse.json(
+        { error: tooManyAttemptsMessage(windowSeconds, ownAllowance.retryAfterSeconds) },
+        { status: 429, headers: { "Retry-After": String(ownAllowance.retryAfterSeconds) } }
+      );
+    }
+  }
+  return null;
+}
+
+/**
+ * TS-232: the daily count's refusal, or -- when the newest-reset rule (TS-219) will let a reset go
+ * sooner than the count frees up -- the same refusal with that shorter wait, in the message and in
+ * Retry-After. It used to say "about 19 hours" when one could go in about 2.
+ */
+function sooner(dayRefusal: NextResponse, newestResetWait: number | null, windowSeconds: number): NextResponse {
+  const dayWait = Number(dayRefusal.headers.get("Retry-After"));
+  if (newestResetWait === null || !(newestResetWait < dayWait)) return dayRefusal;
+  const wait = Math.max(1, newestResetWait);
+  return NextResponse.json(
+    { error: tooManyAttemptsMessage(windowSeconds, wait) },
+    { status: 429, headers: { "Retry-After": String(wait) } }
   );
-  // TS-153: older links are cancelled only once this one has gone out.
-  if (emailDelivered(result)) await retireOlderResetTokens(user.id, token);
-  return NextResponse.json(resetOutcome(true, result));
 }

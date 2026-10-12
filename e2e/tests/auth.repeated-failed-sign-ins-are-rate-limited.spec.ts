@@ -1,7 +1,9 @@
 /**
  * TS-113 (REQ-ACCOUNT-WEDDING-MANAGEMENT, REQ-NON-FUNCTIONAL) — sign-in is rate-limited on FAILED
  * attempts (apps/web/src/lib/rate-limit.ts LOGIN_LIMITS): 10 per account and 30 per network address
- * per 15 minutes. A successful sign-in never counts, so real use can't lock anyone out; once an
+ * per 15 minutes. (TS-171: the 10 are per account *from one address*, with 100 for the account
+ * from everywhere -- see auth.someone-else-cannot-lock-you-out.spec.ts. Every attempt below on one
+ * account comes from one address, so the 10 apply.) A successful sign-in never counts, so real use can't lock anyone out; once an
  * account is over the limit, even its right password waits out the window, so the limit can't
  * reveal which guess was correct.
  *
@@ -27,7 +29,7 @@ defineQualityTest(
     id: "auth.repeated-failed-sign-ins-are-rate-limited.per-account-per-address-and-page-message",
     title: "repeated failed sign-ins are refused per account and per address — even with the right password once over the limit — while successful sign-ins never count and other accounts are unaffected",
     objective:
-      "Confirms successful sign-ins don't count toward the limit; that after 10 wrong passwords an account is refused with 429 and Retry-After even for its correct password, while another account is unaffected; that 30 failed sign-ins from one address block further attempts from it but not from another address; and that the login page shows the wait message.",
+      "Confirms successful sign-ins don't count toward the limit; that after 10 wrong passwords from one address an account is refused there with 429 and Retry-After even for its correct password, while another account is unaffected; that 30 failed sign-ins from one address block further attempts from it but not from another address; and that the login page shows the wait message.",
     expectedOutcome:
       "12 successful sign-ins in a row all succeed. Wrong passwords 1–10 return 401, the 11th attempt (right password) returns 429 with Retry-After, and a different account still signs in. 30 failures from one address, then the 31st attempt from it returns 429 while another address gets a normal 401. The login page opened from the limited address shows 'Too many sign-in attempts'.",
     requirementIds: ["REQ-ACCOUNT-WEDDING-MANAGEMENT", "REQ-NON-FUNCTIONAL"],

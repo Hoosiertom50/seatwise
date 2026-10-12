@@ -158,6 +158,8 @@ defineQualityTest(
       expect(preview.keptCount).toBe(4); // 6 guests - 2 dropped
       expect(preview.unassignedGuestIds.sort()).toEqual([capGuestId, expectedDroppedMnstId].sort());
       expect(preview.isComplete).toBe(false);
+      // TS-177: the Must-Sit-Together pair is kept, but at different tables -- both will be flagged.
+      expect(preview.needsFixingCount).toBe(2);
 
       expect(preview.warnings).toHaveLength(1);
       expect(preview.warnings[0]).toContain(mtogA.firstName);
@@ -208,12 +210,18 @@ defineQualityTest(
       expect(detail.unassignedGuestIds.sort()).toEqual([capGuestId, expectedDroppedMnstId].sort());
     });
 
-    await test.step("Assert: the two later versions are otherwise untouched by the restore -- only the previously-Current one's own isCurrent flag moved to the new restored version", async () => {
+    await test.step("Assert: the two later versions are otherwise untouched by the restore -- only the previously-Current one's own isCurrent flag moved to the new restored version (and its revision moved on)", async () => {
       const laterVersion1After = await weddingData.getPlanVersionDetail(managedWedding.id, laterVersion1Id);
       const laterVersion2After = await weddingData.getPlanVersionDetail(managedWedding.id, laterVersion2Id);
 
       expect(laterVersion1After).toEqual(laterVersion1Before); // fully untouched -- was never Current
-      expect(laterVersion2After).toEqual({ ...(laterVersion2Before as object), isCurrent: false });
+      // TS-189: no longer being Current is itself a change other open screens must notice, so its
+      // revision moves on by one -- nothing else about it changes.
+      expect(laterVersion2After).toEqual({
+        ...(laterVersion2Before as object),
+        isCurrent: false,
+        revision: (laterVersion2Before as { revision: number }).revision + 1,
+      });
     });
 
     await test.step("Assert: the source version itself is completely untouched", async () => {

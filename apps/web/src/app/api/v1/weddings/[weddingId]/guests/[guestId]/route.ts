@@ -6,17 +6,37 @@ import {
   deleteGuestForWedding,
   getCurrentPlanVersionStatus,
   notifyWeddingCollaborators,
-  setGuestAttendance,
-  revalidateGuestAssignment,
+  resyncGuestsSeats,
   recomputeCurrentPlanCompleteness,
   resyncGuestSeat,
+  guestHasRsvpLink,
   GuestConflictError,
+  GuestHeadcountError,
+  GuestAccessibleTableError,
+  AttendanceError,
+  type NewlyFlaggedSeat,
 } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
-import { errorResponse, zodErrorResponse } from "@/lib/api-response";
+import { errorResponse, zodErrorResponse, concurrentChangeResponse, readJson } from "@/lib/api-response";
 import { requireAccess } from "@/lib/access";
 import { guestForViewer } from "@/lib/guest-privacy";
-import { sendGuestRsvpLink } from "@/lib/rsvp-email";
+import { rsvpEmailOutcome, sendGuestRsvpLink } from "@/lib/rsvp-email";
+import { SAVED_BUT_NOT_RECHECKED, SAVED_BUT_NOT_REFRESHED, RSVP_EMAIL_FAILED, afterSave } from "@/lib/post-save";
+import { rsvpEmailChange } from "@/lib/after-commit-answers";
+
+// TS-177: why a guest edit just flagged someone, in the words that fit the reason.
+function flaggedWarning({ name, reason }: NewlyFlaggedSeat): string {
+  switch (reason) {
+    case "capacity":
+      return `${name} no longer fits at their table — flagged as Needs Reassignment.`;
+    case "accessible":
+      return `${name} needs an accessible table and their current table isn't one — flagged as Needs Reassignment.`;
+    case "restricted":
+      return `${name} isn't on their table's required list — flagged as Needs Reassignment.`;
+    default:
+      return `${name}'s current table no longer fits a hard rule for them — flagged as Needs Reassignment.`;
+  }
+}
 
 type Params = { params: Promise<{ weddingId: string; guestId: string }> };
 
@@ -38,10 +58,10 @@ export async function GET(req: NextRequest, { params }: Params) {
 // FR-2.9: editing a guest's Attendance Status, Side, Relationship Tier, household (partyName),
 // or Requires Accessible Table re-checks their current seat assignment against hard rules.
 // Attendance Status is special-cased: it already has its own richer FR-8.1 behavior (free the
-// seat entirely, don't just flag it) via setGuestAttendance -- routing it through the same
-// function here means editing dayOfAttendance from this general endpoint behaves identically to
-// editing it from the dedicated Day-of-mode endpoint, instead of silently bypassing the
-// seat-freeing/notification logic that endpoint has always had.
+// seat entirely, don't just flag it) -- editing dayOfAttendance from this general endpoint behaves
+// identically to editing it from the dedicated Day-of-mode endpoint (the same applyAttendanceChange
+// and the same notification). TS-195: it's saved in the edit's own transaction (see
+// updateGuestForWedding), together with the attendance change a changed RSVP answer brings.
 const REASSIGNMENT_TRIGGER_FIELDS = ["side", "tier", "partyName", "requiresAccessibleTable"] as const;
 
 export async function PATCH(req: NextRequest, { params }: Params) {
@@ -52,18 +72,24 @@ export async function PATCH(req: NextRequest, { params }: Params) {
   const access = await requireAccess(weddingId, user.id, "EDIT");
   if ("error" in access) return access.error;
 
-  const body = await req.json().catch(() => null);
+  // TS-204: readJson refuses a non-JSON or oversized body (413), even one sent without a Content-Length.
+  const json = await readJson(req);
+  if (!json.ok) return json.response;
+  const body = json.body;
   const parsed = updateGuestSchema.safeParse(body);
   if (!parsed.success) return zodErrorResponse(parsed.error);
 
-  const { dayOfAttendance, expectedRevision, ...rest } = parsed.data;
+  const { expectedRevision, ...rest } = parsed.data;
   // TS-143: remember whether the guest had an email before this edit -- giving them their first one
   // sends their RSVP link, just like adding a guest with an email does (and TS-154: so does
   // correcting it).
+  // TS-195: an RSVP answer's effect on attendance is no longer decided from this early read -- it's
+  // decided inside the edit, under the guest's lock (their own RSVP could land in between).
   const before = rest.email ? await getGuestForWedding(guestId, weddingId) : null;
 
+  let updated: Awaited<ReturnType<typeof updateGuestForWedding>>;
   try {
-    const updated = await updateGuestForWedding(guestId, weddingId, rest, expectedRevision);
+    updated = await updateGuestForWedding(guestId, weddingId, rest, expectedRevision, user.id, access.actor);
     if (!updated) return errorResponse("Guest not found", 404);
   } catch (err) {
     // FR-7.7, extended to guests: someone else's edit landed on this guest first -- refuse the
@@ -71,45 +97,96 @@ export async function PATCH(req: NextRequest, { params }: Params) {
     if (err instanceof GuestConflictError) {
       return NextResponse.json({ error: err.message, guest: err.guest }, { status: 409 });
     }
+    // TS-181: a bigger party than their Restricted table can hold for its list -- nothing saved.
+    if (err instanceof GuestHeadcountError) return errorResponse(err.message, 422);
+    // TS-188: needing an accessible table while required at a Restricted table that isn't one.
+    if (err instanceof GuestAccessibleTableError) return errorResponse(err.message, 422);
+    // TS-188/TS-195: bringing them back would overfill their Restricted table's list -- the whole
+    // edit is refused and nothing of it is saved.
+    if (err instanceof AttendanceError) return errorResponse(err.message, 422);
+    // TS-187: lost a race with another change (nothing saved) -- 409, not a server error.
+    const conflict = concurrentChangeResponse(err);
+    if (conflict) return conflict;
     throw err;
   }
 
-  if (dayOfAttendance !== undefined) {
-    await setGuestAttendance(weddingId, guestId, dayOfAttendance, user.id);
+  // FR-10.2: an attendance change is only notification-worthy once the plan has been approved (the
+  // same notification as from the Day-of screen). TS-195: sent once the edit is saved; if it fails,
+  // that's logged and the saved edit stands.
+  if (updated.attendanceChange) {
+    try {
+      if ((await getCurrentPlanVersionStatus(weddingId)) === "APPROVED") {
+        await notifyWeddingCollaborators(
+          weddingId,
+          user.id,
+          "ATTENDANCE_CHANGED",
+          updated.attendanceChange === "NOT_ATTENDING"
+            ? `${updated.guestName} was marked not attending.`
+            : `${updated.guestName} was marked attending again.`
+        );
+      }
+    } catch (err) {
+      console.error("Guest saved, but the attendance notification failed", err);
+    }
   }
 
+  // TS-177: everything below follows from an edit that's already saved -- if any of it fails, the
+  // planner is told the edit is saved but the plan couldn't be re-checked, not that it failed.
   const warnings: string[] = [];
-  if (REASSIGNMENT_TRIGGER_FIELDS.some((f) => parsed.data[f] !== undefined)) {
-    const result = await revalidateGuestAssignment(weddingId, guestId);
-    if (result?.flagged) {
-      warnings.push(
-        `${result.guestName}'s current table no longer fits a hard rule for them — flagged as Needs Reassignment.`
-      );
+  const newlyFlagged: NewlyFlaggedSeat[] = [];
+  try {
+    // TS-177: only a flag this edit newly set is reported. Before, a guest already flagged (or
+    // flagged because their table is over capacity) got "no longer fits a hard rule" on every edit.
+    if (REASSIGNMENT_TRIGGER_FIELDS.some((f) => parsed.data[f] !== undefined)) {
+      newlyFlagged.push(...(await resyncGuestsSeats(weddingId, [guestId])).newlyFlagged);
     }
-  }
 
-  // TS-134: a bigger party can outgrow the table they're seated at -- re-check its room.
-  if (parsed.data.headcount !== undefined) {
-    const { newlyFlagged } = await resyncGuestSeat(weddingId, guestId);
-    for (const f of newlyFlagged) {
-      warnings.push(`${f.name} no longer fits at their table — flagged as Needs Reassignment.`);
+    // TS-134: a bigger party can outgrow the table they're seated at -- re-check its room.
+    if (parsed.data.headcount !== undefined) {
+      newlyFlagged.push(...(await resyncGuestSeat(weddingId, guestId)).newlyFlagged);
     }
+  } catch (err) {
+    console.error("Guest saved, but re-checking the seating plan failed", err);
+    warnings.push(SAVED_BUT_NOT_RECHECKED);
   }
+  const seen = new Set<string>();
+  const flagged = newlyFlagged.filter((f) => !seen.has(f.guestId) && !!seen.add(f.guestId));
+  warnings.unshift(...flagged.map(flaggedWarning));
 
-  const guest = await getGuestForWedding(guestId, weddingId);
-  const firstEmail = !!guest?.email && !!before && !before.email;
+  // TS-209: the edit is saved -- reading it back and emailing the RSVP link can't turn it into an
+  // error (the row used to roll back on screen though the edit had been saved).
+  const guest = await afterSave("reading the guest back", () => getGuestForWedding(guestId, weddingId), warnings, SAVED_BUT_NOT_REFRESHED, null);
+  // TS-220: "first email" and "corrected email" are worked out from the request and the copy read
+  // before the edit -- not from the read-back, whose failure used to skip the RSVP email (and the
+  // fresh link for a corrected address) without a word.
   // TS-154 (Tom's decision #3): correcting one address to another makes a fresh link -- the old
   // one stops working, in case it went to the wrong person -- and emails it to the new address.
-  const correctedEmail =
-    !!guest?.email && !!before?.email && guest.email.trim().toLowerCase() !== before.email.trim().toLowerCase();
+  const newEmail = rest.email || null;
+  const { firstEmail, correctedEmail } = rsvpEmailChange(newEmail, before);
+  // TS-220: who the email goes to -- the saved guest when it could be read back, otherwise built
+  // from the request and the earlier copy.
+  const recipient =
+    guest ?? (before && newEmail ? { id: guestId, firstName: rest.firstName ?? before.firstName, email: newEmail } : null);
+  // TS-174: an address added after the old one was cleared is a correction too -- if the guest
+  // already has a link (it may have gone to the wrong address), they get a fresh one and the old
+  // one stops working. Before, only an address changed in one edit did that.
   const rsvpEmail =
-    (firstEmail || correctedEmail) && guest
-      ? await sendGuestRsvpLink(guest, access.wedding, user.id, { regenerate: correctedEmail })
+    (firstEmail || correctedEmail) && recipient
+      ? await afterSave(
+          "emailing the RSVP link",
+          async () => {
+            const regenerate = correctedEmail || (firstEmail && (await guestHasRsvpLink(guestId, weddingId)));
+            return sendGuestRsvpLink(recipient, access.wedding, user, { regenerate, actor: access.actor });
+          },
+          warnings,
+          null,
+          RSVP_EMAIL_FAILED
+        )
       : null;
   return NextResponse.json({
     guest,
     warnings,
-    ...(rsvpEmail ? { rsvpEmail: { emailed: rsvpEmail.emailed, emailFailed: rsvpEmail.emailFailed, emailLimited: rsvpEmail.emailLimited ?? false } } : {}),
+    ...(rsvpEmail ? { rsvpEmail: rsvpEmailOutcome(rsvpEmail) } : {}),
   });
 }
 
@@ -124,24 +201,50 @@ export async function DELETE(req: NextRequest, { params }: Params) {
   const guest = await getGuestForWedding(guestId, weddingId);
   if (!guest) return errorResponse("Guest not found", 404);
 
-  const deleted = await deleteGuestForWedding(guestId, weddingId);
+  let deleted: boolean;
+  try {
+    deleted = await deleteGuestForWedding(guestId, weddingId, user.id, access.actor);
+  } catch (err) {
+    // TS-187: lost a race with another change (nothing saved) -- 409, not a server error.
+    const conflict = concurrentChangeResponse(err);
+    if (conflict) return conflict;
+    throw err;
+  }
   if (!deleted) return errorResponse("Guest not found", 404);
 
   // FR-2.9: removing a guest cascades away their own seat_assignments row at the DB level, but
   // if they were counted as Unassigned this can flip the plan from incomplete to complete --
   // recompute so isComplete doesn't go stale.
-  await recomputeCurrentPlanCompleteness(weddingId);
-
-  // FR-10.2: guest removal is only notification-worthy post-approval.
-  const status = await getCurrentPlanVersionStatus(weddingId);
-  if (status === "APPROVED") {
-    await notifyWeddingCollaborators(
-      weddingId,
-      user.id,
-      "GUEST_REMOVED",
-      `${guest.firstName} ${guest.lastName} was removed from the guest list.`
-    );
+  // TS-189: an attending guest leaving changes the plan's list of guests waiting for a seat, so
+  // the plan's revision moves on too (anyone with the old copy refreshes before acting on it).
+  // TS-197: that now happens once, inside the delete itself -- this recount only catches up on
+  // completeness. The guest is already gone, so a failure here is a warning, not an error.
+  const warnings: string[] = [];
+  try {
+    await recomputeCurrentPlanCompleteness(weddingId);
+  } catch (recountErr) {
+    console.error("Guest removed, but re-checking the plan failed", recountErr);
+    warnings.push(SAVED_BUT_NOT_RECHECKED);
   }
 
-  return NextResponse.json({ ok: true });
+  // FR-10.2: guest removal is only notification-worthy post-approval.
+  // TS-209: the guest is already gone -- a failed read here mustn't answer an error (the guest came
+  // back on screen).
+  const status = await afterSave("reading the plan's status", () => getCurrentPlanVersionStatus(weddingId), warnings, null, null);
+  if (status === "APPROVED") {
+    // TS-194: the change above is already saved -- telling people about it is best effort, so a
+    // failure is logged and never turns the saved change into an error.
+    try {
+      await notifyWeddingCollaborators(
+        weddingId,
+        user.id,
+        "GUEST_REMOVED",
+        `${guest.firstName} ${guest.lastName} was removed from the guest list.`
+      );
+    } catch (err) {
+      console.error("Saved, but notifying the wedding's members failed:", err);
+    }
+  }
+
+  return NextResponse.json({ ok: true, warnings });
 }

@@ -124,8 +124,8 @@ tracking table as it goes — nothing special to do. The "resolve as already app
 matters if you ever point Prisma's CLI at *this sandbox's* database specifically, since its first
 migration was applied by hand before any tracking table existed there. If you'd rather adopt Prisma
 Client for the query layer instead of the current `pg`-based one, that's a reasonable next step
-once `prisma generate` can run — the schema and `@prisma/adapter-pg` (already installed) are set
-up for it.
+once `prisma generate` can run — the schema is set up for it (add `@prisma/adapter-pg` back then;
+TS-183 removed it while nothing used it).
 
 ## Production deployment
 
@@ -135,21 +135,30 @@ The web app is live at **https://seatwise-app.netlify.app** (since 2026-09-30, T
 |---|---|---|
 | Web app | Netlify, project `seatwise-app`, Free plan | Next.js via Netlify's OpenNext adapter; config in `apps/web/netlify.toml` |
 | Database | Neon, project `Seatwise`, branch `production`, AWS US East 2 (Ohio), Free plan | Same region as Netlify's functions |
-| Email | Resend (account created, **not yet wired**) | Needs a verified domain before it can email guests — until then the app's console stand-in is used and invite/RSVP links are copied by hand |
+| Email | Gmail SMTP — the dedicated **seatwise.notifications@gmail.com** account (app password) | See [Email delivery](#email-delivery-ts-132). Resend is kept for later, once Seatwise has its own domain |
 
-**How a change reaches production.** Merge to `main` → Netlify builds and publishes automatically
-(about a minute). Nothing else deploys:
+**How a change reaches production.** Netlify publishes only the `release` branch — merging to
+`main` does **not** deploy. The owner moves `release` up to `main` (a `main` → `release` PR, about
+once a day, to save credits), and Netlify then builds and publishes it (about a minute). Nothing
+else deploys:
 - **Deploy Previews are off** ("Don't deploy pull requests") and branch deploys are production-only —
   a preview would run unmerged code against the production database.
 - The `ignore` rule in `netlify.toml` skips the build when a merge doesn't touch the web app
-  (`apps/web`, `packages`, the lockfile). The Free plan has **300 credits a month and each
+  (`apps/web`, `packages`, the lockfile). A retry or "Clear cache and deploy" of the same commit
+  (e.g. after changing an environment variable) always builds (TS-183). The Free plan has **300 credits a month and each
   production deploy costs 15** — batch small merges where it's easy, and keep an eye on
   *Usage & billing* in Netlify. When credits run out, every site on the account goes offline until
   the next cycle.
 
 **Environment variables** (Netlify → Project configuration → Environment variables; never in the
 repo): `DATABASE_URL` (Neon's **pooled** `-pooler` string), `JWT_SECRET`, `ENCRYPTION_KEY`,
-`APP_URL` (`https://seatwise-app.netlify.app`). The three secrets are marked *Contains secret
+`APP_URL` (`https://seatwise-app.netlify.app`), and the email settings `SMTP_USER`/`SMTP_PASSWORD`
+(see Email delivery). The running app refuses a `JWT_SECRET` shorter than 32 characters,
+left at a placeholder such as the one in `.env.example` (TS-179), or the same as `ENCRYPTION_KEY`
+(TS-204) -- but only when it first uses it,
+**not at build time** (TS-215). A wrong `JWT_SECRET`, `ENCRYPTION_KEY` or `APP_URL` builds and
+deploys without a word (spending the deploy's credits), and then every sign-in or link fails --
+so check them before publishing (step 1 of the publish steps below). The three secrets are marked *Contains secret
 values* and are **not** available in local development. The two keys were generated with
 `openssl rand -hex 32` and are kept in the owner's password manager.
 
@@ -165,8 +174,122 @@ typed without echo, so it never lands in shell history or anywhere else:
 read -rs NEON_URL && DATABASE_URL="$NEON_URL" pnpm --filter @seatwise/db exec prisma migrate deploy; unset NEON_URL
 ```
 
-(Paste the string after pressing Return — nothing is shown — then Return again.) Do this **before**
-or together with the deploy that needs it.
+(Paste the string after pressing Return — nothing is shown — then Return again.)
+
+**Publish steps when a release includes a migration** (TS-183). The new code and the new schema
+should be live together, so the gap between them is as short as possible:
+
+1. Merge the PRs to `main` and make sure CI is green. **Check the live settings** (TS-215) in
+   Netlify → Project configuration → Environment variables, since nothing checks them at build
+   time:
+   - `JWT_SECRET` and `ENCRYPTION_KEY` are each **64 characters** (what `openssl rand -hex 32`
+     makes) and **different from each other** (*Reveal* shows them; don't copy them anywhere).
+   - `APP_URL` is exactly `https://seatwise-app.netlify.app` (no trailing `/`).
+   - `EMAIL_TRANSPORT` is **not set** -- it's for local runs and CI, where emails are only printed
+     and counted as sent; on the live site nobody would get an email.
+2. **Migrate**: run the `prisma migrate deploy` command above against production.
+
+   **Check it applied exactly the expected migrations** (TS-245). Its output lists each one it
+   applied; compare that with what this release adds since the last publish (`git diff --name-only
+   origin/release..main -- packages/db/prisma/migrations` lists them too). For the first publish
+   after the TS-160 release, that's these **12**, in this order:
+
+   1. `20261005160000_email_verification`
+   2. `20261005170000_declined_guests_not_attending`
+   3. `20261006120000_seat_and_rule_lookup_indexes`
+   4. `20261006180000_wedding_owner_restrict`
+   5. `20261007100000_member_notification_emails`
+   6. `20261007100100_more_notification_types`
+   7. `20261007110000_revoked_sessions`
+   8. `20261007120000_guest_import_results`
+   9. `20261007130000_timeline_next_day`
+   10. `20261007130100_wedding_settings_revision`
+   11. `20261007200000_guest_email_changed_at`
+   12. `20261007200100_one_pending_invite_per_email`
+
+   Fewer, more, or different names: stop and find out why before publishing.
+
+   **If it reports a failed migration** (TS-215), stop: **don't publish** -- the new code expects
+   the new schema. Either restore the database from Neon's history to just before the migrate
+   (Neon keeps 6 hours: Branches → Restore, see Backups below) and try again once the problem is
+   fixed, or, once you know exactly how far the migration got and have finished or undone its
+   changes by hand, mark it with `prisma migrate resolve --applied <name>` or
+   `--rolled-back <name>` (same `read -rs NEON_URL && DATABASE_URL="$NEON_URL" pnpm --filter
+   @seatwise/db exec prisma migrate resolve …` form as above) and run `migrate deploy` again.
+3. **Publish immediately**: merge `main` into `release` (the PR), and wait for Netlify's deploy to
+   finish. Then **sign in on the live site straight away** -- a wrong secret or `APP_URL` shows up
+   here, on the first sign-in or link, not in the deploy.
+4. **Then re-run the safe data steps** against production. Each is a dry run first — read what it
+   says, then repeat with `--confirm`. Both are safe to run more than once and only run against
+   production with `--target-production`, asking for the secrets without showing them:
+
+   ```bash
+   read -rs PRODUCTION_DATABASE_URL && export PRODUCTION_DATABASE_URL   # Neon's direct string
+   # Re-checks every current seating plan with the app's own checks (after the
+   # declined-guests migration, 20261005170000_declined_guests_not_attending). TS-187: it also
+   # marks Not Attending (freeing their seat) any guest who declined in the gap between steps 2
+   # and 3, while the old code was still answering RSVPs -- the dry run lists them by wedding.
+   # A wedding someone is changing at that moment is tried again, then skipped and listed if it
+   # still can't be done; just run it again.
+   pnpm --filter @seatwise/db recheck-current-plans -- --target-production
+   pnpm --filter @seatwise/db recheck-current-plans -- --target-production --confirm
+   # Encrypts RSVP/vendor links still stored in plain text (needs the live ENCRYPTION_KEY).
+   read -rs PRODUCTION_ENCRYPTION_KEY && export PRODUCTION_ENCRYPTION_KEY
+   pnpm --filter @seatwise/db encrypt-old-link-tokens -- --target-production
+   pnpm --filter @seatwise/db encrypt-old-link-tokens -- --target-production --confirm
+   unset PRODUCTION_DATABASE_URL PRODUCTION_ENCRYPTION_KEY
+   ```
+
+   The test-data scripts in `packages/db/prisma` (seed, cleanup, fill, make-large-test-wedding,
+   local-test-data) refuse to run against anything but a local database, whatever they're
+   passed. TS-255: two scripts are different on purpose -- `copy-weddings-to-production`
+   writes to the database named by TARGET_DATABASE_URL, and `backup-real-weddings` only reads.
+5. Check the live site by hand (sign in, open a wedding, its seating plan).
+
+   TS-215 / TS-223: publishing from the TS-160 release brings in the rolling 24-hour limits
+   (TS-203). The counts that release kept aren't read by the new limits, so the 24-hour counts
+   start at 0 when you publish -- at most, someone gets one extra day's allowance on publish day.
+   Nothing to do. (On later publishes the counts carry over: the limits keep their names.)
+
+   TS-187 / TS-245: someone who signed up in the gap between steps 2 and 3 got **no** "confirm
+   your email" message -- the old code doesn't send one. Once the new code is live they see the
+   confirm-your-email banner when they sign in, and **Resend link** on it sends them one.
+6. **Optional, once (TS-195): time limits for every query.** The app gives each of its own
+   transactions a 20-second limit per statement and ends one left idle for 30 seconds (TS-180/
+   TS-187, set inside the transaction). Queries the app runs *outside* a transaction — most simple
+   reads and single-statement saves — get no limit from the app, so one stuck query could hold a
+   connection (and, for a save, a row lock) for as long as it runs. To give those the same limits,
+   open Neon's **SQL Editor** for the production database and run (once — it stays set; replace
+   `<app role>` with the role in the app's `DATABASE_URL`, the part before the `:` after `//`;
+   `SELECT current_user;` in a connection made with that string also shows it):
+
+   ```sql
+   ALTER ROLE <app role> SET statement_timeout = '20s';
+   ALTER ROLE <app role> SET idle_in_transaction_session_timeout = '30s';
+   ```
+
+   They apply to new connections from then on — every connection made with that role, including
+   the migrate command and the data steps above. Those finish well within 20 seconds at today's
+   size; if one ever stops with "canceling statement due to statement timeout", run
+   `ALTER ROLE <app role> RESET statement_timeout;`, re-run the step, then set the limit again.
+   Nothing in the app depends on this step.
+7. **Before sharing the link: time Generate at full size on Neon** (TS-245). A wedding at the caps
+   (2,000 guests, 300 tables) makes thousands of database round trips in one Generate or Approve.
+   That's quick locally but hasn't been measured against Neon. Never do this on the production
+   database -- use a Neon test branch:
+   1. On your machine, make the guest list (this only ever touches your local database; it also
+      adds the same wedding there, so you can time it locally first):
+      `pnpm --filter @seatwise/db make-large-test-wedding -- --owner <your local account's email> --csv ~/large-guests.csv`
+   2. In the Neon console, **Branches → Create branch** (schema only, if offered). Copy that
+      branch's connection string -- check the branch name, not `production`.
+   3. Run the app on your machine against the branch: `read -rs BRANCH_URL && DATABASE_URL="$BRANCH_URL"
+      EMAIL_TRANSPORT=log pnpm --filter @seatwise/web dev` (the sign-up confirm link is printed in
+      that terminal). Sign up, make a wedding, import `~/large-guests.csv` on the Guests tab, and
+      Quick-create 100 tables of 8 three times.
+   4. On the Seating plan tab, time **Generate**, then **Approve**. Over about 10 seconds is worth a
+      ticket before sharing -- people will think it's stuck. Your machine is likely further from
+      Neon than Netlify is, so the live site should be no slower than this.
+   5. Delete the branch in the Neon console, and `~/large-guests.csv`.
 
 **Backups.** Two layers:
 - **Neon** keeps 6 hours of history — for a mistake noticed right away, restore to a point in time

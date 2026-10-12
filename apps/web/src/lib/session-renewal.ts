@@ -23,3 +23,36 @@ export function shouldRenew(claims: { issuedAt: number; authTime: number }, nowS
 /** Response header carrying a renewed token to a Bearer-token client (the mobile app), which has no
  * cookie jar for the renewal to land in. Web clients get a refreshed cookie instead. */
 export const RENEWED_TOKEN_HEADER = "x-seatwise-renewed-token";
+
+/**
+ * TS-204: how long a session ended with "Log out" must stay on the ended list (seconds since
+ * epoch). A copy of the token can still be renewed (proxy.ts doesn't look at the database), each
+ * renewal keeping the session id -- but renewal stops RENEWAL_LIMIT_SECONDS after sign-in, so no
+ * token of this session can be valid past sign-in + that limit + one token lifetime. Keeping the
+ * row only until the logging-out token's own expiry let a renewed copy outlive it.
+ */
+export function revokedSessionKeepUntil(
+  claims: { authTime: number; expiresAt: number },
+  tokenTtlSeconds: number
+): number {
+  return Math.max(claims.expiresAt, claims.authTime + RENEWAL_LIMIT_SECONDS + tokenTtlSeconds);
+}
+
+/**
+ * TS-204: the id a session goes by. A token signed before session ids existed has none -- it gets
+ * one worked out from the sign-in itself (account, sign-in time, session version), so every copy of
+ * that token, and every renewal of each copy, shares it. Before, each renewal of such a token made up
+ * a new random id, so two copies of one token renewed into two sessions and "Log out" on one left
+ * the other working.
+ */
+export async function sessionIdFor(claims: {
+  sub: string;
+  authTime: number;
+  sessionVersion: number;
+  sessionId: string | null;
+}): Promise<string> {
+  if (claims.sessionId) return claims.sessionId;
+  const bytes = new TextEncoder().encode(`${claims.sub}:${claims.authTime}:${claims.sessionVersion}`);
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
+  return `legacy-${Array.from(digest, (b) => b.toString(16).padStart(2, "0")).join("")}`;
+}

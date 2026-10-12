@@ -65,10 +65,9 @@ export class GuestRow {
 
   /** TS-38: the Lock/Unlock toggle -- its accessible name flips with the guest's own `isLocked`
    * state (see GuestsTab.tsx), so `{ exact: true }` keeps "Lock" from also matching "Unlock". */
+  // TS-212: the name also says which guest ("Lock Jane Smith"), so it's matched from the start.
   private lockButton() {
-    return this.root.getByRole("button", { name: "Lock", exact: true }).or(
-      this.root.getByRole("button", { name: "Unlock", exact: true }),
-    );
+    return this.root.getByRole("button", { name: /^(Lock|Unlock) / });
   }
 
   /** Clicks the Lock/Unlock toggle, whichever state it's currently in, and waits for the button
@@ -90,7 +89,7 @@ export class GuestRow {
     ]);
     expect(res.ok(), `saving the lock returned ${res.status()}`).toBe(true);
     const newLabel = wasLocked ? "Lock" : "Unlock";
-    await this.root.getByRole("button", { name: newLabel, exact: true }).waitFor();
+    await this.root.getByRole("button", { name: new RegExp(`^${newLabel} `) }).waitFor();
   }
 
   async isLocked(): Promise<boolean> {
@@ -117,6 +116,49 @@ export class GuestRow {
     await this.firstNameInput().press("Tab");
   }
 
+  /** TS-199: the line under the row saying typed text couldn't be saved and is still in its box. */
+  notSavedYetNote(): Locator {
+    return this.root.getByText(/^Not saved yet — what you typed is still in the box/);
+  }
+
+  /** TS-199: types into the first-name box without leaving it (nothing saved yet). */
+  async typeFirstNameWithoutLeaving(value: string): Promise<void> {
+    await this.firstNameInput().fill(value);
+  }
+
+  /** TS-199: whether the first-name box has keyboard focus. */
+  firstNameBox(): Locator {
+    return this.firstNameInput();
+  }
+
+  /** TS-199: focuses the RSVP list and presses the down arrow `times` times, the way a keyboard
+   * user looks through the choices -- nothing should save until Enter or leaving the list. */
+  async arrowThroughRsvpStatus(times: number): Promise<void> {
+    const list = this.rsvpStatusSelect();
+    await list.focus();
+    const before = await list.inputValue();
+    for (let i = 0; i < times; i++) await list.press("ArrowDown");
+    // A headless browser on macOS doesn't change a closed list with the arrows at all (a real Mac
+    // opens the pop-up instead, so the list treats the arrows as "pop-up opened" -- TS-212). The next
+    // value is then chosen after a key that changes a closed list in place (Page Down), so the list
+    // takes it as an in-place keyboard change and waits for Enter, as an arrow change on Linux does.
+    if ((await list.inputValue()) === before) {
+      // Escape first: the arrows marked the list's pop-up as open (they open it on a real Mac).
+      await list.press("Escape");
+      await list.press("PageDown");
+    }
+    if ((await list.inputValue()) === before) {
+      const values = await list.locator("option").evaluateAll((os) => os.map((o) => (o as HTMLOptionElement).value));
+      const next = values[(values.indexOf(before) + 1) % values.length];
+      await list.selectOption(next);
+    }
+  }
+
+  /** TS-199: presses Enter on the RSVP list (saves a keyboard change). */
+  async confirmRsvpStatusWithEnter(): Promise<void> {
+    await this.rsvpStatusSelect().press("Enter");
+  }
+
   /** TS-129: the notes as the editable textarea currently shows them. */
   async notes(): Promise<string> {
     return this.notesInput().inputValue();
@@ -126,6 +168,12 @@ export class GuestRow {
   async editNotes(value: string): Promise<void> {
     await this.notesInput().fill(value);
     await this.notesInput().press("Tab");
+  }
+
+  /** TS-182: types into the notes without leaving the box, so nothing has been saved yet. */
+  async typeNotesWithoutLeaving(value: string): Promise<void> {
+    await this.notesInput().click();
+    await this.notesInput().pressSequentially(value);
   }
 
   /** TS-129: whether this row offers the notes for editing (View/Comment users get plain text). */
@@ -145,6 +193,16 @@ export class GuestRow {
 
   async email(): Promise<string> {
     return this.emailInput().inputValue();
+  }
+
+  /** TS-206: types into the email box without leaving it (nothing saved yet). */
+  async typeEmailWithoutLeaving(value: string): Promise<void> {
+    await this.emailInput().fill(value);
+  }
+
+  /** TS-206: the email box itself (e.g. to check it still holds what was typed). */
+  emailBox(): Locator {
+    return this.emailInput();
   }
 
   /** TS-118: email saves on blur -- replace the text, then Tab away. Waits for the save (or its
@@ -174,9 +232,21 @@ export class GuestRow {
     await this.sideSelect().selectOption(side);
   }
 
-  /** TS-117: "New link" -- issues a fresh RSVP token, invalidating the old one. */
+  /** TS-117: "New link" -- issues a fresh RSVP token, invalidating the old one. TS-214: it asks
+   * first; this answers "Yes, make a new link". */
   async requestNewRsvpLink(): Promise<void> {
-    await this.root.getByRole("button", { name: "New link", exact: true }).click();
+    await this.newRsvpLinkButton().click();
+    await new ConfirmDelete(this.root).confirm();
+  }
+
+  /** TS-214: the "New link" trigger (opens its "Are you sure?" question). TS-212: named for the guest. */
+  newRsvpLinkButton(): Locator {
+    return this.root.getByRole("button", { name: /^New link for / });
+  }
+
+  /** TS-214: the open "Make a new RSVP link…?" question. */
+  newLinkQuestion(): ConfirmDelete {
+    return new ConfirmDelete(this.root);
   }
 
   /** TS-117: the line the row shows after an RSVP-link action: "Link copied…", "Emailed to …", or
@@ -184,7 +254,8 @@ export class GuestRow {
   /** TS-143: the line shown after the RSVP link was emailed automatically (added with an email, or
    * given a first email). */
   autoRsvpResult(): Locator {
-    return this.root.getByText(/^(Emailed RSVP link to |Couldn't email )/);
+    // TS-177: or, after the RSVP cutoff, the note that the guest wasn't emailed.
+    return this.root.getByText(/^(Emailed RSVP link to |Couldn't email |RSVPs have closed, so this guest wasn't emailed)/);
   }
 
   rsvpLinkResult(): Locator {
@@ -199,5 +270,80 @@ export class GuestRow {
 
   async expectVisible(): Promise<void> {
     await expect(this.root).toBeVisible();
+  }
+
+  // --- TS-202: the row's "Edit details" form (party size, tier, household, age, accessible). ---
+
+  /** TS-202: the "Edit details" button (Owner/Edit only). */
+  editDetailsButton(): Locator {
+    return this.root.getByRole("button", { name: /^Edit details for / });
+  }
+
+  /** TS-202: the open details form. */
+  detailsForm(): Locator {
+    return this.root.getByRole("form", { name: /^Details for / });
+  }
+
+  /** TS-202: one of the details form's fields, by its label. */
+  detailsField(field: "partyName" | "headcount" | "tier" | "ageCategory" | "accessible"): Locator {
+    const labels = {
+      partyName: "Party / household",
+      headcount: "Party size (headcount)",
+      tier: "Tier",
+      ageCategory: "Age category",
+      accessible: "Requires an accessible table",
+    } as const;
+    return this.detailsForm().getByLabel(labels[field], { exact: true });
+  }
+
+  async openDetails(): Promise<void> {
+    await this.editDetailsButton().click();
+    await expect(this.detailsForm()).toBeVisible();
+  }
+
+  /** TS-202: fills whichever details are given (the form must be open). */
+  async fillDetails(input: {
+    partyName?: string;
+    headcount?: string;
+    tier?: "VIP" | "FAMILY" | "FRIEND" | "PLUS_ONE" | "OTHER";
+    ageCategory?: "ADULT" | "CHILD" | "INFANT";
+    requiresAccessibleTable?: boolean;
+  }): Promise<void> {
+    if (input.partyName !== undefined) await this.detailsField("partyName").fill(input.partyName);
+    if (input.headcount !== undefined) await this.detailsField("headcount").fill(input.headcount);
+    if (input.tier !== undefined) await this.detailsField("tier").selectOption(input.tier);
+    if (input.ageCategory !== undefined) await this.detailsField("ageCategory").selectOption(input.ageCategory);
+    if (input.requiresAccessibleTable !== undefined) {
+      await this.detailsField("accessible").setChecked(input.requiresAccessibleTable);
+    }
+  }
+
+  /** TS-202: presses "Save details" and waits for the save to come back; returns its status. */
+  async saveDetails(): Promise<number> {
+    const page = this.root.page();
+    const [res] = await Promise.all([
+      page.waitForResponse((r) => r.request().method() === "PATCH" && /\/api\/v1\/weddings\/[^/]+\/guests\/[^/]+$/.test(new URL(r.url()).pathname)),
+      this.detailsForm().getByRole("button", { name: "Save details", exact: true }).click(),
+    ]);
+    return res.status();
+  }
+
+  /** TS-225: the details form's Save button (to check where keyboard focus is). */
+  saveDetailsButton(): Locator {
+    return this.detailsForm().getByRole("button", { name: /^(Save details|Saving\.\.\.)$/ });
+  }
+
+  async cancelDetails(): Promise<void> {
+    await this.detailsForm().getByRole("button", { name: "Cancel", exact: true }).click();
+  }
+
+  /** TS-202: the reason shown in the details form when a save is refused. */
+  detailsError(): Locator {
+    return this.detailsForm().getByRole("alert");
+  }
+
+  /** TS-202: the read-only line under the name (household · tier · side · age · with plus-ones). */
+  summaryLine(): Locator {
+    return this.root.locator("p").filter({ hasText: /(VIP|Family|Friend|Plus-one|Other)/ }).first();
   }
 }

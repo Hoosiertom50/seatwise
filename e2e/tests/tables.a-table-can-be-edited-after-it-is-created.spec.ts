@@ -23,7 +23,7 @@ defineQualityTest(
     objective:
       "Confirms the Tables tab's Edit form saves name, shape, purpose and favors (and Cancel discards), that lowering seats below the guests seated there flags the overflow as Needs Reassignment with a warning and restoring the seats clears it, that restricting the table to a list that omits a seated guest flags that guest, that nobody is ever unseated by an edit, that an edit based on a stale table is refused with a message and the other change kept, and that a View collaborator sees no Edit button.",
     expectedOutcome:
-      "The row and the API show 'Sweetheart', Rectangular, 'Couple and parents', favoring Family; a cancelled rename leaves it unchanged. At 2 seats one of the three guests is flagged and a 'no longer fits' warning shows, the plan is incomplete, and all three are still assigned; at 3 seats no one is flagged and the plan is complete. Restricted to two guests, the third is flagged with an 'isn't on this table's required list' warning and requiredGuestIds holds the two. A stale save shows 'was just edited elsewhere' and the label stays as the other change set it. The View collaborator's Tables tab has no Edit button.",
+      "The row and the API show 'Sweetheart', Rectangular, 'Couple and parents', favoring Family; a cancelled rename leaves it unchanged. At 2 seats one of the three guests is flagged and a 'no longer fits' warning shows, the plan is incomplete, and all three are still assigned; at 3 seats no one is flagged and the plan is complete. Restricted to two guests, the third is flagged with an 'isn't on this table's required list' warning and requiredGuestIds holds the two. A stale save shows 'changed since you loaded it' and the label stays as the other change set it. The View collaborator's Tables tab has no Edit button.",
     requirementIds: ["REQ-TABLE-VENUE-LAYOUT"],
     tags: ["@mutating", "@feature:tables", "@risk:high", "@suite:regression"],
   },
@@ -110,7 +110,7 @@ defineQualityTest(
       const theirs = await context.request.patch(`/api/v1/weddings/${w}/tables/${head.id}`, { data: { label: "Theirs" } });
       expect(theirs.ok()).toBe(true);
       await tablesTab.saveTableEdit("Sweetheart");
-      await expect(tablesTab.message(/^"Theirs" was just edited elsewhere — showing the latest\./)).toBeVisible();
+      await expect(tablesTab.message(/^"Theirs" changed since you loaded it \(maybe in another tab, or by someone else\) — showing the latest\./)).toBeVisible();
       await expect(tablesTab.editTableButton("Theirs")).toBeVisible();
       expect((await tableNow()).label).toBe("Theirs");
     });

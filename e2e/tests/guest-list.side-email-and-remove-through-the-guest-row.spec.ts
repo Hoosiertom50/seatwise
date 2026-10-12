@@ -10,11 +10,11 @@ import { uniquePersonName } from "../data/ids.js";
 defineQualityTest(
   {
     id: "guest-list.side-email-and-remove-through-the-guest-row.side-email-invalid-email-remove",
-    title: "a guest's side and email can be changed from their row, an invalid email is refused and put back, and Remove takes the guest off the list",
+    title: "a guest's side and email can be changed from their row, an invalid email is refused and kept in the box to fix, and Remove takes the guest off the list",
     objective:
       "Confirms that choosing a side in a guest's row saves it, that typing an email saves it and clearing it removes it, that an invalid email is refused with the validation message and the field shows the saved email again, and that Remove takes the guest off the list and out of the wedding.",
     expectedOutcome:
-      "The API reports side BRIDE, then email 'guest@example.invalid', then the 'Not a valid email address' message shows with the field reading the saved email and the API unchanged, then email null after clearing. After Remove the row is gone and the API no longer lists the guest.",
+      "The API reports side BRIDE, then email 'guest@example.invalid', then the 'Not a valid email address' message shows with the field still reading what was typed and the API unchanged, then email null after clearing. After Remove the row is gone and the API no longer lists the guest.",
     requirementIds: ["REQ-GUEST-LIST-MANAGEMENT"],
     tags: ["@mutating", "@feature:guests", "@risk:normal", "@suite:regression"],
   },
@@ -37,13 +37,14 @@ defineQualityTest(
       await expect.poll(async () => (await saved())?.side).toBe("BRIDE");
     });
 
-    await test.step("An email can be set, an invalid one is refused and put back, and clearing removes it", async () => {
+    await test.step("An email can be set, an invalid one is refused and kept in the box to fix, and clearing removes it", async () => {
       await row.editEmail("guest@example.invalid");
       await expect.poll(async () => (await saved())?.email).toBe("guest@example.invalid");
 
       await row.editEmail("not-an-email");
       await expect(weddingGuestsPage.message(/Not a valid email address/)).toBeVisible();
-      await expect.poll(() => row.email()).toBe("guest@example.invalid");
+      // TS-199: the refused address stays in the box (with the reason) to be fixed; nothing is saved.
+      await expect.poll(() => row.email()).toBe("not-an-email");
       expect((await saved())?.email).toBe("guest@example.invalid");
 
       await row.editEmail("");

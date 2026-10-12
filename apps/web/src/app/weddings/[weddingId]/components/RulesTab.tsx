@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { ConfirmDeleteButton } from "@/components/ConfirmDeleteButton";
-import { api, ApiError } from "@/lib/api-client";
+import { api, ApiError, isItemGoneError } from "@/lib/api-client";
 import type { GuestDTO, RelationshipDTO, RelationshipTypeValue } from "@seatwise/shared";
 import { useUnsavedChanges } from "@/lib/unsaved-changes";
 
@@ -32,7 +32,8 @@ export function RulesTab({
   // TS-150: who a new rule flags because of where they're seated right now.
   const [warnings, setWarnings] = useState<string[]>([]);
   // TS-159: tell the page this tab has input that leaving it would lose.
-  useUnsavedChanges("rules", !!(guestAId || guestBId));
+  // TS-182: only while the form is there (it's hidden without Edit access).
+  useUnsavedChanges("rules", canEdit && !!(guestAId || guestBId));
 
   useEffect(() => {
     api
@@ -78,15 +79,26 @@ export function RulesTab({
   // rather than as a generic failure that puts the row back in the list only to fail again on
   // retry.
   async function onRemove(id: string) {
-    const prev = relationships;
-    setRelationships(relationships.filter((r) => r.id !== id));
+    // TS-182: on failure only this rule comes back, in its old place -- a copy of the whole list
+    // taken here used to also undo a rule added meanwhile.
+    const index = relationships.findIndex((r) => r.id === id);
+    const removed = relationships[index];
+    setRelationships((cur) => cur.filter((r) => r.id !== id));
     try {
-      await api.delete(`/api/v1/weddings/${weddingId}/relationships/${id}`);
+      const res = await api.delete<{ ok: boolean; warnings?: string[] }>(`/api/v1/weddings/${weddingId}/relationships/${id}`);
+      // TS-188: removed, but the seats it affected couldn't be re-checked -- say so, as adding does.
+      setWarnings(res?.warnings ?? []);
     } catch (err) {
-      if (err instanceof ApiError && err.status === 404) {
+      // TS-220: a 404 about the rule itself is answered as success by api-client (TS-209), so one
+      // that gets here is about the wedding (deleted, or no longer open to this person) -- show the
+      // server's own message and put the row back, rather than "That rule was already removed".
+      if (isItemGoneError(err)) {
         setError("That rule was already removed — possibly by another collaborator.");
       } else {
-        setRelationships(prev);
+        if (removed)
+          setRelationships((cur) =>
+            cur.some((r) => r.id === id) ? cur : [...cur.slice(0, index), removed, ...cur.slice(index)]
+          );
         setError(err instanceof ApiError ? err.message : "Couldn't remove that rule.");
       }
     }
@@ -98,7 +110,7 @@ export function RulesTab({
     <div>
       {!canEdit && (
         <p className="mb-4 rounded-md bg-neutral-100 dark:bg-neutral-800 px-3 py-2 text-sm text-neutral-600 dark:text-neutral-300">
-          You have view-only access to this wedding's seating rules — adding or removing rules is
+          You have view-only access to this wedding&apos;s seating rules — adding or removing rules is
           turned off.
         </p>
       )}
@@ -106,9 +118,10 @@ export function RulesTab({
         <>
       <h2 className="mb-3 text-lg font-medium">Add a seating rule</h2>
       <p className="mb-3 text-sm text-neutral-500 dark:text-neutral-400">
-        &ldquo;Must&rdquo; rules are hard rules — they can never be violated once a seating chart
-        is generated. &ldquo;Prefer&rdquo; and &ldquo;avoid&rdquo; are soft preferences the
-        planner will try to honor.
+        {/* TS-177: a new rule doesn't change an existing plan -- it flags anyone it affects. */}
+        &ldquo;Must&rdquo; rules are hard rules: a generated plan always follows them, and a move that
+        breaks one is blocked. Adding one to an existing plan flags anyone it affects as Needs
+        Reassignment. &ldquo;Prefer&rdquo; and &ldquo;avoid&rdquo; are wishes Seatwise tries to meet.
       </p>
       <form
         onSubmit={onAdd}
@@ -189,7 +202,7 @@ export function RulesTab({
         </>
       )}
       {/* TS-151: shown to everyone -- a View user whose rules failed to load used to see "No seating rules yet." */}
-      {error && <p className="mb-4 text-sm text-red-600 dark:text-red-400">{error}</p>}
+      {error && <p role="alert" className="mb-4 text-sm text-red-600 dark:text-red-400">{error}</p>}
 
       <h2 className="mb-3 text-lg font-medium">Rules ({relationships.length})</h2>
       {relationships.length === 0 ? (
@@ -201,10 +214,11 @@ export function RulesTab({
             return (
               <li
                 key={r.id}
-                className="flex items-center justify-between rounded-lg border border-neutral-200 dark:border-neutral-700 px-4 py-3"
+                className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-neutral-200 dark:border-neutral-700 px-4 py-3"
               >
-                <div>
-                  <p className="font-medium">
+                {/* TS-182: long names wrap instead of pushing Remove off a phone screen. */}
+                <div className="min-w-0">
+                  <p className="break-words font-medium">
                     {r.guestAName} &amp; {r.guestBName}
                   </p>
                   <p className="text-sm text-neutral-500 dark:text-neutral-400">
@@ -215,6 +229,7 @@ export function RulesTab({
                 </div>
                 {canEdit && (
                   <ConfirmDeleteButton
+                    id={`rule-${r.id}-remove`}
                     ariaLabel={`Remove the rule for ${r.guestAName} & ${r.guestBName}`}
                     question={`Remove this rule for ${r.guestAName} & ${r.guestBName}? This can't be undone.`}
                     confirmLabel="Yes, remove rule"

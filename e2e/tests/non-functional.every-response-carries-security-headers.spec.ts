@@ -11,7 +11,8 @@ import { expect, defineQualityTest, test } from "../fixtures/index.js";
 
 const EXPECTED: Record<string, string> = {
   "x-frame-options": "DENY",
-  "content-security-policy": "frame-ancestors 'none'",
+  // TS-172: plus object-src, base-uri and form-action.
+  "content-security-policy": "frame-ancestors 'none'; object-src 'none'; base-uri 'self'; form-action 'self'",
   "referrer-policy": "strict-origin-when-cross-origin",
   "permissions-policy": "camera=(), microphone=(), geolocation=()",
   "x-content-type-options": "nosniff",
@@ -22,7 +23,7 @@ defineQualityTest(
     id: "non-functional.every-response-carries-security-headers.page-and-api",
     title: "every page and API response refuses framing, limits the referrer, disables unused device features, and doesn't advertise the framework",
     objective:
-      "Confirms that a page (/login) and an API route (/api/v1/auth/me, signed out) both carry X-Frame-Options DENY, CSP frame-ancestors 'none', Referrer-Policy strict-origin-when-cross-origin, a Permissions-Policy disabling camera/microphone/geolocation, and X-Content-Type-Options nosniff, and that neither sends an x-powered-by header.",
+      "Confirms that a page (/login) and an API route (/api/v1/auth/me, signed out) both carry X-Frame-Options DENY, CSP frame-ancestors 'none' (with object-src 'none', base-uri 'self' and form-action 'self'), Referrer-Policy strict-origin-when-cross-origin, a Permissions-Policy disabling camera/microphone/geolocation, and X-Content-Type-Options nosniff, and that neither sends an x-powered-by header.",
     expectedOutcome:
       "Both responses carry all five headers with exactly the expected values, and neither has x-powered-by.",
     requirementIds: ["REQ-NON-FUNCTIONAL", "REQ-ACCESS-CONTROL"],

@@ -11,7 +11,8 @@
 // Usage (from the repo root):
 //   pnpm --filter @seatwise/db fill-existing
 
-import "./load-env";
+// TS-172: local databases only (see local-only.ts).
+import "./local-only";
 
 import {
   pool,
@@ -224,6 +225,12 @@ async function main() {
     `SELECT id, name, "sideMixing" FROM "weddings" ORDER BY "createdAt"`
   );
   console.log(`Found ${weddings.length} wedding(s) total.\n`);
+  // TS-172: a dry run unless --confirm is given, like the cleanup scripts.
+  if (!process.argv.includes("--confirm")) {
+    for (const w of weddings) console.log(`  would fill any empty parts of "${w.name}" (${w.id})`);
+    console.log("\nDry run only -- nothing was written. Re-run with --confirm to fill these.");
+    return;
+  }
 
   for (const wedding of weddings) {
     console.log(`"${wedding.name}" (${wedding.id})`);

@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api-client";
+import { formatGuestCounts } from "@seatwise/shared";
 
 // TS-96: a new wedding opens on ten tabs with nothing saying where to start. This is the order that
 // actually gets a planner to a seating plan -- guests, tables, (optionally) rules, generate -- with
@@ -30,15 +31,22 @@ export function loadGettingStartedCounts(weddingId: string): Promise<GettingStar
     .catch(() => null);
 }
 
+// TS-182: fired on `window` when a plan is generated (or restored), so the strip -- which goes
+// away once the wedding has a plan -- doesn't stay up until the planner switches tabs.
+export const PLAN_CHANGED_EVENT = "seatwise:plan-changed";
+
 export function GettingStarted({
   weddingId,
   guestCount,
+  peopleCount,
   initialCounts,
   refreshKey,
   onGoTo,
 }: {
   weddingId: string;
   guestCount: number;
+  // TS-177: the sum of headcounts, shown beside the number of invitations.
+  peopleCount: number;
   initialCounts: GettingStartedCounts | null;
   // Changes whenever the planner switches tabs, so counts made on another tab are picked up.
   refreshKey: string;
@@ -61,6 +69,20 @@ export function GettingStarted({
     };
   }, [weddingId, refreshKey]);
 
+  useEffect(() => {
+    let cancelled = false;
+    const onPlanChanged = () => {
+      loadGettingStartedCounts(weddingId).then((c) => {
+        if (!cancelled && c) setCounts(c);
+      });
+    };
+    window.addEventListener(PLAN_CHANGED_EVENT, onPlanChanged);
+    return () => {
+      cancelled = true;
+      window.removeEventListener(PLAN_CHANGED_EVENT, onPlanChanged);
+    };
+  }, [weddingId]);
+
   if (!counts || counts.plans > 0) return null;
 
   const steps: { tab: StepTab; label: string; done: boolean; detail: string }[] = [
@@ -68,7 +90,8 @@ export function GettingStarted({
       tab: "guests",
       label: "1. Add your guests",
       done: guestCount > 0,
-      detail: guestCount > 0 ? `${guestCount} added` : "one at a time, or import a CSV",
+      // TS-214: the count now ends in "invited", so no "added" after it.
+      detail: guestCount > 0 ? formatGuestCounts(guestCount, peopleCount) : "one at a time, or import a CSV",
     },
     {
       tab: "tables",

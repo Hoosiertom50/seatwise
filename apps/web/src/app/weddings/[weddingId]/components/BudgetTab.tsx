@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { ConfirmDeleteButton } from "@/components/ConfirmDeleteButton";
-import { api, ApiError, apiErrorMessage } from "@/lib/api-client";
-import { formatClockTime } from "@/lib/display-format";
+import { api, ApiError, apiErrorMessage, isItemGoneError } from "@/lib/api-client";
+import { OPEN_EDIT_MESSAGE } from "@/lib/display-format";
 import { matchVendorSuggestions } from "@/lib/vendor-suggestions";
 import type {
   VendorDTO,
@@ -13,6 +13,12 @@ import type {
   VendorSuggestionDTO,
 } from "@seatwise/shared";
 import { useUnsavedChanges } from "@/lib/unsaved-changes";
+// TS-193: the same limits the server checks (packages/shared/src/field-limits.ts).
+import { FIELD_LIMITS, CONTACT_PHONE_HTML_PATTERN, CONTACT_PHONE_MESSAGE, arrivalTimeLabel } from "@seatwise/shared";
+// TS-214: the most a cost or the budget can be, with the server's own plain-dollar messages.
+import { MAX_BUDGET_CENTS, BUDGET_TOO_HIGH_MESSAGE, MAX_VENDOR_COST_CENTS, VENDOR_COST_TOO_HIGH_MESSAGE } from "@seatwise/shared";
+import { focusIfLost } from "@/lib/focus-if-lost";
+import { editAfterReload } from "@/lib/vendor-edit";
 
 // TS-20 (FR-15.1/FR-15.2): a per-wedding vendor list plus the wedding's overall budget figure and
 // a running total/remaining against it. Money is always handled here in whole dollars for
@@ -42,21 +48,46 @@ function centsToDollarsString(cents: number | null): string {
 
 // Returns null for a blank string (meaning "not set" for a vendor's cost, or "no budget" for the
 // budget figure) rather than 0 -- an empty field is never silently treated as "free"/"$0 budget".
+// TS-175: "$1,500.50" is read as 1500.50 -- dollar signs, commas and spaces are dropped first. It
+// used to be read as no amount at all ("1,500" became "not set" without a word).
 function dollarsStringToCents(value: string): number | null {
-  const trimmed = value.trim();
-  if (!trimmed) return null;
-  const dollars = Number(trimmed);
+  const cleaned = value.replace(/[$,\s]/g, "");
+  if (!cleaned) return null;
+  const dollars = Number(cleaned);
   if (!Number.isFinite(dollars)) return null;
   return Math.round(dollars * 100);
 }
 
+/** TS-175: why an amount box can't be saved as typed, or null when it can (blank is fine). */
+// TS-214: and over the most the server takes, in the same plain-dollar words the server uses --
+// checked before sending, so the planner never sees a number of cents.
+function amountProblem(value: string, what: string, maxCents: number, tooHighMessage: string): string | null {
+  const cleaned = value.replace(/[$,\s]/g, "");
+  if (!cleaned) return null;
+  if (!/^(\d+(\.\d{0,2})?|\.\d{1,2})$/.test(cleaned)) return `${what} must be an amount in dollars, like 1500 or 1,500.50.`;
+  const cents = dollarsStringToCents(value);
+  return cents !== null && cents > maxCents ? tooHighMessage : null;
+}
+
 function formatCents(cents: number): string {
   const sign = cents < 0 ? "-" : "";
-  return `${sign}$${(Math.abs(cents) / 100).toLocaleString(undefined, {
+  // TS-182: always US formatting -- amounts are dollars, and a browser set to another language used
+  // to show e.g. "$1.234,50".
+  return `${sign}$${(Math.abs(cents) / 100).toLocaleString("en-US", {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   })}`;
 }
+
+// TS-180: one order for the vendor list -- on load and after every change. The list used to come
+// in in the database's order and be re-sorted differently after an edit, so vendors jumped about.
+function sortVendors(list: VendorDTO[]): VendorDTO[] {
+  return [...list].sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
+}
+
+// TS-212: after the vendor form swaps back to the row (Save, Cancel) or a suggestion fills the form,
+// focus goes to a stable control by id -- it used to drop to the page, so the next Tab started from
+// the top. Only if focus was lost (someone who has clicked elsewhere keeps their place) -- see lib/focus-if-lost.ts.
 
 export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: boolean }) {
   const [vendors, setVendors] = useState<VendorDTO[]>([]);
@@ -83,7 +114,9 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
   // TS-114: per-vendor feedback after a share-link action ("Link copied", or the bare link when
   // the clipboard isn't available), keyed by vendor id.
   const [shareResult, setShareResult] = useState<Record<string, string>>({});
-  const [shareBusy, setShareBusy] = useState<string | null>(null);
+  // TS-191: every vendor whose link is being fetched -- one at a time used to mean a second
+  // vendor's request cleared the first one's busy state while it was still working.
+  const [shareBusy, setShareBusy] = useState<ReadonlySet<string>>(() => new Set());
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editVendor, setEditVendor] = useState<Partial<VendorDTO>>({});
@@ -91,29 +124,87 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
   // every keystroke ("1" -> "1.00") made a real cost impossible to type.
   const [editCostText, setEditCostText] = useState("");
   // TS-159: tell the page this tab has input that leaving it would lose.
+  // TS-166: including a budget figure typed but not yet saved.
+  const budgetEdited = summary !== null && budgetInput !== centsToDollarsString(summary.budgetCents);
+  const budgetEditedRef = useRef(budgetEdited);
+  useEffect(() => {
+    budgetEditedRef.current = budgetEdited;
+  }, [budgetEdited]);
+  // TS-175: an open edit box counts only once something in it has changed.
+  const editingVendor = vendors.find((v) => v.id === editingId);
+  const editChanged =
+    !!editingVendor &&
+    (editCostText !== centsToDollarsString(editingVendor.costCents) ||
+      (Object.keys(editVendor) as (keyof VendorDTO)[]).some((k) => (editVendor[k] ?? null) !== (editingVendor[k] ?? null)));
+  // TS-182: only while the forms are there (they're hidden without Edit access).
   useUnsavedChanges(
     "budget",
-    !!(name.trim() || contactName.trim() || contactEmail.trim() || contactPhone.trim() || cost || contractNotes.trim() || arrivalTime || editingId)
+    canEdit && !!(name.trim() || contactName.trim() || contactEmail.trim() || contactPhone.trim() || cost || contractNotes.trim() || arrivalTime || editChanged || budgetEdited)
   );
   const [saving, setSaving] = useState(false);
+  // TS-191: Edit access taken away while a vendor's edit was open -- it can't be saved any more,
+  // so it closes (and stops counting as unsaved).
+  useEffect(() => {
+    if (canEdit) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- TS-191: closes the edit box when Edit access goes.
+    setEditingId(null);
+  }, [canEdit]);
+
+  // TS-235: the Edit access the vendor list on screen was loaded with. Raised from View to Edit, the
+  // Edit buttons used to appear before the reload with contract notes landed -- an edit opened from
+  // the View copy (notes left out) then saved its empty notes over the real ones. Edit waits for it
+  // now (as TS-217 does for guests).
+  const [vendorsLoadedWithEdit, setVendorsLoadedWithEdit] = useState<boolean | null>(null);
+  const vendorsReloading = canEdit && vendorsLoadedWithEdit !== true;
+  const vendorLoads = useRef(0);
+  const vendorsRef = useRef(vendors);
+  const editingIdRef = useRef(editingId);
+  useEffect(() => {
+    vendorsRef.current = vendors;
+    editingIdRef.current = editingId;
+  }, [vendors, editingId]);
 
   useEffect(() => {
+    // TS-235: numbered, so an answer to an earlier load (at the old access level) that arrives late
+    // never replaces a newer one.
+    const request = ++vendorLoads.current;
+    const loadedWithEdit = canEdit;
     (async () => {
       try {
         const [vendorsRes, summaryRes] = await Promise.all([
           api.get<{ vendors: VendorDTO[] }>(`/api/v1/weddings/${weddingId}/vendors`),
           api.get<{ summary: BudgetSummaryDTO }>(`/api/v1/weddings/${weddingId}/budget`),
         ]);
-        setVendors(vendorsRes.vendors);
+        if (request !== vendorLoads.current) return;
+        // TS-180: in the same order the list keeps after every change (see sortVendors).
+        const fresh = sortVendors(vendorsRes.vendors);
+        // TS-235: an edit open while the list is replaced takes the fresh copy for every box nobody
+        // has changed (so it never saves an old copy's empty notes); it closes if the vendor is gone.
+        const openId = editingIdRef.current;
+        if (openId) {
+          const now = fresh.find((v) => v.id === openId);
+          const was = vendorsRef.current.find((v) => v.id === openId);
+          if (!now) setEditingId(null);
+          else {
+            setEditVendor((cur) => editAfterReload(cur, was, now));
+            const wasCost = was ? centsToDollarsString(was.costCents) : null;
+            setEditCostText((cur) => (wasCost !== null && cur !== wasCost ? cur : centsToDollarsString(now.costCents)));
+          }
+        }
+        setVendors(fresh);
+        setVendorsLoadedWithEdit(loadedWithEdit);
         setSummary(summaryRes.summary);
         setBudgetInput(centsToDollarsString(summaryRes.summary.budgetCents));
       } catch {
+        if (request !== vendorLoads.current) return;
         setError("Couldn't load budget & vendor info.");
       } finally {
-        setLoading(false);
+        if (request === vendorLoads.current) setLoading(false);
       }
     })();
-  }, [weddingId]);
+    // TS-180: loaded again when access changes -- someone promoted from View to Edit had vendors
+    // loaded without their contract notes, and saving an edit then wiped the notes.
+  }, [weddingId, canEdit]);
 
   useEffect(() => {
     if (!canEdit) return;
@@ -142,20 +233,57 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
     setContactEmail(s.contactEmail ?? "");
     setContactPhone(s.contactPhone ?? "");
     setPickedSuggestion(s.name);
+    // TS-212: the suggestion list goes away with the pick; the Cost box (the next thing to fill in,
+    // since cost is this wedding's own) takes focus.
+    setTimeout(() => document.getElementById("vendor-cost")?.focus(), 0);
+  }
+
+  // TS-166: the totals are refreshed after a vendor change on their own -- if only this refresh
+  // fails, the change itself still worked. It used to share the save's error handling, so a
+  // vendor that was added showed "Couldn't add" (and the form stayed filled, inviting a
+  // duplicate), and a vendor that was removed was put back on screen.
+  async function refreshSummary() {
+    try {
+      const { summary: updated } = await api.get<{ summary: BudgetSummaryDTO }>(
+        `/api/v1/weddings/${weddingId}/budget`
+      );
+      // TS-170: the totals always come in fresh. The budget figure (and the version it's based on)
+      // only does when the planner isn't in the middle of typing a new one -- otherwise a
+      // collaborator's newer figure would quietly become the base for this planner's save, and
+      // the conflict check that protects it (TS-92) would never fire.
+      setSummary((cur) =>
+        cur && budgetEditedRef.current ? { ...updated, budgetCents: cur.budgetCents, budgetRevision: cur.budgetRevision } : updated
+      );
+      if (!budgetEditedRef.current) setBudgetInput(centsToDollarsString(updated.budgetCents));
+    } catch {
+      setError("Saved — but the budget totals couldn't be refreshed. Reload the page to see them.");
+    }
   }
 
   async function onSaveBudget(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
+    const problem = amountProblem(budgetInput, "The budget", MAX_BUDGET_CENTS, BUDGET_TOO_HIGH_MESSAGE);
+    if (problem) return setError(problem);
     setSavingBudget(true);
     try {
-      const { summary: updated } = await api.patch<{ summary: BudgetSummaryDTO }>(
+      const { summary: saved, warnings } = await api.patch<{ summary: BudgetSummaryDTO | null; warnings?: string[] }>(
         `/api/v1/weddings/${weddingId}/budget`,
         // TS-92: the version this figure is based on -- a stale one is refused, never overwrites.
         { budgetCents: dollarsStringToCents(budgetInput), expectedRevision: summary?.budgetRevision }
       );
-      setSummary(updated);
-      setBudgetInput(centsToDollarsString(updated.budgetCents));
+      // TS-209: saved, but the totals couldn't be read back -- fetch them again (so the next save
+      // carries the new version), and say so if that fails too.
+      const updated =
+        saved ??
+        (await api
+          .get<{ summary: BudgetSummaryDTO }>(`/api/v1/weddings/${weddingId}/budget`)
+          .then((r) => r.summary)
+          .catch(() => null));
+      if (updated) {
+        setSummary(updated);
+        setBudgetInput(centsToDollarsString(updated.budgetCents));
+      } else if (warnings?.length) setError(warnings.join(" "));
     } catch (err) {
       // TS-92: someone else changed the budget first -- show their figure in the box, so the
       // number on screen is what's actually on record.
@@ -164,7 +292,8 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
         setSummary(fresh);
         setBudgetInput(centsToDollarsString(fresh.budgetCents));
       }
-      setError(err instanceof ApiError ? err.message : "Couldn't save that budget figure.");
+      // TS-214: a refused figure says why (the field's own reason), not "Validation failed".
+      setError(fresh ? (err as ApiError).message : apiErrorMessage(err, ["budgetCents"], "Couldn't save that budget figure."));
     } finally {
       setSavingBudget(false);
     }
@@ -173,6 +302,8 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
   async function onAdd(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
+    const problem = amountProblem(cost, "Cost", MAX_VENDOR_COST_CENTS, VENDOR_COST_TOO_HIGH_MESSAGE);
+    if (problem) return setError(problem);
     setAdding(true);
     try {
       const { vendor } = await api.post<{ vendor: VendorDTO }>(`/api/v1/weddings/${weddingId}/vendors`, {
@@ -186,11 +317,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
         contractNotes: contractNotes || null,
         arrivalTime: arrivalTime || null,
       });
-      setVendors([...vendors, vendor].sort((a, b) => a.name.localeCompare(b.name)));
-      const { summary: updated } = await api.get<{ summary: BudgetSummaryDTO }>(
-        `/api/v1/weddings/${weddingId}/budget`
-      );
-      setSummary(updated);
+      setVendors((cur) => sortVendors([...cur, vendor]));
       setName("");
       setCategory("CATERING");
       setCategoryOther("");
@@ -201,6 +328,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
       setContractNotes("");
       setArrivalTime("");
       setPickedSuggestion(null);
+      await refreshSummary();
     } catch (err) {
       setError(apiErrorMessage(err, ["name", "categoryOther", "contactEmail", "costCents", "arrivalTime", "contractNotes"], "Couldn't add that vendor."));
     } finally {
@@ -209,9 +337,18 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
   }
 
   function startEdit(vendor: VendorDTO) {
+    // TS-235: not from a copy loaded without Edit access (its contract notes are left out).
+    if (vendorsReloading) return;
+    // TS-182: opening another vendor used to throw away a changed open edit without a word.
+    if (editChanged && editingId !== vendor.id) {
+      setError(OPEN_EDIT_MESSAGE);
+      return;
+    }
     setEditingId(vendor.id);
     setEditVendor({ ...vendor });
     setEditCostText(centsToDollarsString(vendor.costCents));
+    // TS-212: the Edit button is replaced by the form -- focus its first box.
+    focusIfLost(`vendor-${vendor.id}-edit-name`);
   }
 
   // FR-7.7, extended to vendors: a stale save (someone else's edit landed first) refreshes this
@@ -224,36 +361,57 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
   }
 
   async function onSaveEdit(vendorId: string) {
-    setSaving(true);
     setError(null);
-    const expectedRevision = vendors.find((v) => v.id === vendorId)?.revision;
+    const problem = amountProblem(editCostText, "Cost", MAX_VENDOR_COST_CENTS, VENDOR_COST_TOO_HIGH_MESSAGE);
+    if (problem) return setError(problem);
+    setSaving(true);
+    const loaded = vendors.find((v) => v.id === vendorId);
+    const expectedRevision = loaded?.revision;
+    // TS-180: only what was changed in the edit box is sent, so a field this person never touched
+    // (or never saw -- contract notes are hidden from View access) can't be overwritten by a save.
+    const edited: Record<string, unknown> = {
+      name: editVendor.name,
+      category: editVendor.category,
+      categoryOther: editVendor.category === "OTHER" ? editVendor.categoryOther || "" : null,
+      contactName: editVendor.contactName ?? null,
+      contactEmail: editVendor.contactEmail ?? null,
+      contactPhone: editVendor.contactPhone ?? null,
+      costCents: dollarsStringToCents(editCostText),
+      contractNotes: editVendor.contractNotes ?? null,
+      arrivalTime: editVendor.arrivalTime ?? null,
+    };
+    const changes = Object.fromEntries(
+      Object.entries(edited).filter(([key, value]) => !loaded || (loaded[key as keyof VendorDTO] ?? null) !== (value ?? null))
+    );
+    // A category change always carries its label (or its clearing), which the server checks together.
+    if ("category" in changes || "categoryOther" in changes) {
+      changes.category = edited.category;
+      changes.categoryOther = edited.categoryOther;
+    }
     try {
       const { vendor } = await api.patch<{ vendor: VendorDTO }>(
         `/api/v1/weddings/${weddingId}/vendors/${vendorId}`,
-        {
-          name: editVendor.name,
-          category: editVendor.category,
-          categoryOther: editVendor.category === "OTHER" ? editVendor.categoryOther || "" : null,
-          contactName: editVendor.contactName ?? null,
-          contactEmail: editVendor.contactEmail ?? null,
-          contactPhone: editVendor.contactPhone ?? null,
-          costCents: dollarsStringToCents(editCostText),
-          contractNotes: editVendor.contractNotes ?? null,
-          arrivalTime: editVendor.arrivalTime ?? null,
-          expectedRevision,
-        }
+        { ...changes, expectedRevision }
       );
-      setVendors(vendors.map((v) => (v.id === vendorId ? vendor : v)).sort((a, b) => a.name.localeCompare(b.name)));
-      const { summary: updated } = await api.get<{ summary: BudgetSummaryDTO }>(
-        `/api/v1/weddings/${weddingId}/budget`
-      );
-      setSummary(updated);
+      setVendors((cur) => sortVendors(cur.map((v) => (v.id === vendorId ? vendor : v))));
       setEditingId(null);
+      // TS-212: back to this vendor's Edit button.
+      focusIfLost(`vendor-${vendorId}-edit`);
+      await refreshSummary();
     } catch (err) {
       const fresh = conflictVendor(err);
       if (fresh) {
-        setVendors(vendors.map((v) => (v.id === vendorId ? fresh : v)));
-        setError(`"${fresh.name}" was just edited elsewhere — showing the latest. Try again if you still want to make this change.`);
+        setVendors((cur) => cur.map((v) => (v.id === vendorId ? fresh : v)));
+        // TS-175: close the editor, as Timeline does. It used to stay open with the old values,
+        // and a second Save then wrote them over the other person's change.
+        setEditingId(null);
+        focusIfLost(`vendor-${vendorId}-edit`);
+        setError(`"${fresh.name}" changed since you loaded it (maybe in another tab, or by someone else) — showing the latest. Try again if you still want to make this change.`);
+      } else if (isItemGoneError(err)) {
+        // TS-209: removed by someone else while this was being edited -- it's gone from the list.
+        setVendors((cur) => cur.filter((v) => v.id !== vendorId));
+        setEditingId(null);
+        setError("That vendor was removed (maybe in another tab, or by someone else) — the list has been updated.");
       } else {
         // TS-151: say which field was refused, not just "Validation failed".
         setError(apiErrorMessage(err, ["name", "categoryOther", "contactEmail", "costCents", "arrivalTime", "contractNotes"], "Couldn't save that vendor."));
@@ -266,7 +424,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
   // TS-114: get (or, with regenerate, replace) a vendor's private read-only link and copy it.
   async function onShareLink(vendorId: string, regenerate: boolean) {
     setError(null);
-    setShareBusy(vendorId);
+    setShareBusy((cur) => new Set(cur).add(vendorId));
     try {
       const { link } = await api.post<{ link: VendorShareLinkDTO }>(
         `/api/v1/weddings/${weddingId}/vendors/${vendorId}/share-link`,
@@ -287,7 +445,11 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't get that vendor's link.");
     } finally {
-      setShareBusy(null);
+      setShareBusy((cur) => {
+        const next = new Set(cur);
+        next.delete(vendorId);
+        return next;
+      });
     }
   }
 
@@ -303,18 +465,18 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
   }
 
   async function onRemove(id: string) {
-    const prev = vendors;
-    setVendors(vendors.filter((v) => v.id !== id));
+    const removed = vendors.find((v) => v.id === id);
+    setVendors((cur) => cur.filter((v) => v.id !== id));
     try {
       await api.delete(`/api/v1/weddings/${weddingId}/vendors/${id}`);
-      const { summary: updated } = await api.get<{ summary: BudgetSummaryDTO }>(
-        `/api/v1/weddings/${weddingId}/budget`
-      );
-      setSummary(updated);
-    } catch {
-      setVendors(prev);
-      setError("Couldn't remove that vendor.");
+    } catch (err) {
+      // Put just this vendor back (not an older copy of the whole list).
+      if (removed) setVendors((cur) => sortVendors([...cur, removed]));
+      // TS-209: the server's own reason. A vendor already removed counts as removed (see api-client).
+      setError(apiErrorMessage(err, [], "Couldn't remove that vendor."));
+      return;
     }
+    await refreshSummary();
   }
 
   if (loading) return <p className="text-sm text-neutral-500 dark:text-neutral-400">Loading budget & vendors...</p>;
@@ -325,7 +487,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
     <div>
       {!canEdit && (
         <p className="mb-4 rounded-md bg-neutral-100 dark:bg-neutral-800 px-3 py-2 text-sm text-neutral-600 dark:text-neutral-300">
-          You have view-only access to this wedding's budget — adding, editing, and removing
+          You have view-only access to this wedding&apos;s budget — adding, editing, and removing
           vendors is turned off.
         </p>
       )}
@@ -342,10 +504,11 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
                 Budget ($)
               </label>
               <input
+                maxLength={FIELD_LIMITS.money}
                 id="budget-total"
-                type="number"
-                min={0}
-                step="0.01"
+                // TS-175: a text box, not a number box -- a number box reports "1,500" as empty.
+                type="text"
+                inputMode="decimal"
                 placeholder="e.g. 30000"
                 className="w-40 rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1.5 text-sm"
                 value={budgetInput}
@@ -402,6 +565,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
                 Vendor name
               </label>
               <input
+                maxLength={FIELD_LIMITS.vendorName}
                 id="vendor-name"
                 className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
                 value={name}
@@ -436,12 +600,15 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
                   </ul>
                 </div>
               )}
-              {pickedSuggestion && (
-                <p role="status" className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
-                  Filled in {pickedSuggestion}&apos;s details from your other weddings. Add this wedding&apos;s cost and
-                  contract details below.
-                </p>
-              )}
+              {/* TS-212: always on the page, only its text changes, so screen readers announce it. */}
+              <p role="status" className={pickedSuggestion ? "mt-1 text-xs text-neutral-500 dark:text-neutral-400" : ""}>
+                {pickedSuggestion && (
+                  <>
+                    Filled in {pickedSuggestion}&apos;s details from your other weddings. Add this wedding&apos;s cost and
+                    contract details below.
+                  </>
+                )}
+              </p>
             </div>
             <div>
               <label htmlFor="vendor-category" className="mb-1 block text-sm font-medium">
@@ -461,6 +628,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
               </select>
               {category === "OTHER" && (
                 <input
+                  maxLength={FIELD_LIMITS.vendorCategoryOther}
                   aria-label="Category label"
                   placeholder="e.g. Officiant"
                   className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
@@ -475,6 +643,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
                 Contact name (optional)
               </label>
               <input
+                maxLength={FIELD_LIMITS.vendorContactName}
                 id="vendor-contact-name"
                 className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
                 value={contactName}
@@ -486,10 +655,10 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
                 Cost ($, optional)
               </label>
               <input
+                maxLength={FIELD_LIMITS.money}
                 id="vendor-cost"
-                type="number"
-                min={0}
-                step="0.01"
+                type="text"
+                inputMode="decimal"
                 className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
                 value={cost}
                 onChange={(e) => setCost(e.target.value)}
@@ -500,6 +669,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
                 Contact email (optional)
               </label>
               <input
+                maxLength={FIELD_LIMITS.email}
                 id="vendor-contact-email"
                 type="email"
                 className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
@@ -512,6 +682,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
                 Contact phone (optional)
               </label>
               <input
+                maxLength={FIELD_LIMITS.vendorContactPhone} type="tel" inputMode="tel" autoComplete="tel" pattern={CONTACT_PHONE_HTML_PATTERN} title={CONTACT_PHONE_MESSAGE}
                 id="vendor-contact-phone"
                 className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
                 value={contactPhone}
@@ -535,6 +706,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
                 Contract details / notes (optional)
               </label>
               <textarea
+                maxLength={FIELD_LIMITS.vendorContractNotes}
                 id="vendor-notes"
                 rows={2}
                 placeholder="e.g. 50% deposit due 30 days before, final due day-of"
@@ -554,7 +726,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
         </>
       )}
 
-      {error && <p className="mb-4 text-sm text-red-600 dark:text-red-400">{error}</p>}
+      {error && <p role="alert" className="mb-4 text-sm text-red-600 dark:text-red-400">{error}</p>}
 
       <h2 className="mb-3 text-lg font-medium">Vendors ({vendors.length})</h2>
       {vendors.length === 0 ? (
@@ -565,79 +737,113 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
             <li key={v.id} className="rounded-lg border border-neutral-200 dark:border-neutral-700 px-4 py-3">
               {editingId === v.id ? (
                 <div className="flex flex-col gap-2">
+                  {/* TS-212: every box has a visible label (they only had placeholders, which disappear once typed in). */}
                   <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                    <input
-                      aria-label="Edit vendor name"
-                      className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm"
-                      value={editVendor.name ?? ""}
-                      onChange={(e) => setEditVendor({ ...editVendor, name: e.target.value })}
-                    />
-                    <select
-                      aria-label="Edit category"
-                      className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm"
-                      value={editVendor.category}
-                      onChange={(e) => setEditVendor({ ...editVendor, category: e.target.value as VendorCategory })}
-                    >
-                      {CATEGORIES.map((c) => (
-                        <option key={c.value} value={c.value}>
-                          {c.label}
-                        </option>
-                      ))}
-                    </select>
-                    {editVendor.category === "OTHER" && (
+                    <label className="flex flex-col gap-1 text-xs font-medium text-neutral-600 dark:text-neutral-300">
+                      Vendor name
                       <input
-                        aria-label="Edit category label"
+                        id={`vendor-${v.id}-edit-name`}
+                        maxLength={FIELD_LIMITS.vendorName}
                         className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm"
-                        value={editVendor.categoryOther ?? ""}
-                        onChange={(e) => setEditVendor({ ...editVendor, categoryOther: e.target.value })}
+                        value={editVendor.name ?? ""}
+                        onChange={(e) => setEditVendor({ ...editVendor, name: e.target.value })}
                       />
+                    </label>
+                    <label className="flex flex-col gap-1 text-xs font-medium text-neutral-600 dark:text-neutral-300">
+                      Category
+                      <select
+                        id={`vendor-${v.id}-edit-category`}
+                        className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm"
+                        value={editVendor.category}
+                        onChange={(e) => setEditVendor({ ...editVendor, category: e.target.value as VendorCategory })}
+                      >
+                        {CATEGORIES.map((c) => (
+                          <option key={c.value} value={c.value}>
+                            {c.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    {editVendor.category === "OTHER" && (
+                      <label className="flex flex-col gap-1 text-xs font-medium text-neutral-600 dark:text-neutral-300">
+                        Other category
+                        <input
+                          id={`vendor-${v.id}-edit-category-label`}
+                          maxLength={FIELD_LIMITS.vendorCategoryOther}
+                          className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm"
+                          value={editVendor.categoryOther ?? ""}
+                          onChange={(e) => setEditVendor({ ...editVendor, categoryOther: e.target.value })}
+                        />
+                      </label>
                     )}
-                    <input
-                      aria-label="Edit contact name"
-                      placeholder="Contact name"
-                      className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm"
-                      value={editVendor.contactName ?? ""}
-                      onChange={(e) => setEditVendor({ ...editVendor, contactName: e.target.value })}
-                    />
-                    <input
-                      aria-label="Edit contact email"
-                      placeholder="Contact email"
-                      className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm"
-                      value={editVendor.contactEmail ?? ""}
-                      onChange={(e) => setEditVendor({ ...editVendor, contactEmail: e.target.value })}
-                    />
-                    <input
-                      aria-label="Edit contact phone"
-                      placeholder="Contact phone"
-                      className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm"
-                      value={editVendor.contactPhone ?? ""}
-                      onChange={(e) => setEditVendor({ ...editVendor, contactPhone: e.target.value })}
-                    />
-                    <input
-                      aria-label="Edit arrival time"
-                      type="time"
-                      className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm"
-                      value={editVendor.arrivalTime ?? ""}
-                      onChange={(e) => setEditVendor({ ...editVendor, arrivalTime: e.target.value || null })}
-                    />
-                    <input
-                      aria-label="Edit cost"
-                      type="number"
-                      min={0}
-                      step="0.01"
-                      placeholder="Cost ($)"
-                      className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm"
-                      value={editCostText}
-                      onChange={(e) => setEditCostText(e.target.value)}
-                    />
+                    <label className="flex flex-col gap-1 text-xs font-medium text-neutral-600 dark:text-neutral-300">
+                      Contact name
+                      <input
+                        id={`vendor-${v.id}-edit-contact-name`}
+                        maxLength={FIELD_LIMITS.vendorContactName}
+                        placeholder="Contact name"
+                        className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm"
+                        value={editVendor.contactName ?? ""}
+                        onChange={(e) => setEditVendor({ ...editVendor, contactName: e.target.value })}
+                      />
+                    </label>
+                    <label className="flex flex-col gap-1 text-xs font-medium text-neutral-600 dark:text-neutral-300">
+                      Contact email
+                      <input
+                        id={`vendor-${v.id}-edit-contact-email`}
+                        maxLength={FIELD_LIMITS.email} inputMode="email"
+                        placeholder="Contact email"
+                        className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm"
+                        value={editVendor.contactEmail ?? ""}
+                        onChange={(e) => setEditVendor({ ...editVendor, contactEmail: e.target.value })}
+                      />
+                    </label>
+                    <label className="flex flex-col gap-1 text-xs font-medium text-neutral-600 dark:text-neutral-300">
+                      Contact phone
+                      <input
+                        id={`vendor-${v.id}-edit-contact-phone`}
+                        maxLength={FIELD_LIMITS.vendorContactPhone} type="tel" inputMode="tel" autoComplete="tel" pattern={CONTACT_PHONE_HTML_PATTERN} title={CONTACT_PHONE_MESSAGE}
+                        placeholder="Contact phone"
+                        className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm"
+                        value={editVendor.contactPhone ?? ""}
+                        onChange={(e) => setEditVendor({ ...editVendor, contactPhone: e.target.value })}
+                      />
+                    </label>
+                    <label className="flex flex-col gap-1 text-xs font-medium text-neutral-600 dark:text-neutral-300">
+                      Arrival time
+                      <input
+                        id={`vendor-${v.id}-edit-arrival-time`}
+                        type="time"
+                        className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm"
+                        value={editVendor.arrivalTime ?? ""}
+                        onChange={(e) => setEditVendor({ ...editVendor, arrivalTime: e.target.value || null })}
+                      />
+                    </label>
+                    <label className="flex flex-col gap-1 text-xs font-medium text-neutral-600 dark:text-neutral-300">
+                      Cost ($)
+                      <input
+                        id={`vendor-${v.id}-edit-cost`}
+                        maxLength={FIELD_LIMITS.money}
+                        type="text"
+                        inputMode="decimal"
+                        placeholder="Cost ($)"
+                        className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm"
+                        value={editCostText}
+                        onChange={(e) => setEditCostText(e.target.value)}
+                      />
+                    </label>
                   </div>
-                  <textarea
-                    aria-label="Edit contract notes"
-                    rows={2}
-                    className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm"
-                    value={editVendor.contractNotes ?? ""}
-                    onChange={(e) => setEditVendor({ ...editVendor, contractNotes: e.target.value })}
-                  />
+                  <label className="flex flex-col gap-1 text-xs font-medium text-neutral-600 dark:text-neutral-300">
+                    Contract details / notes
+                    <textarea
+                      id={`vendor-${v.id}-edit-notes`}
+                      maxLength={FIELD_LIMITS.vendorContractNotes}
+                      rows={2}
+                      className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm"
+                      value={editVendor.contractNotes ?? ""}
+                      onChange={(e) => setEditVendor({ ...editVendor, contractNotes: e.target.value })}
+                    />
+                  </label>
                   <div className="flex gap-2">
                     <button
                       onClick={() => onSaveEdit(v.id)}
@@ -647,7 +853,11 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
                       Save
                     </button>
                     <button
-                      onClick={() => setEditingId(null)}
+                      onClick={() => {
+                        setEditingId(null);
+                        // TS-212: back to this vendor's Edit button.
+                        focusIfLost(`vendor-${v.id}-edit`);
+                      }}
                       className="rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800"
                     >
                       Cancel
@@ -656,23 +866,36 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
                 </div>
               ) : (
                 <div className="flex flex-wrap items-start justify-between gap-2">
-                  <div>
-                    <p className="font-medium">
+                  {/* TS-191: long unbroken names, addresses and notes wrap instead of running off a
+                      phone screen (an email address may break anywhere). */}
+                  <div className="min-w-0">
+                    <p className="break-words font-medium [overflow-wrap:anywhere]">
                       {v.name}
                       <span className="ml-2 rounded bg-neutral-100 dark:bg-neutral-800 px-1.5 py-0.5 text-xs text-neutral-600 dark:text-neutral-300">
                         {v.category === "OTHER" && v.categoryOther ? v.categoryOther : CATEGORY_LABEL[v.category]}
                       </span>
                     </p>
-                    <p className="text-sm text-neutral-500 dark:text-neutral-400">
-                      {[v.contactName, v.contactEmail, v.contactPhone].filter(Boolean).join(" · ") || "No contact info"}
+                    <p className="break-words text-sm text-neutral-500 dark:text-neutral-400 [overflow-wrap:anywhere]">
+                      {v.contactName || v.contactEmail || v.contactPhone
+                        ? [v.contactName, v.contactEmail, v.contactPhone]
+                            .filter((part): part is string => !!part)
+                            .map((part, i) => (
+                              <span key={i} className={part === v.contactEmail ? "break-all" : undefined}>
+                                {i > 0 ? " · " : ""}
+                                {part}
+                              </span>
+                            ))
+                        : "No contact info"}
                     </p>
+                    {/* TS-223: "(next day)" for an arrival before 5:00 AM, as the vendor sees it. */}
                     {v.arrivalTime && (
-                      <p className="text-sm text-neutral-500 dark:text-neutral-400">Arrives {formatClockTime(v.arrivalTime)}</p>
+                      <p className="text-sm text-neutral-500 dark:text-neutral-400">Arrives {arrivalTimeLabel(v.arrivalTime)}</p>
                     )}
-                    {v.contractNotes && <p className="mt-1 text-sm text-neutral-500 dark:text-neutral-400">{v.contractNotes}</p>}
-                    {shareResult[v.id] && (
-                      <p className="mt-1 break-all text-xs text-neutral-500 dark:text-neutral-400">{shareResult[v.id]}</p>
-                    )}
+                    {v.contractNotes && <p className="mt-1 whitespace-pre-line break-words text-sm text-neutral-500 dark:text-neutral-400 [overflow-wrap:anywhere]">{v.contractNotes}</p>}
+                    {/* TS-212: the link result was never announced -- a status region, always there. */}
+                    <p role="status" className={shareResult[v.id] ? "mt-1 break-all text-xs text-neutral-500 dark:text-neutral-400" : ""}>
+                      {shareResult[v.id] ?? ""}
+                    </p>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="font-medium">{v.costCents === null ? "No cost set" : formatCents(v.costCents)}</span>
@@ -682,7 +905,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
                             vendors' names and arrival times -- never costs or notes). */}
                         <button
                           onClick={() => onShareLink(v.id, false)}
-                          disabled={shareBusy === v.id}
+                          disabled={shareBusy.has(v.id)}
                           aria-label={`Share link for ${v.name}`}
                           title="Copies a private link to a read-only page for this vendor: the timeline, their details, and the other vendors' arrival times. Never costs or notes."
                           className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50"
@@ -691,16 +914,21 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
                         </button>
                         {v.shareLinkActive && (
                           <>
-                            <button
-                              onClick={() => onShareLink(v.id, true)}
-                              disabled={shareBusy === v.id}
-                              aria-label={`New link for ${v.name}`}
-                              title="Makes a new link; the old one stops working."
-                              className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50"
-                            >
-                              New link
-                            </button>
+                            {/* TS-214: asks first, like Turn off link -- the old link stops working
+                                straight away, and the vendor may already be using it. */}
                             <ConfirmDeleteButton
+                              id={`vendor-${v.id}-new-link`}
+                              label="New link"
+                              ariaLabel={`New link for ${v.name}`}
+                              question={`Make a new link for ${v.name}? The link they have now stops working right away.`}
+                              confirmLabel="Yes, make a new link"
+                              busyLabel="Making…"
+                              disabled={shareBusy.has(v.id)}
+                              onConfirm={() => onShareLink(v.id, true)}
+                              className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50"
+                            />
+                            <ConfirmDeleteButton
+                              id={`vendor-${v.id}-link-off`}
                               label="Turn off link"
                               ariaLabel={`Turn off the link for ${v.name}`}
                               question={`Turn off ${v.name}'s link? It stops working right away. You can make a new one later.`}
@@ -710,12 +938,18 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
                           </>
                         )}
                         <button
+                          id={`vendor-${v.id}-edit`}
                           onClick={() => startEdit(v)}
-                          className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800"
+                          // TS-235: off until the list with contract notes has loaded (see vendorsReloading).
+                          disabled={vendorsReloading}
+                          // TS-175: says which vendor, for screen readers.
+                          aria-label={`Edit ${v.name}`}
+                          className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50"
                         >
                           Edit
                         </button>
                         <ConfirmDeleteButton
+                          id={`vendor-${v.id}-remove`}
                           ariaLabel={`Remove ${v.name}`}
                           question={`Remove ${v.name} and everything recorded for them, such as cost and contract notes? This can't be undone.`}
                           confirmLabel="Yes, remove vendor"

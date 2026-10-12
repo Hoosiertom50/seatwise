@@ -19,7 +19,7 @@ defineQualityTest(
     objective:
       "Confirms that a keyboard-only planner can Tab to a table on the floor plan, move it with arrow keys (10px, or 50px with Shift) with each position announced, that the move is saved and survives a reload, that it can't leave the floor plan, that a keyboard move losing to someone else's shows the conflict message and the other position, that the floor plan has no WCAG 2.1 AA violations, and that a View collaborator's floor plan offers no movable tables.",
     expectedOutcome:
-      "From (60, 60): three Right and two Down presses land at (90, 80), then Shift+Right at (140, 80); the announcement reads 'Table 1 moved to 140, 80.'; the API and a reload both show (140, 80). Holding Shift+Left stops at x 0. After another collaborator moves it to (400, 260), a keyboard move shows 'was moved by someone else just before you' and the table sits at (400, 260). The axe scan finds 0 violations. The View collaborator sees no movable-table buttons.",
+      "From (60, 60): three Right and two Down presses land at (90, 80), then Shift+Right at (140, 80); the announcement reads 'Table 1 moved to 140, 80.'; the API and a reload both show (140, 80). Holding Shift+Left stops at x 0. After another collaborator moves it to (400, 260), a keyboard move shows 'was moved since you loaded it' and the table sits at (400, 260). The axe scan finds 0 violations. The View collaborator sees no movable-table buttons.",
     requirementIds: ["REQ-TABLE-VENUE-LAYOUT", "REQ-NON-FUNCTIONAL"],
     tags: ["@mutating", "@feature:tables", "@risk:normal", "@suite:regression"],
   },
@@ -65,7 +65,7 @@ defineQualityTest(
     await test.step("A keyboard move that loses to someone else's says so and shows theirs", async () => {
       await context.request.patch(`/api/v1/weddings/${w}/tables/${table.id}`, { data: { positionX: 400, positionY: 260 } });
       await tablesTab.pressOnFocusedTable("ArrowRight");
-      await expect(tablesTab.message(/^"[^"]+" was moved by someone else just before you/)).toBeVisible();
+      await expect(tablesTab.message(/^"[^"]+" was moved since you loaded it \(maybe in another tab, or by someone else\)/)).toBeVisible();
       await expect.poll(() => tablesTab.floorPlanTablePosition(table.label)).toEqual({ x: 400, y: 260 });
       expect(await saved()).toEqual({ x: 400, y: 260 });
     });

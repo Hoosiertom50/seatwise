@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 import type { ZodError } from "zod";
+import { AccessChangedError, PlanSourceChangedError, WeddingCapError, isWeddingDeletedError } from "@seatwise/db";
+import { BODY_TOO_LARGE_MESSAGE, declaresBodyTooLarge, isNonJsonBody, readBodyTextWithin } from "./json-body";
 
 export function errorResponse(
   message: string,
@@ -9,10 +11,106 @@ export function errorResponse(
   return NextResponse.json({ error: message, fieldErrors }, { status });
 }
 
+export const SEND_AS_JSON = "Send this request as JSON.";
+
+// TS-179: defence in depth for routes that read a JSON body. proxy.ts already refuses a write whose
+// body isn't JSON, but a route shouldn't depend on that alone (a matcher change, or a route outside
+// it, would quietly drop the check). Refuses a non-JSON body with 415; otherwise returns the parsed
+// body, or null when it's empty or not valid JSON (the route's own schema then says what's wrong,
+// as before).
+export async function readJson(
+  req: Request
+): Promise<{ ok: true; body: unknown } | { ok: false; response: NextResponse }> {
+  if (isNonJsonBody(req.headers)) return { ok: false, response: errorResponse(SEND_AS_JSON, 415) };
+  // TS-200: a body over MAX_JSON_BODY_BYTES is refused (413) -- by its Content-Length before it's
+  // read, or part-way through reading when it came without one.
+  const tooLarge = { ok: false as const, response: errorResponse(BODY_TOO_LARGE_MESSAGE, 413) };
+  if (declaresBodyTooLarge(req.headers)) return tooLarge;
+  const text = await readBodyTextWithin(req.body).catch(() => "");
+  if (text === null) return tooLarge;
+  let body: unknown = null;
+  try {
+    body = text ? JSON.parse(text) : null;
+  } catch {
+    body = null;
+  }
+  return { ok: true, body };
+}
+
 export function zodErrorResponse(error: ZodError) {
   return errorResponse(
     "Validation failed",
     422,
     error.flatten().fieldErrors as Record<string, string[] | undefined>
   );
+}
+
+// TS-173: a write that lost a race with another one -- a deadlock the database broke (40P01), or a
+// guest or table deleted while a new plan was being made (23503) -- is "it changed, try again"
+// (409), not a server error. Nothing was saved in either case. Returns null for anything else.
+export function concurrentChangeResponse(err: unknown) {
+  // TS-195: the wedding itself was deleted meanwhile, or the person's access dropped while the
+  // change waited -- said as such, not as "the plan changed".
+  const gone = weddingDeletedResponse(err);
+  if (gone) return gone;
+  if (err instanceof AccessChangedError) return errorResponse(err.message, 403);
+  const code = (err as { code?: string } | null)?.code;
+  // TS-187: 40001 too -- the current plan kept being replaced while a change waited for it (see
+  // lockCurrentPlan in packages/db).
+  if (code === "40P01" || code === "40001") {
+    return errorResponse("Someone else changed this plan at the same moment — nothing was saved. Please try again.", 409);
+  }
+  if (code === "23503" || err instanceof PlanSourceChangedError) {
+    return errorResponse(
+      "The guest list or tables changed while this was being saved — nothing was saved. Please try again.",
+      409
+    );
+  }
+  // TS-209: the database was too busy -- see databaseBusyResponse.
+  return databaseBusyResponse(err);
+}
+
+export const DATABASE_BUSY_MESSAGE = "Seatwise was too busy to finish — nothing was saved. Try again in a minute.";
+export const DATABASE_BUSY_RETRY_AFTER_SECONDS = 60;
+
+/** TS-209: whether the error is the database running out of time or connections (see below). */
+export function isDatabaseBusyError(err: unknown): boolean {
+  const code = (err as { code?: string } | null)?.code;
+  // 57014: a statement hit the time limit. 25P02: a statement in a transaction that had already
+  // failed (it follows one of these). 25P03: the transaction sat idle too long and was ended.
+  if (code === "57014" || code === "25P02" || code === "25P03") return true;
+  // No free connection within CONNECTION_TIMEOUT_MS (packages/db pool.ts) -- the driver's own
+  // errors, which carry no code.
+  const message = err instanceof Error ? err.message : "";
+  return /timeout exceeded when trying to connect|Connection terminated due to connection timeout/i.test(message);
+}
+
+/**
+ * TS-209: a statement time-out, an aborted transaction or no free database connection -- answered
+ * 503 with Retry-After and a message that says nothing was saved, rather than a bare "Something
+ * went wrong". Only for a request whose changes were rolled back: a route whose change already
+ * committed answers success with a warning instead (see SAVED_BUT_NOT_RECHECKED). Null otherwise.
+ */
+export function databaseBusyResponse(err: unknown) {
+  if (!isDatabaseBusyError(err)) return null;
+  const res = errorResponse(DATABASE_BUSY_MESSAGE, 503);
+  res.headers.set("Retry-After", String(DATABASE_BUSY_RETRY_AFTER_SECONDS));
+  return res;
+}
+
+export const WEDDING_DELETED_MESSAGE = "This wedding was deleted — nothing was saved.";
+
+// TS-195: something added to a wedding (a guest, a table, a timeline entry, a vendor, a plan...)
+// while the wedding was being deleted: the delete wins, and the database refuses the new row
+// (23503 on its wedding) -- answered 404 "This wedding was deleted", not a server error. Returns
+// null for anything else.
+// TS-204: also the person's access dropping while the change waited (403, nothing saved) -- every
+// change now re-reads it under its lock, so every route's error handling has to say so.
+// TS-205: and a change that would take the wedding past one of its caps (422, with the plain
+// message, e.g. "A wedding can have up to 300 tables...").
+export function weddingDeletedResponse(err: unknown) {
+  if (isWeddingDeletedError(err)) return errorResponse(WEDDING_DELETED_MESSAGE, 404);
+  if (err instanceof AccessChangedError) return errorResponse(err.message, 403);
+  if (err instanceof WeddingCapError) return errorResponse(err.message, 422);
+  return null;
 }

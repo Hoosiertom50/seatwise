@@ -14,7 +14,7 @@
 
 import type { APIRequestContext, Browser, BrowserContext } from "@playwright/test";
 import { randomBytes } from "node:crypto";
-import { uniqueToken } from "../data/ids.js";
+import { uniqueTestAddress, uniqueToken } from "../data/ids.js";
 import { getEnv } from "./env.js";
 import { resolveIsProduction } from "./productionGuard.js";
 
@@ -50,8 +50,9 @@ export interface SignedUpAccount {
  * therefore structurally incapable of matching a genuine account, rather than relying on care.
  *
  * This matters more here than for weddings or templates: `User` is the root of the cascade --
- * `Wedding.ownerId` and `SeatingTemplate.ownerId` are both `onDelete: Cascade` -- so deleting the
- * wrong user destroys their weddings, guests, plans and templates along with them.
+ * `SeatingTemplate.ownerId` is `onDelete: Cascade` (TS-187: `Wedding.ownerId` is now `Restrict`, so
+ * the run-level purge deletes a test account's weddings itself, just before the account) -- so
+ * deleting the wrong user destroys their weddings, guests, plans and templates along with them.
  */
 export const TEST_ACCOUNT_EMAIL_DOMAIN = "@example.invalid";
 
@@ -75,13 +76,14 @@ function generateEphemeralPassword(): string {
 export async function signUpFreshAccount(
   request: APIRequestContext,
   workerIndex: number,
+  { confirmEmail = true }: { confirmEmail?: boolean } = {},
 ): Promise<SignedUpAccount> {
   refuseTestAccountsOnProduction();
   const token = uniqueToken(workerIndex);
   const name = `Playwright Tester ${token}`;
   // `.invalid` is the IANA-reserved TLD guaranteed to never resolve or deliver (RFC 2606) — the
-  // right choice here since signup itself never sends a verification email and this address must
-  // never accidentally reach a real inbox.
+  // right choice here: sign-up sends a confirmation email (TS-164), and this address must never
+  // reach a real inbox.
   const email = `pw-tester-${token}${TEST_ACCOUNT_EMAIL_DOMAIN}`;
   const password = generateEphemeralPassword();
 
@@ -89,6 +91,8 @@ export async function signUpFreshAccount(
   if (!res.ok()) {
     throw new Error(`signUpFreshAccount failed: HTTP ${res.status()} — ${await res.text()}`);
   }
+  // TS-164: confirmed as if the emailed link had been clicked (see confirmTestAccountEmail).
+  if (confirmEmail) await (await import("./testDatabase.js")).confirmTestAccountEmail(email);
   return { name, email };
 }
 
@@ -116,9 +120,11 @@ export async function signUpFreshAccountInNewContext(
   browser: Browser,
   workerIndex: number,
   label = "",
+  { confirmEmail = true }: { confirmEmail?: boolean } = {},
 ): Promise<SignedUpBrowserSession> {
   refuseTestAccountsOnProduction();
-  const context = await browser.newContext();
+  // TS-163: its own made-up address, like every test (see uniqueTestAddress).
+  const context = await browser.newContext({ extraHTTPHeaders: { "x-forwarded-for": uniqueTestAddress() } });
   const token = uniqueToken(workerIndex);
   // TS-156: a display name may only hold letters (and spaces, ' . -), so any digits in a label like "comment2"
   // are dropped from the name; the email keeps the label as-is.
@@ -132,5 +138,7 @@ export async function signUpFreshAccountInNewContext(
     await context.close();
     throw new Error(`signUpFreshAccountInNewContext failed: HTTP ${res.status()} — ${await res.text()}`);
   }
+  // TS-164: confirmed as if the emailed link had been clicked (see confirmTestAccountEmail).
+  if (confirmEmail) await (await import("./testDatabase.js")).confirmTestAccountEmail(email);
   return { name, email, context };
 }

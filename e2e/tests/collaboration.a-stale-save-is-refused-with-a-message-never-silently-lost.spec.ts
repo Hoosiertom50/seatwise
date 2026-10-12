@@ -57,7 +57,7 @@ defineQualityTest(
       expect(theirs.status).toBe(200);
 
       await timeline.saveEdit("17:00", "Cocktail hour in the ballroom");
-      await expect(timeline.errorText()).toContainText("Someone else changed this timeline entry");
+      await expect(timeline.errorText()).toContainText("This timeline entry changed since you opened it");
       await expect(timeline.entryTimeText("Cocktail hour on the terrace")).toBeVisible();
       const [stored] = await weddingData.getTimelineEntries(managedWedding.id);
       expect(stored.description).toBe("Cocktail hour on the terrace");
@@ -74,7 +74,7 @@ defineQualityTest(
       expect(theirs.ok()).toBe(true);
 
       await budget.saveBudget("18000");
-      await expect(budget.errorText()).toContainText("Someone else changed the budget figure");
+      await expect(budget.errorText()).toContainText("The budget figure changed since you opened it");
       expect(await budget.budgetInputValue()).toBe("25000.00");
       const stored = (await (await context.request.get(`${base}/budget`)).json()) as { summary: { budgetCents: number } };
       expect(stored.summary.budgetCents).toBe(2_500_000);
@@ -133,7 +133,7 @@ defineQualityTest(
 
       await context.request.patch(`${base}/tables/${table.id}`, { data: { positionX: 400, positionY: 260 } });
       await tables.dragFloorPlanTable(table.label, 100, 40);
-      await expect(tables.message(/^"[^"]+" was moved by someone else just before you/)).toBeVisible();
+      await expect(tables.message(/^"[^"]+" was moved since you loaded it \(maybe in another tab, or by someone else\)/)).toBeVisible();
       await expect.poll(() => tables.floorPlanTablePosition(table.label)).toEqual({ x: 400, y: 260 });
     });
   },

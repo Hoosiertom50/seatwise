@@ -8,7 +8,21 @@
  * its own.
  */
 
-import type { APIRequestContext } from "@playwright/test";
+import type { APIRequestContext, APIResponse } from "@playwright/test";
+
+/**
+ * TS-214: saves wedding settings (PATCH .../weddings/:weddingId) the way the app does -- with the
+ * settingsRevision the change is based on, read first. A save without it is refused (Copilot review).
+ */
+export async function patchWedding(
+  request: APIRequestContext,
+  weddingId: string,
+  options: { data: Record<string, unknown> },
+): Promise<APIResponse> {
+  const current = await request.get(`/api/v1/weddings/${weddingId}`);
+  const revision = current.ok() ? ((await current.json()) as { wedding: { settingsRevision?: number } }).wedding.settingsRevision : undefined;
+  return request.patch(`/api/v1/weddings/${weddingId}`, { data: { expectedRevision: revision ?? 0, ...options.data } });
+}
 
 export class UnsupportedCleanupError extends Error {
   constructor(message: string) {
@@ -34,6 +48,9 @@ export interface CreateWeddingOptions {
   templateId?: string;
   applyTemplateTables?: boolean;
   applyTemplateRules?: boolean;
+  /** TS-190: the wedding's own side names. */
+  sideLabel1?: string;
+  sideLabel2?: string;
 }
 
 // TS-51: the full wedding row (GET .../weddings/:id), as opposed to CreatedWedding's bare
@@ -43,6 +60,8 @@ export interface WeddingDetail {
   name: string;
   sideMixing: SideMixing;
   guestCount: number;
+  /** TS-199: the owner's free-text note (Collaborators tab). */
+  note?: string | null;
 }
 
 // TS-51: a template row as returned by the list endpoint (GET /api/v1/templates) -- no `tables`
@@ -88,6 +107,8 @@ export interface CreatedGuest {
 export interface ListedGuest extends CreatedGuest {
   email: string | null;
   notes: string | null;
+  /** TS-199 */
+  rsvpStatus?: "PENDING" | "CONFIRMED" | "DECLINED";
 }
 
 export interface CreateGuestInput {
@@ -159,6 +180,9 @@ export interface CreatedTableDetail extends CreatedTable {
 // optimistic-concurrency token the API accepts back.
 export interface UpdateTableInput extends Partial<CreateTableInput> {
   expectedRevision?: number;
+  /** TS-199: where the table sits on the floor plan (display only). */
+  positionX?: number;
+  positionY?: number;
 }
 
 export interface QuickCreateTablesInput {
@@ -199,6 +223,11 @@ export interface PlanVersionDetail {
   revision: number;
   assignments: PlanVersionAssignment[];
   unassignedGuestIds: string[];
+  // TS-207: the unassigned guests' names.
+  unassignedGuests?: { id: string; name: string }[];
+  // TS-197: seats held by attending guests, and attending guests without one.
+  assignedGuestCount: number;
+  unassignedGuestCount: number;
   warnings: string[];
   modifiedSinceApproval: ModifiedSinceApproval;
   // TS-47 (FR-9.4): set only on a version created by restoring an earlier one.
@@ -231,6 +260,8 @@ export interface RestorePreview {
   droppedGuests: { guestId: string; guestName: string; reason: string }[];
   unassignedGuestIds: string[];
   isComplete: boolean;
+  // TS-177: of keptCount, how many will be flagged Needs Reassignment once restored.
+  needsFixingCount: number;
   warnings: string[];
 }
 
@@ -311,6 +342,8 @@ export interface TimelineEntryDetail {
   id: string;
   weddingId: string;
   time: string;
+  // TS-214: after midnight -- listed after the wedding day's own entries.
+  nextDay: boolean;
   description: string;
   sortOrder: number;
   createdAt: string;
@@ -603,8 +636,17 @@ export class WeddingDataSetup {
   /** TS-42: updates wedding-level settings (PATCH .../weddings/:weddingId) -- currently only
    * needed for sideMixing, which has no UI control at all (see RulesTab/TablesTab investigation
    * notes); OWNER-only access, which the managedWedding fixture's own account always has. */
-  async updateWedding(weddingId: string, input: { sideMixing?: "KEEP_SEPARATE" | "BALANCED_MIX" | "FULLY_MIXED" }): Promise<void> {
-    const res = await this.request.patch(`/api/v1/weddings/${weddingId}`, { data: input });
+  // TS-177: also the RSVP cutoff (to close RSVPs) and the wedding's own side names.
+  async updateWedding(
+    weddingId: string,
+    input: {
+      sideMixing?: "KEEP_SEPARATE" | "BALANCED_MIX" | "FULLY_MIXED";
+      rsvpCutoffDate?: string | null;
+      sideLabel1?: string;
+      sideLabel2?: string;
+    },
+  ): Promise<void> {
+    const res = await patchWedding(this.request, weddingId, { data: input });
     await assertOk(res, `updateWedding(${weddingId}, ${JSON.stringify(input)})`);
   }
 
@@ -612,7 +654,10 @@ export class WeddingDataSetup {
    * seat-assignment/access-control tests call this raw, but TS-43's plan-review-status tests need
    * it repeatedly across several files, so it's centralized here rather than copy-pasted. */
   async generatePlanVersion(weddingId: string): Promise<PlanVersionDetail> {
-    const res = await this.request.post(`/api/v1/weddings/${weddingId}/plan-versions/generate`);
+    // TS-237: replacing an approved plan needs that version named -- these helpers always mean to.
+    const res = await this.request.post(`/api/v1/weddings/${weddingId}/plan-versions/generate`, {
+      data: { replacesApprovedVersionId: await this.approvedCurrentVersionId(weddingId) },
+    });
     await assertOk(res, `generatePlanVersion(${weddingId})`);
     const body = (await res.json()) as { planVersion: PlanVersionDetail };
     return body.planVersion;
@@ -750,7 +795,8 @@ export class WeddingDataSetup {
    * cases, not a setup failure. */
   async createTimelineEntry(
     weddingId: string,
-    input: { time: string; description: string },
+    // TS-214: nextDay -- "After midnight (next day)".
+    input: { time: string; description: string; nextDay?: boolean },
   ): Promise<{ status: number; body: { entry?: TimelineEntryDetail; error?: string } }> {
     const res = await this.request.post(`/api/v1/weddings/${weddingId}/timeline-entries`, { data: input });
     return { status: res.status(), body: await res.json() };
@@ -832,8 +878,21 @@ export class WeddingDataSetup {
     weddingId: string,
     planVersionId: string,
   ): Promise<{ status: number; body: { planVersion?: PlanVersionDetail; warnings?: string[]; error?: string } }> {
-    const res = await this.request.post(`/api/v1/weddings/${weddingId}/plan-versions/${planVersionId}/restore`);
+    // TS-237: as generatePlanVersion -- an approved current plan is replaced on purpose.
+    const res = await this.request.post(`/api/v1/weddings/${weddingId}/plan-versions/${planVersionId}/restore`, {
+      data: { replacesApprovedVersionId: await this.approvedCurrentVersionId(weddingId) },
+    });
     return { status: res.status(), body: await res.json() };
+  }
+
+  /** TS-237: the current plan version's id when it's Approved, else null -- what Generate and
+   * Restore send to confirm they replace that approved plan (the server refuses, 409, otherwise). */
+  async approvedCurrentVersionId(weddingId: string): Promise<string | null> {
+    // Not asserted: a caller without access gets its own refusal from the Generate/Restore itself.
+    const res = await this.request.get(`/api/v1/weddings/${weddingId}/plan-versions`);
+    if (!res.ok()) return null;
+    const current = ((await res.json()) as { planVersions: PlanVersionRow[] }).planVersions.find((v) => v.isCurrent);
+    return current?.status === "APPROVED" ? current.id : null;
   }
 
   /** Deletes a single guest. Supported by the app's API (DELETE

@@ -29,6 +29,14 @@ export class AccountPage extends BasePage {
     return this.getHelpSection().getByRole("link", { name: "Email support", exact: true });
   }
 
+  /** TS-257: the Appearance section and its three choices. */
+  appearanceSection() {
+    return this.page.getByRole("region", { name: "Appearance", exact: true });
+  }
+  appearanceChoice(label: "Match my device" | "Light" | "Dark") {
+    return this.appearanceSection().getByRole("radio", { name: label, exact: true });
+  }
+
   message(text: string | RegExp) {
     return typeof text === "string" ? this.page.getByText(text, { exact: true }) : this.page.getByText(text);
   }
@@ -40,5 +48,35 @@ export class AccountPage extends BasePage {
 
   deletedHeading() {
     return this.page.getByRole("heading", { name: "Your account has been deleted" });
+  }
+
+  /** TS-204: the "Signed in elsewhere" section and its Log out on all devices button. */
+  logOutEverywhereButton() {
+    return this.page.getByRole("region", { name: "Signed in elsewhere", exact: true }).getByRole("button", { name: "Log out on all devices", exact: true });
+  }
+
+  /** TS-223: the message shown in the "Signed in elsewhere" section when Log out on all devices can't work. */
+  logOutEverywhereMessage() {
+    return this.page.getByRole("region", { name: "Signed in elsewhere", exact: true }).getByRole("alert");
+  }
+
+  /** TS-223: the section's "Sign in" link, shown with that message. */
+  logOutEverywhereSignInLink() {
+    return this.page.getByRole("region", { name: "Signed in elsewhere", exact: true }).getByRole("link", { name: "Sign in", exact: true });
+  }
+
+  /** TS-223: presses Log out on all devices and waits for the server's answer; returns its status. */
+  async pressLogOutEverywhere(): Promise<number> {
+    const [res] = await Promise.all([
+      this.page.waitForResponse((r) => r.request().method() === "POST" && new URL(r.url()).pathname === "/api/v1/auth/logout"),
+      this.logOutEverywhereButton().click(),
+    ]);
+    return res.status();
+  }
+
+  /** TS-204: signs out every device, landing on the sign-in page. */
+  async logOutEverywhere(): Promise<void> {
+    await this.logOutEverywhereButton().click();
+    await this.page.waitForURL(/\/login/);
   }
 }

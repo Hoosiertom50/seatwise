@@ -76,7 +76,7 @@ defineQualityTest(
       });
       expect(res.status).toBe(422);
       expect(res.body.fieldErrors?.templateId).toEqual([
-        "Pick at least one part of the template to use: its table layout, its rule-shape, or both.",
+        "Pick at least one part of the template to use: its table layout, its side-mixing setting, or both.",
       ]);
       expect(res.body.wedding).toBeUndefined();
     });

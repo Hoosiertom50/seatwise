@@ -41,7 +41,7 @@ export interface AddVendorInput {
 
 export class BudgetTabPage extends BasePage {
   private budgetTabButton() {
-    return this.page.getByRole("button", { name: "Budget", exact: true });
+    return this.page.getByRole("tab", { name: "Budget", exact: true });
   }
 
   async goto(weddingId: string): Promise<void> {
@@ -238,16 +238,27 @@ export class BudgetTabPage extends BasePage {
   newLinkButton(vendorName: string) {
     return this.page.getByRole("button", { name: `New link for ${vendorName}`, exact: true });
   }
+  /** TS-214: the "Make a new link…?" question New link opens, scoped to the vendor's row. */
+  newLinkQuestion(vendorName: string): ConfirmDelete {
+    return new ConfirmDelete(this.vendorRow(vendorName));
+  }
   /** Clicks Share link (or New link) and returns the link the row then shows. */
   async getShareLink(vendorName: string, fresh = false): Promise<string> {
     const button = fresh ? this.newLinkButton(vendorName) : this.shareLinkButton(vendorName);
-    await Promise.all([
+    const [response] = await Promise.all([
       this.page.waitForResponse((r) => r.request().method() === "POST" && /\/share-link$/.test(new URL(r.url()).pathname)),
-      button.click(),
+      (async () => {
+        await button.click();
+        // TS-214: New link asks first ("Yes, make a new link").
+        if (fresh) await new ConfirmDelete(this.vendorRow(vendorName)).confirm();
+      })(),
     ]);
-    const line = this.vendorRow(vendorName).getByText(/\/vendor\/[0-9a-f]{64}/);
-    const text = (await line.textContent()) ?? "";
-    return text.match(/https?:\/\/\S+\/vendor\/[0-9a-f]{64}/)![0];
+    // TS-176: the link comes from the server's answer, and the row is waited on until it shows
+    // that link -- reading the row straight after the answer sometimes caught the old link before
+    // the screen had redrawn (a flaky "new link is the same as the old one").
+    const url = ((await response.json()) as { link: { url: string } }).link.url;
+    await expect(this.vendorRow(vendorName).getByText(url)).toBeVisible();
+    return url;
   }
   async turnOffShareLink(vendorName: string): Promise<void> {
     await this.page.getByRole("button", { name: `Turn off the link for ${vendorName}`, exact: true }).click();
@@ -287,7 +298,13 @@ export class BudgetTabPage extends BasePage {
   /** The contract-notes line -- only rendered at all when the vendor has notes on file (the third
    * `<p>` in document order within the row, after the name/badge line and the contact line). */
   vendorNotesText(nameContains: string) {
-    return this.vendorRow(nameContains).locator("p").nth(2);
+    // TS-212: the row's always-present share-link status line isn't one of its text lines.
+    return this.vendorRow(nameContains).locator("p:not([role=status])").nth(2);
+  }
+
+  /** TS-223: the row's "Arrives ..." line (only shown when an arrival time is set). */
+  vendorArrivalText(nameContains: string) {
+    return this.vendorRow(nameContains).getByText(/^Arrives /);
   }
 
   /** The row's own cost text -- "No cost set" or a formatted dollar amount. */
@@ -296,7 +313,8 @@ export class BudgetTabPage extends BasePage {
   }
 
   private editButton(nameContains: string) {
-    return this.vendorRow(nameContains).getByRole("button", { name: "Edit", exact: true });
+    // TS-175: named for the vendor ("Edit <name>").
+    return this.vendorRow(nameContains).getByRole("button", { name: /^Edit / });
   }
   private removeButton(nameContains: string) {
     return this.vendorRow(nameContains).getByRole("button", { name: /^Remove / });
@@ -307,23 +325,36 @@ export class BudgetTabPage extends BasePage {
   }
 
   // Not row-scoped, deliberately: once Edit is clicked, BudgetTab.tsx replaces that row's own
-  // display with these inputs (matched by aria-label, since none has a visible <label>) -- exactly
-  // one row can be in edit mode at a time (a single `editingId` in component state), so a
-  // page-wide lookup is unambiguous, same reasoning as TimelineTabPage's edit* locators.
+  // display with these inputs -- exactly one row can be in edit mode at a time (a single
+  // `editingId` in component state), so a page-wide lookup is unambiguous, same reasoning as
+  // TimelineTabPage's edit* locators. TS-212: the boxes now have visible labels ("Vendor name",
+  // "Cost ($)"...) that repeat the Add form's, so they're found by their ids
+  // (vendor-<id>-edit-<field>) rather than by label.
+  private editField(field: string) {
+    return this.page.locator(`[id^="vendor-"][id$="-edit-${field}"]`);
+  }
   private editNameInput() {
-    return this.page.getByLabel("Edit vendor name", { exact: true });
+    return this.editField("name");
   }
   private editCategorySelect() {
-    return this.page.getByLabel("Edit category", { exact: true });
+    return this.editField("category");
   }
   private editCategoryOtherInput() {
-    return this.page.getByLabel("Edit category label", { exact: true });
+    return this.editField("category-label");
   }
   private editCostInput() {
-    return this.page.getByLabel("Edit cost", { exact: true });
+    return this.editField("cost");
   }
   private editContractNotesInput() {
-    return this.page.getByLabel("Edit contract notes", { exact: true });
+    return this.editField("notes");
+  }
+  /** TS-212: the open edit box's visible label for a field (e.g. "Cost ($)"), as a screen reader reads it. */
+  editFieldByVisibleLabel(label: string) {
+    return this.page.locator("li").getByLabel(label, { exact: true });
+  }
+  /** TS-212: a vendor's Edit button (named "Edit <vendor>"). */
+  editButtonLocator(nameContains: string) {
+    return this.editButton(nameContains);
   }
   private saveEditButton() {
     return this.page.getByRole("button", { name: "Save", exact: true });
@@ -367,6 +398,24 @@ export class BudgetTabPage extends BasePage {
     ]);
   }
 
+  /** TS-180: like saveEdit, and returns what the Save actually sent (only changed fields go). */
+  async saveEditReturningSentFields(): Promise<Record<string, unknown>> {
+    const [request] = await Promise.all([
+      this.page.waitForRequest((req) => req.method() === "PATCH" && /\/vendors\/[^/]+$/.test(new URL(req.url()).pathname)),
+      this.saveEdit(),
+    ]);
+    return (request.postDataJSON() ?? {}) as Record<string, unknown>;
+  }
+
+  /** TS-175: how many vendor edit forms are open (0 once a conflict has closed the editor). */
+  async editCostInputCount(): Promise<number> {
+    return this.editCostInput().count();
+  }
+  /** TS-175: clicks Save without waiting for a request -- for a value the screen refuses itself. */
+  async clickSaveEdit(): Promise<void> {
+    await this.saveEditButton().click();
+  }
+
   async cancelEdit(): Promise<void> {
     await this.cancelEditButton().click();
   }
@@ -396,9 +445,14 @@ export class BudgetTabPage extends BasePage {
     return this.vendorNameInput();
   }
   allEditButtons() {
-    return this.page.getByRole("button", { name: "Edit", exact: true });
+    return this.page.getByRole("button", { name: /^Edit / });
   }
   allRemoveButtons() {
     return this.page.getByRole("button", { name: /^Remove / });
+  }
+
+  /** TS-235: a vendor row's Edit button, to check whether it can be pressed yet. */
+  vendorEditButton(nameContains: string) {
+    return this.editButton(nameContains);
   }
 }

@@ -5,9 +5,12 @@ import { ConfirmDeleteButton } from "@/components/ConfirmDeleteButton";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { api, ApiError, apiErrorMessage } from "@/lib/api-client";
-import { formatShortEventDate, localTodayIso } from "@/lib/display-format";
-import type { WeddingSummaryDTO, SeatingTemplateDTO } from "@seatwise/shared";
+import { formatDate, localTodayIso } from "@/lib/display-format";
+import { formatGuestCounts, type WeddingSummaryDTO, type SeatingTemplateDTO } from "@seatwise/shared";
 import { NotificationsBell } from "@/components/NotificationsBell";
+import { EmailVerificationNotice } from "@/components/EmailVerificationNotice";
+// TS-193: the same limits the server checks (packages/shared/src/field-limits.ts).
+import { FIELD_LIMITS } from "@seatwise/shared";
 
 // TS-19 (FR-14.2): human-readable labels for a template's captured rule-shape.
 const SIDE_MIXING_LABELS: Record<string, string> = {
@@ -26,8 +29,9 @@ const PLAN_STATUS_LABELS: Record<"DRAFT" | "IN_REVIEW" | "APPROVED", string> = {
 };
 
 const PLAN_STATUS_BADGE_CLASSES: Record<"DRAFT" | "IN_REVIEW" | "APPROVED", string> = {
-  DRAFT: "bg-amber-100 text-amber-700 dark:text-amber-400",
-  IN_REVIEW: "bg-blue-100 text-blue-700 dark:text-blue-400",
+  // TS-175: dark-mode backgrounds too -- light text on the light pill was unreadable.
+  DRAFT: "bg-amber-100 dark:bg-amber-900 text-amber-700 dark:text-amber-300",
+  IN_REVIEW: "bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300",
   APPROVED: "bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-400",
 };
 
@@ -87,6 +91,21 @@ export default function DashboardPage() {
   const [applyTemplateTables, setApplyTemplateTables] = useState(true);
   const [applyTemplateRules, setApplyTemplateRules] = useState(true);
   const [templatesError, setTemplatesError] = useState<string | null>(null);
+  // TS-199: whether "Your templates" is unfolded (kept when the list is briefly empty).
+  const [templatesOpen, setTemplatesOpen] = useState(false);
+  // TS-191: the template list itself couldn't be loaded (shown in the templates section).
+  const [templatesLoadFailed, setTemplatesLoadFailed] = useState(false);
+  async function loadTemplates() {
+    try {
+      const res = await api.get<{ templates: SeatingTemplateDTO[] }>("/api/v1/templates");
+      setTemplates(res.templates);
+      setTemplatesLoadFailed(false);
+    } catch (err) {
+      // A signed-out session is handled by the wedding list's own load.
+      if (err instanceof ApiError && err.status === 401) return;
+      setTemplatesLoadFailed(true);
+    }
+  }
 
   // FR-11.1: search/filter/sort all operate on the already-fetched list client-side -- at the
   // portfolio scale this is built for (dozens, 15-50+ weddings per planner) that's instant, and
@@ -96,29 +115,32 @@ export default function DashboardPage() {
   const [planStatusFilter, setPlanStatusFilter] = useState<PlanStatusFilter>("ALL");
   const [sortKey, setSortKey] = useState<SortKey>("urgency");
 
+  // TS-175: a failed load says so, with Try again -- it used to show "No weddings yet".
+  const [loadFailed, setLoadFailed] = useState(false);
+  const [loadAttempt, setLoadAttempt] = useState(0);
   useEffect(() => {
     (async () => {
       try {
         const me = await api.get<{ user: { id: string; name: string } }>("/api/v1/auth/me");
         setUserName(me.user.name);
         setUserId(me.user.id);
-        const [list, templatesRes] = await Promise.all([
-          api.get<{ weddings: WeddingSummaryDTO[] }>("/api/v1/weddings"),
-          api.get<{ templates: SeatingTemplateDTO[] }>("/api/v1/templates"),
-        ]);
+        // TS-191: templates load on their own -- if only they fail, the weddings still show and
+        // the templates section says what went wrong (it used to be "Couldn't load your weddings").
+        void loadTemplates();
+        const list = await api.get<{ weddings: WeddingSummaryDTO[] }>("/api/v1/weddings");
         setWeddings(list.weddings);
-        setTemplates(templatesRes.templates);
+        setLoadFailed(false);
       } catch (err) {
         if (err instanceof ApiError && err.status === 401) {
           router.push("/login");
           return;
         }
-        setError("Couldn't load your weddings.");
+        setLoadFailed(true);
       } finally {
         setLoading(false);
       }
     })();
-  }, [router]);
+  }, [router, loadAttempt]);
 
   const visibleWeddings = useMemo(() => {
     const term = search.trim().toLowerCase();
@@ -212,20 +234,35 @@ export default function DashboardPage() {
   }
 
   async function onDeleteTemplate(id: string) {
-    const prev = templates;
-    setTemplates(templates.filter((t) => t.id !== id));
+    // TS-182: on failure only this template comes back, in its old place -- a copy of the whole
+    // list taken here used to also undo another template deleted meanwhile.
+    const index = templates.findIndex((t) => t.id === id);
+    const removed = templates[index];
+    setTemplatesError(null);
+    setTemplates((cur) => cur.filter((t) => t.id !== id));
     if (selectedTemplateId === id) setSelectedTemplateId("");
     try {
       await api.delete(`/api/v1/templates/${id}`);
     } catch (err) {
-      setTemplates(prev);
+      if (removed)
+        setTemplates((cur) =>
+          cur.some((t) => t.id === id) ? cur : [...cur.slice(0, index), removed, ...cur.slice(index)]
+        );
       setTemplatesError(err instanceof ApiError ? err.message : "Couldn't delete that template.");
     }
   }
 
+  // TS-175: a failed log out says so (it failed silently), and a successful one replaces this
+  // page in history, so Back doesn't bounce between the dashboard and the sign-in page.
+  // TS-204 (Tom's decision): this device only -- "Log out on all devices" is on the Account page.
   async function onLogout() {
-    await api.post("/api/v1/auth/logout");
-    router.push("/login");
+    try {
+      await api.post("/api/v1/auth/logout");
+    } catch {
+      setError("Couldn't log out — check your connection and try again.");
+      return;
+    }
+    router.replace("/login");
   }
 
   if (loading) {
@@ -257,6 +294,9 @@ export default function DashboardPage() {
         </div>
       </div>
 
+      {/* TS-164 */}
+      <EmailVerificationNotice />
+
       <form
         onSubmit={onCreate}
         className="mb-8 flex flex-col gap-3 rounded-lg border border-neutral-200 dark:border-neutral-700 p-4"
@@ -280,7 +320,7 @@ export default function DashboardPage() {
               value={newName}
               onChange={(e) => setNewName(e.target.value)}
               required
-              maxLength={200}
+              maxLength={FIELD_LIMITS.weddingName}
             />
           </div>
           <div>
@@ -300,6 +340,7 @@ export default function DashboardPage() {
               Venue
             </label>
             <input
+              maxLength={FIELD_LIMITS.venueName}
               id="new-wedding-venue"
               className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
               value={newVenue}
@@ -351,7 +392,7 @@ export default function DashboardPage() {
                     checked={applyTemplateRules}
                     onChange={(e) => setApplyTemplateRules(e.target.checked)}
                   />
-                  Use its rule-shape (
+                  Use its side-mixing setting (
                   {SIDE_MIXING_LABELS[
                     templates.find((t) => t.id === selectedTemplateId)?.sideMixing ?? "BALANCED_MIX"
                   ]}
@@ -377,6 +418,7 @@ export default function DashboardPage() {
               Note (optional)
             </label>
             <textarea
+              maxLength={FIELD_LIMITS.weddingNote}
               id="new-wedding-note"
               className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
               rows={2}
@@ -396,22 +438,48 @@ export default function DashboardPage() {
         )}
       </form>
 
-      {error && <p className="mb-4 text-sm text-red-600 dark:text-red-400">{error}</p>}
+      {error && (
+        <p role="alert" className="mb-4 text-sm text-red-600 dark:text-red-400">
+          {error}
+        </p>
+      )}
 
+      {templatesLoadFailed && templates.length === 0 && (
+        <div className="mb-8 rounded-lg border border-neutral-200 dark:border-neutral-700 p-4">
+          <p className="text-sm font-medium">Your templates</p>
+          <p role="alert" className="mt-2 text-sm text-red-600 dark:text-red-400">
+            Couldn&apos;t load your templates.{" "}
+            <button type="button" onClick={() => void loadTemplates()} className="underline hover:no-underline">
+              Try again
+            </button>
+          </p>
+        </div>
+      )}
+
+      {/* TS-199: the error is shown outside the fold, and the fold remembers it was open -- deleting
+          the only template took the whole section away for a moment, so when the delete failed it
+          came back closed with the error hidden inside it. */}
+      {templatesError && !templatesLoadFailed && (
+        <p role="alert" className="mb-2 text-sm text-red-600 dark:text-red-400">{templatesError}</p>
+      )}
       {templates.length > 0 && (
-        <details className="mb-8 rounded-lg border border-neutral-200 dark:border-neutral-700 p-4">
+        <details
+          open={templatesOpen}
+          onToggle={(e) => setTemplatesOpen(e.currentTarget.open)}
+          className="mb-8 rounded-lg border border-neutral-200 dark:border-neutral-700 p-4"
+        >
           <summary className="cursor-pointer text-sm font-medium">
             Your templates ({templates.length})
           </summary>
-          {templatesError && <p className="mt-2 text-sm text-red-600 dark:text-red-400">{templatesError}</p>}
           <ul className="mt-3 flex flex-col gap-2">
             {templates.map((t) => (
               <li
                 key={t.id}
                 className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-neutral-200 dark:border-neutral-700 px-3 py-2"
               >
-                <div>
-                  <p className="font-medium">{t.name}</p>
+                {/* TS-199: a long name wraps instead of running off a phone screen. */}
+                <div className="min-w-0">
+                  <p className="break-words font-medium [overflow-wrap:anywhere]">{t.name}</p>
                   <p className="text-xs text-neutral-500 dark:text-neutral-400">
                     {t.tableCount} table{t.tableCount === 1 ? "" : "s"} ·{" "}
                     {SIDE_MIXING_LABELS[t.sideMixing]}
@@ -419,6 +487,7 @@ export default function DashboardPage() {
                   </p>
                 </div>
                 <ConfirmDeleteButton
+                  id={`template-${t.id}-delete`}
                   label="Delete"
                   ariaLabel={`Delete ${t.name}`}
                   question={`Delete the template "${t.name}"? Weddings already made from it aren't changed. This can't be undone.`}
@@ -435,6 +504,7 @@ export default function DashboardPage() {
         <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex flex-1 flex-col gap-2 sm:flex-row">
             <input
+              maxLength={FIELD_LIMITS.search}
               type="search"
               aria-label="Search weddings"
               placeholder="Search by name or venue..."
@@ -464,13 +534,27 @@ export default function DashboardPage() {
             <option value="urgency">Sort: Needs attention first</option>
             <option value="eventDate">Sort: Event date (soonest)</option>
             <option value="name">Sort: Name (A–Z)</option>
-            <option value="guestCount">Sort: Guest count (most)</option>
+            <option value="guestCount">Sort: Invitations (most)</option>
             <option value="issues">Sort: Outstanding issues (most)</option>
           </select>
         </div>
       )}
 
-      {weddings.length === 0 ? (
+      {loadFailed ? (
+        <div role="alert" className="flex flex-wrap items-center gap-3 text-sm text-red-600 dark:text-red-400">
+          Couldn&apos;t load your weddings.
+          <button
+            type="button"
+            onClick={() => {
+              setLoading(true);
+              setLoadAttempt((n) => n + 1);
+            }}
+            className="rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 text-neutral-900 dark:text-neutral-100 hover:bg-neutral-50 dark:hover:bg-neutral-800"
+          >
+            Try again
+          </button>
+        </div>
+      ) : weddings.length === 0 ? (
         <p className="text-sm text-neutral-500 dark:text-neutral-400">
           {/* TS-96: say what happens after this first step, not just "add one". */}
           No weddings yet — add one above. Then open it to add your guests and tables, and Seatwise
@@ -492,11 +576,12 @@ export default function DashboardPage() {
                 <li key={w.id} className="flex items-stretch gap-2">
                   <Link
                     href={`/weddings/${w.id}`}
-                    className="flex flex-1 flex-col gap-2 rounded-lg border border-neutral-200 dark:border-neutral-700 px-4 py-3 hover:border-neutral-400 dark:hover:border-neutral-500 sm:flex-row sm:items-center sm:justify-between"
+                    className="flex min-w-0 flex-1 flex-col gap-2 rounded-lg border border-neutral-200 dark:border-neutral-700 px-4 py-3 hover:border-neutral-400 dark:hover:border-neutral-500 sm:flex-row sm:items-center sm:justify-between"
                   >
-                    <div>
+                    {/* TS-199: a long name or venue wraps instead of running off a phone screen. */}
+                    <div className="min-w-0">
                       <p className="flex flex-wrap items-center gap-2 font-medium">
-                        {w.name}
+                        <span className="min-w-0 break-words [overflow-wrap:anywhere]">{w.name}</span>
                         {userId && w.ownerId !== userId && (
                           <span className="rounded-full bg-neutral-100 dark:bg-neutral-800 px-2 py-0.5 text-xs font-normal text-neutral-500 dark:text-neutral-400">
                             Shared with you
@@ -512,8 +597,8 @@ export default function DashboardPage() {
                           {w.planStatus ? PLAN_STATUS_LABELS[w.planStatus] : "No plan yet"}
                         </span>
                       </p>
-                      <p className="text-sm text-neutral-500 dark:text-neutral-400">
-                        {w.eventDate ? formatShortEventDate(w.eventDate) : "No date set"}
+                      <p className="break-words text-sm text-neutral-500 dark:text-neutral-400 [overflow-wrap:anywhere]">
+                        {w.eventDate ? formatDate(w.eventDate) : "No date set"}
                         {w.venueName ? ` · ${w.venueName}` : ""}
                       </p>
                     </div>
@@ -526,8 +611,10 @@ export default function DashboardPage() {
                             `${w.needsReassignmentCount} needs reassignment`}
                         </span>
                       )}
+                      {/* TS-177: invitations and people, the same as the Guests tab's header. */}
                       <span>
-                        {w.guestCount} guest{w.guestCount === 1 ? "" : "s"}
+                        {/* TS-214: invited and attending (the Tables tab's count). */}
+                        {formatGuestCounts(w.guestCount, w.peopleCount, w.attendingCount)}
                       </span>
                     </div>
                   </Link>

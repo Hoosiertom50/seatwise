@@ -6,12 +6,16 @@ export function canSeeGuestNotes(accessLevel: string | null | undefined): boolea
   return accessLevel === "OWNER" || accessLevel === "EDIT";
 }
 
-export function withoutPrivateNotes<T extends { notes?: string | null; rsvpNotes?: string | null }>(guest: T): T {
-  return { ...guest, notes: null, rsvpNotes: null };
+// TS-172 (Tom's decision, 2026-10-05): a guest's email address is kept from View and Comment
+// collaborators too -- it's the guest's own contact detail, and the RSVP link goes to it.
+export function withoutPrivateNotes<T extends { notes?: string | null; rsvpNotes?: string | null; email?: string | null }>(
+  guest: T
+): T {
+  return { ...guest, notes: null, rsvpNotes: null, ...("email" in guest ? { email: null } : {}) };
 }
 
 /** The guest as this person may see them. */
-export function guestForViewer<T extends { notes?: string | null; rsvpNotes?: string | null }>(
+export function guestForViewer<T extends { notes?: string | null; rsvpNotes?: string | null; email?: string | null }>(
   guest: T,
   accessLevel: string | null | undefined
 ): T {

@@ -10,13 +10,23 @@
 import { expect } from "@playwright/test";
 import { BasePage } from "./BasePage.js";
 
+/** TS-199: a guest's name used inside a pattern, matched literally. */
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 export class PlanTabPage extends BasePage {
   private seatingPlanTabButton() {
-    return this.page.getByRole("button", { name: "Seating plan", exact: true });
+    return this.page.getByRole("tab", { name: "Seating plan", exact: true });
   }
 
   private generateButton() {
     return this.page.getByRole("button", { name: /^generate new plan$|^generating\.\.\.$/i });
+  }
+
+  /** TS-255: the Generate button in its ready state (for checking where keyboard focus lands). */
+  generateNewPlanButton() {
+    return this.page.getByRole("button", { name: "Generate new plan", exact: true });
   }
 
   private saveAsDraftCheckbox() {
@@ -28,7 +38,8 @@ export class PlanTabPage extends BasePage {
   listTableCard(label: string) {
     return this.page
       .locator("div.rounded-lg")
-      .filter({ has: this.page.getByText(label, { exact: true }) })
+      // TS-221: the heading line only -- another card's "Move to..." list names this table too.
+      .filter({ has: this.page.locator("p").getByText(label, { exact: true }) })
       .filter({ hasText: /seated|seats free/ })
       .last();
   }
@@ -108,6 +119,40 @@ export class PlanTabPage extends BasePage {
     await this.floorPlanViewButton().click();
   }
 
+  /** TS-199: the seating floor plan's canvas (the table boxes and the guests in them). */
+  floorPlanRegion() {
+    return this.page.getByRole("group", { name: "Seating floor plan", exact: true });
+  }
+
+  /** TS-199: a guest's "Move to…"/"Seat at…" list in the List view (pick a table, then press the
+   * button next to it). */
+  private listMoveSelect(guestName: string) {
+    return this.page.getByLabel(new RegExp(`^Move ${escapeRegExp(guestName)} to (a|a different) table$`));
+  }
+  private listMoveButton(guestName: string) {
+    return this.page.getByRole("button", { name: new RegExp(`^(Move|Seat) ${escapeRegExp(guestName)}$`) });
+  }
+
+  /** TS-199: picks a table in a guest's List-view list and presses Move/Seat, waiting for the save. */
+  async moveGuestInList(guestName: string, tableLabel: string): Promise<void> {
+    await this.listMoveSelect(guestName).selectOption({ label: tableLabel });
+    await Promise.all([this.waitForMove(), this.listMoveButton(guestName).click()]);
+  }
+
+  /** TS-199: focuses a guest's List-view list and presses the down arrow `times` times. */
+  async arrowThroughListMoveChoices(guestName: string, times: number): Promise<void> {
+    await this.listMoveSelect(guestName).focus();
+    for (let i = 0; i < times; i++) await this.page.keyboard.press("ArrowDown");
+  }
+
+  /** TS-199: the guest's List-view list (for focus checks) and its Move/Seat button. */
+  listMoveList(guestName: string) {
+    return this.listMoveSelect(guestName);
+  }
+  listMoveButtonFor(guestName: string) {
+    return this.listMoveButton(guestName);
+  }
+
   async moveToReview(): Promise<void> {
     await this.moveToReviewButton().click();
     await this.moveBackToDraftButton().waitFor();
@@ -161,7 +206,8 @@ export class PlanTabPage extends BasePage {
     return this.page.getByText("That move was made, but note:", { exact: true }).locator("..");
   }
 
-  private undoButton() {
+  // TS-228: public, so a test can check an undo that can never be done is dropped.
+  undoButton() {
     return this.page.getByTestId("undo-button");
   }
   private redoButton() {
@@ -255,7 +301,8 @@ export class PlanTabPage extends BasePage {
     await this.guestChip(guestId).focus();
     await this.page.keyboard.press("Enter");
     await expect(this.guestChip(guestId)).toHaveAttribute("aria-pressed", "true");
-    const table = this.tableBox(tableId);
+    // TS-212: the table itself isn't a button any more -- its "Move <guest> to <table>" button is.
+    const table = this.tableBox(tableId).getByRole("button", { name: /^Move .+ to / });
     const tableIsEarlier = await this.page.evaluate(
       ([g, t]) => {
         const chip = document.querySelector(`[data-guest-id="${g}"]`)!;
@@ -340,7 +387,8 @@ export class PlanTabPage extends BasePage {
     await this.selectOptionMatching(this.versionSelect(), optionLabel);
   }
   pastVersionNotice() {
-    return this.page.getByText(/^This is a past version — status can only be changed on the current one\./);
+    // TS-177: also shown for a comparison draft.
+    return this.page.getByText(/^This isn't the current version \(it's an older one, or a comparison draft\) — status can only be changed on the current one\./);
   }
   restoreButton(versionNumber: number) {
     return this.page.getByRole("button", { name: `Restore version ${versionNumber}...`, exact: true });
@@ -348,11 +396,20 @@ export class PlanTabPage extends BasePage {
   restorePreview(versionNumber: number) {
     return this.page.getByText(new RegExp(`^Restoring version ${versionNumber} will create a new version`));
   }
+  /** TS-208: the restore preview's note that confirming will save a comparison draft (the current
+   * plan is approved and this person can't replace it). */
+  restoreWillBeDraftNote() {
+    return this.page.getByTestId("restore-will-be-draft");
+  }
   async confirmRestore(): Promise<void> {
     await this.page.getByRole("button", { name: "Confirm restore", exact: true }).click();
   }
   async cancelRestore(): Promise<void> {
-    await this.page.getByRole("button", { name: "Cancel", exact: true }).click();
+    await this.restoreCancelButton().click();
+  }
+  /** TS-255: the restore preview's Cancel (pressed with the keyboard to check where focus lands). */
+  restoreCancelButton() {
+    return this.page.getByRole("button", { name: "Cancel", exact: true });
   }
   /** Any status-change button (none should show on a past version). */
   statusChangeButtons() {
@@ -363,7 +420,15 @@ export class PlanTabPage extends BasePage {
     return typeof text === "string" ? this.page.getByText(text, { exact: true }) : this.page.getByText(text);
   }
   private async selectOptionMatching(select: ReturnType<PlanTabPage["versionSelect"]>, label: RegExp): Promise<void> {
-    const options = await select.locator("option").allTextContents();
+    // TS-177: the list fills in after the tab loads -- wait for the option rather than reading it once.
+    let options: string[] = [];
+    await expect
+      .poll(async () => {
+        options = await select.locator("option").allTextContents();
+        return options.some((o) => label.test(o));
+      })
+      .toBe(true)
+      .catch(() => undefined);
     const match = options.find((o) => label.test(o));
     if (!match) throw new Error(`No option matching ${label} (have: ${options.join(" | ")})`);
     await select.selectOption({ label: match });
@@ -374,8 +439,13 @@ export class PlanTabPage extends BasePage {
    * to its ready label, which only happens after the request settles either way (success or a
    * reported conflict), so callers never race the async request. */
   async generate(saveAsDraft = false): Promise<void> {
+    // TS-189: the checkbox is only offered once a plan exists (the first plan is always current),
+    // so wait for the tab to finish loading before deciding whether it's there.
+    await this.generateButton().waitFor();
     const checkbox = this.saveAsDraftCheckbox();
-    if ((await checkbox.isChecked()) !== saveAsDraft) {
+    if ((await checkbox.count()) === 0) {
+      if (saveAsDraft) throw new Error("PlanTabPage.generate: no comparison-draft choice before the first plan exists.");
+    } else if ((await checkbox.isChecked()) !== saveAsDraft) {
       await checkbox.click();
     }
     await this.generateButton().click();
@@ -384,5 +454,150 @@ export class PlanTabPage extends BasePage {
     // for a fresh locator matching only the ready-state label is a real wait for that, not a
     // fixed sleep.
     await this.page.getByRole("button", { name: "Generate new plan", exact: true }).waitFor();
+  }
+
+  /** TS-170: starts a tap-to-move without waiting for it to save (to act again while it's on its way). */
+  async startTapMove(guestId: string, tableId: string): Promise<void> {
+    await this.guestChip(guestId).click();
+    const table = this.tableBox(tableId);
+    await table.scrollIntoViewIfNeeded();
+    const box = (await table.boundingBox())!;
+    await this.page.mouse.click(box.x + box.width / 2, box.y + 10);
+  }
+
+  /** TS-170: clicks "Move to review" without waiting for the status to change. */
+  async clickMoveToReview(): Promise<void> {
+    await this.moveToReviewButton().click();
+  }
+
+  /** TS-170: the "Move back to draft" button, which appears once the plan is In review. */
+  moveBackToDraftLocator() {
+    return this.moveBackToDraftButton();
+  }
+
+  /** TS-179: shown after Generate or Restore by someone who can't replace an approved plan. */
+  savedAsDraftNotice() {
+    return this.page.getByRole("status").filter({ hasText: "saved as a comparison draft" });
+  }
+
+  /** TS-221: shown when the open version was removed (pruned) and the tab opened the current plan. */
+  versionRemovedNotice() {
+    return this.page.getByRole("status").filter({ hasText: "The version you had open was removed — you're now looking at the current plan." });
+  }
+
+  /** TS-221: the screen-reader announcement of the last move, undo or redo (always on the page). */
+  moveAnnouncement() {
+    return this.page.getByTestId("plan-move-announcement");
+  }
+
+  /** TS-221: a guest an older version seats who has since been marked not attending. */
+  notAttendingGuest(guestName: string) {
+    return this.page.getByText(`${guestName} (not attending now)`, { exact: true });
+  }
+
+  /** TS-231: the question Generate asks before it replaces an approved current plan. */
+  replaceApprovedPrompt() {
+    return this.page.getByRole("alertdialog").filter({ hasText: "This replaces the approved plan." });
+  }
+  /** TS-231: clicks Generate (draft box left as it is) without answering a replace-approved question. */
+  async clickGenerate(): Promise<void> {
+    await this.generateButton().click();
+  }
+  /** TS-237: unticks the draft box (if offered) and clicks Generate, without waiting for the run. */
+  async clickGenerateToReplaceCurrent(): Promise<void> {
+    await this.generateButton().waitFor();
+    const checkbox = this.saveAsDraftCheckbox();
+    if ((await checkbox.count()) > 0 && (await checkbox.isChecked())) await checkbox.click();
+    await this.generateButton().click();
+  }
+  /** TS-231: answers the replace-approved question with "Replace the approved plan" and waits for the run. */
+  async confirmReplaceApproved(): Promise<void> {
+    await this.replaceApprovedPrompt().getByRole("button", { name: "Replace the approved plan", exact: true }).click();
+    await this.page.getByRole("button", { name: "Generate new plan", exact: true }).waitFor();
+  }
+  async cancelReplaceApproved(): Promise<void> {
+    await this.replaceApprovedPrompt().getByRole("button", { name: "Cancel", exact: true }).click();
+  }
+  /** TS-231: the restore preview's line saying confirming replaces the approved plan. */
+  restoreReplacesApprovedNote() {
+    return this.page.getByTestId("restore-replaces-approved");
+  }
+  /** TS-237: the restore preview's line when the plan was approved after the preview was shown. */
+  restoreApprovedMeanwhileNote() {
+    return this.page.getByTestId("restore-approved-meanwhile");
+  }
+  /** TS-235: the comparison's note about guests not attending now (listed, not counted). */
+  comparisonNotAttendingNote() {
+    return this.page.getByTestId("comparison-not-attending-note");
+  }
+  /** TS-235: the comparison table's row for a guest, by the name it shows. */
+  comparisonRow(shownName: string) {
+    return this.page
+      .getByRole("region", { name: "Version comparison" })
+      .getByRole("row")
+      .filter({ has: this.page.getByRole("cell", { name: shownName, exact: true }) });
+  }
+
+  /** TS-221: the table labels offered in a guest's List-view "Move to…"/"Seat at…" list. */
+  async listMoveChoices(guestName: string): Promise<string[]> {
+    return (await this.listMoveSelect(guestName).locator("option").allTextContents()).filter((o) => !/^(Move|Seat at)\.\.\.$/.test(o));
+  }
+
+  /** TS-189: shown when a newer plan was made elsewhere and the tab switched to it. */
+  newerPlanNotice() {
+    return this.page.getByRole("status").filter({ hasText: "A newer plan was made — you're now looking at it." });
+  }
+
+  /** TS-197: what the last Generate said about its plan -- headed "Couldn't seat everyone:" when
+   * someone was left unseated (with the reasons), otherwise "Notes on this plan:". */
+  generateWarnings() {
+    return this.page.getByTestId("plan-generate-warnings");
+  }
+
+  /** TS-197: shown when a comparison draft was asked for but there was no current plan, so the
+   * new version was made the current plan. */
+  madeCurrentNotice() {
+    return this.page.getByRole("status").filter({ hasText: "this version was made the current plan" });
+  }
+
+  /** TS-197: the open version's "N seated, M unassigned" line. */
+  seatedSummary() {
+    return this.page.getByText(/^\d+ seated, \d+ unassigned$/);
+  }
+
+  /** TS-189: the open version's badge, "Version N — complete/incomplete". */
+  openVersionBadge(versionNumber: number) {
+    return this.page.getByText(new RegExp(`^Version ${versionNumber} — (complete|incomplete)$`));
+  }
+
+  /** TS-189: the "Save as comparison draft" choice (offered only once a plan exists). */
+  comparisonDraftChoice() {
+    return this.saveAsDraftCheckbox();
+  }
+
+  /** TS-179: the approved plan's PDF export buttons (shown only on the current, approved version).
+   * TS-211: buttons now -- each fetches its PDF and says inline when it can't. */
+  exportLinks() {
+    return this.page.getByRole("button", { name: /\(PDF\)$/ });
+  }
+
+  /** TS-211: one PDF export button, by its label (e.g. "Seating chart (PDF)"). */
+  exportButton(label: string) {
+    return this.page.getByRole("button", { name: label, exact: true });
+  }
+
+  /** TS-211: the warning next to Export while attending guests aren't seated. */
+  exportUnseatedWarning() {
+    return this.page.getByTestId("export-unseated-warning");
+  }
+
+  /** TS-250: the warning next to Export while guests need a new seat since the plan was approved. */
+  exportNeedsReassignmentWarning() {
+    return this.page.getByTestId("export-needs-reassignment-warning");
+  }
+
+  /** TS-211: a failed export's message, shown next to the export buttons. */
+  exportError(text: string | RegExp) {
+    return this.page.getByRole("alert").filter({ hasText: text });
   }
 }

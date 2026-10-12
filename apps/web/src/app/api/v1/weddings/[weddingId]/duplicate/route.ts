@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { duplicateWeddingSchema } from "@seatwise/shared";
+import { copiedWeddingName, duplicateWeddingSchema } from "@seatwise/shared";
 import { duplicateWeddingLayout, getWeddingById } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
-import { errorResponse, zodErrorResponse } from "@/lib/api-response";
+import { errorResponse, zodErrorResponse, readJson } from "@/lib/api-response";
 import { requireAccess } from "@/lib/access";
+import { countOr429, TOO_MANY_WEDDINGS_TODAY, WEDDING_CREATE_LIMITS, weddingCreateKey } from "@/lib/rate-limit";
+import { afterSave, SAVED_BUT_NOT_REFRESHED } from "@/lib/post-save";
 
 type Params = { params: Promise<{ weddingId: string }> };
 
@@ -18,16 +20,46 @@ export async function POST(req: NextRequest, { params }: Params) {
   const access = await requireAccess(weddingId, user.id, "OWNER");
   if ("error" in access) return access.error;
 
-  const body = await req.json().catch(() => ({}));
+  // TS-204: readJson refuses a non-JSON or oversized body (413), even one sent without a Content-Length.
+  const json = await readJson(req);
+  if (!json.ok) return json.response;
+  const body = json.body ?? {};
   const parsed = duplicateWeddingSchema.safeParse(body ?? {});
   if (!parsed.success) return zodErrorResponse(parsed.error);
 
   const source = await getWeddingById(weddingId);
   if (!source) return errorResponse("Wedding not found", 404);
-  const name = parsed.data.name ?? `${source.name} (copy)`;
+  // TS-168: "(copy)" isn't allowed in a wedding name (so emails for the copy fell back to "a
+  // wedding"), and could take a long name past the limit.
+  const name = parsed.data.name ?? copiedWeddingName(source.name);
 
-  const newId = await duplicateWeddingLayout(weddingId, user.id, name);
-  if (!newId) return errorResponse("Wedding not found", 404);
-  const wedding = await getWeddingById(newId);
-  return NextResponse.json({ wedding }, { status: 201 });
+  // TS-178: a copy is a new wedding too, so it counts toward the same daily cap.
+  // TS-194: given back from exactly the window it was counted in, if no copy is made -- including
+  // when making it fails.
+  const { limited, giveBack } = await countOr429(weddingCreateKey(user.id), WEDDING_CREATE_LIMITS.perAccountDay, TOO_MANY_WEDDINGS_TODAY);
+  if (limited) return limited;
+  let newId: string | null;
+  try {
+    newId = await duplicateWeddingLayout(weddingId, user.id, name);
+  } catch (err) {
+    await giveBack();
+    throw err;
+  }
+  if (!newId) {
+    await giveBack();
+    return errorResponse("Wedding not found", 404);
+  }
+  // TS-220: the copy is saved by now -- a failed read-back answers with the new wedding's id (all
+  // the page needs to open it) and a warning, never an error: a planner told it failed would press
+  // again and make a second copy, using up another of the day's allowance.
+  const warnings: string[] = [];
+  const copyId = newId;
+  const wedding = await afterSave(
+    "reading the copied wedding back",
+    async () => (await getWeddingById(copyId)) ?? { id: copyId },
+    warnings,
+    SAVED_BUT_NOT_REFRESHED,
+    { id: copyId }
+  );
+  return NextResponse.json({ wedding, warnings }, { status: 201 });
 }

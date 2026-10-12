@@ -126,12 +126,12 @@ defineQualityTest(
     await test.step("Assert: each row's plan-status badge, guest count, and issue pill reflect real state", async () => {
       const alphaRow = await dashboardPage.weddingLink(nameAlpha).textContent();
       expect(alphaRow).toContain("No plan yet");
-      expect(alphaRow).toContain("0 guests");
+      expect(alphaRow).toContain("0 invitations · 0 people");
 
       const betaRow = await dashboardPage.weddingLink(nameBeta).textContent();
       expect(betaRow).toContain("Draft");
       expect(betaRow).toContain("Grand Hall");
-      expect(betaRow).toContain("1 guest");
+      expect(betaRow).toContain("1 invitation · 1 person");
       expect(betaRow).not.toContain("unassigned"); // complete plan -- the issue pill isn't rendered at all
 
       const gammaRow = await dashboardPage.weddingLink(nameGamma).textContent();
@@ -141,7 +141,7 @@ defineQualityTest(
       const deltaRow = await dashboardPage.weddingLink(nameDelta).textContent();
       expect(deltaRow).toContain("Approved");
       expect(deltaRow).toContain("1 unassigned");
-      expect(deltaRow).toContain("2 guests");
+      expect(deltaRow).toContain("2 invitations · 2 people");
     });
 
     await test.step("Act + Assert: searching by venue name narrows to the one matching wedding, with the 'Showing N of M' summary", async () => {

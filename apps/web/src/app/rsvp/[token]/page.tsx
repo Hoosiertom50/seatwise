@@ -2,8 +2,16 @@
 
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
-import { api, ApiError } from "@/lib/api-client";
+import { api, ApiError, apiErrorMessage } from "@/lib/api-client";
+import { formatDate } from "@/lib/display-format";
 import type { GuestRsvpPreviewDTO } from "@seatwise/shared";
+// TS-193: the same limits the server checks (packages/shared/src/field-limits.ts).
+import { FIELD_LIMITS } from "@seatwise/shared";
+
+// TS-202: the same words the server uses when a party is too big (submitGuestRsvp).
+function partyLimitText(limit: number): string {
+  return `Your invitation is for up to ${limit} ${limit === 1 ? "person" : "people"}.`;
+}
 
 // TS-17 (FR-12.1/FR-12.2/FR-12.3): the guest's own RSVP page, reached via their unique
 // unauthenticated link. No sign-in of any kind -- mirrors /invites/[token] structurally (a
@@ -22,8 +30,11 @@ export default function GuestRsvpPage() {
   // shown instead of "this link doesn't exist", which would wrongly tell a guest their link is dead.
   const [loadError, setLoadError] = useState<string | null>(null);
 
-  const [attending, setAttending] = useState<"CONFIRMED" | "DECLINED">("CONFIRMED");
-  const [headcount, setHeadcount] = useState(1);
+  // TS-191: null until the guest has answered -- a guest who hadn't answered used to be shown as
+  // "Joyfully attending", and on a closed page that read as an answer they never gave.
+  const [attending, setAttending] = useState<"CONFIRMED" | "DECLINED" | null>(null);
+  // TS-182: kept as typed, so clearing the box to type a new number doesn't show 0.
+  const [headcount, setHeadcount] = useState("1");
   const [plusOneNames, setPlusOneNames] = useState("");
   const [notes, setNotes] = useState("");
   const [requiresAccessibleTable, setRequiresAccessibleTable] = useState(false);
@@ -33,24 +44,39 @@ export default function GuestRsvpPage() {
       const res = await api.get<{ rsvp: GuestRsvpPreviewDTO }>(`/api/v1/rsvp/${token}`);
       setPreview(res.rsvp);
       if (res.rsvp.status !== "NOT_FOUND") {
-        setAttending(res.rsvp.rsvpStatus === "DECLINED" ? "DECLINED" : "CONFIRMED");
-        setHeadcount(res.rsvp.headcount ?? 1);
+        setAttending(
+          res.rsvp.rsvpStatus === "DECLINED" ? "DECLINED" : res.rsvp.rsvpStatus === "CONFIRMED" ? "CONFIRMED" : null
+        );
+        setHeadcount(String(res.rsvp.headcount ?? 1));
         setPlusOneNames(res.rsvp.plusOneNames ?? "");
         setNotes(res.rsvp.notes ?? "");
         setRequiresAccessibleTable(res.rsvp.requiresAccessibleTable ?? false);
       }
     } catch (err) {
-      if (err instanceof ApiError && err.status === 429) {
-        setLoadError(err.message);
-      } else {
-        setPreview({ status: "NOT_FOUND" });
-      }
+      // TS-166: the server answers a link that doesn't exist with status NOT_FOUND (handled above),
+      // so anything that lands here is a failure to load -- a weak phone signal, a server hiccup,
+      // too many attempts. It used to be shown as "This RSVP link doesn't exist", telling a guest
+      // their real link was dead. Now they see what happened and can try again; and if the form is
+      // already showing (the reload right after submitting), it stays put.
+      const message =
+        err instanceof ApiError && err.status !== 0
+          ? err.message
+          : "We couldn't load your RSVP just now. Check your connection and try again.";
+      if (preview) setError(message);
+      else setLoadError(message);
     } finally {
       setLoading(false);
     }
   }
 
+  function retryLoad() {
+    setLoadError(null);
+    setLoading(true);
+    load();
+  }
+
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- TS-176: loads the guest's RSVP when the page opens.
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
@@ -58,19 +84,35 @@ export default function GuestRsvpPage() {
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
+    // TS-191: nothing is sent until the guest has picked an answer.
+    if (attending === null) {
+      setError("Choose “Joyfully attending” or “Regretfully declining” first.");
+      return;
+    }
     setSubmitting(true);
     try {
+      // TS-170: a cleared party-size box reads as 0 -- and once "declining" hides it, the browser
+      // no longer checks it -- so it's never sent below 1.
+      const partySize = Math.max(1, Number(headcount) || 1);
+      // TS-174: only the answers the form is showing are sent. Declining hides the party size,
+      // plus-ones and accessible seat (they stay as they were on file); a party of one hides the
+      // plus-ones, so a name typed before the size dropped to 1 isn't sent (it's cleared).
       await api.post(`/api/v1/rsvp/${token}`, {
         rsvpStatus: attending,
-        headcount,
-        plusOneNames: plusOneNames || null,
         notes: notes || null,
-        requiresAccessibleTable,
+        ...(attending === "CONFIRMED"
+          ? {
+              headcount: partySize,
+              plusOneNames: partySize > 1 ? plusOneNames || null : null,
+              requiresAccessibleTable,
+            }
+          : {}),
       });
       setJustSubmitted(true);
       await load();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Couldn't submit your RSVP.");
+      // TS-170: say which answer was refused, not just "Validation failed".
+      setError(apiErrorMessage(err, ["headcount", "plusOneNames", "notes"], "Couldn't submit your RSVP."));
     } finally {
       setSubmitting(false);
     }
@@ -82,6 +124,13 @@ export default function GuestRsvpPage() {
         <div className="w-full max-w-sm text-center">
           <h1 className="mb-4 text-2xl font-semibold">RSVP</h1>
           <p className="text-sm text-neutral-600 dark:text-neutral-300">{loadError}</p>
+          <button
+            type="button"
+            onClick={retryLoad}
+            className="mt-4 rounded-md border border-neutral-300 dark:border-neutral-600 px-4 py-2 text-sm font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800"
+          >
+            Try again
+          </button>
         </div>
       </main>
     );
@@ -96,7 +145,11 @@ export default function GuestRsvpPage() {
       <main className="flex flex-1 items-center justify-center px-6">
         <div className="w-full max-w-sm text-center">
           <h1 className="mb-4 text-2xl font-semibold">RSVP</h1>
-          <p className="text-sm text-neutral-600 dark:text-neutral-300">This RSVP link doesn&apos;t exist.</p>
+          {/* TS-177: also what an older link shows once the couple made a new one. */}
+          <p className="text-sm text-neutral-600 dark:text-neutral-300">
+            This RSVP link isn&apos;t active. If you were sent a newer link, use that one — or ask the couple for your
+            current link.
+          </p>
         </div>
       </main>
     );
@@ -107,7 +160,7 @@ export default function GuestRsvpPage() {
   return (
     <main className="flex flex-1 items-center justify-center px-6 py-10">
       <div className="w-full max-w-md">
-        <h1 className="mb-1 text-2xl font-semibold">
+        <h1 className="mb-1 break-words text-2xl font-semibold [overflow-wrap:anywhere]">
           {preview.weddingName}
         </h1>
         <p className="mb-6 text-sm text-neutral-500 dark:text-neutral-400">
@@ -117,14 +170,17 @@ export default function GuestRsvpPage() {
         {closed && (
           <p className="mb-6 rounded-md bg-neutral-100 dark:bg-neutral-800 px-3 py-2 text-sm text-neutral-600 dark:text-neutral-300">
             RSVP responses have closed
-            {preview.rsvpCutoffDate ? ` (the deadline was ${preview.rsvpCutoffDate})` : ""}. Shown
+            {/* TS-177: dates are shown as MM-DD-YYYY. */}
+            {preview.rsvpCutoffDate ? ` (the deadline was ${formatDate(preview.rsvpCutoffDate)})` : ""}. Shown
             below is what&apos;s currently on file — contact the couple directly if anything needs
             to change.
           </p>
         )}
         {!closed && justSubmitted && (
-          <p className="mb-6 rounded-md bg-green-50 dark:bg-green-950 px-3 py-2 text-sm text-green-700 dark:text-green-400">
-            Thanks — your RSVP has been recorded. You can come back to this link any time to update it.
+          <p role="status" className="mb-6 rounded-md bg-green-50 dark:bg-green-950 px-3 py-2 text-sm text-green-700 dark:text-green-400">
+            {/* TS-177: answers can be changed only while RSVPs are open. */}
+            Thanks — your RSVP has been recorded. You can come back to this link to change it
+            {preview.rsvpCutoffDate ? ` until ${formatDate(preview.rsvpCutoffDate)}` : " while RSVPs are open"}.
           </p>
         )}
 
@@ -134,6 +190,8 @@ export default function GuestRsvpPage() {
               <button
                 type="button"
                 onClick={() => setAttending("CONFIRMED")}
+                // TS-175: screen readers hear which answer is chosen.
+                aria-pressed={attending === "CONFIRMED"}
                 className={`flex-1 rounded-md border px-3 py-2 text-sm font-medium ${
                   attending === "CONFIRMED"
                     ? "border-neutral-900 dark:border-neutral-100 bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900"
@@ -145,6 +203,7 @@ export default function GuestRsvpPage() {
               <button
                 type="button"
                 onClick={() => setAttending("DECLINED")}
+                aria-pressed={attending === "DECLINED"}
                 className={`flex-1 rounded-md border px-3 py-2 text-sm font-medium ${
                   attending === "DECLINED"
                     ? "border-neutral-900 dark:border-neutral-100 bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900"
@@ -154,28 +213,39 @@ export default function GuestRsvpPage() {
                 Regretfully declining
               </button>
             </div>
+            {closed && attending === null && (
+              <p className="text-sm text-neutral-600 dark:text-neutral-300">No response on file.</p>
+            )}
 
             {attending === "CONFIRMED" && (
               <>
                 <label className="text-sm">
                   <span className="mb-1 block text-neutral-700 dark:text-neutral-300">Total in your party (including you)</span>
                   <input
+                    inputMode="numeric"
                     type="number"
                     min={1}
                     max={preview?.maxHeadcount ?? 20}
                     value={headcount}
-                    onChange={(e) => setHeadcount(Number(e.target.value))}
+                    onChange={(e) => setHeadcount(e.target.value)}
+                    aria-describedby="rsvp-party-limit"
                     className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
                   />
                 </label>
+                {/* TS-202: says how many the invitation is for, before the box stops at it. */}
+                <p id="rsvp-party-limit" className="-mt-3 text-xs text-neutral-500 dark:text-neutral-400">
+                  {partyLimitText(preview?.maxHeadcount ?? 20)}
+                </p>
 
-                {headcount > 1 && (
+                {Number(headcount) > 1 && (
                   <label className="text-sm">
                     <span className="mb-1 block text-neutral-700 dark:text-neutral-300">Who&apos;s coming with you?</span>
                     <input
                       type="text"
                       value={plusOneNames}
                       onChange={(e) => setPlusOneNames(e.target.value)}
+                      // TS-180: the most the server accepts, so typing stops there instead of failing on send.
+                      maxLength={FIELD_LIMITS.plusOneNames}
                       placeholder="e.g. Jamie Lee"
                       className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
                     />
@@ -200,12 +270,14 @@ export default function GuestRsvpPage() {
               <textarea
                 value={notes}
                 onChange={(e) => setNotes(e.target.value)}
+                // TS-180: the most the server accepts.
+                maxLength={FIELD_LIMITS.rsvpNotes}
                 rows={3}
                 className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
               />
             </label>
 
-            {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}
+            {error && <p role="alert" className="text-sm text-red-600 dark:text-red-400">{error}</p>}
 
             <button
               type="submit"

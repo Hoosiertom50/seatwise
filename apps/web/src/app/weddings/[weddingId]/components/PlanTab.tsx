@@ -1,7 +1,71 @@
 "use client";
 
+import { formatDateTime, formatMomentDate, REFRESH_FAILED_MESSAGE } from "@/lib/display-format";
 import { useEffect, useRef, useState } from "react";
 import { api, ApiError } from "@/lib/api-client";
+import { useSerialTasks } from "@/lib/serial-tasks";
+import { useUnsavedChanges } from "@/lib/unsaved-changes";
+import { inReadingOrder } from "@/lib/reading-order";
+import { focusIfLost } from "@/lib/focus-if-lost";
+import { PickThenActControl } from "@/components/PickThenActControl";
+import { PLAN_CHANGED_EVENT } from "./GettingStarted";
+import { undoPlanFor, mustSitGroup, undoWouldSplitGroup, undoSeatsBeforeFor, UNDO_SPLITS_GROUP_MESSAGE, type UndoPlan } from "@/lib/plan-undo";
+import { PlanExportButtons } from "./PlanExportButtons";
+import {
+  SAVED_AS_DRAFT_BECAUSE_APPROVED,
+  MADE_CURRENT_BECAUSE_NO_CURRENT_PLAN,
+  REPLACES_APPROVED_PLAN,
+  APPROVED_PLAN_NOT_CONFIRMED,
+} from "@/lib/plan-approval-text";
+
+// TS-182: a change queued for one version, but another version is open by the time it runs.
+const VERSION_CLOSED_MESSAGE = "That version isn't open any more — nothing was saved.";
+// TS-189: a move tried while a new plan is being made or an old one restored.
+const VERSION_CHANGING_MESSAGE = "Wait for the new plan to finish — nothing was moved.";
+// TS-197: shown when the page switches to a plan someone (or another tab) made since this one opened.
+const NEWER_PLAN_MESSAGE = "A newer plan was made — you're now looking at it.";
+// TS-221: shown when the version that was open has been removed (older versions are cleared out
+// automatically once a wedding has many) and the page has opened the current plan instead.
+const VERSION_REMOVED_MESSAGE = "The version you had open was removed — you're now looking at the current plan.";
+
+// TS-221: the server's answer for a plan version that no longer exists (a restore says "Source").
+function isVersionGone(err: unknown): boolean {
+  return err instanceof ApiError && err.status === 404 && /^(Source plan|Plan) version not found\.?$/.test(err.message);
+}
+
+// TS-237: a Generate or Restore refused because the plan it would replace was approved after this
+// page looked -- the approved version's id (to confirm and send back), or null for anything else.
+function approvedMeanwhileId(err: unknown): string | null {
+  if (!(err instanceof ApiError) || err.status !== 409 || err.data?.code !== APPROVED_PLAN_NOT_CONFIRMED) return null;
+  const id = err.data.approvedVersionId;
+  return typeof id === "string" ? id : null;
+}
+
+// TS-221: a table this version seats guests at that isn't in the tab's table list (added on another
+// screen since the list was fetched) -- drawn from what the plan says about it, so its guests show
+// (they used to be under no table at all). Seats unknown until the list catches up.
+function unlistedTable(id: string, label: string, weddingId: string, index: number, belowY: number): SeatingTableDTO {
+  return {
+    id,
+    weddingId,
+    label,
+    capacity: 0,
+    isRestricted: false,
+    isAccessible: false,
+    isLocked: false,
+    purpose: null,
+    purposeCriterionType: null,
+    purposeCriterionValue: null,
+    singleSideOnly: false,
+    shape: "ROUND",
+    positionX: 40 + index * (PLAN_BOX_WIDTH + 24),
+    positionY: belowY,
+    requiredGuestIds: [],
+    createdAt: "",
+    updatedAt: "",
+    revision: 0,
+  };
+}
 import { RULE_WEIGHT_CONFIG, compareTableLabels } from "@seatwise/shared";
 import type {
   GuestDTO,
@@ -10,9 +74,12 @@ import type {
   PlanVersionDetailDTO,
   PlanVersionScoreReportDTO,
   PlanVersionStatusValue,
+  RelationshipDTO,
   RestorePreviewDTO,
   SeatingTableDTO,
 } from "@seatwise/shared";
+// TS-193: the same limits the server checks (packages/shared/src/field-limits.ts).
+import { FIELD_LIMITS } from "@seatwise/shared";
 
 const COMPARISON_STATUS_LABEL: Record<PlanVersionComparisonDTO["guests"][number]["status"], string> = {
   unchanged: "Unchanged",
@@ -31,7 +98,7 @@ const COMPARISON_STATUS_CLASS: Record<PlanVersionComparisonDTO["guests"][number]
 function versionOptionLabel(v: PlanVersionDTO): string {
   // FR-5.6: a Comparison Draft can be *newer* than the Current version (list order alone no
   // longer implies which one is current), so the picker always says explicitly which is which.
-  return `v${v.versionNumber}${v.label ? ` — ${v.label}` : ""}${v.isCurrent ? " (current)" : ""} (${new Date(v.createdAt).toLocaleDateString()})`;
+  return `v${v.versionNumber}${v.label ? ` — ${v.label}` : ""}${v.isCurrent ? " (current)" : ""} (${formatMomentDate(v.createdAt)})`;
 }
 
 // FR-7.1: the floor-plan boxes reuse each table's saved (positionX, positionY) from the Tables
@@ -55,10 +122,10 @@ interface MoveGuestResult {
 // they were unassigned). Undoing/redoing replays a single move-or-unassign call for `guestId` --
 // since MUST_SIT_TOGETHER membership is still live and unchanged, the backend sweeps the same
 // whole unit along again, exactly mirroring how the original action worked.
-interface UndoEntry {
-  guestId: string;
-  priorTableId: string | null;
-  toTableId: string;
+interface UndoEntry extends UndoPlan {
+  /** TS-189: the version the move was made on -- an entry is never replayed on another one. */
+  versionId: string;
+  // TS-197 / TS-208: guestId, toTableId, undoTableId and undoOnlyGuestIds -- see plan-undo.ts.
   description: string;
 }
 
@@ -89,26 +156,94 @@ export function PlanTab({
   const [versions, setVersions] = useState<PlanVersionDTO[]>([]);
   const [detail, setDetail] = useState<PlanVersionDetailDTO | null>(null);
   const [tables, setTables] = useState<SeatingTableDTO[]>([]);
+  // TS-221: the table list is fetched again on a 4-second tick and after anything that can bring
+  // new tables into view (Generate, Restore, a newer plan) -- it used to load once, so a table added
+  // on another screen never appeared (with its guests) and one removed elsewhere was still offered.
+  // Numbered, so an older answer never replaces a newer one.
+  const tablesRequest = useRef(0);
+  async function refreshTables() {
+    const request = ++tablesRequest.current;
+    try {
+      const res = await api.get<{ tables: SeatingTableDTO[] }>(`/api/v1/weddings/${weddingId}/tables`);
+      if (request !== tablesRequest.current) return;
+      setTables((cur) => (JSON.stringify(cur) === JSON.stringify(res.tables) ? cur : res.tables));
+    } catch {
+      // Best effort -- the next tick tries again.
+    }
+  }
+  // TS-221: what the last move, undo or redo did, for screen readers (moves weren't announced).
+  const [moveAnnouncement, setMoveAnnouncement] = useState("");
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
   // FR-5.6: the planner's upfront choice for the *next* generation run -- true (the default)
   // makes it the new Current version, replacing whichever was Current before; false saves it
   // alongside as a non-replacing Comparison Draft instead.
   const [saveAsDraft, setSaveAsDraft] = useState(false);
+  // TS-231: Generate is asking "This replaces the approved plan" before it runs.
+  const [confirmReplaceApproved, setConfirmReplaceApproved] = useState(false);
+  // TS-237: the approved version that question is about -- sent with the confirmed Generate, so the
+  // server replaces only that one -- and, when the server said it was approved meanwhile, why it's
+  // asking again.
+  const [replaceApprovedId, setReplaceApprovedId] = useState<string | null>(null);
+  const [replaceApprovedNotice, setReplaceApprovedNotice] = useState<string | null>(null);
+  const replaceApprovedConfirmRef = useRef<HTMLButtonElement | null>(null);
+  useEffect(() => {
+    if (confirmReplaceApproved) replaceApprovedConfirmRef.current?.focus();
+  }, [confirmReplaceApproved]);
   // FR-5.3: the just-generated plan's soft-preference report -- shown only right after this
   // generation run, same lifecycle as moveWarnings below (not persisted for a later reload).
   const [scoreReport, setScoreReport] = useState<PlanVersionScoreReportDTO | null>(null);
   const [showScoreDetail, setShowScoreDetail] = useState(false);
   const [statusUpdating, setStatusUpdating] = useState(false);
-  const [movingGuestId, setMovingGuestId] = useState<string | null>(null);
+  // TS-170: every guest with a move queued or on its way (one value used to stand for all of
+  // them, so a row whose move was still queued looked idle again).
+  const [movingIds, setMovingIds] = useState<ReadonlySet<string>>(new Set());
+  const markMoving = (id: string, moving: boolean) =>
+    setMovingIds((cur) => {
+      const next = new Set(cur);
+      if (moving) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  // TS-166: moves run one at a time, each against the plan as the previous one left it (see
+  // serial-tasks.ts); detailRef is that latest copy, updated as soon as a move comes back.
+  const queueMove = useSerialTasks();
+  const detailRef = useRef<PlanVersionDetailDTO | null>(null);
+  useEffect(() => {
+    detailRef.current = detail;
+  }, [detail]);
   const [error, setError] = useState<string | null>(null);
+  // TS-179: set when Generate or Restore was saved as a comparison draft because the current plan
+  // is approved and this person can't replace it. Cleared on the next generate/restore/switch.
+  const [draftNotice, setDraftNotice] = useState<string | null>(null);
   const [moveWarnings, setMoveWarnings] = useState<string[]>([]);
+  // TS-197: what the last Generate said about its plan (who couldn't be seated and why), kept apart
+  // from move warnings and shown until the next Generate or another version is opened. Before, the
+  // list was reloaded straight after Generate and these were lost.
+  const [generateWarnings, setGenerateWarnings] = useState<{ heading: string; items: string[] } | null>(null);
+  // TS-197: what a restore said about the version it made, under its own heading.
+  const [restoreWarnings, setRestoreWarnings] = useState<string[]>([]);
   const [conflicts, setConflicts] = useState<string[]>([]);
   const [restorePreview, setRestorePreview] = useState<RestorePreviewDTO | null>(null);
+  // TS-208: the restore will be saved as a comparison draft (the current plan is approved and this
+  // person can't replace it) -- the preview says so before they confirm, not after.
+  const [restoreWillBeDraft, setRestoreWillBeDraft] = useState(false);
+  // TS-231: confirming the restore replaces the approved current plan (this person may) -- said so.
+  const [restoreReplacesApproved, setRestoreReplacesApproved] = useState(false);
+  // TS-237: which approved version that is (sent back with the confirmed restore), and the server's
+  // "approved a moment ago" answer when it changed before the restore was confirmed.
+  const [restoreApprovedId, setRestoreApprovedId] = useState<string | null>(null);
+  const [restoreApprovedNotice, setRestoreApprovedNotice] = useState("");
   const [previewingRestore, setPreviewingRestore] = useState(false);
   const [restoring, setRestoring] = useState(false);
-  const [editingLabel, setEditingLabel] = useState(false);
+  // TS-175: the version whose nickname is being typed. Switching to another version closes the box
+  // (a nickname typed for one version used to be saved onto the next one opened).
+  const [labelVersionId, setLabelVersionId] = useState<string | null>(null);
+  const editingLabel = labelVersionId !== null && labelVersionId === detail?.id;
   const [labelInput, setLabelInput] = useState("");
+  // TS-166: a version label being typed counts as unsaved input (TS-159).
+  // TS-191: only while the box is there -- it's hidden once Edit access goes.
+  useUnsavedChanges("plan-label", canEdit && editingLabel && labelInput.trim() !== (detail?.label ?? ""));
   const [savingLabel, setSavingLabel] = useState(false);
   const [showCompare, setShowCompare] = useState(false);
   const [compareFromId, setCompareFromId] = useState("");
@@ -123,13 +258,43 @@ export function PlanTab({
   const [undoStack, setUndoStack] = useState<UndoEntry[]>([]);
   const [redoStack, setRedoStack] = useState<UndoEntry[]>([]);
   const [undoRedoBusy, setUndoRedoBusy] = useState(false);
+  // TS-182: while a move (or undo/redo) is queued or on its way, the version can't be switched
+  // and a new plan can't be generated -- the move would land on a version no longer on screen.
+  const planChangesPending = movingIds.size > 0 || undoRedoBusy;
+  // TS-189: while a new plan is being made (or an old one restored), the version on screen is about
+  // to stop being the current one -- moves, undo/redo and status changes wait.
+  const versionChanging = generating || restoring;
+  // TS-189: shown when another person (or another tab) made a newer plan while this one was open,
+  // and the page has switched to it.
+  const [supersededNotice, setSupersededNotice] = useState<string | null>(null);
+  // TS-189: undo/redo belong to the version they were made on -- whenever another version opens
+  // (picked, generated, restored, or a newer plan made elsewhere), they're cleared.
+  const openVersionId = detail?.id ?? null;
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- TS-189: clears undo/redo when the open version changes.
+    setUndoStack([]);
+    setRedoStack([]);
+  }, [openVersionId]);
+  // TS-182: only the newest version picked is shown -- a slower answer for an earlier pick used to
+  // replace it.
+  const selectRequest = useRef(0);
 
+  // TS-207: never a raw id -- a guest added on another screen (a walk-in, another planner) can reach
+  // this plan before the page's guest list has them, so the plan's own names are used next, and
+  // failing those, words (screen readers used to read out "Seat 3f2a…").
   const guestName = (id: string) => {
     const g = guests.find((g) => g.id === id);
-    return g ? `${g.firstName} ${g.lastName}` : id;
+    if (g) return `${g.firstName} ${g.lastName}`;
+    return (
+      detail?.unassignedGuests?.find((u) => u.id === id)?.name ??
+      detail?.assignments.find((a) => a.guestId === id)?.guestName ??
+      "a guest added elsewhere"
+    );
   };
 
-  const tableLabel = (id: string) => tables.find((t) => t.id === id)?.label ?? id;
+  // TS-207: likewise never a raw id for a table added elsewhere since this tab loaded.
+  const tableLabel = (id: string) =>
+    tables.find((t) => t.id === id)?.label ?? detail?.assignments.find((a) => a.tableId === id)?.tableLabel ?? "another table";
 
   // FR-7.7: a 409 conflict carries the fresh, currently-committed plan version alongside the
   // message -- pulling it out lets every write handler refresh the view in one step instead of a
@@ -162,8 +327,98 @@ export function PlanTab({
     }
   }
 
+  // TS-189: the open version (`supersededId`) was replaced as the current plan elsewhere. Reloads the
+  // version list and opens the new current one -- unless the planner has opened something else
+  // meanwhile, which is then left alone.
+  async function openNewerCurrentPlan(supersededId: string, isCancelled: () => boolean) {
+    const list = await api.get<{ planVersions: PlanVersionDTO[] }>(`/api/v1/weddings/${weddingId}/plan-versions`);
+    if (isCancelled() || detailRef.current?.id !== supersededId) return;
+    const newCurrent = list.planVersions.find((v) => v.isCurrent);
+    if (!newCurrent || newCurrent.id === supersededId) return;
+    const opened = await api.get<{ planVersion: PlanVersionDetailDTO }>(
+      `/api/v1/weddings/${weddingId}/plan-versions/${newCurrent.id}`
+    );
+    if (isCancelled() || detailRef.current?.id !== supersededId) return;
+    setVersions(list.planVersions);
+    detailRef.current = opened.planVersion;
+    setDetail(opened.planVersion);
+    // What was shown for the old version (warnings, a restore preview, a score report) is about it.
+    clearVersionMessages();
+    setSupersededNotice(NEWER_PLAN_MESSAGE);
+    void refreshTables();
+  }
+
+  // TS-221: the open version (`goneId`) no longer exists -- removed as one of the oldest versions
+  // once a new one was made. Every action on it said "Plan version not found" and the 4-second check
+  // stayed quiet; now the current plan opens, with a note saying why.
+  async function openCurrentAfterVersionGone(goneId: string, isCancelled: () => boolean = () => false) {
+    const list = await api.get<{ planVersions: PlanVersionDTO[] }>(`/api/v1/weddings/${weddingId}/plan-versions`);
+    if (isCancelled() || detailRef.current?.id !== goneId) return;
+    const current = list.planVersions.find((v) => v.isCurrent) ?? list.planVersions[0];
+    const opened = current
+      ? (await api.get<{ planVersion: PlanVersionDetailDTO }>(`/api/v1/weddings/${weddingId}/plan-versions/${current.id}`)).planVersion
+      : null;
+    if (isCancelled() || detailRef.current?.id !== goneId) return;
+    setVersions(list.planVersions);
+    detailRef.current = opened;
+    setDetail(opened);
+    clearVersionMessages();
+    setError(null);
+    setSupersededNotice(VERSION_REMOVED_MESSAGE);
+    void refreshTables();
+  }
+
+  // TS-221: an action's answer said the open version is gone -- open the current plan instead.
+  // True when it did (the caller then shows nothing else).
+  function handledVersionGone(err: unknown, versionId: string | undefined): boolean {
+    if (!versionId || !isVersionGone(err)) return false;
+    openCurrentAfterVersionGone(versionId).catch(() => setError(REFRESH_FAILED_MESSAGE));
+    return true;
+  }
+
+  // TS-197: everything shown about the version that was open -- cleared when another one opens.
+  function clearVersionMessages() {
+    setMoveWarnings([]);
+    setGenerateWarnings(null);
+    setRestoreWarnings([]);
+    setRestorePreview(null);
+    setScoreReport(null);
+    setDraftNotice(null);
+  }
+
+  // TS-197: a refused change came back with the plan as it is now. Usually that's the open version
+  // with a newer revision; when a newer plan replaced the open one, it's that newer plan -- the page
+  // switches to it (and says so), as the 4-second check would.
+  function takeFreshPlan(fresh: PlanVersionDetailDTO) {
+    const openId = detailRef.current?.id;
+    const wasCurrent = detailRef.current?.isCurrent === true;
+    detailRef.current = fresh;
+    setDetail(fresh);
+    // TS-208: the same version came back, but it's no longer the current plan -- a newer one was
+    // made a moment ago (a nickname or status saved within seconds of someone's Generate). The page
+    // used to stay on the old version with its 4-second check stopped and no word about it; it now
+    // opens the current plan and says so, as the check would have.
+    if (openId && fresh.id === openId && wasCurrent && !fresh.isCurrent) {
+      setVersions((vs) => vs.map((v) => (v.id === fresh.id ? fresh : v)));
+      openNewerCurrentPlan(fresh.id, () => false).catch(() => {});
+      return;
+    }
+    if (openId && fresh.id !== openId) {
+      clearVersionMessages();
+      setSupersededNotice(NEWER_PLAN_MESSAGE);
+      void refreshTables();
+      api
+        .get<{ planVersions: PlanVersionDTO[] }>(`/api/v1/weddings/${weddingId}/plan-versions`)
+        .then((list) => setVersions(list.planVersions))
+        .catch(() => {});
+    } else {
+      setVersions((vs) => vs.map((v) => (v.id === fresh.id ? fresh : v)));
+    }
+  }
+
   useEffect(() => {
     Promise.all([
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- TS-176: loads the versions and tables when the tab opens.
       loadVersions(),
       api
         .get<{ tables: SeatingTableDTO[] }>(`/api/v1/weddings/${weddingId}/tables`)
@@ -174,40 +429,72 @@ export function PlanTab({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [weddingId]);
 
+  // TS-221: the table list, every 4 seconds while this tab is open (see refreshTables).
+  useEffect(() => {
+    const interval = setInterval(() => void refreshTables(), 4000);
+    return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- TS-221: refreshTables only uses setters and refs.
+  }, [weddingId]);
+
   // FR-7.7: "a saved change made by one user becomes visible to the others within five seconds
   // without a manual refresh." Polls the Current Plan Version every 4s and merges in whatever's
   // actually new (by comparing revision, so an unchanged plan never re-renders). Skipped entirely
   // while any write from this tab is in flight, so a poll landing mid-action can't clobber an
   // optimistic update or yank the view out from under a click. Scoped to the current version
-  // only, matching FR-7.7's own "the same wedding or Current Plan Version" wording -- broader
-  // live sync for guests/rules/tables/comments isn't built in this pass (see the README).
+  // only, matching FR-7.7's own "the same wedding or Current Plan Version" wording. TS-207: the
+  // guest list is kept fresh by the wedding page; a guest it doesn't have yet is named from the
+  // plan itself (see guestName).
   useEffect(() => {
     if (!detail?.isCurrent) return;
     const planVersionId = detail.id;
-    const busy = movingGuestId !== null || undoRedoBusy || statusUpdating || savingLabel || restoring || generating;
+    const busy = movingIds.size > 0 || undoRedoBusy || statusUpdating || savingLabel || restoring || generating;
     if (busy) return;
+    let cancelled = false;
     const interval = setInterval(async () => {
       try {
         const res = await api.get<{ planVersion: PlanVersionDetailDTO }>(
           `/api/v1/weddings/${weddingId}/plan-versions/${planVersionId}`
         );
+        if (cancelled) return;
+        // TS-189: the version on screen stopped being the current one -- someone (or another tab)
+        // made or restored a newer plan. Checked before the revision: it's news either way, and
+        // the server may or may not have bumped the old version's revision when it was replaced.
+        // The list is reloaded and the new current plan opened, with a note saying so; moves
+        // made here from now on go to the plan everyone else is looking at.
+        if (!res.planVersion.isCurrent) {
+          await openNewerCurrentPlan(planVersionId, () => cancelled);
+          return;
+        }
+        // TS-166: a poll that set off before a move can come back after it -- only ever take a
+        // newer copy, never an older one (the moved guest used to snap back).
         setDetail((cur) => {
-          if (!cur || cur.id !== planVersionId || cur.revision === res.planVersion.revision) return cur;
+          if (!cur || cur.id !== planVersionId || cur.revision >= res.planVersion.revision) return cur;
           return res.planVersion;
         });
-        setVersions((vs) => vs.map((v) => (v.id === res.planVersion.id ? res.planVersion : v)));
-      } catch {
+        setVersions((vs) =>
+          vs.map((v) => (v.id === res.planVersion.id && v.revision < res.planVersion.revision ? res.planVersion : v))
+        );
+      } catch (err) {
+        // TS-221: the version on screen was removed (it had just stopped being current, and was
+        // among the oldest) -- the current plan opens, as it would for a newer plan.
+        if (!cancelled && isVersionGone(err)) {
+          await openCurrentAfterVersionGone(planVersionId, () => cancelled).catch(() => {});
+          return;
+        }
         // Best-effort background sync -- a transient failure here isn't worth surfacing as an
         // error; the next tick tries again.
       }
     }, 4000);
-    return () => clearInterval(interval);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- TS-189: openNewerCurrentPlan only uses setters and refs.
   }, [
     detail?.id,
     detail?.isCurrent,
     weddingId,
-    movingGuestId,
+    movingIds,
     undoRedoBusy,
     statusUpdating,
     savingLabel,
@@ -215,52 +502,117 @@ export function PlanTab({
     generating,
   ]);
 
-  async function onGenerate() {
+  async function onGenerate(confirmedReplaceApproved = false) {
+    // TS-231: the new version would replace an approved current plan (the draft box is unticked,
+    // and this person may replace it) -- asked first. The server decides again as it saves.
+    const approvedOnPage = versions.find((v) => v.isCurrent && v.status === "APPROVED");
+    const replacesApproved = canApprove && versions.length > 0 && !saveAsDraft && approvedOnPage !== undefined;
+    if (replacesApproved && !confirmedReplaceApproved) {
+      setReplaceApprovedId(approvedOnPage.id);
+      setReplaceApprovedNotice(null);
+      setConfirmReplaceApproved(true);
+      return;
+    }
+    // TS-237: the approved version this person confirmed replacing (none if they weren't asked). The
+    // page's list can be out of date (it isn't refreshed while an older version is open), so the
+    // server checks it: if a different or newly approved plan is current, it saves nothing and asks.
+    const confirmedApprovedId = confirmedReplaceApproved ? replaceApprovedId : null;
+    setConfirmReplaceApproved(false);
+    setReplaceApprovedNotice(null);
     setError(null);
+    setDraftNotice(null);
+    setSupersededNotice(null);
     setConflicts([]);
-    setMoveWarnings([]);
-    setRestorePreview(null);
+    clearVersionMessages();
     setUndoStack([]);
     setRedoStack([]);
-    setScoreReport(null);
     setShowScoreDetail(false);
     setGenerating(true);
     try {
-      const res = await api.post<{ planVersion: PlanVersionDetailDTO; scoreReport?: PlanVersionScoreReportDTO }>(
-        `/api/v1/weddings/${weddingId}/plan-versions/generate`,
-        { makeCurrent: !saveAsDraft }
-      );
-      await loadVersions(res.planVersion.id);
+      const res = await api.post<{
+        planVersion: PlanVersionDetailDTO;
+        scoreReport?: PlanVersionScoreReportDTO;
+        savedAsDraftBecauseApproved?: boolean;
+        madeCurrentBecauseNoCurrentPlan?: boolean;
+        notice?: string;
+      }>(`/api/v1/weddings/${weddingId}/plan-versions/generate`, {
+        // TS-189: the very first plan is always the current one (the choice isn't offered then).
+        makeCurrent: versions.length === 0 || !saveAsDraft,
+        replacesApprovedVersionId: confirmedApprovedId,
+      });
+      window.dispatchEvent(new Event(PLAN_CHANGED_EVENT));
+      // TS-182: the plan was made even if reloading the list then fails -- say that, not "Couldn't".
+      // TS-179: the new version is opened either way -- as a comparison draft if it was kept back.
+      try {
+        await loadVersions(res.planVersion.id);
+      } catch {
+        setError(REFRESH_FAILED_MESSAGE);
+      }
+      // TS-221: the new plan may seat guests at tables added since this tab loaded.
+      void refreshTables();
       setScoreReport(res.scoreReport ?? null);
+      // TS-197: what the engine said about this plan, from the Generate answer itself (the reload
+      // above reads the saved version, which doesn't keep them). With someone left unseated, the
+      // reasons are what matters most, and the heading says so.
+      if (res.planVersion.warnings.length > 0) {
+        setGenerateWarnings({
+          heading: res.planVersion.unassignedGuestIds.length > 0 ? "Couldn't seat everyone:" : "Notes on this plan:",
+          items: res.planVersion.warnings,
+        });
+      }
+      if (res.savedAsDraftBecauseApproved) setDraftNotice(SAVED_AS_DRAFT_BECAUSE_APPROVED);
+      // TS-197: a comparison draft asked for when there was no current plan was made current -- say so.
+      else if (res.madeCurrentBecauseNoCurrentPlan) setDraftNotice(res.notice ?? MADE_CURRENT_BECAUSE_NO_CURRENT_PLAN);
     } catch (err) {
-      if (err instanceof ApiError && err.status === 409 && err.fieldErrors?.conflicts) {
+      const approvedId = approvedMeanwhileId(err);
+      if (approvedId) {
+        // TS-237: the plan was approved after this page last looked -- nothing was saved; ask again.
+        setReplaceApprovedId(approvedId);
+        setReplaceApprovedNotice((err as ApiError).message);
+        setConfirmReplaceApproved(true);
+      } else if (err instanceof ApiError && err.status === 409 && err.fieldErrors?.conflicts) {
         setConflicts(err.fieldErrors.conflicts as unknown as string[]);
       } else {
         setError(err instanceof ApiError ? err.message : "Couldn't generate a plan.");
       }
     } finally {
       setGenerating(false);
+      // TS-255: confirmed from the "replaces the approved plan" question, which has gone -- focus
+      // goes back to Generate (disabled until now) rather than dropping to the page. When the
+      // question was asked again, its own button has focus and keeps it.
+      if (confirmedReplaceApproved) focusIfLost("generate-plan-button");
     }
   }
 
   async function onSelectVersion(id: string) {
-    setMoveWarnings([]);
-    setRestorePreview(null);
-    setScoreReport(null);
+    clearVersionMessages();
+    setSupersededNotice(null);
     setShowScoreDetail(false);
     // Undo/redo history is scoped to whichever version was current when each move was made --
     // switching what's being viewed ends that continuity rather than risk replaying a stale move
     // against the wrong version later.
     setUndoStack([]);
     setRedoStack([]);
+    const request = ++selectRequest.current;
     // TS-151: a version that can't be loaded says so instead of failing silently.
     try {
       const d = await api.get<{ planVersion: PlanVersionDetailDTO }>(
         `/api/v1/weddings/${weddingId}/plan-versions/${id}`
       );
+      if (request !== selectRequest.current) return;
       setError(null);
       setDetail(d.planVersion);
     } catch (err) {
+      if (request !== selectRequest.current) return;
+      // TS-221: removed since the list was loaded -- the list is reloaded so it's no longer offered.
+      if (isVersionGone(err)) {
+        setError("That version was removed (older versions are cleared out automatically).");
+        api
+          .get<{ planVersions: PlanVersionDTO[] }>(`/api/v1/weddings/${weddingId}/plan-versions`)
+          .then((list) => setVersions(list.planVersions))
+          .catch(() => {});
+        return;
+      }
       setError(err instanceof ApiError ? err.message : "Couldn't open that version.");
     }
   }
@@ -268,28 +620,52 @@ export function PlanTab({
   // Returns what happened (error, or warnings) so a caller that wants to show feedback right at
   // the point of interaction -- the floor plan's drag-and-drop, see PlanFloorPlan below -- can do
   // so without forcing the user back up to the top-of-tab banner this also still populates.
-  async function onMoveGuest(guestId: string, tableId: string): Promise<MoveGuestResult> {
-    if (!detail || !tableId) return {};
+  function onMoveGuest(guestId: string, tableId: string): Promise<MoveGuestResult> {
+    if (!detail || !tableId) return Promise.resolve({});
+    // TS-189: not while a new plan is being made or an old one restored (see versionChanging).
+    if (versionChanging) return Promise.resolve({ error: VERSION_CHANGING_MESSAGE });
+    // TS-208: the last change's messages are cleared here, at the click -- not when the queued move
+    // runs, which wiped the refusal (or warnings) of the move queued just ahead of it.
     setError(null);
     setMoveWarnings([]);
-    setMovingGuestId(guestId);
-    const priorTableId = detail.assignments.find((a) => a.guestId === guestId)?.tableId ?? null;
+    markMoving(guestId, true);
+    // TS-182: the version on screen at the click -- a queued move doesn't land on another one.
+    const versionId = detail.id;
+    return queueMove(() => moveGuest(guestId, tableId, versionId));
+  }
+
+  async function moveGuest(guestId: string, tableId: string, versionId: string): Promise<MoveGuestResult> {
+    const current = detailRef.current;
+    if (!current || current.id !== versionId) {
+      markMoving(guestId, false);
+      setError(VERSION_CLOSED_MESSAGE);
+      return { error: VERSION_CLOSED_MESSAGE };
+    }
     try {
       const res = await api.post<{ planVersion: PlanVersionDetailDTO; warnings: string[] }>(
-        `/api/v1/weddings/${weddingId}/plan-versions/${detail.id}/assignments`,
-        { guestId, tableId, expectedRevision: detail.revision }
+        `/api/v1/weddings/${weddingId}/plan-versions/${current.id}/assignments`,
+        { guestId, tableId, expectedRevision: current.revision }
       );
+      detailRef.current = res.planVersion;
       setDetail(res.planVersion);
       setVersions((vs) => vs.map((v) => (v.id === res.planVersion.id ? res.planVersion : v)));
-      setMoveWarnings(res.warnings);
-      if (priorTableId !== tableId) {
+      // TS-208: added to (they're cleared at the click), so a quick second move keeps the first's.
+      setMoveWarnings((w) => [...w, ...res.warnings]);
+      // TS-221: said aloud too (the region is always on the page; see moveAnnouncement).
+      setMoveAnnouncement(`Moved ${guestName(guestId)} to ${tableLabel(tableId)}.`);
+      // TS-197 / TS-208: what undo puts back -- worked out from every seat the move changed (see
+      // plan-undo.ts). Seating a guest whose must-sit partner was already there undoes only the
+      // guest (it used to unseat the partner too), and a move that only brought a partner over is
+      // recorded too (it wasn't).
+      const undo = undoPlanFor(guestId, tableId, current.assignments, res.planVersion.assignments);
+      if (undo) {
+        const seated = !current.assignments.some((a) => a.guestId === guestId);
         setUndoStack((s) => [
           ...s,
           {
-            guestId,
-            priorTableId,
-            toTableId: tableId,
-            description: `move ${guestName(guestId)} to "${tableLabel(tableId)}"`,
+            versionId: current.id,
+            ...undo,
+            description: `${seated ? "seat" : "move"} ${guestName(guestId)} ${seated ? "at" : "to"} "${tableLabel(tableId)}"`,
           },
         ]);
         setRedoStack([]);
@@ -298,16 +674,16 @@ export function PlanTab({
     } catch (err) {
       // FR-7.7: this plan changed under us -- show the fresh state instead of leaving the view
       // stale, and don't record an undo entry for a move that never actually applied.
+      // TS-197: or a newer plan replaced this one -- the page switches to it.
       const fresh = conflictPlanVersion(err);
-      if (fresh) {
-        setDetail(fresh);
-        setVersions((vs) => vs.map((v) => (v.id === fresh.id ? fresh : v)));
-      }
+      if (fresh) takeFreshPlan(fresh);
+      // TS-221: the version was removed -- the current plan opens instead.
+      if (handledVersionGone(err, current.id)) return { error: VERSION_REMOVED_MESSAGE };
       const message = err instanceof ApiError ? err.message : "Couldn't move that guest.";
       setError(message);
       return { error: message };
     } finally {
-      setMovingGuestId(null);
+      markMoving(guestId, false);
     }
   }
 
@@ -317,90 +693,135 @@ export function PlanTab({
   // another tab, or a collaborator) has since moved them again, the stale entry is dropped
   // instead of blindly overwriting that newer change, and the current state is shown instead.
   async function onUndo() {
-    if (undoStack.length === 0 || !detail || undoRedoBusy) return;
-    const entry = undoStack[undoStack.length - 1];
-    setError(null);
-    setUndoRedoBusy(true);
-    try {
-      const fresh = await api.get<{ planVersion: PlanVersionDetailDTO }>(
-        `/api/v1/weddings/${weddingId}/plan-versions/${detail.id}`
-      );
-      const currentTableId = fresh.planVersion.assignments.find((a) => a.guestId === entry.guestId)?.tableId ?? null;
-      if (currentTableId !== entry.toTableId) {
-        setDetail(fresh.planVersion);
-        setUndoStack((s) => s.slice(0, -1));
-        setError(
-          `Can't undo that — ${guestName(entry.guestId)}'s seat has changed since then (possibly by another collaborator).`
-        );
-        return;
-      }
-      const res = await api.post<{ planVersion: PlanVersionDetailDTO; warnings: string[] }>(
-        `/api/v1/weddings/${weddingId}/plan-versions/${detail.id}/assignments`,
-        { guestId: entry.guestId, tableId: entry.priorTableId }
-      );
-      setDetail(res.planVersion);
-      setVersions((vs) => vs.map((v) => (v.id === res.planVersion.id ? res.planVersion : v)));
-      setMoveWarnings(res.warnings);
-      setUndoStack((s) => s.slice(0, -1));
-      setRedoStack((r) => [...r, entry]);
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Couldn't undo that move.");
-    } finally {
-      setUndoRedoBusy(false);
-    }
+    if (undoStack.length === 0 || !detail || undoRedoBusy || versionChanging) return;
+    await replay(undoStack[undoStack.length - 1], "undo");
   }
 
   async function onRedo() {
-    if (redoStack.length === 0 || !detail || undoRedoBusy) return;
-    const entry = redoStack[redoStack.length - 1];
+    if (redoStack.length === 0 || !detail || undoRedoBusy || versionChanging) return;
+    await replay(redoStack[redoStack.length - 1], "redo");
+  }
+
+  // TS-175: undo and redo go through the same queue as moves and status changes, and send the
+  // plan's revision. They used to run alongside it and never updated the copy the queue works
+  // from, so the move (or "Move to review") right after an undo was refused as a stale change.
+  async function replay(entry: UndoEntry, kind: "undo" | "redo") {
+    // TS-197: undo goes back to undoTableId (see UndoEntry) -- and redo then starts from there.
+    const [expectedAt, target] = kind === "undo" ? [entry.toTableId, entry.undoTableId] : [entry.undoTableId, entry.toTableId];
+    const dropEntry = () => (kind === "undo" ? setUndoStack((s) => s.slice(0, -1)) : setRedoStack((s) => s.slice(0, -1)));
+    // TS-208: cleared at the click, like a move's (see onMoveGuest).
     setError(null);
+    setMoveWarnings([]);
     setUndoRedoBusy(true);
     try {
-      const fresh = await api.get<{ planVersion: PlanVersionDetailDTO }>(
-        `/api/v1/weddings/${weddingId}/plan-versions/${detail.id}`
-      );
-      const currentTableId = fresh.planVersion.assignments.find((a) => a.guestId === entry.guestId)?.tableId ?? null;
-      if (currentTableId !== entry.priorTableId) {
-        setDetail(fresh.planVersion);
-        setRedoStack((s) => s.slice(0, -1));
-        setError(
-          `Can't redo that — ${guestName(entry.guestId)}'s seat has changed since then (possibly by another collaborator).`
+      await queueMove(async () => {
+        const current = detailRef.current;
+        if (!current) return;
+        // TS-189: an entry made on another version is never replayed on this one.
+        if (current.id !== entry.versionId) {
+          setUndoStack([]);
+          setRedoStack([]);
+          setError(`Can't ${kind} that — it was made on a different version of the plan.`);
+          return;
+        }
+        const fresh = await api.get<{ planVersion: PlanVersionDetailDTO }>(
+          `/api/v1/weddings/${weddingId}/plan-versions/${current.id}`
         );
-        return;
-      }
-      const res = await api.post<{ planVersion: PlanVersionDetailDTO; warnings: string[] }>(
-        `/api/v1/weddings/${weddingId}/plan-versions/${detail.id}/assignments`,
-        { guestId: entry.guestId, tableId: entry.toTableId }
-      );
-      setDetail(res.planVersion);
-      setVersions((vs) => vs.map((v) => (v.id === res.planVersion.id ? res.planVersion : v)));
-      setMoveWarnings(res.warnings);
-      setRedoStack((s) => s.slice(0, -1));
-      setUndoStack((u) => [...u, entry]);
+        const currentTableId = fresh.planVersion.assignments.find((a) => a.guestId === entry.guestId)?.tableId ?? null;
+        if (currentTableId !== expectedAt) {
+          detailRef.current = fresh.planVersion;
+          setDetail(fresh.planVersion);
+          dropEntry();
+          setError(
+            `Can't ${kind} that — ${guestName(entry.guestId)}'s seat has changed since then (possibly by another collaborator).`
+          );
+          return;
+        }
+        // TS-221: the server moves the guest's whole must-sit-together group. If that group wasn't
+        // all at the undo table before the move (it was split), undoing would put someone at a
+        // table they were never at -- refused, and the entry dropped (it can never be undone).
+        // TS-228: the server checks the group again under the plan's lock (a rule added during this
+        // round trip), from the seats sent as undoSeatsBefore -- this check just answers sooner.
+        let undoSeatsBefore: Record<string, string> | undefined;
+        if (kind === "undo" && target !== null) {
+          const { relationships } = await api.get<{ relationships: RelationshipDTO[] }>(
+            `/api/v1/weddings/${weddingId}/relationships`
+          );
+          const notAttending = new Set(guests.filter((g) => g.dayOfAttendance === "NOT_ATTENDING").map((g) => g.id));
+          const group = mustSitGroup(entry.guestId, relationships, notAttending);
+          if (undoWouldSplitGroup(entry, group)) {
+            dropEntry();
+            setError(UNDO_SPLITS_GROUP_MESSAGE);
+            return;
+          }
+          undoSeatsBefore = undoSeatsBeforeFor(entry, group);
+        }
+        const res = await api.post<{ planVersion: PlanVersionDetailDTO; warnings: string[] }>(
+          `/api/v1/weddings/${weddingId}/plan-versions/${current.id}/assignments`,
+          {
+            guestId: entry.guestId,
+            tableId: target,
+            expectedRevision: fresh.planVersion.revision,
+            // TS-208: undoing a seat takes away only the seats that move gave (a must-sit partner
+            // who was already at that table keeps theirs).
+            ...(target === null && entry.undoOnlyGuestIds ? { onlyGuestIds: entry.undoOnlyGuestIds } : {}),
+            ...(undoSeatsBefore ? { undoSeatsBefore } : {}),
+          }
+        );
+        detailRef.current = res.planVersion;
+        setDetail(res.planVersion);
+        setVersions((vs) => vs.map((v) => (v.id === res.planVersion.id ? res.planVersion : v)));
+        setMoveWarnings((w) => [...w, ...res.warnings]);
+        dropEntry();
+        if (kind === "undo") setRedoStack((r) => [...r, entry]);
+        else setUndoStack((u) => [...u, entry]);
+        // TS-221: announced, like a move.
+        setMoveAnnouncement(`${kind === "undo" ? "Undone" : "Redone"}: ${entry.description}.`);
+      });
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Couldn't redo that move.");
+      const fresh = conflictPlanVersion(err);
+      if (fresh) takeFreshPlan(fresh);
+      if (handledVersionGone(err, entry.versionId)) return;
+      // TS-228: the server found the group split (checked under the plan's lock) -- this undo can
+      // never be done, so the entry goes, as when the screen finds it first.
+      if (err instanceof ApiError && err.message === UNDO_SPLITS_GROUP_MESSAGE) dropEntry();
+      setError(err instanceof ApiError ? err.message : `Couldn't ${kind} that move.`);
     } finally {
       setUndoRedoBusy(false);
     }
   }
 
   async function onSetStatus(newStatus: PlanVersionStatusValue) {
-    if (!detail) return;
+    if (!detail || versionChanging) return;
     setError(null);
     setStatusUpdating(true);
+    // TS-208: the version open at the click -- an answer about it is only shown while it's still open.
+    const requestedOn = detail.id;
     try {
-      const res = await api.post<{ planVersion: PlanVersionDetailDTO }>(
-        `/api/v1/weddings/${weddingId}/plan-versions/${detail.id}/status`,
-        { status: newStatus, expectedRevision: detail.revision }
-      );
-      setDetail(res.planVersion);
+      // TS-170: queued behind any move still on its way, and sent with the plan as that move left it
+      // -- clicking "Move to review" right after a move used to be refused as a stale change.
+      const res = await queueMove(() => {
+        const current = detailRef.current!;
+        return api.post<{ planVersion: PlanVersionDetailDTO }>(
+          `/api/v1/weddings/${weddingId}/plan-versions/${current.id}/status`,
+          { status: newStatus, expectedRevision: current.revision }
+        );
+      });
       setVersions((vs) => vs.map((v) => (v.id === res.planVersion.id ? res.planVersion : v)));
+      // TS-197: another version was opened while this was on its way -- it stays open.
+      if (detailRef.current?.id !== res.planVersion.id) return;
+      detailRef.current = res.planVersion;
+      setDetail(res.planVersion);
     } catch (err) {
       const fresh = conflictPlanVersion(err);
-      if (fresh) {
-        setDetail(fresh);
-        setVersions((vs) => vs.map((v) => (v.id === fresh.id ? fresh : v)));
-      }
+      // TS-182: the queue's copy too, so the next change is sent with this revision.
+      // TS-197: unless another version was opened meanwhile (the answer is about the old one). The
+      // "can't be approved yet" refusal carries the re-checked plan too, so its new revision and
+      // flags show straight away.
+      // TS-208: a refusal because a newer plan replaced this one carries that plan -- it opens, with
+      // the newer-plan notice (the check was by id, so it was ignored and the page got stuck).
+      if (fresh && detailRef.current?.id === requestedOn) takeFreshPlan(fresh);
+      if (handledVersionGone(err, requestedOn)) return;
       setError(err instanceof ApiError ? err.message : "Couldn't update the plan's status.");
     } finally {
       setStatusUpdating(false);
@@ -412,11 +833,21 @@ export function PlanTab({
     setError(null);
     setPreviewingRestore(true);
     try {
-      const res = await api.get<{ preview: RestorePreviewDTO }>(
+      const res = await api.get<{
+        preview: RestorePreviewDTO;
+        willSaveAsDraft?: boolean;
+        willReplaceApproved?: boolean;
+        approvedVersionId?: string | null;
+      }>(
         `/api/v1/weddings/${weddingId}/plan-versions/${detail.id}/restore-preview`
       );
       setRestorePreview(res.preview);
+      setRestoreWillBeDraft(res.willSaveAsDraft === true);
+      setRestoreReplacesApproved(res.willReplaceApproved === true);
+      setRestoreApprovedId(res.approvedVersionId ?? null);
+      setRestoreApprovedNotice("");
     } catch (err) {
+      if (handledVersionGone(err, detailRef.current?.id)) return;
       setError(err instanceof ApiError ? err.message : "Couldn't preview that restore.");
     } finally {
       setPreviewingRestore(false);
@@ -426,21 +857,60 @@ export function PlanTab({
   async function onConfirmRestore() {
     if (!detail) return;
     setError(null);
+    setDraftNotice(null);
+    setSupersededNotice(null);
     setRestoring(true);
     try {
-      const res = await api.post<{ planVersion: PlanVersionDetailDTO; warnings: string[] }>(
-        `/api/v1/weddings/${weddingId}/plan-versions/${detail.id}/restore`
-      );
-      setRestorePreview(null);
+      const res = await api.post<{
+        planVersion: PlanVersionDetailDTO;
+        warnings: string[];
+        savedAsDraftBecauseApproved?: boolean;
+      }>(`/api/v1/weddings/${weddingId}/plan-versions/${detail.id}/restore`, {
+        // TS-237: the approved version the preview said this replaces (checked by the server).
+        replacesApprovedVersionId: restoreReplacesApproved ? restoreApprovedId : null,
+      });
+      // TS-197: what was shown about the version restored from (a Generate's or a move's notes) goes.
+      clearVersionMessages();
       setUndoStack([]);
       setRedoStack([]);
-      await loadVersions(res.planVersion.id);
-      setMoveWarnings(res.warnings);
+      window.dispatchEvent(new Event(PLAN_CHANGED_EVENT));
+      // TS-182: restored even if reloading the list then fails -- say that, not "Couldn't".
+      try {
+        await loadVersions(res.planVersion.id);
+      } catch {
+        setError(REFRESH_FAILED_MESSAGE);
+      }
+      // TS-221: as after Generate.
+      void refreshTables();
+      // TS-197: under their own heading (they were shown as if a move had made them).
+      setRestoreWarnings(res.warnings);
+      if (res.savedAsDraftBecauseApproved) setDraftNotice(SAVED_AS_DRAFT_BECAUSE_APPROVED);
     } catch (err) {
+      const approvedId = approvedMeanwhileId(err);
+      if (approvedId) {
+        // TS-237: approved after the preview was shown -- nothing was saved. The preview now says it
+        // replaces the approved plan, and confirming again replaces that version.
+        setRestoreReplacesApproved(true);
+        setRestoreWillBeDraft(false);
+        setRestoreApprovedId(approvedId);
+        setRestoreApprovedNotice((err as ApiError).message);
+        return;
+      }
+      if (handledVersionGone(err, detailRef.current?.id)) return;
       setError(err instanceof ApiError ? err.message : "Couldn't restore that version.");
     } finally {
       setRestoring(false);
     }
+  }
+
+  // TS-212: after the nickname box closes (Save, Cancel), focus goes to the button that opens it
+  // again -- it used to drop to the page. Only if focus was lost.
+  function focusNicknameButtonIfLost() {
+    setTimeout(() => {
+      const active = document.activeElement;
+      if (active && active !== document.body && active.isConnected) return;
+      document.getElementById("plan-nickname-button")?.focus();
+    }, 0);
   }
 
   async function onSaveLabel() {
@@ -448,20 +918,44 @@ export function PlanTab({
     setError(null);
     setSavingLabel(true);
     try {
-      const res = await api.patch<{ planVersion: PlanVersionDetailDTO }>(
-        `/api/v1/weddings/${weddingId}/plan-versions/${detail.id}`,
-        { label: labelInput, expectedRevision: detail.revision }
-      );
-      setDetail(res.planVersion);
+      // TS-170: queued like a move (see onSetStatus).
+      const label = labelInput;
+      const versionId = labelVersionId;
+      const res = await queueMove(() => {
+        const current = detailRef.current!;
+        if (current.id !== versionId) throw new Error(VERSION_CLOSED_MESSAGE);
+        return api.patch<{ planVersion: PlanVersionDetailDTO }>(
+          `/api/v1/weddings/${weddingId}/plan-versions/${current.id}`,
+          { label, expectedRevision: current.revision }
+        );
+      });
       setVersions((vs) => vs.map((v) => (v.id === res.planVersion.id ? res.planVersion : v)));
-      setEditingLabel(false);
+      // TS-197: another version was opened while this was on its way -- it stays open.
+      if (detailRef.current?.id !== res.planVersion.id) return;
+      detailRef.current = res.planVersion;
+      setDetail(res.planVersion);
+      setLabelVersionId(null);
+      // TS-212: the box goes away -- focus goes to the nickname button that replaces it.
+      focusNicknameButtonIfLost();
     } catch (err) {
       const fresh = conflictPlanVersion(err);
-      if (fresh) {
-        setDetail(fresh);
-        setVersions((vs) => vs.map((v) => (v.id === fresh.id ? fresh : v)));
+      // TS-182: the queue's copy too (see onSetStatus). TS-197: only if that version is still open.
+      // TS-208: and when it has just been replaced as the current plan, the current one opens (see
+      // takeFreshPlan).
+      if (fresh && fresh.id === detailRef.current?.id) takeFreshPlan(fresh);
+      if (handledVersionGone(err, detailRef.current?.id)) {
+        setLabelVersionId(null);
+        return;
       }
-      setError(err instanceof ApiError ? err.message : "Couldn't save that label.");
+      // TS-182: the "isn't open any more" message is shown as it is (it was replaced by the
+      // general one, since it isn't an ApiError).
+      setError(
+        err instanceof ApiError
+          ? err.message
+          : err instanceof Error && err.message === VERSION_CLOSED_MESSAGE
+            ? VERSION_CLOSED_MESSAGE
+            : "Couldn't save that label."
+      );
     } finally {
       setSavingLabel(false);
     }
@@ -494,6 +988,13 @@ export function PlanTab({
   const needsReassignmentGuests: { guestId: string; guestName: string; tableId: string; tableLabel: string }[] = [];
   if (detail) {
     for (const a of detail.assignments) {
+      // TS-221: an older version's seat held by a guest who has since declined -- shown at the table,
+      // marked (it used to look like an ordinary seat, while the counts left it out).
+      if (a.notAttending) {
+        if (!grouped.has(a.tableId)) grouped.set(a.tableId, { tableLabel: a.tableLabel, guests: [] });
+        grouped.get(a.tableId)!.guests.push({ guestId: a.guestId, guestName: `${a.guestName} (not attending now)` });
+        continue;
+      }
       if (a.needsReassignment) {
         needsReassignmentGuests.push({ guestId: a.guestId, guestName: a.guestName, tableId: a.tableId, tableLabel: a.tableLabel });
         continue;
@@ -507,9 +1008,22 @@ export function PlanTab({
   const headcountByGuest = new Map(guests.map((g) => [g.id, g.headcount]));
   const seatsTakenByTable = new Map<string, number>();
   for (const a of detail?.assignments ?? []) {
+    if (a.notAttending) continue; // TS-221: not holding a seat any more
     seatsTakenByTable.set(a.tableId, (seatsTakenByTable.get(a.tableId) ?? 0) + (headcountByGuest.get(a.guestId) ?? 1));
   }
   const canEditThisVersion = canEdit && Boolean(detail?.isCurrent);
+  // TS-221: every table the plan seats someone at is drawn, even one not in the table list yet
+  // (added elsewhere a moment ago -- the list catches up within 4 seconds). Its guests used to show
+  // under no table at all. Placed below the others on the floor plan.
+  const listedTableIds = new Set(tables.map((t) => t.id));
+  const unlistedTables: SeatingTableDTO[] = [];
+  const belowY = Math.max(40, ...tables.map((t) => (t.positionY ?? 40) + PLAN_BOX_HEIGHT + 24));
+  for (const a of detail?.assignments ?? []) {
+    if (listedTableIds.has(a.tableId) || unlistedTables.some((t) => t.id === a.tableId)) continue;
+    unlistedTables.push(unlistedTable(a.tableId, a.tableLabel, weddingId, unlistedTables.length, belowY));
+  }
+  const unlistedTableIds = new Set(unlistedTables.map((t) => t.id));
+  const planTables = unlistedTables.length > 0 ? [...tables, ...unlistedTables] : tables;
 
   return (
     <div>
@@ -522,32 +1036,85 @@ export function PlanTab({
             than silently dropped.
           </p>
         </div>
+        {/* TS-177: the Generate column may shrink (it was shrink-0) -- the long draft label pushed a phone screen sideways. */}
         {canEdit && (
-          <div className="flex shrink-0 flex-col items-end gap-2">
+          <div className="flex min-w-0 max-w-full flex-col items-end gap-2">
             <button
-              onClick={onGenerate}
-              disabled={generating}
+              id="generate-plan-button"
+              onClick={() => void onGenerate()}
+              disabled={generating || planChangesPending}
               className="min-h-11 rounded-md bg-neutral-900 dark:bg-neutral-100 px-4 py-2 text-sm font-medium text-white dark:text-neutral-900 hover:bg-neutral-700 dark:hover:bg-neutral-300 disabled:opacity-50"
             >
               {generating ? "Generating..." : "Generate new plan"}
             </button>
             {/* FR-5.6: chosen upfront, before the run -- an unsuccessful run (a hard-rule
                 conflict) only ever produces a conflict report either way, nothing is saved. */}
-            <label className="flex items-center gap-2 text-xs text-neutral-600 dark:text-neutral-300">
-              <input
-                type="checkbox"
-                checked={saveAsDraft}
-                onChange={(e) => setSaveAsDraft(e.target.checked)}
-                disabled={generating}
-              />
-              Save as comparison draft (don&apos;t replace the current version)
-            </label>
+            {/* TS-189: with no plan yet there's nothing to compare against -- the first plan is
+                always the current one. */}
+            {versions.length > 0 && (
+              <label className="flex items-center gap-2 text-right text-xs text-neutral-600 dark:text-neutral-300">
+                <input
+                  type="checkbox"
+                  checked={saveAsDraft}
+                  onChange={(e) => {
+                    setSaveAsDraft(e.target.checked);
+                    // TS-231: a draft doesn't replace anything -- nothing left to confirm.
+                    if (e.target.checked) setConfirmReplaceApproved(false);
+                  }}
+                  disabled={generating}
+                />
+                Save as comparison draft (don&apos;t replace the current version)
+              </label>
+            )}
+            {/* TS-231: asked before Generate replaces an approved plan (it used to happen silently). */}
+            {confirmReplaceApproved && (
+              <div
+                role="alertdialog"
+                aria-labelledby="replace-approved-text"
+                aria-describedby={replaceApprovedNotice ? "replace-approved-notice" : undefined}
+                data-testid="generate-replaces-approved"
+                className="max-w-md rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950 p-3 text-sm text-amber-800 dark:text-amber-300"
+              >
+                {/* TS-237: the server refused because the plan was approved after this page looked. */}
+                {replaceApprovedNotice && (
+                  <p id="replace-approved-notice" className="mb-2 font-medium" data-testid="generate-approved-meanwhile">
+                    {replaceApprovedNotice}
+                  </p>
+                )}
+                <p id="replace-approved-text" className="mb-2">{REPLACES_APPROVED_PLAN}</p>
+                <div className="flex flex-wrap justify-end gap-2">
+                  <button
+                    ref={replaceApprovedConfirmRef}
+                    type="button"
+                    onClick={() => void onGenerate(true)}
+                    disabled={generating || planChangesPending}
+                    className="min-h-11 rounded-md bg-neutral-900 dark:bg-neutral-100 px-3 py-1.5 text-sm font-medium text-white dark:text-neutral-900 hover:bg-neutral-700 dark:hover:bg-neutral-300 disabled:opacity-50"
+                  >
+                    Replace the approved plan
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setConfirmReplaceApproved(false);
+                      // TS-255: back to the button that asked, not the page.
+                      focusIfLost("generate-plan-button");
+                    }}
+                    className="min-h-11 rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>
       {!canEdit && (
         <p className="mb-4 rounded-md bg-neutral-100 dark:bg-neutral-800 px-3 py-2 text-sm text-neutral-600 dark:text-neutral-300">
-          You have view-only access to this wedding's seating plan.
+          {/* TS-166: a Couple member with Comment access can still approve -- don't call that view-only. */}
+          {canApprove
+            ? "You can review and approve this seating plan, but not change who sits where."
+            : "You have view-only access to this wedding's seating plan."}
         </p>
       )}
 
@@ -563,7 +1130,40 @@ export function PlanTab({
           </ul>
         </div>
       )}
-      {error && <p className="mb-4 text-sm text-red-600 dark:text-red-400">{error}</p>}
+      {error && <p role="alert" className="mb-4 text-sm text-red-600 dark:text-red-400">{error}</p>}
+      {/* TS-221: these live regions are always on the page and only their contents change (the
+          TS-212 pattern) -- a status inserted already holding its text may not be announced. */}
+      <div role="status">
+        {draftNotice && (
+          <p
+            data-testid="plan-saved-as-draft-notice"
+            className="mb-4 rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950 p-3 text-sm text-amber-800 dark:text-amber-300"
+          >
+            {draftNotice}
+          </p>
+        )}
+      </div>
+      <div role="status">
+        {supersededNotice && (
+          <p
+            data-testid="plan-superseded-notice"
+            className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-950 p-3 text-sm text-blue-800 dark:text-blue-300"
+          >
+            <span>{supersededNotice}</span>
+            <button
+              type="button"
+              onClick={() => setSupersededNotice(null)}
+              className="shrink-0 underline hover:no-underline"
+            >
+              Dismiss
+            </button>
+          </p>
+        )}
+      </div>
+      {/* TS-221: what the last move, undo or redo did, for screen readers. */}
+      <p role="status" className="sr-only" data-testid="plan-move-announcement">
+        {moveAnnouncement}
+      </p>
 
       {/* FR-5.3: shown once, right after the generation run that produced it -- not persisted, so
           reloading or switching versions clears it, same as the moveWarnings/conflicts above. */}
@@ -576,6 +1176,7 @@ export function PlanTab({
             </p>
             <button
               onClick={() => setShowScoreDetail((s) => !s)}
+              aria-expanded={showScoreDetail}
               className="shrink-0 text-xs font-medium text-blue-700 dark:text-blue-400 hover:underline"
             >
               {showScoreDetail ? "Hide calculation" : "How is this calculated?"}
@@ -612,7 +1213,9 @@ export function PlanTab({
             .
           </p>
           {showScoreDetail && (
-            <pre className="mt-3 overflow-x-auto rounded bg-neutral-50 dark:bg-neutral-900 p-3 text-xs text-neutral-600 dark:text-neutral-300">
+            // TS-212: a scrolling box is a Tab stop in Chrome 130+ and Firefox -- named, so it isn't a
+            // silent one.
+            <pre role="region" aria-label="Scoring weights" tabIndex={0} className="mt-3 overflow-x-auto rounded bg-neutral-50 dark:bg-neutral-900 p-3 text-xs text-neutral-600 dark:text-neutral-300">
               {JSON.stringify(RULE_WEIGHT_CONFIG, null, 2)}
             </pre>
           )}
@@ -629,6 +1232,9 @@ export function PlanTab({
             className="min-h-11 rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
             value={detail?.id ?? ""}
             onChange={(e) => onSelectVersion(e.target.value)}
+            // TS-197: also while a status change or nickname is being saved -- its answer is about
+            // the version open now.
+            disabled={planChangesPending || statusUpdating || savingLabel}
           >
             {versions.map((v) => (
               <option key={v.id} value={v.id}>
@@ -636,7 +1242,7 @@ export function PlanTab({
                 {v.label ? ` — ${v.label}` : ""}
                 {v.restoredFromVersionNumber ? ` (restored from v${v.restoredFromVersionNumber})` : ""} —{" "}
                 {v.isComplete ? "complete" : "incomplete"}, {STATUS_LABEL[v.status]} (
-                {new Date(v.createdAt).toLocaleString()})
+                {formatDateTime(v.createdAt)})
               </option>
             ))}
           </select>
@@ -646,6 +1252,7 @@ export function PlanTab({
       {versions.length > 1 && (
         <div className="mb-6 rounded-lg border border-neutral-200 dark:border-neutral-700 p-4">
           <button
+            aria-expanded={showCompare}
             onClick={() => {
               setShowCompare((s) => !s);
               if (!showCompare) {
@@ -702,7 +1309,7 @@ export function PlanTab({
                   {comparing ? "Comparing..." : "Compare"}
                 </button>
               </div>
-              {compareError && <p className="mb-2 text-sm text-red-600 dark:text-red-400">{compareError}</p>}
+              {compareError && <p role="alert" className="mb-2 text-sm text-red-600 dark:text-red-400">{compareError}</p>}
               {comparison && (
                 <div>
                   <p className="mb-2 text-sm text-neutral-600 dark:text-neutral-300">
@@ -713,7 +1320,23 @@ export function PlanTab({
                     moved, {comparison.summary.addedCount} added, {comparison.summary.removedCount} removed,{" "}
                     {comparison.summary.unchangedCount} unchanged
                   </p>
-                  <div className="max-h-96 overflow-y-auto rounded-md border border-neutral-200 dark:border-neutral-700">
+                  {/* TS-235: guests marked not attending now are listed but not counted above. */}
+                  {(() => {
+                    const notAttendingCount = comparison.guests.filter((g) => g.notAttending).length;
+                    return notAttendingCount > 0 ? (
+                      <p data-testid="comparison-not-attending-note" className="mb-2 text-sm text-neutral-500 dark:text-neutral-400">
+                        {notAttendingCount === 1 ? "1 guest is" : `${notAttendingCount} guests are`} not attending now — listed
+                        below, but not counted.
+                      </p>
+                    ) : null;
+                  })()}
+                  {/* TS-212: scrolls by keyboard too, as a named region (it was an unnamed Tab stop). */}
+                  <div
+                    role="region"
+                    aria-label="Version comparison"
+                    tabIndex={0}
+                    className="max-h-96 overflow-y-auto rounded-md border border-neutral-200 dark:border-neutral-700"
+                  >
                     <table className="w-full text-left text-sm">
                       <thead className="sticky top-0 bg-neutral-50 dark:bg-neutral-900">
                         <tr>
@@ -726,7 +1349,8 @@ export function PlanTab({
                       <tbody>
                         {comparison.guests.map((g) => (
                           <tr key={g.guestId} className="border-t border-neutral-100 dark:border-neutral-800">
-                            <td className="px-3 py-1.5">{g.guestName}</td>
+                            {/* TS-235: as the version lists say it (TS-221). */}
+                            <td className="px-3 py-1.5">{g.notAttending ? `${g.guestName} (not attending now)` : g.guestName}</td>
                             <td className="px-3 py-1.5 text-neutral-500 dark:text-neutral-400">{g.fromTableLabel ?? "—"}</td>
                             <td className="px-3 py-1.5 text-neutral-500 dark:text-neutral-400">{g.toTableLabel ?? "—"}</td>
                             <td className="px-3 py-1.5">
@@ -750,8 +1374,10 @@ export function PlanTab({
 
       {!detail ? (
         <p className="text-sm text-neutral-500 dark:text-neutral-400">
-          No plan generated yet — add guests and tables, then click &ldquo;Generate new
-          plan&rdquo;.
+          {/* TS-177: only people who can edit have that button. */}
+          {canEdit
+            ? <>No plan generated yet — add guests and tables, then click &ldquo;Generate new plan&rdquo;.</>
+            : "No plan generated yet. Someone with Edit access can generate one."}
         </p>
       ) : (
         <>
@@ -779,7 +1405,7 @@ export function PlanTab({
                   value={labelInput}
                   onChange={(e) => setLabelInput(e.target.value)}
                   placeholder="Version nickname"
-                  maxLength={100}
+                  maxLength={FIELD_LIMITS.planVersionLabel}
                   className="min-h-11 rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm"
                 />
                 <button
@@ -790,7 +1416,10 @@ export function PlanTab({
                   {savingLabel ? "Saving..." : "Save"}
                 </button>
                 <button
-                  onClick={() => setEditingLabel(false)}
+                  onClick={() => {
+                    setLabelVersionId(null);
+                    focusNicknameButtonIfLost();
+                  }}
                   disabled={savingLabel}
                   className="min-h-11 rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-xs font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50"
                 >
@@ -799,9 +1428,10 @@ export function PlanTab({
               </span>
             ) : (
               <button
+                id="plan-nickname-button"
                 onClick={() => {
                   setLabelInput(detail.label ?? "");
-                  setEditingLabel(true);
+                  setLabelVersionId(detail.id);
                 }}
                 className="text-sm text-neutral-500 dark:text-neutral-400 underline hover:text-neutral-700 dark:hover:text-neutral-300"
               >
@@ -810,46 +1440,32 @@ export function PlanTab({
             )}
           </div>
 
-          {detail.status === "APPROVED" && (
-            <div className="mb-6 flex flex-wrap items-center gap-2 rounded-lg border border-neutral-200 dark:border-neutral-700 p-3">
-              <span className="text-sm font-medium">Export:</span>
-              <a
-                href={`/api/v1/weddings/${weddingId}/plan-versions/${detail.id}/export/chart`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="rounded-md border border-neutral-300 dark:border-neutral-600 min-h-11 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800"
-              >
-                Seating chart (PDF)
-              </a>
-              <a
-                href={`/api/v1/weddings/${weddingId}/plan-versions/${detail.id}/export/lookup`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="rounded-md border border-neutral-300 dark:border-neutral-600 min-h-11 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800"
-              >
-                Guest lookup list (PDF)
-              </a>
-              <a
-                href={`/api/v1/weddings/${weddingId}/plan-versions/${detail.id}/export/cards`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="rounded-md border border-neutral-300 dark:border-neutral-600 min-h-11 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800"
-              >
-                Place cards (PDF)
-              </a>
-            </div>
+          {/* TS-179: only the current plan exports -- an approved version that was since replaced is out of date. */}
+          {/* TS-211: fetched as files, with a failure said inline, and a warning while guests aren't seated. */}
+          {detail.status === "APPROVED" && detail.isCurrent && (
+            <PlanExportButtons
+              weddingId={weddingId}
+              planVersionId={detail.id}
+              unseatedCount={detail.unassignedGuestIds.length}
+              // TS-250: and a warning while guests need a new seat since approval.
+              needsReassignmentCount={detail.assignments.filter((a) => a.needsReassignment).length}
+            />
           )}
 
           {!detail.isCurrent && (
             <div className="mb-6 rounded-lg border border-neutral-200 dark:border-neutral-700 p-4">
               <p className="mb-2 text-sm text-neutral-500 dark:text-neutral-400">
-                This is a past version — status can only be changed on the current one. Restoring
-                it makes a brand-new current version with a copy of its assignments,
-                re-checked against today's guests/tables/rules — it never rewrites this version or
+                {/* TS-177: also shown for a comparison draft, which can be newer than the current version. */}
+                This isn&apos;t the current version (it&apos;s an older one, or a comparison draft) — status can
+                only be changed on the current one. Restoring
+                {/* TS-208: not always the current one -- see the preview. */}
+                it makes a brand-new version (normally the current one) with a copy of its assignments,
+                re-checked against today&apos;s guests/tables/rules — it never rewrites this version or
                 anything newer.
               </p>
               {canEdit && restorePreview?.sourceVersionNumber !== detail.versionNumber && (
                 <button
+                  id="restore-version-button"
                   onClick={onPreviewRestore}
                   disabled={previewingRestore}
                   className="rounded-md border border-neutral-300 dark:border-neutral-600 min-h-11 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50"
@@ -862,9 +1478,28 @@ export function PlanTab({
                   <p className="mb-2 text-sm font-medium text-amber-800 dark:text-amber-300">
                     Restoring version {restorePreview.sourceVersionNumber} will create a new
                     version {restorePreview.isComplete ? "(complete)" : "(incomplete)"}: {restorePreview.keptCount}{" "}
-                    guest(s) kept exactly as seated, {restorePreview.unassignedGuestIds.length} left
-                    unassigned.
+                    {/* TS-177: guests kept at their tables but about to be flagged aren't "kept
+                        exactly as seated" -- say they'll need fixing. */}
+                    {restorePreview.needsFixingCount > 0
+                      ? `guest(s) kept at their tables (${restorePreview.needsFixingCount} will need fixing: see below)`
+                      : "guest(s) kept exactly as seated"}
+                    , {restorePreview.unassignedGuestIds.length} left unassigned.
                   </p>
+                  {restoreWillBeDraft && (
+                    <p className="mb-2 text-sm text-amber-800 dark:text-amber-300" data-testid="restore-will-be-draft">
+                      The current plan is approved, so this will be saved as a comparison draft — the approved
+                      plan stays current. Only the owner or a Couple member can replace an approved plan.
+                    </p>
+                  )}
+                  {/* TS-237: the restore was refused because the plan was approved after the preview. */}
+                  <p role="alert" className="text-sm font-medium text-amber-800 dark:text-amber-300" data-testid="restore-approved-meanwhile">
+                    {restoreApprovedNotice}
+                  </p>
+                  {restoreReplacesApproved && (
+                    <p className="mb-2 text-sm font-medium text-amber-800 dark:text-amber-300" data-testid="restore-replaces-approved">
+                      {REPLACES_APPROVED_PLAN}
+                    </p>
+                  )}
                   {restorePreview.droppedGuests.length > 0 && (
                     <ul className="mb-2 list-inside list-disc text-sm text-amber-700 dark:text-amber-400">
                       {restorePreview.droppedGuests.map((d, i) => (
@@ -890,7 +1525,11 @@ export function PlanTab({
                       {restoring ? "Restoring..." : "Confirm restore"}
                     </button>
                     <button
-                      onClick={() => setRestorePreview(null)}
+                      onClick={() => {
+                        setRestorePreview(null);
+                        // TS-255: back to "Restore version N...", which comes back in its place.
+                        focusIfLost("restore-version-button");
+                      }}
                       disabled={restoring}
                       className="rounded-md border border-neutral-300 dark:border-neutral-600 min-h-11 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50"
                     >
@@ -907,7 +1546,7 @@ export function PlanTab({
               {canEdit && detail.status === "DRAFT" && (
                 <button
                   onClick={() => onSetStatus("IN_REVIEW")}
-                  disabled={statusUpdating}
+                  disabled={statusUpdating || versionChanging}
                   className="rounded-md border border-neutral-300 dark:border-neutral-600 min-h-11 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50"
                 >
                   Move to review
@@ -918,7 +1557,7 @@ export function PlanTab({
                   {canEdit && (
                     <button
                       onClick={() => onSetStatus("DRAFT")}
-                      disabled={statusUpdating}
+                      disabled={statusUpdating || versionChanging}
                       className="rounded-md border border-neutral-300 dark:border-neutral-600 min-h-11 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50"
                     >
                       Move back to draft
@@ -927,24 +1566,26 @@ export function PlanTab({
                   {canApprove && (
                     <button
                       onClick={() => onSetStatus("APPROVED")}
-                      disabled={statusUpdating || !detail.isComplete}
-                      title={!detail.isComplete ? "Every guest must be seated before a plan can be approved." : undefined}
-                      className="rounded-md bg-green-700 dark:bg-green-600 min-h-11 px-3 py-1.5 text-sm font-medium text-white hover:bg-green-800 dark:hover:bg-green-500 disabled:opacity-50"
+                      disabled={statusUpdating || versionChanging || !detail.isComplete}
+                      title={!detail.isComplete ? "Every guest must be seated, with nobody flagged Needs Reassignment, before a plan can be approved." : undefined}
+                      // TS-212: green-700 in dark mode too -- white on green-600 was under 4.5:1.
+                      className="rounded-md bg-green-700 min-h-11 px-3 py-1.5 text-sm font-medium text-white hover:bg-green-800 disabled:opacity-50"
                     >
                       Approve
                     </button>
                   )}
                   {canApprove && !detail.isComplete && (
                     <span className="text-sm text-neutral-500 dark:text-neutral-400">
-                      Seat every guest before this can be approved.
+                      Seat every guest, and sort out anyone flagged Needs Reassignment, before this can be approved.
                     </span>
                   )}
                 </>
               )}
-              {canEdit && detail.status === "APPROVED" && (
+              {/* TS-177: only the people the server lets undo an approval (TS-172) see this. */}
+              {canApprove && detail.status === "APPROVED" && (
                 <button
                   onClick={() => onSetStatus("IN_REVIEW")}
-                  disabled={statusUpdating}
+                  disabled={statusUpdating || versionChanging}
                   className="rounded-md border border-neutral-300 dark:border-neutral-600 min-h-11 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50"
                 >
                   Reopen for review
@@ -959,27 +1600,53 @@ export function PlanTab({
                 Modified since approval
               </p>
               <p className="text-sm text-amber-700 dark:text-amber-400">
-                First change {new Date(detail.modifiedSinceApproval.firstModifiedAt!).toLocaleString()},
-                latest {new Date(detail.modifiedSinceApproval.latestModifiedAt!).toLocaleString()}.
+                First change {formatDateTime(detail.modifiedSinceApproval.firstModifiedAt!)},
+                latest {formatDateTime(detail.modifiedSinceApproval.latestModifiedAt!)}.
                 Approval doesn&apos;t lock anything — this plan is still Approved, but review what
                 changed.
               </p>
             </div>
           )}
 
-          {detail.warnings.length > 0 && (
-            <div className="mb-6 rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-950 p-4">
-              <p className="mb-2 text-sm font-medium text-amber-800 dark:text-amber-300">Notes on this plan:</p>
+          {/* TS-197: what the last Generate said about this plan, under a heading that says what it
+              is (who couldn't be seated, and why) -- kept until the next Generate or another
+              version is opened. A move's warnings are shown once, below, not copied in here. */}
+          {/* TS-212: these three status regions are always on the page and only their contents
+              change -- a status box inserted already holding its text is skipped by some screen
+              readers. */}
+          <div role="status">
+          {generateWarnings && (
+            <div
+              data-testid="plan-generate-warnings"
+              className="mb-6 rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950 p-4"
+            >
+              <p className="mb-2 text-sm font-medium text-amber-800 dark:text-amber-300">{generateWarnings.heading}</p>
               <ul className="list-inside list-disc text-sm text-amber-700 dark:text-amber-400">
-                {detail.warnings.map((w, i) => (
+                {generateWarnings.items.map((w, i) => (
                   <li key={i}>{w}</li>
                 ))}
               </ul>
             </div>
           )}
 
+          {/* TS-197: a restore's own notes, under their own heading. */}
+          </div>
+          <div role="status">
+          {restoreWarnings.length > 0 && (
+            <div className="mb-6 rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950 p-4">
+              <p className="mb-2 text-sm font-medium text-amber-800 dark:text-amber-300">Restored, but note:</p>
+              <ul className="list-inside list-disc text-sm text-amber-700 dark:text-amber-400">
+                {restoreWarnings.map((w, i) => (
+                  <li key={i}>{w}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          </div>
+          <div role="status">
           {moveWarnings.length > 0 && (
-            <div className="mb-6 rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-950 p-4">
+            <div className="mb-6 rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950 p-4">
               <p className="mb-2 text-sm font-medium text-amber-800 dark:text-amber-300">
                 That move was made, but note:
               </p>
@@ -990,12 +1657,16 @@ export function PlanTab({
               </ul>
             </div>
           )}
+          </div>
 
           {!canEditThisVersion && (
             <p className="mb-4 text-sm text-neutral-500 dark:text-neutral-400">
+              {/* TS-177: an approver without Edit access isn't "view-only"; a non-current version is the reason for an editor. */}
               {canEdit
-                ? "This is a past version — guests can only be manually moved on the current one."
-                : "You have view-only access to this wedding's seating plan — manual moves are turned off."}
+                ? "This isn't the current version (it's an older one, or a comparison draft) — guests can only be moved on the current version."
+                : canApprove
+                  ? "You can review and approve this plan, but not move guests."
+                  : "You have view-only access to this wedding's seating plan — manual moves are turned off."}
             </p>
           )}
 
@@ -1004,7 +1675,7 @@ export function PlanTab({
               <button
                 data-testid="undo-button"
                 onClick={onUndo}
-                disabled={undoStack.length === 0 || undoRedoBusy || movingGuestId !== null}
+                disabled={undoStack.length === 0 || undoRedoBusy || movingIds.size > 0 || versionChanging}
                 title={undoStack.length > 0 ? `Undo: ${undoStack[undoStack.length - 1].description}` : undefined}
                 className="min-h-11 rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50"
               >
@@ -1013,14 +1684,14 @@ export function PlanTab({
               <button
                 data-testid="redo-button"
                 onClick={onRedo}
-                disabled={redoStack.length === 0 || undoRedoBusy || movingGuestId !== null}
+                disabled={redoStack.length === 0 || undoRedoBusy || movingIds.size > 0 || versionChanging}
                 title={redoStack.length > 0 ? `Redo: ${redoStack[redoStack.length - 1].description}` : undefined}
                 className="min-h-11 rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50"
               >
                 Redo
               </button>
               <span className="text-xs text-neutral-500 dark:text-neutral-400">
-                Undo/redo covers this browser session's own moves only — reload or switch
+                Undo/redo covers this browser session&apos;s own moves only — reload or switch
                 versions and use version history instead.
               </span>
             </div>
@@ -1033,23 +1704,21 @@ export function PlanTab({
                 {detail.unassignedGuestIds.map((id) => (
                   <li key={id} className="flex items-center justify-between gap-2 text-sm">
                     <span>{guestName(id)}</span>
+                    {/* TS-199: pick a table, then press Seat -- the arrow keys no longer seat the
+                        guest at every table on the way (see PickThenActControl). */}
                     {canEditThisVersion && (
-                      <select
-                        aria-label={`Move ${guestName(id)} to a table`}
-                        className="min-h-11 rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm disabled:opacity-50"
-                        value=""
-                        disabled={movingGuestId === id}
-                        onChange={(e) => onMoveGuest(id, e.target.value)}
-                      >
-                        <option value="" disabled>
-                          {movingGuestId === id ? "Seating..." : "Seat at..."}
-                        </option>
-                        {tables.map((t) => (
-                          <option key={t.id} value={t.id}>
-                            {t.label}
-                          </option>
-                        ))}
-                      </select>
+                      <PickThenActControl
+                        id={`plan-move-${id}`}
+                        label={`Move ${guestName(id)} to a table`}
+                        placeholder="Seat at..."
+                        busy={movingIds.has(id)}
+                        busyLabel="Seating..."
+                        disabled={versionChanging}
+                        options={planTables.map((t) => ({ value: t.id, label: t.label }))}
+                        actLabel="Seat"
+                        actAriaLabel={`Seat ${guestName(id)}`}
+                        onAct={(tableId) => onMoveGuest(id, tableId)}
+                      />
                     )}
                   </li>
                 ))}
@@ -1070,27 +1739,24 @@ export function PlanTab({
                   <li key={g.guestId} className="flex items-center justify-between gap-2 text-sm">
                     <span>
                       {g.guestName}{" "}
-                      <span className="text-xs text-neutral-400 dark:text-neutral-500">(currently at {g.tableLabel})</span>
+                      <span className="text-xs text-neutral-500 dark:text-neutral-400">(currently at {g.tableLabel})</span>
                     </span>
+                    {/* TS-199: pick, then Move (see PickThenActControl). */}
                     {canEditThisVersion && (
-                      <select
-                        aria-label={`Move ${g.guestName} to a different table`}
-                        className="min-h-11 rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-sm disabled:opacity-50"
-                        value=""
-                        disabled={movingGuestId === g.guestId}
-                        onChange={(e) => onMoveGuest(g.guestId, e.target.value)}
-                      >
-                        <option value="" disabled>
-                          {movingGuestId === g.guestId ? "Moving..." : "Move to..."}
-                        </option>
-                        {tables
+                      <PickThenActControl
+                        id={`plan-move-${g.guestId}`}
+                        label={`Move ${g.guestName} to a different table`}
+                        placeholder="Move to..."
+                        busy={movingIds.has(g.guestId)}
+                        busyLabel="Moving..."
+                        disabled={versionChanging}
+                        options={planTables
                           .filter((t) => t.id !== g.tableId)
-                          .map((t) => (
-                            <option key={t.id} value={t.id}>
-                              {t.label}
-                            </option>
-                          ))}
-                      </select>
+                          .map((t) => ({ value: t.id, label: t.label }))}
+                        actLabel="Move"
+                        actAriaLabel={`Move ${g.guestName}`}
+                        onAct={(tableId) => onMoveGuest(g.guestId, tableId)}
+                      />
                     )}
                   </li>
                 ))}
@@ -1103,12 +1769,14 @@ export function PlanTab({
             <div className="flex gap-1 rounded-md border border-neutral-300 dark:border-neutral-600 p-0.5 text-sm">
               <button
                 onClick={() => setPlanView("list")}
+                aria-pressed={planView === "list"}
                 className={`rounded px-2 py-1 ${planView === "list" ? "bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900" : "hover:bg-neutral-50 dark:hover:bg-neutral-800"}`}
               >
                 List
               </button>
               <button
                 onClick={() => setPlanView("floorplan")}
+                aria-pressed={planView === "floorplan"}
                 className={`rounded px-2 py-1 ${planView === "floorplan" ? "bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900" : "hover:bg-neutral-50 dark:hover:bg-neutral-800"}`}
               >
                 Floor plan
@@ -1118,14 +1786,21 @@ export function PlanTab({
 
           {planView === "floorplan" ? (
             <PlanFloorPlan
-              tables={tables}
+              tables={planTables}
               grouped={grouped}
               unassignedGuestIds={detail.unassignedGuestIds}
               needsReassignmentGuests={needsReassignmentGuests}
               guestName={guestName}
               onMoveGuest={onMoveGuest}
               canEditThisVersion={canEditThisVersion}
-              movingGuestId={movingGuestId}
+              readOnlyNote={
+                canEdit
+                  ? "Guests can only be moved on the current version."
+                  : canApprove
+                    ? "You can approve this plan, but not move guests."
+                    : "View-only — dragging guests between tables is turned off for your access level."
+              }
+              movingIds={movingIds}
             />
           ) : (
             <div className="flex flex-col gap-3">
@@ -1136,7 +1811,7 @@ export function PlanTab({
                   empty table used to be missing from this list entirely, and nothing showed how
                   many seats were free. (A table this version seats someone at but that no longer
                   exists can't happen: removing a table removes its seats.) */}
-              {[...tables]
+              {[...planTables]
                 .sort((a, b) => compareTableLabels(a.label, b.label))
                 .map((table) => {
                   const tableId = table.id;
@@ -1154,34 +1829,38 @@ export function PlanTab({
                       )}
                     </span>
                     <span
-                      className={`text-sm ${taken > table.capacity ? "font-medium text-red-600 dark:text-red-400" : "text-neutral-500 dark:text-neutral-400"}`}
+                      className={`text-sm ${taken > table.capacity && !unlistedTableIds.has(tableId) ? "font-medium text-red-600 dark:text-red-400" : "text-neutral-500 dark:text-neutral-400"}`}
                     >
-                      {taken === 0 ? `Empty — ${table.capacity} seats free` : `${taken}/${table.capacity} seated`}
+                      {/* TS-221: a table not in the list yet -- its seats aren't known here. */}
+                      {unlistedTableIds.has(tableId)
+                        ? `${taken} seated`
+                        : taken === 0
+                          ? `Empty — ${table.capacity} seats free`
+                          : `${taken}/${table.capacity} seated`}
                     </span>
                   </p>
                   <ul className="flex flex-col gap-1.5">
                     {t.guests.map((g) => (
                       <li key={g.guestId} className="flex items-center justify-between gap-2 text-sm">
                         <span>{g.guestName}</span>
+                        {/* TS-199: pick, then Move (see PickThenActControl). */}
                         {canEditThisVersion && (
-                          <select
-                            aria-label={`Move ${g.guestName} to a different table`}
-                            className="min-h-11 rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-xs disabled:opacity-50"
-                            value=""
-                            disabled={movingGuestId === g.guestId}
-                            onChange={(e) => onMoveGuest(g.guestId, e.target.value)}
-                          >
-                            <option value="" disabled>
-                              {movingGuestId === g.guestId ? "Moving..." : "Move to..."}
-                            </option>
-                            {tables
+                          <PickThenActControl
+                            id={`plan-move-${g.guestId}`}
+                            label={`Move ${g.guestName} to a different table`}
+                            placeholder="Move to..."
+                            busy={movingIds.has(g.guestId)}
+                            busyLabel="Moving..."
+                            disabled={versionChanging}
+                            options={planTables
                               .filter((table) => table.id !== tableId)
-                              .map((table) => (
-                                <option key={table.id} value={table.id}>
-                                  {table.label}
-                                </option>
-                              ))}
-                          </select>
+                              .map((table) => ({ value: table.id, label: table.label }))}
+                            actLabel="Move"
+                            actAriaLabel={`Move ${g.guestName}`}
+                            selectClassName="min-h-11 max-w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-xs disabled:opacity-50"
+                            buttonClassName="min-h-11 rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1 text-xs font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50"
+                            onAct={(tableId) => onMoveGuest(g.guestId, tableId)}
+                          />
                         )}
                       </li>
                     ))}
@@ -1220,7 +1899,8 @@ function PlanFloorPlan({
   guestName,
   onMoveGuest,
   canEditThisVersion,
-  movingGuestId,
+  readOnlyNote,
+  movingIds,
 }: {
   tables: SeatingTableDTO[];
   grouped: Map<string, { tableLabel: string; guests: { guestId: string; guestName: string }[] }>;
@@ -1229,7 +1909,9 @@ function PlanFloorPlan({
   guestName: (id: string) => string;
   onMoveGuest: (guestId: string, tableId: string) => Promise<MoveGuestResult>;
   canEditThisVersion: boolean;
-  movingGuestId: string | null;
+  /** TS-177: why guests can't be dragged, when they can't (access level, or not the current version). */
+  readOnlyNote: string;
+  movingIds: ReadonlySet<string>;
 }) {
   const [dragOverTableId, setDragOverTableId] = useState<string | null>(null);
   // Feedback for the table that was just dropped onto, shown right there on the canvas instead of
@@ -1277,6 +1959,16 @@ function PlanFloorPlan({
     } else {
       setDropFeedback((cur) => (cur?.tableId === tableId ? null : cur));
     }
+    // TS-175: keep a keyboard user's place -- focus the guest where they now are. The table they
+    // were put at re-draws, and focus used to fall back to the top of the page.
+    // TS-199: only if focus was lost in the redraw -- Safari can run this a moment late, and it used
+    // to pull focus back from wherever the planner had already gone next (so their next Enter
+    // un-picked this guest instead of acting where they were).
+    requestAnimationFrame(() => {
+      const active = document.activeElement;
+      const lost = !active || active === document.body || !active.isConnected;
+      if (lost) document.querySelector<HTMLElement>(`[data-guest-id="${CSS.escape(guestId)}"]`)?.focus();
+    });
   }
 
   function onGuestDragStart(e: React.DragEvent<HTMLSpanElement>, guestId: string) {
@@ -1378,7 +2070,7 @@ function PlanFloorPlan({
       <p className="mb-3 text-sm text-neutral-500 dark:text-neutral-400">
         {canEditThisVersion
           ? "Drag a guest onto a different table to move them — or tap or press Enter on a guest, then on a table. Hard rules are enforced exactly as with the dropdowns above."
-          : "View-only — dragging guests between tables is turned off for your access level."}
+          : readOnlyNote}
       </p>
       <p role="status" aria-live="polite" className="sr-only">
         {pickedGuestId ? `${guestName(pickedGuestId)} picked up. Choose a table, or press Escape to cancel.` : ""}
@@ -1405,7 +2097,7 @@ function PlanFloorPlan({
                 baseClass="rounded-full border border-dashed border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-900 px-2 py-1 text-xs"
                 canEdit={canEditThisVersion}
                 picked={pickedGuestId === id}
-                moving={movingGuestId === id}
+                moving={movingIds.has(id)}
                 handlers={chipHandlers}
               />
             )}
@@ -1429,7 +2121,7 @@ function PlanFloorPlan({
                 title={`Currently at ${g.tableLabel}, which no longer fits a hard rule for them`}
                 canEdit={canEditThisVersion}
                 picked={pickedGuestId === g.guestId}
-                moving={movingGuestId === g.guestId}
+                moving={movingIds.has(g.guestId)}
                 handlers={chipHandlers}
               />
             )}
@@ -1437,10 +2129,20 @@ function PlanFloorPlan({
         </div>
       )}
       <div
+        // TS-199: named, so the seating floor plan can be found as one area (e.g. its Tab order).
+        role="group"
+        aria-label="Seating floor plan"
+        // TS-212: Chrome 130+ and Firefox make a scrolling box a Tab stop of its own. With guests to
+        // Tab to it isn't needed (focusing one scrolls it into view); view-only, it's how the room
+        // scrolls by keyboard, and it's named.
+        tabIndex={canEditThisVersion ? -1 : 0}
         style={{ width: "100%", height, maxWidth: width }}
         className="relative overflow-auto rounded-lg border border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-900"
       >
-        {tables.map((t) => {
+        {/* TS-199: listed in reading order of where the tables sit (rows top to bottom, each left
+            to right), so Tab moves through the guests and tables the way the room reads. Tables
+            don't move on this view, so the order holds while a guest is dragged. */}
+        {inReadingOrder(tables, (t) => ({ x: t.positionX ?? 40, y: t.positionY ?? 40 })).map((t) => {
           const entry = grouped.get(t.id);
           const tableGuests = entry?.guests ?? [];
           const isTarget = pickedGuestId !== null && canEditThisVersion;
@@ -1457,19 +2159,10 @@ function PlanFloorPlan({
               onDrop={(e) => onTableDrop(e, t.id)}
               // TS-90: while a guest is picked up, every table is a place to put them -- by tap,
               // click, or keyboard (Tab to it, then Enter/Space).
+              // TS-212: the table itself is no longer a button while picking (that hid its guest chips
+              // from screen readers, and put buttons inside a button). A click anywhere on it still
+              // moves the guest; for the keyboard and screen readers, a "Move here" button does.
               onClick={isTarget ? () => void moveTo(pickedGuestId, t.id) : undefined}
-              onKeyDown={
-                isTarget
-                  ? (e) => {
-                      if (e.target !== e.currentTarget || (e.key !== "Enter" && e.key !== " ")) return;
-                      e.preventDefault();
-                      void moveTo(pickedGuestId, t.id);
-                    }
-                  : undefined
-              }
-              {...(isTarget
-                ? { role: "button", tabIndex: 0, "aria-label": `Move ${guestName(pickedGuestId)} to ${t.label}` }
-                : {})}
               style={{
                 left: t.positionX ?? 40,
                 top: t.positionY ?? 40,
@@ -1485,8 +2178,33 @@ function PlanFloorPlan({
               <p className="mb-1 truncate font-medium" title={t.label}>
                 {t.label}
               </p>
-              <div className="flex max-h-36 flex-col gap-1 overflow-y-auto">
-                {tableGuests.length === 0 && <span className="text-neutral-400 dark:text-neutral-500">Empty</span>}
+              {isTarget && (
+                // TS-212: a button by role with its own Tab stop (tabIndex 0) rather than a <button> --
+                // Safari's Tab skips real buttons by default, and this is how a keyboard user puts the
+                // picked guest down (the table box it replaced was a Tab stop there too).
+                <span
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`Move ${guestName(pickedGuestId)} to ${t.label}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void moveTo(pickedGuestId, t.id);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key !== "Enter" && e.key !== " ") return;
+                    e.preventDefault();
+                    e.stopPropagation();
+                    void moveTo(pickedGuestId, t.id);
+                  }}
+                  className="mb-1 cursor-pointer self-start rounded border border-blue-400 px-1.5 py-0.5 text-xs text-blue-800 dark:text-blue-300 hover:bg-blue-50 dark:hover:bg-blue-950"
+                >
+                  Move here
+                </span>
+              )}
+              {/* TS-212: not a Tab stop of its own -- the chips inside are, and the list view shows
+                  every guest at every table. */}
+              <div tabIndex={-1} className="flex max-h-36 flex-col gap-1 overflow-y-auto">
+                {tableGuests.length === 0 && <span className="text-neutral-500 dark:text-neutral-400">Empty</span>}
                 {tableGuests.map((g) =>
                   <GuestChip
                 key={g.guestId}
@@ -1495,7 +2213,7 @@ function PlanFloorPlan({
                 baseClass="truncate rounded px-1.5 py-0.5 bg-neutral-100 dark:bg-neutral-800 text-neutral-900 dark:text-neutral-100"
                 canEdit={canEditThisVersion}
                 picked={pickedGuestId === g.guestId}
-                moving={movingGuestId === g.guestId}
+                moving={movingIds.has(g.guestId)}
                 handlers={chipHandlers}
               />
                 )}

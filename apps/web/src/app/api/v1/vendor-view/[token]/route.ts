@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import type { VendorViewDTO } from "@seatwise/shared";
 import { getVendorViewByToken } from "@seatwise/db";
-import { clientAddress, rateLimitOr429, VENDOR_LINK_LIMITS } from "@/lib/rate-limit";
+import { networkRateLimitOr429, vendorLinkNetworkCounters } from "@/lib/rate-limit";
 
 type Params = { params: Promise<{ token: string }> };
 
@@ -11,7 +11,8 @@ type Params = { params: Promise<{ token: string }> };
 // time the vendor opens it.
 export async function GET(req: NextRequest, { params }: Params) {
   const { token } = await params;
-  const limited = await rateLimitOr429(`vendor-link:addr:${clientAddress(req)}`, VENDOR_LINK_LIMITS.perAddress);
+  // TS-219: per address, and for IPv6 per /48 as well.
+  const limited = await networkRateLimitOr429(vendorLinkNetworkCounters(req));
   if (limited) return limited;
 
   const view = await getVendorViewByToken(token);

@@ -10,7 +10,7 @@
  *
  * Traced directly to apps/web/src/app/api/v1/weddings/[weddingId]/guests/[guestId]/route.ts's
  * `PATCH`: editing any of `REASSIGNMENT_TRIGGER_FIELDS` (side, tier, partyName,
- * requiresAccessibleTable) calls `revalidateGuestAssignment`, which re-checks the guest's current
+ * requiresAccessibleTable) calls `resyncGuestsSeats`, which re-checks the guest's current
  * seat against hard rules and sets that one seat_assignment's `needsReassignment` -- read from
  * packages/db/src/queries/plan-versions.ts.
  */

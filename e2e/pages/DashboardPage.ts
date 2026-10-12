@@ -71,7 +71,8 @@ export class DashboardPage extends BasePage {
     return this.page.getByLabel("Use its table layout", { exact: true });
   }
   private applyTemplateRulesCheckbox() {
-    return this.page.getByLabel(/^Use its rule-shape/);
+    // TS-177: "rule-shape" was jargon; it's the side-mixing setting.
+    return this.page.getByLabel(/^Use its side-mixing setting/);
   }
 
   async goto(): Promise<void> {

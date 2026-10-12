@@ -3,7 +3,8 @@
  * joins a wedding (FR-1.4a), and until now no test drove it: every collaborator was created with
  * the direct-grant setup shortcut (`addCollaborator`). This walks the whole thing through the UI:
  * the owner sends an invite from the Collaborators tab, the invitee opens the emailed link while
- * signed out, creates an account from it, lands back on the invite (TS-122), accepts, and is in
+ * signed out, creates an account from it, lands back on the invite (TS-122), confirms their email
+ * address from the link emailed at sign-up (TS-164 -- accepting is refused until then), accepts, and is in
  * the wedding at exactly the invited role and level. Then the same link, reopened, reveals nothing.
  *
  * A second invitee who already has an account signs in from the link instead, and is returned to
@@ -22,7 +23,7 @@ import { LoginPage } from "../pages/LoginPage.js";
 import { WeddingDetailPage } from "../pages/WeddingDetailPage.js";
 import { uniqueToken } from "../data/ids.js";
 import { TEST_ACCOUNT_EMAIL_DOMAIN } from "../support/auth.js";
-import { inviteToken } from "../support/testDatabase.js";
+import { confirmTestAccountEmail, inviteToken } from "../support/testDatabase.js";
 
 defineQualityTest(
   {
@@ -73,6 +74,8 @@ defineQualityTest(
         // Generated for this test only, never logged or attached.
         await new SignupPage(inviteePage).signUp("Playwright Invitee", newPersonEmail, randomBytes(16).toString("base64url"));
         await expect(invitePage.acceptButton()).toBeVisible();
+        // TS-164 / TS-203: a brand-new account is unconfirmed, but this invite was emailed to its
+        // address -- the link only reached that inbox -- so accepting it confirms the address too.
         await invitePage.accept();
         await inviteePage.waitForURL(`**/weddings/${managedWedding.id}`);
         await expect(new WeddingDetailPage(inviteePage).yourAccessBadge()).toHaveText("Your access: Comment");
@@ -102,6 +105,8 @@ defineQualityTest(
         const email = `pw-existing-${uniqueToken(testInfo.workerIndex)}${TEST_ACCOUNT_EMAIL_DOMAIN}`;
         const password = randomBytes(16).toString("base64url");
         expect((await existing.request.post("/api/v1/auth/signup", { data: { name: "Playwright Existing", email, password } })).status()).toBe(201);
+        // TS-164: an existing account has confirmed its email long since.
+        await confirmTestAccountEmail(email);
         await existing.clearCookies();
 
         const created = await weddingData.createInvite(managedWedding.id, email, "EDIT", "COUPLE");

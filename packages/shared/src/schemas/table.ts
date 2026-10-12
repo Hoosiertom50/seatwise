@@ -1,4 +1,8 @@
 import { z } from "zod";
+// TS-180: free text refuses hidden control characters (see ../safe-text).
+import { safeText } from "../safe-text";
+import { FIELD_LIMITS } from "../field-limits";
+import { expectedRevisionField } from "./common";
 import { guestSideEnum, guestTierEnum, ageCategoryEnum } from "./guest";
 
 // FR-4.1: affects only the floor-plan drawing (FR-4.3), never seating logic.
@@ -59,14 +63,14 @@ function validatePurposeCriterion(
 }
 
 const tableBaseSchema = z.object({
-  label: z.string().min(1, "Table name is required").max(100),
+  label: safeText(FIELD_LIMITS.tableLabel, { required: "Table name is required" }),
   capacity: z.number().int().min(1).max(50),
   isRestricted: z.boolean().default(false),
   isAccessible: z.boolean().default(false),
   isLocked: z.boolean().default(false),
-  purpose: z.string().max(200).optional().nullable(),
+  purpose: safeText(FIELD_LIMITS.tablePurpose).optional().nullable(),
   purposeCriterionType: tablePurposeCriterionTypeEnum.optional().nullable(),
-  purposeCriterionValue: z.string().max(40).optional().nullable(),
+  purposeCriterionValue: safeText(FIELD_LIMITS.tablePurposeValue).optional().nullable(),
   // FR-3.4: table-level override, favoring one side only regardless of the wedding's setting.
   singleSideOnly: z.boolean().default(false),
   shape: tableShapeEnum.default("ROUND"),
@@ -77,7 +81,7 @@ export type CreateTableInput = z.infer<typeof tableBaseSchema>;
 
 // FR-7.7, extended to seating tables: every edit accepts the revision the client last saw, so the
 // server can detect a save that landed on top of a newer one instead of silently overwriting it.
-const expectedRevisionField = z.number().int().nonnegative().optional();
+// TS-174: bounded to what the database can store (see ./common).
 
 export const updateTableSchema = tableBaseSchema
   .partial()
@@ -103,7 +107,7 @@ export const quickCreateTablesSchema = z.object({
   count: z.number().int().min(1).max(100),
   capacity: z.number().int().min(1).max(50),
   shape: tableShapeEnum.default("ROUND"),
-  labelPrefix: z.string().min(1).max(50).default("Table"),
+  labelPrefix: safeText(FIELD_LIMITS.tableLabelPrefix, { required: "A name for the tables is required" }).default("Table"),
 });
 export type QuickCreateTablesInput = z.infer<typeof quickCreateTablesSchema>;
 

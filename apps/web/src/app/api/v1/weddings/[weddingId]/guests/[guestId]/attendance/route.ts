@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { setAttendanceSchema } from "@seatwise/shared";
-import { setGuestAttendance, AttendanceError } from "@seatwise/db";
+import { setGuestAttendance, AttendanceError, getGuestForWedding } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
-import { errorResponse, zodErrorResponse } from "@/lib/api-response";
+import { errorResponse, zodErrorResponse, concurrentChangeResponse, readJson } from "@/lib/api-response";
 import { requireAccess } from "@/lib/access";
+import { guestForViewer } from "@/lib/guest-privacy";
+import { afterSave, SAVED_BUT_NOT_REFRESHED } from "@/lib/post-save";
 
 type Params = { params: Promise<{ weddingId: string; guestId: string }> };
 
@@ -23,22 +25,53 @@ export async function POST(req: NextRequest, { params }: Params) {
   const access = await requireAccess(weddingId, user.id, "EDIT");
   if ("error" in access) return access.error;
 
-  const body = await req.json().catch(() => null);
+  // TS-204: readJson refuses a non-JSON or oversized body (413), even one sent without a Content-Length.
+  const json = await readJson(req);
+  if (!json.ok) return json.response;
+  const body = json.body;
   const parsed = setAttendanceSchema.safeParse(body);
   if (!parsed.success) return zodErrorResponse(parsed.error);
 
   try {
+    // TS-207: whether the guest already had that attendance (changed on another screen, or by their
+    // own RSVP link) -- the screen then says so, instead of claiming it just made the change. Found
+    // under the change's own locks, so a change made at the same moment can't make it wrong.
+    let unchanged = false;
+    // TS-220: a read-back after the save that failed -- the answer then says so (Day-of used to
+    // claim the seat was freed while the plan on screen still showed them seated).
+    const warnings: string[] = [];
     const planVersion = await setGuestAttendance(
       weddingId,
       guestId,
       parsed.data.attendance,
-      user.id
+      user.id,
+      // TS-204: read again under the change's locks.
+      {
+        actorAccess: access.actor,
+        onOutcome: (outcome) => (unchanged = outcome.unchanged),
+        onPlanNotRefreshed: () => {
+          if (!warnings.includes(SAVED_BUT_NOT_REFRESHED)) warnings.push(SAVED_BUT_NOT_REFRESHED);
+        },
+      }
     );
-    return NextResponse.json({ planVersion });
+    // TS-175: the guest too -- the change bumps their revision (TS-165), and a screen that kept the
+    // old one got a false "edited elsewhere" on its next edit of them.
+    // TS-209: saved by now -- a failed read-back gives no guest, not an error (or "nothing was saved").
+    // TS-220: and with a warning, so the screen tells the truth.
+    const guest = await afterSave("reading the guest back", () => getGuestForWedding(guestId, weddingId), warnings, SAVED_BUT_NOT_REFRESHED, null);
+    return NextResponse.json({
+      planVersion,
+      guest: guest ? guestForViewer(guest, access.accessLevel) : null,
+      unchanged,
+      warnings,
+    });
   } catch (err) {
     if (err instanceof AttendanceError) {
-      return errorResponse(err.message, 409);
+      // TS-209: a guest deleted elsewhere a moment ago is gone (404), not a conflict.
+      return errorResponse(err.message, err.message === "Guest not found." ? 404 : 409);
     }
+    const conflict = concurrentChangeResponse(err);
+    if (conflict) return conflict;
     throw err;
   }
 }

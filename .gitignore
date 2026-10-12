@@ -4,6 +4,9 @@ node_modules/
 dist/
 .env
 .env*.local
+# TS-192: every other .env.* file too (.env.production, .env.backup, ...); only the example is shared.
+.env.*
+!.env.example
 *.log
 .DS_Store
 .pnpm-store/

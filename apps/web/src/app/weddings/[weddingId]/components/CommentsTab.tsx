@@ -1,9 +1,14 @@
 "use client";
 
+import { formatDateTime } from "@/lib/display-format";
 import { useEffect, useMemo, useState, useRef } from "react";
-import { api, ApiError } from "@/lib/api-client";
+import { api, ApiError, apiErrorMessage } from "@/lib/api-client";
 import type { CommentDTO, GuestDTO, SeatingTableDTO, TimelineEntryDTO } from "@seatwise/shared";
 import { useUnsavedChanges } from "@/lib/unsaved-changes";
+// TS-193: the same limits the server checks (packages/shared/src/field-limits.ts).
+import { FIELD_LIMITS, timelineTimeLabel } from "@seatwise/shared";
+import { focusIfLost } from "@/lib/focus-if-lost";
+import { mayApplyCommentsPoll } from "@/lib/comments-poll";
 
 // TS-13 (Collaboration & Notifications, FR-10.3): comments attached to a guest or table. A
 // dedicated tab (rather than inline per-row) keeps this tractable — pick a target, see its
@@ -37,10 +42,20 @@ export function CommentsTab({
   const [replyingTo, setReplyingTo] = useState<string | null>(null);
   // TS-151: which reply is being posted, so a double-click can't post it twice.
   const [postingReply, setPostingReply] = useState<string | null>(null);
+  // TS-199: the reply box whose Reply was pressed with nothing (or only spaces) in it.
+  const [replyEmpty, setReplyEmpty] = useState<string | null>(null);
   // TS-159: tell the page this tab has input that leaving it would lose.
-  useUnsavedChanges("comments", !!(body.trim() || Object.values(replyBodies).some((b) => b.trim())));
+  // TS-182: only while the comment boxes are there (they're hidden without Comment access).
+  // TS-191: only the reply box that's open counts. A draft left in a closed one is kept (it's back
+  // when Reply is opened again) but can't be seen, and asking about it puzzled people.
+  const openReplyDraft = replyingTo ? (replyBodies[replyingTo] ?? "") : "";
+  const hasDraft = canComment && !!(body.trim() || openReplyDraft.trim());
+  useUnsavedChanges("comments", hasDraft);
   // Checked synchronously: a second click can land before React re-renders with postingReply set.
   const postingReplyNow = useRef(false);
+  // TS-191: comments whose Resolve is on its way, so a second press doesn't send it again.
+  const [resolving, setResolving] = useState<ReadonlySet<string>>(() => new Set());
+  const resolvingNow = useRef(new Set<string>());
 
   useEffect(() => {
     Promise.all([
@@ -55,6 +70,50 @@ export function CommentsTab({
       })
       .catch(() => setError("Couldn't load comments."))
       .finally(() => setLoading(false));
+  }, [weddingId]);
+
+  // TS-221: new threads, replies and resolves from other people show while this tab is open -- the
+  // comments are fetched again every 4 seconds (the page's own poll interval). Before, they loaded
+  // once, so the bell announced a comment this tab never showed until it was opened again. Paused
+  // while a comment or reply is being written (nothing moves under the person typing) and while a
+  // post or resolve of this tab's own is on its way. An answer that started before one of this
+  // tab's own changes landed is dropped -- it could put back the list from before that change.
+  const hasDraftRef = useRef(hasDraft);
+  const busyRef = useRef(false);
+  const busy = posting || postingReply !== null || resolving.size > 0;
+  useEffect(() => {
+    hasDraftRef.current = hasDraft;
+    busyRef.current = busy;
+  }, [hasDraft, busy]);
+  const localChanges = useRef(0);
+  useEffect(() => {
+    let cancelled = false;
+    let inFlight = false;
+    const interval = setInterval(async () => {
+      if (inFlight || hasDraftRef.current || busyRef.current) return;
+      inFlight = true;
+      const changesBefore = localChanges.current;
+      try {
+        const c = await api.get<{ comments: CommentDTO[] }>(`/api/v1/weddings/${weddingId}/comments`);
+        // TS-228: a draft started while this was on its way also holds it back (see mayApplyCommentsPoll).
+        const apply = mayApplyCommentsPoll({
+          cancelled,
+          changesBefore,
+          changesNow: localChanges.current,
+          busy: busyRef.current,
+          hasDraft: hasDraftRef.current,
+        });
+        if (apply) setComments(c.comments);
+      } catch {
+        // Best effort -- the next tick tries again.
+      } finally {
+        inFlight = false;
+      }
+    }, 4000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
   }, [weddingId]);
 
   // Top-level comments (no parent), each with its replies attached, newest top-level first.
@@ -79,6 +138,11 @@ export function CommentsTab({
       setError("Pick who or what this comment is about.");
       return;
     }
+    // TS-223: a comment of only spaces said "Validation failed" -- now said plainly, before sending.
+    if (!body.trim()) {
+      setError("Write something first.");
+      return;
+    }
     setPosting(true);
     try {
       const { comment } = await api.post<{ comment: CommentDTO }>(
@@ -91,11 +155,13 @@ export function CommentsTab({
           body,
         }
       );
-      setComments([comment, ...comments]);
+      localChanges.current++;
+      setComments((cur) => [comment, ...cur]);
       setBody("");
       setTargetId("");
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Couldn't post that comment.");
+      // TS-223: the field's own reason (e.g. the text is empty), not the bare "Validation failed".
+      setError(apiErrorMessage(err, ["body"], "Couldn't post that comment."));
     } finally {
       setPosting(false);
     }
@@ -117,11 +183,15 @@ export function CommentsTab({
         `/api/v1/weddings/${weddingId}/comments`,
         { targetType, guestId, tableId, timelineEntryId, body: text, parentCommentId }
       );
+      localChanges.current++;
       setComments((cur) => [...cur, comment]);
       setReplyBodies((cur) => ({ ...cur, [parentCommentId]: "" }));
       setReplyingTo(null);
+      // TS-212: the reply box closes -- focus goes back to the thread's Reply button (it used to
+      // drop to the page; Cancel already did this). Checked again after the redraw (lib/focus-if-lost).
+      focusIfLost(`reply-open-${parentCommentId}`);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Couldn't post that reply.");
+      setError(apiErrorMessage(err, ["body"], "Couldn't post that reply."));
     } finally {
       postingReplyNow.current = false;
       setPostingReply(null);
@@ -133,18 +203,37 @@ export function CommentsTab({
   // could. Still, sync from the server's returned comment rather than guessing at
   // resolvedAt/resolvedByName, and revert the optimistic update on any failure (a gap the
   // optimistic update here previously left open).
+  // TS-175: every update works on the list as it is at that moment. It used to put back a copy
+  // taken when Resolve was clicked, so a reply posted while the resolve was saving disappeared.
   async function onResolve(commentId: string) {
-    const prev = comments;
-    setComments(
-      comments.map((c) => (c.id === commentId ? { ...c, resolvedAt: new Date().toISOString() } : c))
-    );
+    if (resolvingNow.current.has(commentId)) return;
+    resolvingNow.current.add(commentId);
+    setResolving((cur) => new Set(cur).add(commentId));
+    try {
+      await resolveComment(commentId);
+    } finally {
+      resolvingNow.current.delete(commentId);
+      setResolving((cur) => {
+        const next = new Set(cur);
+        next.delete(commentId);
+        return next;
+      });
+    }
+  }
+
+  async function resolveComment(commentId: string) {
+    const before = comments.find((c) => c.id === commentId);
+    localChanges.current++;
+    setComments((cur) => cur.map((c) => (c.id === commentId ? { ...c, resolvedAt: new Date().toISOString() } : c)));
     try {
       const { comment } = await api.post<{ comment: CommentDTO }>(
         `/api/v1/weddings/${weddingId}/comments/${commentId}/resolve`
       );
-      setComments(prev.map((c) => (c.id === commentId ? comment : c)));
+      localChanges.current++;
+      setComments((cur) => cur.map((c) => (c.id === commentId ? comment : c)));
     } catch (err) {
-      setComments(prev);
+      localChanges.current++;
+      if (before) setComments((cur) => cur.map((c) => (c.id === commentId ? before : c)));
       setError(err instanceof ApiError ? err.message : "Couldn't resolve that comment.");
     }
   }
@@ -209,12 +298,14 @@ export function CommentsTab({
                 {targetType === "TIMELINE_ENTRY" &&
                   timelineEntries.map((e) => (
                     <option key={e.id} value={e.id}>
-                      {e.time} — {e.description}
+                      {/* TS-214: "(next day)" for an entry after midnight. */}
+                      {timelineTimeLabel(e.time, e.nextDay)} — {e.description}
                     </option>
                   ))}
               </select>
             </div>
             <textarea
+              maxLength={FIELD_LIMITS.comment}
               aria-label="Comment text"
               className="rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
               rows={2}
@@ -238,7 +329,7 @@ export function CommentsTab({
         </p>
       )}
 
-      {error && <p className="mb-4 text-sm text-red-600 dark:text-red-400">{error}</p>}
+      {error && <p role="alert" className="mb-4 text-sm text-red-600 dark:text-red-400">{error}</p>}
 
       <h2 className="mb-3 text-lg font-medium">Comments ({threads.length})</h2>
       {threads.length === 0 ? (
@@ -250,16 +341,17 @@ export function CommentsTab({
             return (
               <li key={root.id} className="rounded-lg border border-neutral-200 dark:border-neutral-700 p-4">
                 <div className="flex items-start justify-between gap-2">
-                  <div>
-                    <p className="text-sm font-medium">
+                  {/* TS-191: long unbroken text wraps instead of running off a phone screen. */}
+                  <div className="min-w-0">
+                    <p className="break-words text-sm font-medium [overflow-wrap:anywhere]">
                       {root.targetLabel}
                       {root.targetRemoved && (
                         <span className="ml-2 text-xs font-normal text-neutral-500 dark:text-neutral-400">(removed)</span>
                       )}
                     </p>
-                    <p className="mt-1 text-sm text-neutral-700 dark:text-neutral-300">{root.body}</p>
+                    <p className="mt-1 whitespace-pre-line break-words text-sm text-neutral-700 dark:text-neutral-300 [overflow-wrap:anywhere]">{root.body}</p>
                     <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
-                      {root.authorName} · {new Date(root.createdAt).toLocaleString()}
+                      {root.authorName} · {formatDateTime(root.createdAt)}
                     </p>
                   </div>
                   {root.resolvedAt ? (
@@ -270,9 +362,12 @@ export function CommentsTab({
                     canResolve && (
                       <button
                         onClick={() => onResolve(root.id)}
-                        className="shrink-0 rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-xs hover:bg-neutral-50 dark:hover:bg-neutral-800"
+                        disabled={resolving.has(root.id)}
+                        // TS-212: says which comment -- a screen reader's button list read "Resolve, Resolve…".
+                        aria-label={`${resolving.has(root.id) ? "Resolving" : "Resolve"} ${root.authorName}'s comment on ${root.targetLabel}`}
+                        className="shrink-0 rounded-md border border-neutral-300 dark:border-neutral-600 px-2 py-1 text-xs hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50"
                       >
-                        Resolve
+                        {resolving.has(root.id) ? "Resolving…" : "Resolve"}
                       </button>
                     )
                   )}
@@ -281,10 +376,10 @@ export function CommentsTab({
                 {replies.length > 0 && (
                   <ul className="mt-3 flex flex-col gap-2 border-l-2 border-neutral-100 dark:border-neutral-800 pl-4">
                     {replies.map((r) => (
-                      <li key={r.id}>
-                        <p className="text-sm text-neutral-700 dark:text-neutral-300">{r.body}</p>
+                      <li key={r.id} className="min-w-0">
+                        <p className="whitespace-pre-line break-words text-sm text-neutral-700 dark:text-neutral-300 [overflow-wrap:anywhere]">{r.body}</p>
                         <p className="mt-0.5 text-xs text-neutral-500 dark:text-neutral-400">
-                          {r.authorName} · {new Date(r.createdAt).toLocaleString()}
+                          {r.authorName} · {formatDateTime(r.createdAt)}
                         </p>
                       </li>
                     ))}
@@ -294,27 +389,67 @@ export function CommentsTab({
                 {canComment && !root.targetRemoved && (
                   <div className="mt-3">
                     {replyingTo === root.id ? (
+                      // TS-199: a form, so Enter in the box sends the reply like the button does;
+                      // Cancel closes it (the draft is kept for next time).
+                      <form
+                        className="flex flex-col gap-2"
+                        onSubmit={(e) => {
+                          e.preventDefault();
+                          if (!(replyBodies[root.id] ?? "").trim()) {
+                            setReplyEmpty(root.id);
+                            return;
+                          }
+                          setReplyEmpty(null);
+                          void onReply(root.id, root.targetType, root.guestId, root.tableId, root.timelineEntryId);
+                        }}
+                      >
                       <div className="flex flex-col gap-2 sm:flex-row">
                         <input
+                          // TS-191: opening Reply puts focus in the box.
+                          autoFocus
+                          maxLength={FIELD_LIMITS.comment}
                           aria-label="Reply text"
                           className="flex-1 rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
                           placeholder="Write a reply..."
                           value={replyBodies[root.id] ?? ""}
-                          onChange={(e) => setReplyBodies({ ...replyBodies, [root.id]: e.target.value })}
+                          onChange={(e) => {
+                            setReplyBodies({ ...replyBodies, [root.id]: e.target.value });
+                            if (replyEmpty === root.id && e.target.value.trim()) setReplyEmpty(null);
+                          }}
+                          aria-describedby={replyEmpty === root.id ? `reply-empty-${root.id}` : undefined}
                         />
                         <button
-                          onClick={() =>
-                            onReply(root.id, root.targetType, root.guestId, root.tableId, root.timelineEntryId)
-                          }
+                          type="submit"
                           disabled={postingReply === root.id}
                           className="rounded-md bg-neutral-900 dark:bg-neutral-100 px-3 py-2 text-sm font-medium text-white dark:text-neutral-900 hover:bg-neutral-700 dark:hover:bg-neutral-300 disabled:opacity-50"
                         >
                           {postingReply === root.id ? "Posting..." : "Reply"}
                         </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setReplyingTo(null);
+                            setReplyEmpty(null);
+                            // Back to the Reply button that opened the box.
+                            setTimeout(() => document.getElementById(`reply-open-${root.id}`)?.focus(), 0);
+                          }}
+                          disabled={postingReply === root.id}
+                          className="rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50"
+                        >
+                          Cancel
+                        </button>
                       </div>
+                      {replyEmpty === root.id && (
+                        <p id={`reply-empty-${root.id}`} role="alert" className="text-sm text-red-600 dark:text-red-400">
+                          Write something first.
+                        </p>
+                      )}
+                      </form>
                     ) : (
                       <button
+                        id={`reply-open-${root.id}`}
                         onClick={() => setReplyingTo(root.id)}
+                        aria-label={`Reply to ${root.authorName}'s comment on ${root.targetLabel}`}
                         className="text-sm text-neutral-500 dark:text-neutral-400 hover:underline"
                       >
                         Reply

@@ -1,6 +1,7 @@
 import { randomUUID } from "crypto";
-import { pool } from "../pool";
+import { pool, beginTransaction } from "../pool";
 import { TemplateNotFoundError } from "./templates";
+import { lockCurrentPlan, lockRestrictedLists } from "./seat-checks";
 
 export interface WeddingRow {
   id: string;
@@ -12,6 +13,13 @@ export interface WeddingRow {
   note: string | null;
   status: string;
   guestCount: number;
+  // TS-177: everyone the guests bring (the sum of headcounts) -- guestCount counts invitations.
+  peopleCount: number;
+  // TS-214: the people actually coming (headcounts of guests marked Attending) -- the same count as
+  // the Tables tab's "Attending".
+  attendingCount: number;
+  // TS-214: bumped on every settings save; a save based on an older one is refused.
+  settingsRevision: number;
   emailNotificationsEnabled: boolean;
   // FR-3.4
   sideMixing: string;
@@ -38,12 +46,16 @@ export interface WeddingSummaryRow extends WeddingRow {
 const SELECT_WITH_GUEST_COUNT = `
   SELECT w.id, w."ownerId", w.name, w."eventDate"::text AS "eventDate", w."venueName", w.note,
          w.status, w."emailNotificationsEnabled", w."sideMixing", w."sideLabel1", w."sideLabel2",
-         w."rsvpCutoffDate"::text AS "rsvpCutoffDate",
+         w."rsvpCutoffDate"::text AS "rsvpCutoffDate", w."settingsRevision",
          w."createdAt", w."updatedAt",
-         COALESCE(g.count, 0)::int AS "guestCount"
+         COALESCE(g.count, 0)::int AS "guestCount",
+         COALESCE(g.people, 0)::int AS "peopleCount",
+         COALESCE(g.attending, 0)::int AS "attendingCount"
   FROM "weddings" w
   LEFT JOIN (
-    SELECT "weddingId", COUNT(*) AS count FROM "guests" GROUP BY "weddingId"
+    SELECT "weddingId", COUNT(*) AS count, SUM(headcount) AS people,
+           SUM(headcount) FILTER (WHERE "dayOfAttendance" = 'ATTENDING') AS attending
+    FROM "guests" GROUP BY "weddingId"
   ) g ON g."weddingId" = w.id
 `;
 
@@ -59,15 +71,19 @@ const SELECT_WITH_GUEST_COUNT = `
 const SELECT_WITH_SUMMARY = `
   SELECT w.id, w."ownerId", w.name, w."eventDate"::text AS "eventDate", w."venueName", w.note,
          w.status, w."emailNotificationsEnabled", w."sideMixing", w."sideLabel1", w."sideLabel2",
-         w."rsvpCutoffDate"::text AS "rsvpCutoffDate",
+         w."rsvpCutoffDate"::text AS "rsvpCutoffDate", w."settingsRevision",
          w."createdAt", w."updatedAt",
          COALESCE(g.count, 0)::int AS "guestCount",
+         COALESCE(g.people, 0)::int AS "peopleCount",
+         COALESCE(g.attending, 0)::int AS "attendingCount",
          cpv.status AS "planStatus",
          COALESCE(unassigned.count, 0)::int AS "unassignedCount",
          COALESCE(reassign.count, 0)::int AS "needsReassignmentCount"
   FROM "weddings" w
   LEFT JOIN (
-    SELECT "weddingId", COUNT(*) AS count FROM "guests" GROUP BY "weddingId"
+    SELECT "weddingId", COUNT(*) AS count, SUM(headcount) AS people,
+           SUM(headcount) FILTER (WHERE "dayOfAttendance" = 'ATTENDING') AS attending
+    FROM "guests" GROUP BY "weddingId"
   ) g ON g."weddingId" = w.id
   LEFT JOIN LATERAL (
     SELECT id, status FROM "plan_versions" pv
@@ -112,7 +128,7 @@ export async function createWedding(
 ): Promise<WeddingRow> {
   const client = await pool.connect();
   try {
-    await client.query("BEGIN");
+    await beginTransaction(client);
 
     let sideMixing = input.sideMixing ?? null;
     let templateTables: Array<{
@@ -159,7 +175,7 @@ export async function createWedding(
        VALUES ($1, $2, $3, $4, $5, $6, COALESCE($7::"SideMixingSetting", 'BALANCED_MIX'), COALESCE($8, 'Bride'), COALESCE($9, 'Groom'), $10, now())
        RETURNING id, "ownerId", name, "eventDate"::text AS "eventDate", "venueName", note, status,
                  "emailNotificationsEnabled", "sideMixing", "sideLabel1", "sideLabel2",
-                 "rsvpCutoffDate"::text AS "rsvpCutoffDate", "createdAt", "updatedAt"`,
+                 "rsvpCutoffDate"::text AS "rsvpCutoffDate", "settingsRevision", "createdAt", "updatedAt"`,
       [
         id,
         ownerId,
@@ -201,9 +217,9 @@ export async function createWedding(
     }
 
     await client.query("COMMIT");
-    return { ...wedding, guestCount: 0 };
+    return { ...wedding, guestCount: 0, peopleCount: 0, attendingCount: 0 };
   } catch (err) {
-    await client.query("ROLLBACK");
+    await client.query("ROLLBACK").catch(() => {});
     throw err;
   } finally {
     client.release();
@@ -264,12 +280,23 @@ export async function listWeddingsWithSummaryForUser(userId: string): Promise<We
   return rows;
 }
 
-export async function setEmailNotificationsEnabled(id: string, ownerId: string, enabled: boolean): Promise<boolean> {
-  const { rowCount } = await pool.query(
-    `UPDATE "weddings" SET "emailNotificationsEnabled" = $1, "updatedAt" = now() WHERE id = $2 AND "ownerId" = $3`,
+// TS-237: moves the settings revision on too, so other open tabs (whose 4-second check only takes
+// settings from a newer revision, see apps/web/src/lib/wedding-poll.ts) show the switch as it is
+// now. Not compare-and-set: it's one on/off switch, and the last press wins. Returns the new
+// revision (null: not found, or not the owner).
+export async function setEmailNotificationsEnabled(
+  id: string,
+  ownerId: string,
+  enabled: boolean
+): Promise<{ settingsRevision: number; updatedAt: Date } | null> {
+  const { rows } = await pool.query<{ settingsRevision: number; updatedAt: Date }>(
+    `UPDATE "weddings"
+        SET "emailNotificationsEnabled" = $1, "settingsRevision" = "settingsRevision" + 1, "updatedAt" = now()
+      WHERE id = $2 AND "ownerId" = $3
+      RETURNING "settingsRevision", "updatedAt"`,
     [enabled, id, ownerId]
   );
-  return (rowCount ?? 0) > 0;
+  return rows[0] ?? null;
 }
 
 export async function updateWeddingForOwner(
@@ -284,8 +311,10 @@ export async function updateWeddingForOwner(
     sideLabel1: string;
     sideLabel2: string;
     rsvpCutoffDate: string | null;
-  }>
-): Promise<boolean> {
+  }>,
+  // TS-214: the settingsRevision the change is based on -- left out, the save isn't checked.
+  expectedRevision?: number
+): Promise<"UPDATED" | "NOT_FOUND" | "SIDE_LABELS_CLASH" | "CONFLICT"> {
   const fields: string[] = [];
   const values: unknown[] = [];
   let i = 1;
@@ -323,19 +352,77 @@ export async function updateWeddingForOwner(
     fields.push(`"rsvpCutoffDate" = $${i++}`);
     values.push(input.rsvpCutoffDate);
   }
-  fields.push(`"updatedAt" = now()`);
+  // TS-214: every settings save moves the revision on.
+  fields.push(`"updatedAt" = now()`, `"settingsRevision" = "settingsRevision" + 1`);
   values.push(id, ownerId);
+  // TS-195: a side name saved on its own must differ from the other one as it is when this saves
+  // -- checked in the UPDATE itself, against the row as Postgres writes it. Before, the route
+  // compared it with the other name read a moment earlier, so two tabs (one renaming each side to
+  // the same name) could both pass and leave both sides called the same. The second now waits for
+  // the first, sees its name, and is refused.
+  let clashCheck = "";
+  if (input.sideLabel1 !== undefined && input.sideLabel2 === undefined) {
+    clashCheck = ` AND lower(btrim("sideLabel2")) <> lower(btrim($${values.length + 1}::text))`;
+    values.push(input.sideLabel1);
+  } else if (input.sideLabel2 !== undefined && input.sideLabel1 === undefined) {
+    clashCheck = ` AND lower(btrim("sideLabel1")) <> lower(btrim($${values.length + 1}::text))`;
+    values.push(input.sideLabel2);
+  }
+  // TS-214: compare-and-set -- the save only lands on the settings it was based on (like the TS-92
+  // budget). Checked in the UPDATE itself, so of two saves at once the second waits and is refused.
+  let revisionCheck = "";
+  if (expectedRevision !== undefined) {
+    revisionCheck = ` AND "settingsRevision" = $${values.length + 1}`;
+    values.push(expectedRevision);
+  }
   const { rowCount } = await pool.query(
-    `UPDATE "weddings" SET ${fields.join(", ")} WHERE id = $${i++} AND "ownerId" = $${i}`,
+    `UPDATE "weddings" SET ${fields.join(", ")} WHERE id = $${i++} AND "ownerId" = $${i}${clashCheck}${revisionCheck}`,
     values
   );
-  return (rowCount ?? 0) > 0;
+  if ((rowCount ?? 0) > 0) return "UPDATED";
+  if (!clashCheck && !revisionCheck) return "NOT_FOUND";
+  const { rows } = await pool.query(`SELECT "settingsRevision" FROM "weddings" WHERE id = $1 AND "ownerId" = $2`, [
+    id,
+    ownerId,
+  ]);
+  if (!rows[0]) return "NOT_FOUND";
+  // A changed revision is reported first: the other change may be the very one behind a clash.
+  if (expectedRevision !== undefined && rows[0].settingsRevision !== expectedRevision) return "CONFLICT";
+  return clashCheck ? "SIDE_LABELS_CLASH" : "CONFLICT";
 }
 
-export async function deleteWeddingForOwner(id: string, ownerId: string): Promise<boolean> {
-  const { rowCount } = await pool.query(
-    `DELETE FROM "weddings" WHERE id = $1 AND "ownerId" = $2`,
-    [id, ownerId]
-  );
-  return (rowCount ?? 0) > 0;
+// TS-209: one transaction that takes the locks in the app's usual order -- the wedding's row, then
+// the current plan's row, then the Restricted lists -- before the DELETE (which removes the guests,
+// tables, seats and rules with it). As one bare DELETE it locked those rows in whatever order the
+// cascade reached them, and could deadlock with a rule being added or a group being moved (the
+// delete lost, with a server error). A deadlock that still happens is answered "try again" (409)
+// by the route.
+// TS-255: "not-owner" when the wedding is still there but was handed off after the route's owner
+// check -- the screen must not take that for a delete that already happened ("gone").
+export async function deleteWeddingForOwner(
+  id: string,
+  ownerId: string
+): Promise<"deleted" | "gone" | "not-owner"> {
+  const client = await pool.connect();
+  try {
+    await beginTransaction(client);
+    const { rows } = await client.query(
+      `SELECT id, "ownerId" FROM "weddings" WHERE id = $1 FOR NO KEY UPDATE`,
+      [id]
+    );
+    if (!rows[0] || rows[0].ownerId !== ownerId) {
+      await client.query("ROLLBACK");
+      return rows[0] ? "not-owner" : "gone";
+    }
+    await lockCurrentPlan(client, id);
+    await lockRestrictedLists(client, id);
+    const { rowCount } = await client.query(`DELETE FROM "weddings" WHERE id = $1 AND "ownerId" = $2`, [id, ownerId]);
+    await client.query("COMMIT");
+    return (rowCount ?? 0) > 0 ? "deleted" : "gone";
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
 }

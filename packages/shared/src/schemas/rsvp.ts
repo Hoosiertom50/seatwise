@@ -1,4 +1,7 @@
 import { z } from "zod";
+// TS-180: free text refuses hidden control characters (see ../safe-text).
+import { safeText } from "../safe-text";
+import { FIELD_LIMITS } from "../field-limits";
 
 // TS-17 (FR-12.1-FR-12.4): the guest-facing RSVP flow, reached via a unique unauthenticated
 // token link rather than the normal (authenticated, planner-facing) guest schemas in guest.ts.
@@ -40,8 +43,8 @@ export interface GuestRsvpPreviewDTO {
 export const submitGuestRsvpSchema = z.object({
   rsvpStatus: z.enum(["CONFIRMED", "DECLINED"]),
   headcount: z.number().int().min(1).max(20).default(1),
-  plusOneNames: z.string().max(500).optional().nullable(),
-  notes: z.string().max(2000).optional().nullable(),
+  plusOneNames: safeText(FIELD_LIMITS.plusOneNames, { multiline: true }).optional().nullable(),
+  notes: safeText(FIELD_LIMITS.rsvpNotes, { multiline: true }).optional().nullable(),
   requiresAccessibleTable: z.boolean().default(false),
 });
 export type SubmitGuestRsvpInput = z.infer<typeof submitGuestRsvpSchema>;
@@ -58,6 +61,22 @@ export interface RsvpLinkDTO {
   url: string;
   // TS-156: not emailed because the planner has sent a lot of RSVP emails in a short time.
   emailLimited?: boolean;
+  // TS-177: with emailLimited -- it was the account's daily allowance, so more can go tomorrow.
+  emailLimitedToday?: boolean;
+  // TS-177 (Tom's decision): not emailed because the wedding's RSVP cutoff has passed -- the link
+  // would only open a "closed" page. It's still made, so the planner can copy it if they choose.
+  rsvpClosed?: boolean;
+  // TS-164: not emailed because the planner hasn't confirmed their own email address yet.
+  confirmEmailFirst?: boolean;
+  // TS-171: not emailed again because this link already went to this address within the hour.
+  recentlyEmailed?: boolean;
+  // TS-171: not emailed because this address has already had its share of Seatwise email today.
+  recipientLimited?: boolean;
+  // TS-219: with emailFailed -- the mail server stopped answering after it may have taken the email,
+  // so it may have been sent (it counts as sent for the hour's "already emailed").
+  uncertain?: boolean;
+  // TS-241: with emailFailed -- Seatwise's own email limit for now (site-wide), not a failure.
+  siteEmailLimited?: boolean;
   // TS-132: true only when the email really went out (or, in local dev/CI, was logged) -- lets the
   // UI say "link emailed to X" vs. "link copied".
   emailed: boolean;
@@ -65,3 +84,7 @@ export interface RsvpLinkDTO {
   // so the planner knows to send the link themselves.
   emailFailed: boolean;
 }
+
+// TS-143 / TS-177: what adding or editing a guest reports about the RSVP email it sent (or didn't)
+// -- the same outcome as RsvpLinkDTO, without the link itself.
+export type RsvpEmailOutcomeDTO = Required<Omit<RsvpLinkDTO, "url">>;

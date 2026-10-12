@@ -58,8 +58,9 @@ export default defineConfig({
   globalSetup: "./e2e/support/globalSetup.ts",
 
   // TS-102: run-level cleanup backstop for test-created weddings the per-test cleanup missed.
-  // Dry-run unless PW_TEARDOWN_SWEEP=confirm, and it only ever matches names carrying
-  // TEST_DATA_MARKER -- see e2e/support/globalTeardown.ts for the full safety model.
+  // TS-176: it deletes by default; PW_TEARDOWN_SWEEP=dry-run only reports what it would delete
+  // (this comment used to say the reverse). It only ever matches names carrying TEST_DATA_MARKER,
+  // and only in a local database -- see e2e/support/globalTeardown.ts for the full safety model.
   globalTeardown: "./e2e/support/globalTeardown.ts",
 
   reporter: [
@@ -85,12 +86,27 @@ export default defineConfig({
     {
       name: "framework-unit",
       testDir: "./playwright-framework/tests",
+      // TS-215: its own results folder, so a unit-only run doesn't clear a browser run's evidence.
+      outputDir: "artifacts/playwright/runs/unit-results/framework",
+    },
+
+    // TS-215: the e2e helpers' own unit tests (tab-order rules, token redaction, test-address ids,
+    // artifact paths) -- plain functions, no database, app or browser. They have no @suite tag, so
+    // the tag-selected CI e2e runs never picked them up; CI's validate job runs this project.
+    {
+      name: "unit",
+      testDir: "./e2e/tests/unit",
+      // TS-215: its own results folder (see framework-unit), and the teardown sweep skips a run of
+      // only these two projects (e2e/support/globalTeardown.ts).
+      outputDir: "artifacts/playwright/runs/unit-results/e2e",
     },
 
     // Application E2E tests. Chromium is the required baseline browser (spec Section 5 defaults).
+    // TS-215: e2e/tests/unit belongs to the `unit` project above, not to the browser projects.
     {
       name: "chromium",
       testDir: "./e2e/tests",
+      testIgnore: "**/unit/**",
       use: {
         ...devices["Desktop Chrome"],
         launchOptions: {
@@ -110,11 +126,13 @@ export default defineConfig({
     {
       name: "firefox",
       testDir: "./e2e/tests",
+      testIgnore: "**/unit/**",
       use: { ...devices["Desktop Firefox"] },
     },
     {
       name: "webkit",
       testDir: "./e2e/tests",
+      testIgnore: "**/unit/**",
       use: { ...devices["Desktop Safari"] },
     },
 
@@ -130,6 +148,7 @@ export default defineConfig({
     {
       name: "edge",
       testDir: "./e2e/tests",
+      testIgnore: "**/unit/**",
       use: { ...devices["Desktop Edge"], channel: "msedge" },
     },
   ],

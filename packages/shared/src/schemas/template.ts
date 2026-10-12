@@ -1,4 +1,8 @@
 import { z } from "zod";
+// TS-180: free text refuses hidden control characters (see ../safe-text).
+import { safeText } from "../safe-text";
+import { FIELD_LIMITS } from "../field-limits";
+import { weddingNameField } from "./wedding";
 import type { SideMixing } from "./wedding";
 import type { TableShape, TablePurposeCriterionType } from "./table";
 
@@ -10,7 +14,7 @@ import type { TableShape, TablePurposeCriterionType } from "./table";
 // applyTemplateFields below) -- composable, but only at the two-piece granularity FR-14.4 itself
 // names ("table layout and/or rule-shape"), not per-table or per-field.
 export const saveWeddingAsTemplateSchema = z.object({
-  name: z.string().min(1, "Template name is required").max(150),
+  name: safeText(FIELD_LIMITS.templateName, { required: "Template name is required" }),
 });
 export type SaveWeddingAsTemplateInput = z.infer<typeof saveWeddingAsTemplateSchema>;
 
@@ -68,8 +72,10 @@ export const addTemplateTablesSchema = z.object({
 export type AddTemplateTablesInput = z.infer<typeof addTemplateTablesSchema>;
 
 // TS-91: copy a wedding's room layout and seating settings into a new wedding. Name defaults to
-// "<original name> (copy)".
+// "<original name> - copy". TS-168: a name given here follows the same rules as any wedding name
+// (it used to only be length-checked, so a copy could be named like a web address and that name
+// would then go out in emails).
 export const duplicateWeddingSchema = z.object({
-  name: z.string().trim().min(1).max(200).optional(),
+  name: weddingNameField.optional(),
 });
 export type DuplicateWeddingInput = z.infer<typeof duplicateWeddingSchema>;
