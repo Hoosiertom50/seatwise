@@ -213,7 +213,7 @@ async function checkPlanVersionRevision(
 ): Promise<void> {
   const { rows } = await client.query(
     // TS-148: scoped to the wedding, so another wedding's version is never locked or compared.
-    // TS-187: NO KEY UPDATE -- see resyncSeatsAtTable in seat-checks.ts.
+    // TS-187: NO KEY UPDATE -- see resyncTables in seat-checks.ts.
     `SELECT revision, "isCurrent" FROM "plan_versions" WHERE id = $1 AND "weddingId" = $2 FOR NO KEY UPDATE`,
     [planVersionId, weddingId]
   );
@@ -718,7 +718,7 @@ export async function setPlanVersionStatus(
     // been made View, a Collaborator, or had handed the wedding off.
     await lockWeddingRow(client, weddingId);
     const { rows } = await client.query(
-      // TS-187: NO KEY UPDATE -- see resyncSeatsAtTable in seat-checks.ts.
+      // TS-187: NO KEY UPDATE -- see resyncTables in seat-checks.ts.
       `SELECT status, "isComplete", revision, "isCurrent" FROM "plan_versions" WHERE id = $1 AND "weddingId" = $2 FOR NO KEY UPDATE`,
       [id, weddingId]
     );

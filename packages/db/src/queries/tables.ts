@@ -545,7 +545,7 @@ export async function updateSeatingTableForWedding(
       isRestricted: boolean;
       isAccessible: boolean;
     }>(
-      // TS-187: NO KEY UPDATE -- see resyncSeatsAtTable in seat-checks.ts.
+      // TS-187: NO KEY UPDATE -- see resyncTables in seat-checks.ts.
       `SELECT revision, label, capacity, "isRestricted", "isAccessible" FROM "seating_tables" WHERE id = $1 AND "weddingId" = $2 FOR NO KEY UPDATE`,
       [id, weddingId]
     );
@@ -817,7 +817,7 @@ export async function setRequiredGuestsForTable(
     if (actor) await recheckActorAccess(client, weddingId, actor);
 
     const { rows: tableRows } = await client.query<TableAfterEdit>(
-      // TS-187: NO KEY UPDATE -- see resyncSeatsAtTable in seat-checks.ts.
+      // TS-187: NO KEY UPDATE -- see resyncTables in seat-checks.ts.
       `SELECT id, label, capacity, "isRestricted", "isAccessible" FROM "seating_tables" WHERE id = $1 AND "weddingId" = $2 FOR NO KEY UPDATE`,
       [tableId, weddingId]
     );
@@ -863,7 +863,7 @@ export async function setRequiredGuestsForTable(
 
 // FR-4.6 / TS-120: after a table edit that can make its current seating invalid -- accessible
 // switched off, seats lowered, or a restricted table's required list changed -- re-check everyone
-// seated at it in the Current Plan Version (see resyncSeatsAtTable in seat-checks.ts for the rules)
+// seated at it in the Current Plan Version (see resyncTables in seat-checks.ts for the rules)
 // and keep isComplete in sync, all in one transaction. Nobody is ever unseated.
 export async function resyncTableSeating(
   weddingId: string,
