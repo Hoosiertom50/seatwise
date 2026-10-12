@@ -114,7 +114,7 @@ Keep the owner in browser 1. Use browser 2 for the others.
 - [ ] **Q25** Open **Taylor & Quinn's Wedding** → **Guests** → **Bulk import guests (CSV)**. Choose `sample-guest-import.csv` (in `~/Projects/seatwise/docs/`, or the copy in Documents → Seatwise). Click **Preview import**.
   You should see: "20 new, 0 updating, 0 with errors". Names look exactly like the file: José Álvarez, Zoë Müller-Schmidt, Siobhán O'Brien, Łukasz Wróbel.
 - [ ] **Q26** Click **Confirm import (20 guest(s))**, then go to **Seating plan** and click **Generate new plan**.
-  You should see: "Import complete: 20 guest(s) added…", then a first plan with everyone attending seated and "0 unassigned".
+  You should see: "Import complete: 20 guest(s) added…". The new plan leaves **2 guests unassigned**, Mary-Kate D'Angelo and Dolores Fernández-Ruiz, listed under "Couldn't seat everyone:" with a reason about accessible seating. That's right: they need an accessible table and none of this wedding's tables is accessible. Go to **Tables**, click **Edit** on **Table 1**, tick **Accessible (wheelchair-accessible seating)**, **Save changes**, then back on **Seating plan** click **Generate new plan** again: everyone attending is seated and it says "0 unassigned".
 
 ## 6. Look and feel (4 steps)
 

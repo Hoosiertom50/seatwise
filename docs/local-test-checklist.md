@@ -481,7 +481,7 @@ First, in browser 2: log out, sign in as `couple@demo.seatwise.test` (Jamie), op
 - [ ] **16.5** Click **Export guest list (CSV)**. Open the file, change one first name (for example `Kai` to `Kailani`), and save it as CSV. Import that file.
   You should see: the **Guest ID** list is picked automatically. Preview says "0 new, 1 updating…" and the other rows "unchanged". Confirm: Kai is now Kailani.
 - [ ] **16.6** Go to **Seating plan** and click **Generate new plan**.
-  You should see: a first plan (v1, Draft) with everyone attending seated across Table 1 to Table 4 and "0 unassigned".
+  You should see: a first plan (v1, Draft) that leaves **2 guests unassigned**, Mary-Kate D'Angelo and Dolores Fernández-Ruiz, under "Couldn't seat everyone:" with a reason about accessible seating. That's right: they need an accessible table and none of this wedding's tables is accessible. On **Tables**, **Edit** **Table 1**, tick **Accessible (wheelchair-accessible seating)**, **Save changes**; then **Generate new plan** again: everyone attending is seated across Table 1 to Table 4 and "0 unassigned".
 
 ## 17. Activity tab
 
