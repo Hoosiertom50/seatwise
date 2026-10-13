@@ -1,13 +1,17 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ConfirmDeleteButton } from "@/components/ConfirmDeleteButton";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { api, ApiError, apiErrorMessage } from "@/lib/api-client";
 import { formatDate, localTodayIso } from "@/lib/display-format";
+// TS-263: asks before creating a wedding whose date has already passed.
+import { pastWeddingDateQuestion } from "@/lib/past-wedding-date";
 import { formatGuestCounts, type WeddingSummaryDTO, type SeatingTemplateDTO } from "@seatwise/shared";
-import { NotificationsBell } from "@/components/NotificationsBell";
+// TS-264: bell · Account · Log out, the same on every signed-in page.
+import { SignedInHeader } from "@/components/SignedInHeader";
+import { LOG_OUT, LOG_OUT_FAILED_MESSAGE, logOutThisDevice } from "@/lib/log-out";
 import { EmailVerificationNotice } from "@/components/EmailVerificationNotice";
 // TS-193: the same limits the server checks (packages/shared/src/field-limits.ts).
 import { FIELD_LIMITS } from "@seatwise/shared";
@@ -82,6 +86,8 @@ export default function DashboardPage() {
   const [newNote, setNewNote] = useState("");
   const [showNote, setShowNote] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // TS-263: a past date waiting for "Save anyway" (the date and the question asked about it).
+  const [dateQuestion, setDateQuestion] = useState<{ value: string; message: string } | null>(null);
 
   // TS-19 (FR-14.4): "start from an existing template" is offered right in this create form --
   // templates are a portfolio-level asset (not scoped to any one wedding), so they're fetched
@@ -194,8 +200,36 @@ export default function DashboardPage() {
     }
   }
 
+  // PR #114 review: "Save anyway" submits the form (so a name cleared, or both template boxes
+  // unticked, while the question was up is caught as with Add wedding), saying yes to this one date.
+  const createForm = useRef<HTMLFormElement>(null);
+  const pastDateConfirmed = useRef<string | null>(null);
+  function onSaveAnyway(date: string) {
+    pastDateConfirmed.current = date;
+    createForm.current?.requestSubmit();
+    // The submit (onCreate) has read it by now; if the form's own check stopped the submit, the
+    // yes mustn't carry over to a later Add wedding with the same date.
+    pastDateConfirmed.current = null;
+  }
+
   async function onCreate(e: React.FormEvent) {
     e.preventDefault();
+    const confirmed = pastDateConfirmed.current;
+    pastDateConfirmed.current = null;
+    // TS-263: a date before today (in the planner's own time zone) is only saved once they say so
+    // -- it used to be saved without a word, and it's usually the wrong year.
+    const question = pastWeddingDateQuestion(newDate, localTodayIso());
+    if (question && confirmed !== newDate) {
+      setError(null);
+      setDateQuestion({ value: newDate, message: question });
+      return;
+    }
+    await createWedding();
+  }
+
+  // TS-263: also "Save anyway" -- creates the wedding with the date that was asked about.
+  async function createWedding() {
+    setDateQuestion(null);
     setError(null);
     setCreating(true);
     try {
@@ -233,6 +267,13 @@ export default function DashboardPage() {
     }
   }
 
+  // TS-263: "Change it" -- the typed date stays (usually only the year is wrong) and the date box
+  // gets focus.
+  function onChangeDate() {
+    setDateQuestion(null);
+    setTimeout(() => document.getElementById("new-wedding-date")?.focus(), 0);
+  }
+
   async function onDeleteTemplate(id: string) {
     // TS-182: on failure only this template comes back, in its old place -- a copy of the whole
     // list taken here used to also undo another template deleted meanwhile.
@@ -252,17 +293,36 @@ export default function DashboardPage() {
     }
   }
 
-  // TS-175: a failed log out says so (it failed silently), and a successful one replaces this
-  // page in history, so Back doesn't bounce between the dashboard and the sign-in page.
-  // TS-204 (Tom's decision): this device only -- "Log out on all devices" is on the Account page.
-  async function onLogout() {
-    try {
-      await api.post("/api/v1/auth/logout");
-    } catch {
-      setError("Couldn't log out — check your connection and try again.");
-      return;
+  // TS-264: Log out (TS-175/TS-204) is in the shared SignedInHeader now, on every signed-in page.
+  // Leaving the dashboard (Log out, Account, a notification's wedding) with something typed in the
+  // "Add a wedding" form asks first, as the wedding page does -- it used to log out and lose it.
+  const [pendingLeave, setPendingLeave] = useState<string | null>(null);
+  const leaveOpener = useRef<HTMLElement | null>(null);
+  function stay() {
+    setPendingLeave(null);
+    leaveOpener.current?.focus();
+    leaveOpener.current = null;
+  }
+  const [logOutError, setLogOutError] = useState<string | null>(null);
+  const createFormTyped = [newName, newDate, newVenue, newNote, selectedTemplateId].some((v) => v.trim() !== "");
+  function onLeave(href: string): boolean {
+    if (!createFormTyped) return true;
+    // PR #114 review: Stay (or Escape) puts focus back on the control that asked -- Log out,
+    // Account, the bell or the back link -- not the top of the page.
+    leaveOpener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    setLogOutError(null);
+    setPendingLeave(href);
+    return false;
+  }
+  async function leaveWithoutSaving() {
+    const href = pendingLeave;
+    setPendingLeave(null);
+    if (href === LOG_OUT) {
+      if (await logOutThisDevice()) router.replace("/login");
+      else setLogOutError(LOG_OUT_FAILED_MESSAGE);
+    } else if (href) {
+      router.push(href);
     }
-    router.replace("/login");
   }
 
   if (loading) {
@@ -271,33 +331,60 @@ export default function DashboardPage() {
 
   return (
     <main className="mx-auto w-full max-w-[1600px] flex-1 px-6 py-10">
-      <div className="mb-8 flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold">Your weddings</h1>
-          {userName && <p className="text-sm text-neutral-500 dark:text-neutral-400">Signed in as {userName}</p>}
-        </div>
-        <div className="flex items-center gap-2">
-          <NotificationsBell />
-          {/* TS-105 */}
-          <Link
-            href="/account"
-            className="rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800"
-          >
-            Account
-          </Link>
+      {/* TS-264: the same bell · Account · Log out as every other signed-in page. */}
+      <div className="mb-8">
+        <SignedInHeader
+          onLeave={onLeave}
+          logOutError={logOutError}
+          left={
+            <>
+              <h1 className="text-xl font-semibold sm:text-2xl">Your weddings</h1>
+              {userName && <p className="text-sm text-neutral-500 dark:text-neutral-400">Signed in as {userName}</p>}
+            </>
+          }
+        />
+      </div>
+
+      {pendingLeave && (
+        <div
+          role="alertdialog"
+          aria-labelledby="dashboard-unsaved-question"
+          // TS-212: Escape means Stay, as in every other question in the app.
+          onKeyDown={(e) => {
+            if (e.key === "Escape") {
+              e.preventDefault();
+              e.stopPropagation();
+              stay();
+            }
+          }}
+          className="mb-6 flex flex-wrap items-center gap-3 rounded-md bg-amber-50 dark:bg-amber-950 px-4 py-3 text-sm text-amber-900 dark:text-amber-200"
+        >
+          <span id="dashboard-unsaved-question" className="flex-1">
+            You&apos;ve started adding a wedding. Leave and lose what you typed?
+          </span>
           <button
-            onClick={onLogout}
-            className="rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800"
+            type="button"
+            autoFocus
+            onClick={stay}
+            className="min-h-11 rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800"
           >
-            Log out
+            Stay
+          </button>
+          <button
+            type="button"
+            onClick={() => void leaveWithoutSaving()}
+            className="min-h-11 rounded-md bg-red-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-red-800"
+          >
+            Leave without saving
           </button>
         </div>
-      </div>
+      )}
 
       {/* TS-164 */}
       <EmailVerificationNotice />
 
       <form
+        ref={createForm}
         onSubmit={onCreate}
         className="mb-8 flex flex-col gap-3 rounded-lg border border-neutral-200 dark:border-neutral-700 p-4"
       >
@@ -332,7 +419,11 @@ export default function DashboardPage() {
               type="date"
               className="rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
               value={newDate}
-              onChange={(e) => setNewDate(e.target.value)}
+              onChange={(e) => {
+                setNewDate(e.target.value);
+                // TS-263: a new date is a new answer -- the question was about the old one.
+                setDateQuestion(null);
+              }}
             />
           </div>
           <div className="flex-1">
@@ -354,6 +445,48 @@ export default function DashboardPage() {
           >
             {creating ? "Adding..." : "Add wedding"}
           </button>
+        </div>
+        {/* TS-263: asks before creating a wedding whose date has already passed. Right after Add
+            wedding, so it's the next Tab stop. The region is always on the page, so the question is
+            announced when it appears (TS-212). */}
+        <div aria-live="assertive" data-testid="new-wedding-date-question-region">
+          {dateQuestion && (
+            <div
+              role="alertdialog"
+              aria-labelledby="new-wedding-date-question"
+              // TS-212: Escape means "Change it", like the other questions in the app.
+              onKeyDown={(e) => {
+                if (e.key === "Escape") {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  onChangeDate();
+                }
+              }}
+              className="flex flex-wrap items-center gap-3 rounded-md bg-amber-50 dark:bg-amber-950 px-3 py-2 text-sm text-amber-900 dark:text-amber-200"
+            >
+              {/* basis-60: on a phone the buttons go under the question rather than squeezing it. */}
+              <span id="new-wedding-date-question" className="flex-1 basis-60">
+                {dateQuestion.message}
+              </span>
+              <button
+                type="button"
+                onClick={() => onSaveAnyway(dateQuestion.value)}
+                disabled={creating || (!!selectedTemplateId && !applyTemplateTables && !applyTemplateRules)}
+                className="min-h-11 rounded-md bg-amber-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-amber-800 disabled:opacity-50"
+              >
+                Save anyway
+              </button>
+              <button
+                type="button"
+                // PR #114 review: focus starts on the safe choice, so Escape works straight away.
+                autoFocus
+                onClick={onChangeDate}
+                className="min-h-11 rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800"
+              >
+                Change it
+              </button>
+            </div>
+          )}
         </div>
         {/* TS-19 (FR-14.4): entirely optional -- leaving this at "Start from scratch" behaves
             exactly as before this feature existed. */}

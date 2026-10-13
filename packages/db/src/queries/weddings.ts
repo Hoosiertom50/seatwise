@@ -68,7 +68,7 @@ const SELECT_WITH_GUEST_COUNT = `
 // "planStatus" comes back null (rendered as "No plan yet"), "needsReassignmentCount" correctly
 // comes back 0 (nothing to reassign without a plan), and "unassignedCount" correctly falls back to
 // every Attending guest (nothing's assigned to anything, so all of them are unassigned) since the
-// NOT EXISTS below never matches a NULL planVersionId.
+// list of seats below is empty for a NULL planVersionId.
 const SELECT_WITH_SUMMARY = `
   SELECT w.id, w."ownerId", w.name, w."eventDate"::text AS "eventDate", w."venueName", w.note,
          w.status, w."emailNotificationsEnabled", w."sideMixing", w."sideLabel1", w."sideLabel2",
@@ -93,8 +93,11 @@ const SELECT_WITH_SUMMARY = `
   LEFT JOIN LATERAL (
     SELECT COUNT(*)::int AS count FROM "guests" ag
     WHERE ag."weddingId" = w.id AND ag."dayOfAttendance" = 'ATTENDING'
-      AND NOT EXISTS (
-        SELECT 1 FROM "seat_assignments" sa WHERE sa."planVersionId" = cpv.id AND sa."guestId" = ag.id
+      -- TS-266: NOT IN (a hashed list of the plan's seats) rather than NOT EXISTS, which Postgres
+      -- can turn into a seat-by-guest loop on a newly imported wedding it has no statistics for yet.
+      -- "guestId" is never NULL, so it finds the same guests; with no plan the list is empty.
+      AND ag.id NOT IN (
+        SELECT sa."guestId" FROM "seat_assignments" sa WHERE sa."planVersionId" = cpv.id
       )
   ) unassigned ON true
   LEFT JOIN LATERAL (
@@ -378,26 +381,55 @@ export async function updateWeddingForOwner(
 // by the route.
 // TS-255: "not-owner" when the wedding is still there but was handed off after the route's owner
 // check -- the screen must not take that for a delete that already happened ("gone").
+// TS-265: the plans are now all locked FOR UPDATE (what deleting a row needs) before the DELETE --
+// the current plan's row first, as every change does, then the wedding's older plans in id order.
+// Before, the current plan was taken with the weaker lock a plan change takes and the cascade then
+// took each plan as it removed it, so now and then (a delete made while the plan was being changed
+// and replaced) it waited for a change that was waiting for it, and one of them failed. The one
+// change that can hold an older plan while waiting for the current one is a change that was
+// already waiting when a Generate replaced the plan (Postgres keeps its lock on the old row -- see
+// lockCurrentPlan). So the older plans are asked for without waiting: when one is held, the delete
+// lets go of everything, gives that change its turn, and starts again.
+const DELETE_WEDDING_ATTEMPTS = 5;
+
 export async function deleteWeddingForOwner(
   id: string,
   ownerId: string
 ): Promise<"deleted" | "gone" | "not-owner"> {
   const client = await pool.connect();
   try {
-    await beginTransaction(client);
-    const { rows } = await client.query(
-      `SELECT id, "ownerId" FROM "weddings" WHERE id = $1 FOR NO KEY UPDATE`,
-      [id]
-    );
-    if (!rows[0] || rows[0].ownerId !== ownerId) {
-      await client.query("ROLLBACK");
-      return rows[0] ? "not-owner" : "gone";
+    for (let attempt = 1; ; attempt++) {
+      await beginTransaction(client);
+      const { rows } = await client.query(
+        `SELECT id, "ownerId" FROM "weddings" WHERE id = $1 FOR NO KEY UPDATE`,
+        [id]
+      );
+      if (!rows[0] || rows[0].ownerId !== ownerId) {
+        await client.query("ROLLBACK");
+        return rows[0] ? "not-owner" : "gone";
+      }
+      await lockCurrentPlan(client, id, true);
+      try {
+        await client.query(
+          `SELECT id FROM "plan_versions" WHERE "weddingId" = $1 AND NOT "isCurrent" ORDER BY id FOR UPDATE NOWAIT`,
+          [id]
+        );
+      } catch (err) {
+        // 55P03: an older plan is held by a change that's waiting for the current one.
+        if ((err as { code?: string }).code !== "55P03") throw err;
+        await client.query("ROLLBACK");
+        if (attempt >= DELETE_WEDDING_ATTEMPTS) {
+          // 40001 is Postgres's own "try again" code; the route answers it with a 409.
+          throw Object.assign(new Error("The wedding's plans kept changing while it was being deleted."), { code: "40001" });
+        }
+        await new Promise((resolve) => setTimeout(resolve, 25 * attempt));
+        continue;
+      }
+      await lockRestrictedLists(client, id);
+      const { rowCount } = await client.query(`DELETE FROM "weddings" WHERE id = $1 AND "ownerId" = $2`, [id, ownerId]);
+      await client.query("COMMIT");
+      return (rowCount ?? 0) > 0 ? "deleted" : "gone";
     }
-    await lockCurrentPlan(client, id);
-    await lockRestrictedLists(client, id);
-    const { rowCount } = await client.query(`DELETE FROM "weddings" WHERE id = $1 AND "ownerId" = $2`, [id, ownerId]);
-    await client.query("COMMIT");
-    return (rowCount ?? 0) > 0 ? "deleted" : "gone";
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});
     throw err;

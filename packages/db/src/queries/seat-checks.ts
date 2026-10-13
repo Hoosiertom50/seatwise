@@ -349,10 +349,14 @@ export async function refreshPlanCompleteness(
   planVersionId: string,
   { bumpRevision }: { bumpRevision: boolean }
 ): Promise<void> {
+  // TS-266: "attending and not seated" is a NOT IN over this plan's seats (guestId is never NULL,
+  // so it finds the same guests as NOT EXISTS did). Postgres reads the plan's seats once into a
+  // lookup; with NOT EXISTS it could pair every guest with every seat when its statistics didn't
+  // know this plan yet (a freshly imported wedding), which took ~150-300 ms a time on 2,000 guests.
   const { rows: countRows } = await client.query(
     `SELECT
        (SELECT COUNT(*)::int FROM "guests" g WHERE g."weddingId" = $1 AND g."dayOfAttendance" = 'ATTENDING'
-          AND NOT EXISTS (SELECT 1 FROM "seat_assignments" sa WHERE sa."planVersionId" = $2 AND sa."guestId" = g.id)
+          AND g.id NOT IN (SELECT sa."guestId" FROM "seat_assignments" sa WHERE sa."planVersionId" = $2)
        ) AS "unassignedCount",
        (SELECT COUNT(*)::int FROM "seat_assignments" WHERE "planVersionId" = $2 AND "needsReassignment" = true)
          AS "needsReassignmentCount"`,
@@ -380,11 +384,13 @@ export async function refreshPlanCompleteness(
 // at all just gets "none" a few times over, which costs next to nothing.
 const LOCK_CURRENT_PLAN_ATTEMPTS = 4;
 
-export async function lockCurrentPlan(q: Queryable, weddingId: string): Promise<string | null> {
+// TS-265: `forDelete` -- the wedding delete takes the row FOR UPDATE (what deleting it needs) from
+// the start; see deleteWeddingForOwner.
+export async function lockCurrentPlan(q: Queryable, weddingId: string, forDelete = false): Promise<string | null> {
   for (let attempt = 1; attempt <= LOCK_CURRENT_PLAN_ATTEMPTS; attempt++) {
     // TS-187: NO KEY UPDATE -- see resyncTables.
     const { rows } = await q.query(
-      `SELECT id FROM "plan_versions" WHERE "weddingId" = $1 AND "isCurrent" FOR NO KEY UPDATE`,
+      `SELECT id FROM "plan_versions" WHERE "weddingId" = $1 AND "isCurrent" ${forDelete ? "FOR UPDATE" : "FOR NO KEY UPDATE"}`,
       [weddingId]
     );
     if (rows[0]) return rows[0].id as string;
