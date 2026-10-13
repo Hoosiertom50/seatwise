@@ -86,10 +86,11 @@ export function SignedInHeader({
         </button>
       </nav>
       {status !== undefined && <div className="mt-1 flex w-full justify-end text-right">{status}</div>}
-      {/* TS-212: always on the page (empty, it takes no room), so a failed log out is announced. */}
-      <p role="alert" className={`w-full text-right text-sm text-red-600 dark:text-red-400 ${shownError ? "mt-1" : ""}`}>
+      {/* TS-212: always on the page (empty, it takes no room), so a failed log out is announced. A
+          div, not a p: the tabs' own error lines are the page's red paragraphs. */}
+      <div role="alert" className={`w-full text-right text-sm text-red-600 dark:text-red-400 ${shownError ? "mt-1" : ""}`}>
         {shownError ?? ""}
-      </p>
+      </div>
     </header>
   );
 }
