@@ -197,13 +197,19 @@ const MAC_ROMAN_IN_A_WORD = new RegExp(`\\p{L}[${MAC_ROMAN_NOT_LETTERS}]\\p{L}|\
 // "Mart’" for Martí), which used to be made a plain apostrophe and saved as "Zo'" -- but not inside a
 // quoted nickname ("Robert ‘Bob’", "Robert ‘Bobby Joe’", "‘Bobby-Joe’"). And the Mac's own curly apostrophes, which windows-1252 shows as
 // Õ and Ô, inside a name ("OÕBrien", "DÔArcy", "KaÕiulani").
+// TS-262: ’ at the end of a word counts only after a consonant ("Mart’", "Lev’" for Martí, Leví) --
+// windows-1252 names end in ’ after a vowel ("Kenya’", "Andre’", "Rene’"), and Mac í after a vowel
+// at a word's end is rare. ‘ at the end (Mac ë: "Zo‘", "Chlo‘") still counts after any small letter.
+// The quoted-nickname check now looks back from the ’ or ‘ instead of from every letter -- looking
+// back from every letter of a long cell took time growing with the square of its length (a
+// 20,000-character cell took 3.7 seconds).
 const MAC_ROMAN_IN_A_NAME = new RegExp(
   [
     `\\p{Ll}‘\\p{Ll}`,
     `\\p{L}[¿§]`,
     `(?<!\\p{L})[${MAC_ROMAN_NOT_LETTERS_AT_START}]\\p{L}`,
     `\\p{L}œ(?![ui])\\p{Ll}`,
-    `(?<!['‘"“][\\p{L}\\p{M}]*)(?<![‘"“][\\p{L}\\p{M} .-]*)\\p{Ll}[’‘](?![\\p{L}\\p{M}])`,
+    `(?:\\p{Ll}‘|[^\\P{Ll}aeiou]’)(?![\\p{L}\\p{M}])(?<!['‘"“][\\p{L}\\p{M}]*[’‘])(?<![‘"“][\\p{L}\\p{M} .-]*[’‘])`,
     `\\p{Ll}[ÕÔ]\\p{L}|\\p{Lu}[ÕÔ]\\p{Lu}\\p{Ll}`,
   ].join("|"),
   "u"
@@ -223,9 +229,14 @@ const MAC_ROMAN_IN_A_NAME = new RegExp(
 // - õ after a, or after another õ, with only consonants between, and not before a vowel: the Mac's
 //   Turkish dotless ı ("Yõldõz", "Aydõn", "Sarõ"). Estonian õ is nearly always in a name's first
 //   syllable ("Tõnis", "Mõttus", "Rõõmus"), and Portuguese õ always before e ("Simões", "Camões").
+// TS-262: the code did more than the note above says -- ’ before a consonant counted too, so a lone
+// windows-1252 "Ja’nae", "Da’shawn" or "Ta’kia" was refused as Mac. Now only a consonant before the
+// ’ counts ("Mar’a", "Garc’a", "Mart’nez"), plus "u’s" (Mac "Luís", "Luísa"), which those names
+// don't have. "Shan’tel" (n before ’) still looks exactly like Mac "Ben’tez" (Benítez), so a lone
+// one is still refused; with any other Windows sign in the file it imports.
 const MAC_ROMAN_IN_A_NAME_UNLESS_WINDOWS = new RegExp(
   [
-    `[^\\P{Ll}aeiou]’\\p{Ll}|\\p{Ll}’[^\\P{Ll}aeiou]`,
+    `[^\\P{Ll}aeiou]’\\p{Ll}|u’s`,
     `\\p{L}š(?:(?!le)[rhlnmsfdgbwzc]|tt|tz|th|pf|pp)`,
     `[aAõ][b-df-hj-np-tv-z]+õ(?![aeiouõ])`,
   ].join("|"),
