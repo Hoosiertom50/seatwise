@@ -1222,6 +1222,8 @@ export function CollaboratorsTab({
                     </button>
                     <button
                       type="button"
+                      // PR #114 review: focus starts on the safe choice, so Escape works straight away.
+                      autoFocus
                       onClick={onChangeDate}
                       className="min-h-11 rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800"
                     >

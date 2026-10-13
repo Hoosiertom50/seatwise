@@ -241,3 +241,49 @@ defineQualityTest(
     }
   },
 );
+
+defineQualityTest(
+  {
+    id: "auth.log-out-from-every-signed-in-page.account-typed-password-asks-first",
+    title: "Log out on the Account page with a password typed in Delete my account asks first: Stay keeps it, Leave without saving logs out",
+    objective:
+      "Confirms (TS-264, PR #114 review) that the Account page's Log out asks before throwing away a password typed in 'Delete my account': Stay keeps the typed password and the session; Log out then Leave without saving lands on the sign-in page with the session over.",
+    expectedOutcome:
+      "After the first Log out: the question 'You've typed your password to delete your account. Leave and clear it?' shows, the address is still /account and /auth/me answers 200. After Stay: no question and the password box still holds what was typed. After Log out and Leave without saving: the browser is on /login and /auth/me answers 401.",
+    requirementIds: ["REQ-ACCOUNT-WEDDING-MANAGEMENT", "REQ-NON-FUNCTIONAL"],
+    tags: ["@mutating", "@feature:authentication", "@risk:normal", "@suite:regression"],
+  },
+  async ({ browser }, testInfo) => {
+    const { devices, signedIn, cleanUp } = await accountOnTwoDevices(browser, testInfo.workerIndex, "account-unsaved");
+    const [one] = devices;
+    try {
+      const page = await one.newPage();
+      const account = new AccountPage(page);
+      const header = new SignedInHeader(page);
+      await account.goto();
+      await account.typeDeletePassword("not-sent-yet");
+
+      await test.step("Log out asks first, and nothing is logged out yet", async () => {
+        await header.pressLogOut();
+        await expect(account.leaveQuestion()).toBeVisible();
+        await expect(page).toHaveURL(/\/account$/);
+        expect(await signedIn(one)).toBe(200);
+      });
+
+      await test.step("Stay keeps the typed password and the session", async () => {
+        await account.stayOnPage();
+        await expect(account.leaveQuestion()).toHaveCount(0);
+        await expect(account.deletePasswordInput()).toHaveValue("not-sent-yet");
+        expect(await signedIn(one)).toBe(200);
+      });
+
+      await test.step("Log out, then Leave without saving, logs out", async () => {
+        await header.pressLogOut();
+        await Promise.all([page.waitForURL(/\/login/), account.leaveWithoutSaving()]);
+        expect(await signedIn(one)).toBe(401);
+      });
+    } finally {
+      await cleanUp();
+    }
+  },
+);

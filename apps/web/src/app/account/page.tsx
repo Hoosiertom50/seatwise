@@ -8,6 +8,7 @@ import { ConfirmDeleteButton } from "@/components/ConfirmDeleteButton";
 import { AppearanceSetting } from "@/components/AppearanceSetting";
 // TS-264: bell · Account · Log out, the same on every signed-in page.
 import { SignedInHeader } from "@/components/SignedInHeader";
+import { LOG_OUT, LOG_OUT_FAILED_MESSAGE, logOutThisDevice } from "@/lib/log-out";
 import { SUPPORT_EMAIL, SUPPORT_MAILTO, SUPPORT_PROMISE } from "@/lib/support";
 // TS-193: the same limits the server checks (packages/shared/src/field-limits.ts).
 import { FIELD_LIMITS } from "@seatwise/shared";
@@ -19,6 +20,27 @@ export default function AccountPage() {
   const router = useRouter();
   const [user, setUser] = useState<{ name: string; email: string } | null>(null);
   const [password, setPassword] = useState("");
+  // TS-264 (PR #114 review): leaving with a password typed in "Delete my account" -- Log out, the
+  // bell, or Back to your weddings -- asks first rather than quietly throwing it away.
+  const [pendingLeave, setPendingLeave] = useState<string | null>(null);
+  const [logOutError, setLogOutError] = useState<string | null>(null);
+  function onLeave(href: string): boolean {
+    if (password === "") return true;
+    setLogOutError(null);
+    setPendingLeave(href);
+    return false;
+  }
+  async function leaveWithoutSaving() {
+    const href = pendingLeave;
+    setPendingLeave(null);
+    setPassword("");
+    if (href === LOG_OUT) {
+      if (await logOutThisDevice()) router.replace("/login");
+      else setLogOutError(LOG_OUT_FAILED_MESSAGE);
+    } else if (href) {
+      router.push(href);
+    }
+  }
   const [error, setError] = useState<string | null>(null);
   const [ownedWeddings, setOwnedWeddings] = useState<{ id: string; name: string }[]>([]);
   const [deleted, setDeleted] = useState(false);
@@ -116,12 +138,54 @@ export default function AccountPage() {
       {/* TS-264: the same bell · Account · Log out as every other signed-in page. */}
       <SignedInHeader
         onAccountPage
+        onLeave={onLeave}
+        logOutError={logOutError}
         left={
-          <Link href="/dashboard" className="inline-flex min-h-11 items-center text-sm text-neutral-500 dark:text-neutral-400 underline">
+          <Link
+            href="/dashboard"
+            onClick={(e) => {
+              if (!onLeave("/dashboard")) e.preventDefault();
+            }}
+            className="inline-flex min-h-11 items-center text-sm text-neutral-500 dark:text-neutral-400 underline"
+          >
             ← Back to your weddings
           </Link>
         }
       />
+      {pendingLeave && (
+        <div
+          role="alertdialog"
+          aria-labelledby="account-unsaved-question"
+          // TS-212: Escape means Stay, as in every other question in the app.
+          onKeyDown={(e) => {
+            if (e.key === "Escape") {
+              e.preventDefault();
+              e.stopPropagation();
+              setPendingLeave(null);
+            }
+          }}
+          className="mt-4 flex flex-wrap items-center gap-3 rounded-md bg-amber-50 dark:bg-amber-950 px-4 py-3 text-sm text-amber-900 dark:text-amber-200"
+        >
+          <span id="account-unsaved-question" className="flex-1">
+            You&apos;ve typed your password to delete your account. Leave and clear it?
+          </span>
+          <button
+            type="button"
+            autoFocus
+            onClick={() => setPendingLeave(null)}
+            className="min-h-11 rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800"
+          >
+            Stay
+          </button>
+          <button
+            type="button"
+            onClick={() => void leaveWithoutSaving()}
+            className="min-h-11 rounded-md bg-red-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-red-800"
+          >
+            Leave without saving
+          </button>
+        </div>
+      )}
       <h1 className="mb-1 mt-4 text-2xl font-semibold">Your account</h1>
       {/* TS-199: a long name or address wraps instead of running off a phone screen. */}
       <p className="mb-8 break-words text-sm text-neutral-600 dark:text-neutral-300 [overflow-wrap:anywhere]">

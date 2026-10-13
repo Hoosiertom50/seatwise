@@ -21,6 +21,24 @@ export class AccountPage extends BasePage {
     ]);
   }
 
+  /** TS-264: typing (without pressing) the password in "Delete my account". */
+  async typeDeletePassword(password: string): Promise<void> {
+    await this.page.getByLabel("Your password", { exact: true }).fill(password);
+  }
+  deletePasswordInput() {
+    return this.page.getByLabel("Your password", { exact: true });
+  }
+  /** TS-264: the question shown when leaving with a password typed in "Delete my account". */
+  leaveQuestion() {
+    return this.page.getByRole("alertdialog", { name: /typed your password to delete your account/ });
+  }
+  async stayOnPage(): Promise<void> {
+    await this.leaveQuestion().getByRole("button", { name: "Stay", exact: true }).click();
+  }
+  async leaveWithoutSaving(): Promise<void> {
+    await this.leaveQuestion().getByRole("button", { name: "Leave without saving", exact: true }).click();
+  }
+
   /** TS-100: the "Get help" section and its Email support link. */
   getHelpSection() {
     return this.page.getByRole("region", { name: "Get help", exact: true });

@@ -18,12 +18,17 @@ import { patchWedding } from "../data/api.js";
 
 // Far enough either side of today that no time zone makes it today.
 const PAST = "2020-05-16";
-// Always about two years ahead of the day the test runs, so it never becomes a past date.
-const FUTURE = (() => {
+// Always about two years ahead of the day the test runs, so it never becomes a past date (and a
+// second one a month after it).
+const yearsAhead = (years: number, months = 0) => {
   const d = new Date();
-  d.setFullYear(d.getFullYear() + 2);
+  d.setUTCDate(1);
+  d.setUTCFullYear(d.getUTCFullYear() + years, d.getUTCMonth() + months);
   return d.toISOString().slice(0, 10);
-})();
+};
+const FUTURE = yearsAhead(2);
+const LATER_A = yearsAhead(3);
+const LATER_B = yearsAhead(3, 1);
 
 // Two of the page's 4-second checks, with headroom.
 const WITHIN_SECONDS = { timeout: 10_000 };
@@ -145,7 +150,7 @@ defineQualityTest(
     objective:
       "Confirms (TS-263, following TS-246/TS-251) that when the owner has the 'has already passed' question up for a wedding date, and the date is saved elsewhere (another tab) meanwhile, pressing 'Save anyway' -- after the page's 4-second check has brought in the newer settings -- doesn't overwrite it: it is refused with 'changed since you opened them', the question goes and the box shows the newer date. A fresh change afterwards saves normally.",
     expectedOutcome:
-      "After Save anyway: the 'changed since you opened them' message shows, the question is gone, the date box reads 2031-01-01 and the server keeps 2031-01-01. Then 2031-02-01 saves with 'Saved' and no message.",
+      "After Save anyway: the 'changed since you opened them' message shows, the question is gone, the date box reads the other tab's future date and the server keeps it. Then a later future date saves with 'Saved' and no message.",
     requirementIds: ["REQ-ACCOUNT-WEDDING-MANAGEMENT", "REQ-NON-FUNCTIONAL"],
     tags: ["@mutating", "@feature:account", "@risk:normal", "@suite:regression"],
   },
@@ -159,7 +164,7 @@ defineQualityTest(
     await test.step("The question is up while the date is saved elsewhere", async () => {
       await tab.pressSaveDateAndVenue(PAST);
       await expect(tab.pastDateQuestion()).toBeVisible();
-      expect((await patchWedding(context.request, w, { data: { eventDate: "2031-01-01" } })).ok()).toBe(true);
+      expect((await patchWedding(context.request, w, { data: { eventDate: LATER_A } })).ok()).toBe(true);
       // A check sent after that save has answered carries the newer settings.
       for (let i = 0; i < 2; i++)
         await page.waitForResponse(
@@ -173,13 +178,13 @@ defineQualityTest(
       await tab.pressSaveDateAnyway();
       await expect(tab.message(SETTINGS_CHANGED_ELSEWHERE)).toBeVisible();
       await expect(tab.pastDateQuestion()).toHaveCount(0);
-      await expect(tab.weddingDateInput()).toHaveValue("2031-01-01");
-      expect(await savedDate()).toBe("2031-01-01");
+      await expect(tab.weddingDateInput()).toHaveValue(LATER_A);
+      expect(await savedDate()).toBe(LATER_A);
     });
 
     await test.step("A fresh change then saves", async () => {
-      await tab.saveDateAndVenue("2031-02-01", "");
-      expect(await savedDate()).toBe("2031-02-01");
+      await tab.saveDateAndVenue(LATER_B, "");
+      expect(await savedDate()).toBe(LATER_B);
       await expect(tab.message(SETTINGS_CHANGED_ELSEWHERE)).toHaveCount(0);
     });
   },

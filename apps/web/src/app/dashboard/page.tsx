@@ -284,7 +284,7 @@ export default function DashboardPage() {
   // "Add a wedding" form asks first, as the wedding page does -- it used to log out and lose it.
   const [pendingLeave, setPendingLeave] = useState<string | null>(null);
   const [logOutError, setLogOutError] = useState<string | null>(null);
-  const createFormTyped = [newName, newDate, newVenue, newNote].some((v) => v.trim() !== "");
+  const createFormTyped = [newName, newDate, newVenue, newNote, selectedTemplateId].some((v) => v.trim() !== "");
   function onLeave(href: string): boolean {
     if (!createFormTyped) return true;
     setLogOutError(null);
@@ -454,6 +454,8 @@ export default function DashboardPage() {
               </button>
               <button
                 type="button"
+                // PR #114 review: focus starts on the safe choice, so Escape works straight away.
+                autoFocus
                 onClick={onChangeDate}
                 className="min-h-11 rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800"
               >
