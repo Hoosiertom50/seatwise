@@ -251,7 +251,7 @@ defineQualityTest(
     objective:
       "Confirms (TS-264, PR #114 review) that the Account page's Log out asks before throwing away a password typed in 'Delete my account': Stay keeps the typed password and the session; Log out then Leave without saving lands on the sign-in page with the session over.",
     expectedOutcome:
-      "After the first Log out: the question 'You've typed your password to delete your account. Leave and clear it?' shows, the address is still /account and /auth/me answers 200. After Stay: no question, the password box still holds what was typed and Log out has focus. Escape on the question does the same. After Log out and Leave without saving: the browser is on /login and /auth/me answers 401.",
+      "After the first Log out: the question 'You've typed your password to delete your account. Leave and clear it?' shows, the address is still /account and /auth/me answers 200. After Stay: no question, the password box still holds what was typed and Log out has focus. Account (the page it is on) asks nothing and keeps the password. Escape on the question does the same. After Log out and Leave without saving: the browser is on /login and /auth/me answers 401.",
     requirementIds: ["REQ-ACCOUNT-WEDDING-MANAGEMENT", "REQ-NON-FUNCTIONAL"],
     tags: ["@mutating", "@feature:authentication", "@risk:normal", "@suite:regression"],
   },
@@ -278,6 +278,13 @@ defineQualityTest(
         await expect(account.deletePasswordInput()).toHaveValue("not-sent-yet");
         await expect(header.logOutButton()).toBeFocused();
         expect(await signedIn(one)).toBe(200);
+      });
+
+      await test.step("Account (this same page) asks nothing and keeps the typed password", async () => {
+        await header.accountLink().click();
+        await expect(account.leaveQuestion()).toHaveCount(0);
+        await expect(page).toHaveURL(/\/account$/);
+        await expect(account.deletePasswordInput()).toHaveValue("not-sent-yet");
       });
 
       await test.step("Escape also means Stay, with focus back on Log out", async () => {

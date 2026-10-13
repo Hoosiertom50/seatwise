@@ -73,6 +73,12 @@ export function SignedInHeader({
           aria-current={onAccountPage ? "page" : undefined}
           ref={accountLink}
           onClick={(e) => {
+            // PR #114 review: already here -- nothing to leave, so nothing to ask (it used to offer
+            // to clear a typed password and then stay on this same page).
+            if (onAccountPage) {
+              e.preventDefault();
+              return;
+            }
             if (!onLeave) return;
             accountLink.current?.focus(); // As for Log out below.
             if (!onLeave("/account")) e.preventDefault();
