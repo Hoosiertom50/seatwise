@@ -358,3 +358,56 @@ defineQualityTest(
     }
   },
 );
+
+defineQualityTest(
+  {
+    id: "auth.log-out-from-every-signed-in-page.typed-venue-asks-first",
+    title: "Log out with a venue typed but not saved asks first: Stay keeps it, Leave without saving logs out",
+    objective:
+      "Confirms (TS-264, PR #114 review) that Date and venue, which only save with their button, count as unsaved while changed: Log out with a new venue typed (Save not pressed) asks 'You have unsaved changes on this tab' instead of logging out; Stay keeps the typed venue and the session; Log out then Leave without saving lands on the sign-in page and the venue was not saved.",
+    expectedOutcome:
+      "After the first Log out: the question shows, the address is still the wedding and /auth/me answers 200. After Stay: the Venue box still reads 'Typed Not Saved Hall'. After Log out and Leave without saving: /login, /auth/me answers 401, and the second browser reads no venue from the server.",
+    requirementIds: ["REQ-ACCOUNT-WEDDING-MANAGEMENT", "REQ-NON-FUNCTIONAL"],
+    tags: ["@mutating", "@feature:authentication", "@risk:high", "@suite:regression"],
+  },
+  async ({ browser }, testInfo) => {
+    const { devices, signedIn, cleanUp } = await accountOnTwoDevices(browser, testInfo.workerIndex, "header-venue");
+    const [one, two] = devices;
+    try {
+      const wedding = await new WeddingDataSetup(one.request).createWedding(uniqueTitle(testInfo.workerIndex, "Typed Venue Wedding"));
+      const page = await one.newPage();
+      const collaborators = new CollaboratorsTabPage(page);
+      const detail = new WeddingDetailPage(page);
+      const header = new SignedInHeader(page);
+      await collaborators.goto(wedding.id);
+      await collaborators.venueInput().fill("Typed Not Saved Hall");
+
+      await test.step("Log out asks first, and nothing is logged out yet", async () => {
+        await header.pressLogOut();
+        await expect(detail.unsavedChangesPrompt()).toBeVisible();
+        await expect(page).toHaveURL(new RegExp(`/weddings/${wedding.id}$`));
+        expect(await signedIn(one)).toBe(200);
+      });
+
+      await test.step("Stay keeps the typed venue and the session", async () => {
+        await detail.stayOnTab();
+        await expect(detail.unsavedChangesPrompt()).toHaveCount(0);
+        await expect(collaborators.venueInput()).toHaveValue("Typed Not Saved Hall");
+        expect(await signedIn(one)).toBe(200);
+      });
+
+      await test.step("Log out, then Leave without saving, logs out without saving the venue", async () => {
+        await header.pressLogOut();
+        await expect(detail.unsavedChangesPrompt()).toBeVisible();
+        await Promise.all([page.waitForURL(/\/login/), detail.leaveTabWithoutSaving()]);
+        expect(await signedIn(one)).toBe(401);
+        const saved = ((await (await two.request.get(`/api/v1/weddings/${wedding.id}`)).json()) as {
+          wedding: { venueName: string | null };
+        }).wedding;
+        expect(saved.venueName).toBeNull();
+      });
+    } finally {
+      await cleanUp();
+    }
+  },
+);
