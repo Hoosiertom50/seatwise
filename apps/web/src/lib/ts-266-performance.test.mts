@@ -61,6 +61,9 @@ function membersWithEmail(n: number): Statement[] {
   const everyone = ["owner", ...ids("c", n)].map((id) => ({ id, email: `${id}@example.invalid`, emailVerifiedAt: new Date(), wantsEmail: true }));
   const run = async (sql: string, params: unknown[] = []) => {
     const text = sql.replace(/\s+/g, " ").trim();
+    // PR #114 review: the old-counter cleanup runs on about 1 request in 100 (pruneOldCounters) --
+    // not part of what's counted here, so it can't fail the test at random.
+    if (/^DELETE FROM "rate_limit_counters" WHERE "windowStart" </.test(text)) return { rows: [], rowCount: 0 };
     log.push({ sql: text, params });
     let rows: Rows = [];
     if (/^SELECT "ownerId", name, "emailNotificationsEnabled" FROM "weddings"/.test(text)) rows = [{ ownerId: "owner", name: "W", emailNotificationsEnabled: true }];
