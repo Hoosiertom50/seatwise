@@ -68,7 +68,7 @@ const SELECT_WITH_GUEST_COUNT = `
 // "planStatus" comes back null (rendered as "No plan yet"), "needsReassignmentCount" correctly
 // comes back 0 (nothing to reassign without a plan), and "unassignedCount" correctly falls back to
 // every Attending guest (nothing's assigned to anything, so all of them are unassigned) since the
-// NOT EXISTS below never matches a NULL planVersionId.
+// list of seats below is empty for a NULL planVersionId.
 const SELECT_WITH_SUMMARY = `
   SELECT w.id, w."ownerId", w.name, w."eventDate"::text AS "eventDate", w."venueName", w.note,
          w.status, w."emailNotificationsEnabled", w."sideMixing", w."sideLabel1", w."sideLabel2",
@@ -93,8 +93,11 @@ const SELECT_WITH_SUMMARY = `
   LEFT JOIN LATERAL (
     SELECT COUNT(*)::int AS count FROM "guests" ag
     WHERE ag."weddingId" = w.id AND ag."dayOfAttendance" = 'ATTENDING'
-      AND NOT EXISTS (
-        SELECT 1 FROM "seat_assignments" sa WHERE sa."planVersionId" = cpv.id AND sa."guestId" = ag.id
+      -- TS-266: NOT IN (a hashed list of the plan's seats) rather than NOT EXISTS, which Postgres
+      -- can turn into a seat-by-guest loop on a newly imported wedding it has no statistics for yet.
+      -- "guestId" is never NULL, so it finds the same guests; with no plan the list is empty.
+      AND ag.id NOT IN (
+        SELECT sa."guestId" FROM "seat_assignments" sa WHERE sa."planVersionId" = cpv.id
       )
   ) unassigned ON true
   LEFT JOIN LATERAL (
