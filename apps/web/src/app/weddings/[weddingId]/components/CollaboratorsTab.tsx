@@ -448,7 +448,7 @@ export function CollaboratorsTab({
       setDateQuestion({ value: eventDate, message: question });
       return;
     }
-    await saveDetails(eventDate);
+    await saveDetailsTracked(eventDate);
   }
 
   // TS-246: the date or venue was saved elsewhere while being changed here -- both boxes show what's
@@ -479,7 +479,7 @@ export function CollaboratorsTab({
       setVenueName(wedding.venueName ?? "");
       return;
     }
-    await saveDetails(value);
+    await saveDetailsTracked(value);
   }
 
   // TS-263: "Change it" -- the typed date stays (usually only the year is wrong) and still counts as
@@ -489,8 +489,15 @@ export function CollaboratorsTab({
     setTimeout(() => document.getElementById("wedding-date")?.focus(), 0);
   }
 
-  async function saveDetails(date: string) {
-    if (!wedding) return;
+  // TS-264: registered with the page's saves, so Log out, Account and the other ways off the page
+  // wait for it (and ask if it fails) instead of signing out while it's on its way.
+  function saveDetailsTracked(date: string) {
+    return settingFields.trackSave("setting-details", saveDetails(date));
+  }
+
+  /** False if the date and venue weren't saved. */
+  async function saveDetails(date: string): Promise<boolean> {
+    if (!wedding) return false;
     setDateQuestion(null);
     setSavingDetails(true);
     setDetailsSaved(false);
@@ -516,6 +523,7 @@ export function CollaboratorsTab({
       setEventDate(updated.eventDate ?? "");
       setVenueName(updated.venueName ?? "");
       setDetailsSaved(true);
+      return true;
     } catch (err) {
       setError(apiErrorMessage(err, ["eventDate", "venueName"], "Couldn't save the date and venue."));
       // TS-214: on a conflict both boxes show what's saved now; the change can be made again.
@@ -525,6 +533,7 @@ export function CollaboratorsTab({
         setVenueName(fresh.venueName ?? "");
         changedElsewhere("setting-date", "setting-venue"); // TS-246: they show the latest now.
       }
+      return false;
     } finally {
       setSavingDetails(false);
     }

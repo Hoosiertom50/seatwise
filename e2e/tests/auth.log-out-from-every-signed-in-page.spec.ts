@@ -16,6 +16,7 @@ import type { Browser, BrowserContext } from "@playwright/test";
 import { expect, defineQualityTest, test } from "../fixtures/index.js";
 import { SignedInHeader } from "../components/SignedInHeader.js";
 import { AccountPage } from "../pages/AccountPage.js";
+import { CollaboratorsTabPage } from "../pages/CollaboratorsTabPage.js";
 import { DashboardPage } from "../pages/DashboardPage.js";
 import { DayOfTabPage } from "../pages/DayOfTabPage.js";
 import { WeddingDetailPage } from "../pages/WeddingDetailPage.js";
@@ -281,6 +282,66 @@ defineQualityTest(
         await header.pressLogOut();
         await Promise.all([page.waitForURL(/\/login/), account.leaveWithoutSaving()]);
         expect(await signedIn(one)).toBe(401);
+      });
+    } finally {
+      await cleanUp();
+    }
+  },
+);
+
+defineQualityTest(
+  {
+    id: "auth.log-out-from-every-signed-in-page.waits-for-date-and-venue-save",
+    title: "Log out pressed while Save date and venue is on its way waits for the save, then logs out",
+    objective:
+      "Confirms (TS-264, PR #114 review) that the Date and venue save is one of the page's saves: with its request held back, Log out neither signs out nor leaves the page; once the save answers, the browser lands on the sign-in page and the new date and venue are saved.",
+    expectedOutcome:
+      "While the save is held: the address is still the wedding and /auth/me answers 200. After it is let through: the browser is on /login, its /auth/me answers 401, and the second browser reads the new date and venue from the server.",
+    requirementIds: ["REQ-ACCOUNT-WEDDING-MANAGEMENT", "REQ-NON-FUNCTIONAL"],
+    tags: ["@mutating", "@feature:authentication", "@risk:high", "@suite:regression"],
+  },
+  async ({ browser }, testInfo) => {
+    const { devices, signedIn, cleanUp } = await accountOnTwoDevices(browser, testInfo.workerIndex, "header-saving");
+    const [one, two] = devices;
+    try {
+      const wedding = await new WeddingDataSetup(one.request).createWedding(uniqueTitle(testInfo.workerIndex, "Saving Log Out Wedding"));
+      const d = new Date();
+      d.setUTCDate(1);
+      d.setUTCFullYear(d.getUTCFullYear() + 2);
+      const date = d.toISOString().slice(0, 10);
+      const page = await one.newPage();
+      const collaborators = new CollaboratorsTabPage(page);
+      const header = new SignedInHeader(page);
+      await collaborators.goto(wedding.id);
+      await collaborators.venueInput().fill("Held Back Hall");
+
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => (release = resolve));
+      let saveSeen!: () => void;
+      const seen = new Promise<void>((resolve) => (saveSeen = resolve));
+      const weddingAddress = new RegExp(`/api/v1/weddings/${wedding.id}$`);
+      await page.route(weddingAddress, async (route) => {
+        if (route.request().method() !== "PATCH") return route.continue();
+        saveSeen();
+        await held;
+        await route.continue();
+      });
+
+      await test.step("Log out while the save is held: still signed in, still on the wedding", async () => {
+        await collaborators.pressSaveDateAndVenue(date);
+        await seen;
+        await header.pressLogOut();
+        await expect(page).toHaveURL(new RegExp(`/weddings/${wedding.id}$`));
+        expect(await signedIn(one)).toBe(200);
+      });
+
+      await test.step("Once the save answers, Log out carries on and the date and venue are saved", async () => {
+        await Promise.all([page.waitForURL(/\/login/), Promise.resolve().then(release)]);
+        expect(await signedIn(one)).toBe(401);
+        const saved = ((await (await two.request.get(`/api/v1/weddings/${wedding.id}`)).json()) as {
+          wedding: { eventDate: string | null; venueName: string | null };
+        }).wedding;
+        expect(saved).toMatchObject({ eventDate: date, venueName: "Held Back Hall" });
       });
     } finally {
       await cleanUp();
