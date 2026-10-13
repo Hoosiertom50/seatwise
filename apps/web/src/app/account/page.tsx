@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { api, ApiError } from "@/lib/api-client";
@@ -23,9 +23,18 @@ export default function AccountPage() {
   // TS-264 (PR #114 review): leaving with a password typed in "Delete my account" -- Log out, the
   // bell, or Back to your weddings -- asks first rather than quietly throwing it away.
   const [pendingLeave, setPendingLeave] = useState<string | null>(null);
+  const leaveOpener = useRef<HTMLElement | null>(null);
+  function stay() {
+    setPendingLeave(null);
+    leaveOpener.current?.focus();
+    leaveOpener.current = null;
+  }
   const [logOutError, setLogOutError] = useState<string | null>(null);
   function onLeave(href: string): boolean {
     if (password === "") return true;
+    // PR #114 review: Stay (or Escape) puts focus back on the control that asked -- Log out,
+    // Account, the bell or the back link -- not the top of the page.
+    leaveOpener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     setLogOutError(null);
     setPendingLeave(href);
     return false;
@@ -144,6 +153,7 @@ export default function AccountPage() {
           <Link
             href="/dashboard"
             onClick={(e) => {
+              e.currentTarget.focus(); // Safari doesn't focus a clicked link; Stay brings focus back here.
               if (!onLeave("/dashboard")) e.preventDefault();
             }}
             className="inline-flex min-h-11 items-center text-sm text-neutral-500 dark:text-neutral-400 underline"
@@ -161,7 +171,7 @@ export default function AccountPage() {
             if (e.key === "Escape") {
               e.preventDefault();
               e.stopPropagation();
-              setPendingLeave(null);
+              stay();
             }
           }}
           className="mt-4 flex flex-wrap items-center gap-3 rounded-md bg-amber-50 dark:bg-amber-950 px-4 py-3 text-sm text-amber-900 dark:text-amber-200"
@@ -172,7 +182,7 @@ export default function AccountPage() {
           <button
             type="button"
             autoFocus
-            onClick={() => setPendingLeave(null)}
+            onClick={stay}
             className="min-h-11 rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800"
           >
             Stay

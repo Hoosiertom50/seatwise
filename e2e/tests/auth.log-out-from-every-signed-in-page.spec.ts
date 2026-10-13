@@ -203,7 +203,7 @@ defineQualityTest(
     objective:
       "Confirms (TS-264, PR #114 review) that the dashboard's Log out goes through an unsaved-changes question when something has been typed in the 'Add a wedding' form: Stay keeps the typing and the session; Log out then Leave without saving lands on the sign-in page with the session over. With nothing typed, Log out goes straight through (covered by the other tests).",
     expectedOutcome:
-      "After the first Log out: the question 'You've started adding a wedding. Leave and lose what you typed?' shows, the address is still the dashboard and /auth/me answers 200. After Stay: no question, the wedding-name box still reads the typed name. After Log out and Leave without saving: the browser is on /login and /auth/me answers 401.",
+      "After the first Log out: the question 'You've started adding a wedding. Leave and lose what you typed?' shows, the address is still the dashboard and /auth/me answers 200. After Stay: no question, the wedding-name box still reads the typed name and Log out has focus. After Log out and Leave without saving: the browser is on /login and /auth/me answers 401.",
     requirementIds: ["REQ-ACCOUNT-WEDDING-MANAGEMENT", "REQ-NON-FUNCTIONAL"],
     tags: ["@mutating", "@feature:authentication", "@risk:normal", "@suite:regression"],
   },
@@ -225,10 +225,11 @@ defineQualityTest(
         expect(await signedIn(one)).toBe(200);
       });
 
-      await test.step("Stay keeps the typing and the session", async () => {
+      await test.step("Stay keeps the typing and the session, with focus back on Log out", async () => {
         await dashboard.stayOnDashboard();
         await expect(question).toHaveCount(0);
         await expect(dashboard.weddingNameInput()).toHaveValue("Half-typed wedding");
+        await expect(header.logOutButton()).toBeFocused();
         expect(await signedIn(one)).toBe(200);
       });
 
@@ -250,7 +251,7 @@ defineQualityTest(
     objective:
       "Confirms (TS-264, PR #114 review) that the Account page's Log out asks before throwing away a password typed in 'Delete my account': Stay keeps the typed password and the session; Log out then Leave without saving lands on the sign-in page with the session over.",
     expectedOutcome:
-      "After the first Log out: the question 'You've typed your password to delete your account. Leave and clear it?' shows, the address is still /account and /auth/me answers 200. After Stay: no question and the password box still holds what was typed. After Log out and Leave without saving: the browser is on /login and /auth/me answers 401.",
+      "After the first Log out: the question 'You've typed your password to delete your account. Leave and clear it?' shows, the address is still /account and /auth/me answers 200. After Stay: no question, the password box still holds what was typed and Log out has focus. Escape on the question does the same. After Log out and Leave without saving: the browser is on /login and /auth/me answers 401.",
     requirementIds: ["REQ-ACCOUNT-WEDDING-MANAGEMENT", "REQ-NON-FUNCTIONAL"],
     tags: ["@mutating", "@feature:authentication", "@risk:normal", "@suite:regression"],
   },
@@ -271,11 +272,20 @@ defineQualityTest(
         expect(await signedIn(one)).toBe(200);
       });
 
-      await test.step("Stay keeps the typed password and the session", async () => {
+      await test.step("Stay keeps the typed password and the session, with focus back on Log out", async () => {
         await account.stayOnPage();
         await expect(account.leaveQuestion()).toHaveCount(0);
         await expect(account.deletePasswordInput()).toHaveValue("not-sent-yet");
+        await expect(header.logOutButton()).toBeFocused();
         expect(await signedIn(one)).toBe(200);
+      });
+
+      await test.step("Escape also means Stay, with focus back on Log out", async () => {
+        await header.pressLogOut();
+        await expect(account.leaveQuestion()).toBeVisible();
+        await page.keyboard.press("Escape");
+        await expect(account.leaveQuestion()).toHaveCount(0);
+        await expect(header.logOutButton()).toBeFocused();
       });
 
       await test.step("Log out, then Leave without saving, logs out", async () => {

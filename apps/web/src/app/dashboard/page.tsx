@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ConfirmDeleteButton } from "@/components/ConfirmDeleteButton";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
@@ -283,10 +283,19 @@ export default function DashboardPage() {
   // Leaving the dashboard (Log out, Account, a notification's wedding) with something typed in the
   // "Add a wedding" form asks first, as the wedding page does -- it used to log out and lose it.
   const [pendingLeave, setPendingLeave] = useState<string | null>(null);
+  const leaveOpener = useRef<HTMLElement | null>(null);
+  function stay() {
+    setPendingLeave(null);
+    leaveOpener.current?.focus();
+    leaveOpener.current = null;
+  }
   const [logOutError, setLogOutError] = useState<string | null>(null);
   const createFormTyped = [newName, newDate, newVenue, newNote, selectedTemplateId].some((v) => v.trim() !== "");
   function onLeave(href: string): boolean {
     if (!createFormTyped) return true;
+    // PR #114 review: Stay (or Escape) puts focus back on the control that asked -- Log out,
+    // Account, the bell or the back link -- not the top of the page.
+    leaveOpener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     setLogOutError(null);
     setPendingLeave(href);
     return false;
@@ -331,7 +340,7 @@ export default function DashboardPage() {
             if (e.key === "Escape") {
               e.preventDefault();
               e.stopPropagation();
-              setPendingLeave(null);
+              stay();
             }
           }}
           className="mb-6 flex flex-wrap items-center gap-3 rounded-md bg-amber-50 dark:bg-amber-950 px-4 py-3 text-sm text-amber-900 dark:text-amber-200"
@@ -342,7 +351,7 @@ export default function DashboardPage() {
           <button
             type="button"
             autoFocus
-            onClick={() => setPendingLeave(null)}
+            onClick={stay}
             className="min-h-11 rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800"
           >
             Stay

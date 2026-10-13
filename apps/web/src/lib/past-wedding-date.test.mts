@@ -27,10 +27,21 @@ test("an empty date, today and a later date save straight away", () => {
 });
 
 test("'today' is the planner's own date -- late evening in the US is not yet tomorrow", () => {
-  // 9pm on 13 Oct is already 14 Oct in UTC; a wedding on the 13th is today, not past, and one on
-  // the 12th is past. Compared with UTC's date, the 13th would have asked.
-  const lateEvening = new Date(2026, 9, 13, 21, 0, 0);
-  const localToday = localTodayIso(lateEvening);
+  // 9pm on 13 Oct in New York is already 14 Oct in UTC; a wedding on the 13th is today, not past,
+  // and one on the 12th is past. Compared with UTC's date, the 13th would have asked. The zone is
+  // set here (PR #114 review): on a UTC test machine a local 9pm is still the 13th in UTC too.
+  const savedZone = process.env.TZ;
+  process.env.TZ = "America/New_York";
+  let localToday: string;
+  const lateEvening = new Date(Date.UTC(2026, 9, 14, 1, 0, 0));
+  try {
+    localToday = localTodayIso(lateEvening);
+  } finally {
+    if (savedZone === undefined) delete process.env.TZ;
+    else process.env.TZ = savedZone;
+  }
+  assert.equal(lateEvening.toISOString().slice(0, 10), "2026-10-14");
+  assert.equal(localToday, "2026-10-13");
   assert.equal(pastWeddingDateQuestion("2026-10-13", localToday), null);
   assert.notEqual(pastWeddingDateQuestion("2026-10-12", localToday), null);
 });

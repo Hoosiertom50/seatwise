@@ -47,6 +47,9 @@ defineQualityTest(
       await guests.guestRow(fullName).editFirstName("Renamed");
       await expect.poll(async () => (await weddingData.listGuests(w)).some((g) => g.firstName === "Renamed")).toBe(true);
       await expect(guests.message(/changed since you loaded it/)).toHaveCount(0);
+      // The page takes its extra Back entry off once the save is done; opening the Budget tab before
+      // then (a test can, within milliseconds) has that Back cancel the page load.
+      await wedding.waitForBackGuardGone();
     });
 
     await test.step("A vendor edit that loses to someone else's change closes and doesn't overwrite it", async () => {
