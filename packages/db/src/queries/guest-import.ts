@@ -706,7 +706,7 @@ export async function commitGuestImport(
       const { rows: countRows } = await client.query(
         `SELECT
            (SELECT COUNT(*)::int FROM "guests" g WHERE g."weddingId" = $1 AND g."dayOfAttendance" = 'ATTENDING'
-              AND NOT EXISTS (SELECT 1 FROM "seat_assignments" sa WHERE sa."planVersionId" = $2 AND sa."guestId" = g.id)
+              AND g.id NOT IN (SELECT sa."guestId" FROM "seat_assignments" sa WHERE sa."planVersionId" = $2) -- TS-266
            ) AS "unassignedCount",
            (SELECT COUNT(*)::int FROM "seat_assignments" WHERE "planVersionId" = $2 AND "needsReassignment" = true)
              AS "needsReassignmentCount"`,

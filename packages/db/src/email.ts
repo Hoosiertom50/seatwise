@@ -2,7 +2,15 @@ import nodemailer from "nodemailer";
 import { Resend } from "resend";
 import { pool } from "./pool";
 import { runningOnNetlify } from "@seatwise/shared";
-import { hitRateLimitCount, hitRollingCount, ROLLING_BUCKET_SECONDS, undoRateLimitHit } from "./queries/rate-limit";
+import {
+  hitRateLimitCount,
+  hitRateLimits,
+  hitRollingCount,
+  ROLLING_BUCKET_SECONDS,
+  ROLLING_SPAN_SECONDS,
+  undoRateLimitHit,
+  undoRateLimitHits,
+} from "./queries/rate-limit";
 
 // TS-132: how Seatwise sends email, chosen from the environment:
 //
@@ -234,10 +242,13 @@ export function dailyEmailLimits(env: EmailEnv = process.env): {
 
 // TS-186: a hit returns the window it was counted in, and undo takes exactly that one back.
 type Counted = { count: number; windowStart: Date };
-type DailyCounter = { hit: () => Promise<Counted>; undo: (windowStart: Date) => Promise<void> };
+// TS-266: `key` -- the stored count's name, so a batch of emails can count on it in one go (see
+// sendEmailsToWeddingMembers). Test stand-ins leave it out and are counted one hit at a time.
+type DailyCounter = { hit: () => Promise<Counted>; undo: (windowStart: Date) => Promise<void>; key?: string };
 // TS-194: the site-wide counts roll over the last 24 hours (new keys, so the old calendar-day rows
 // are never mistaken for an hour's count).
 const rollingCounterFor = (key: string): DailyCounter => ({
+  key,
   hit: () => hitRollingCount(key),
   undo: (windowStart) => undoRateLimitHit(key, ROLLING_BUCKET_SECONDS, windowStart),
 });
@@ -752,6 +763,159 @@ export async function sendEmail(
     await giveBack();
     return "failed";
   }
+}
+
+/**
+ * TS-266: the same email to several confirmed members of a wedding (a notification) -- what
+ * sendEmail(to, subject, text, env, { toWeddingMember: true, account, forGuestsOf }) does for each
+ * address, with the site-wide counts made once for the whole batch instead of once per address:
+ * each count gets all of them in one go, and whatever isn't used is given back in one go. The same
+ * limits, in the same order, so the same number go out as one at a time -- the first ones in
+ * `to`'s order; the rest are refused just as sendEmail refuses them. Members aren't held to the
+ * per-address counts (TS-171), so there are none to make. Results are in `to`'s order.
+ */
+export async function sendEmailsToWeddingMembers(
+  to: string[],
+  subject: string,
+  text: string,
+  env: EmailEnv = process.env,
+  { account, forGuestsOf }: { account?: string; forGuestsOf?: string } = {}
+): Promise<EmailResult[]> {
+  if (to.length === 0) return [];
+  const config = resolveEmailTransport(env);
+  // The same refusals as sendEmail, for everyone at once.
+  if (config.kind === "log" && runningOnNetlify(env)) {
+    console.error(
+      `[email] NOT sent to ${to.length} member(s): this server would only print the email (EMAIL_TRANSPORT=log, or not a production build), which never happens on Netlify. Remove EMAIL_TRANSPORT from the site's settings and set SMTP_USER and SMTP_PASSWORD.`
+    );
+    return to.map(() => "failed");
+  }
+  if (config.kind === "none") {
+    console.warn(`[email] not sent to ${to.length} member(s): no email service is configured (set SMTP_USER and SMTP_PASSWORD).`);
+    return to.map(() => "not-configured");
+  }
+  if (config.kind === "log") {
+    const production = env.NODE_ENV === "production";
+    const body = production ? redactLinkTokens(text) : text;
+    for (const address of to) {
+      console.log(`[email-log] to=${production ? maskEmailAddress(address) : address} subject="${subject}" body="${body}"`);
+    }
+    return to.map(() => "logged");
+  }
+
+  // One email at a time, a send that failed gave its counts back before the next address was tried,
+  // so that address could still go. Here the addresses refused for want of room are tried again
+  // while sends in the round before failed (which only happens when the mail server refuses some).
+  const results: EmailResult[] = new Array(to.length);
+  let pending = to.map((_, i) => i);
+  for (;;) {
+    const round = await sendMemberRound(
+      pending.map((i) => to[i]),
+      subject,
+      text,
+      env,
+      config,
+      { account, forGuestsOf }
+    );
+    pending.forEach((index, j) => (results[index] = round[j]));
+    const refused = pending.filter((_, j) => round[j] === "limited" || round[j] === "account-limited");
+    if (refused.length === 0 || !round.includes("failed")) return results;
+    pending = refused;
+  }
+}
+
+/** TS-266: one round of sendEmailsToWeddingMembers (a real transport): count once, send, give back. */
+async function sendMemberRound(
+  to: string[],
+  subject: string,
+  text: string,
+  env: EmailEnv,
+  config: EmailTransportConfig,
+  { account, forGuestsOf }: { account?: string; forGuestsOf?: string }
+): Promise<EmailResult[]> {
+  // The counts sendEmail makes for a member's email, in its order: the account's share (refused as
+  // the account's limit), guests' answers' share, the first-week accounts' notifications share, and
+  // the everyday allowance short of the part kept for invites and RSVP links.
+  const limits = dailyEmailLimits(env);
+  const steps: { counter: DailyCounter; limit: number; refused: EmailResult; what: string }[] = [];
+  if (account) steps.push({ counter: accountShareCounter(account), limit: limits.accountShare, refused: "account-limited", what: `account's share of ${limits.accountShare} emails` });
+  if (forGuestsOf && !account) {
+    steps.push({ counter: guestAnswersCounter, limit: limits.guestAnswers, refused: "limited", what: `share for emails guests' answers set off of ${limits.guestAnswers}` });
+  }
+  const n = to.length;
+  const taken: { step: (typeof steps)[number]; windowStart: Date; n: number }[] = [];
+  const giveBackFromEach = async (count: number) => {
+    if (count <= 0) return;
+    const keyed = taken.filter((t) => t.step.counter.key);
+    await undoRateLimitHits(keyed.map((t) => ({ key: t.step.counter.key!, windowStart: t.windowStart, n: Math.min(count, t.n) })));
+    for (const t of taken.filter((t) => !t.step.counter.key)) {
+      for (let i = 0; i < Math.min(count, t.n); i++) await t.step.counter.undo(t.windowStart);
+    }
+    for (const t of taken) t.n -= Math.min(count, t.n);
+  };
+  let fit = n;
+  const fits: number[] = [];
+  try {
+    if (account && (await accountIsNew(account))) {
+      steps.push({
+        counter: newAccountNotificationsCounter,
+        limit: limits.newAccountNotifications,
+        refused: "limited",
+        what: `share for first-week accounts' notifications of ${limits.newAccountNotifications}`,
+      });
+    }
+    steps.push({ counter: dailyCounter, limit: limits.everyday - limits.plannerFloor, refused: "limited", what: `limit for emails of ${limits.everyday - limits.plannerFloor}` });
+
+    // Real counts: every one in a single statement. Test stand-ins: one hit at a time.
+    const keyed = steps.filter((s) => s.counter.key);
+    const counted = await hitRateLimits(keyed.map((s) => ({ key: s.counter.key!, limit: s.limit, windowSeconds: ROLLING_SPAN_SECONDS, n })));
+    keyed.forEach((s, i) => taken.push({ step: s, windowStart: counted[i].windowStart, n }));
+    for (const s of steps) {
+      const k = keyed.indexOf(s);
+      if (k >= 0) {
+        fits.push(counted[k].fits);
+        continue;
+      }
+      let last: Counted | null = null;
+      for (let i = 0; i < n; i++) {
+        last = await s.counter.hit();
+        const entry = taken.find((t) => t.step === s);
+        if (entry) entry.n++;
+        else taken.push({ step: s, windowStart: last.windowStart, n: 1 });
+      }
+      fits.push(Math.max(0, Math.min(n, s.limit - (last!.count - n))));
+    }
+    // The i-th email (from 0) goes only if every count still has room for it (more than i).
+    fit = Math.min(n, ...fits);
+    await giveBackFromEach(n - fit);
+  } catch (err) {
+    await giveBackFromEach(n).catch(() => {});
+    console.error(`[email] not sent to ${n} member(s): the email counts couldn't be checked: ${errorText(err)}`);
+    return to.map(() => "failed");
+  }
+  // Every one that doesn't fit is refused by the same count: refused emails are given back, so each
+  // finds the counts as the last one that went left them -- the first count, in sendEmail's order,
+  // with no room for one more.
+  const refusedBy = steps[fits.findIndex((f) => f === fit)];
+  if (fit < n) console.warn(`[email] not sent to ${n - fit} member(s): the last 24 hours' ${refusedBy.what} has been used.`);
+
+  const results: EmailResult[] = await Promise.all(
+    to.map(async (address, i): Promise<EmailResult> => {
+      if (i >= fit) return refusedBy.refused;
+      try {
+        await sender(config, { to: address, subject, text });
+        return "sent";
+      } catch (err) {
+        console.error(`[email] failed to send to ${maskEmailAddress(address)} via ${config.kind}: ${errorText(err)}`);
+        // TS-203: it may have gone out after all -- it stays counted.
+        return isAmbiguousSendError(err) ? "uncertain" : "failed";
+      }
+    })
+  );
+  // TS-178: what didn't go out doesn't use up the allowance.
+  const failed = results.filter((r, i) => i < fit && r === "failed").length;
+  await giveBackFromEach(failed).catch((err) => console.error(`[email] couldn't give back a count: ${errorText(err)}`));
+  return results;
 }
 
 // TS-178: a mail server's error often repeats the recipient ("550 <someone@example.com> rejected"),

@@ -349,10 +349,14 @@ export async function refreshPlanCompleteness(
   planVersionId: string,
   { bumpRevision }: { bumpRevision: boolean }
 ): Promise<void> {
+  // TS-266: "attending and not seated" is a NOT IN over this plan's seats (guestId is never NULL,
+  // so it finds the same guests as NOT EXISTS did). Postgres reads the plan's seats once into a
+  // lookup; with NOT EXISTS it could pair every guest with every seat when its statistics didn't
+  // know this plan yet (a freshly imported wedding), which took ~150-300 ms a time on 2,000 guests.
   const { rows: countRows } = await client.query(
     `SELECT
        (SELECT COUNT(*)::int FROM "guests" g WHERE g."weddingId" = $1 AND g."dayOfAttendance" = 'ATTENDING'
-          AND NOT EXISTS (SELECT 1 FROM "seat_assignments" sa WHERE sa."planVersionId" = $2 AND sa."guestId" = g.id)
+          AND g.id NOT IN (SELECT sa."guestId" FROM "seat_assignments" sa WHERE sa."planVersionId" = $2)
        ) AS "unassignedCount",
        (SELECT COUNT(*)::int FROM "seat_assignments" WHERE "planVersionId" = $2 AND "needsReassignment" = true)
          AS "needsReassignmentCount"`,
