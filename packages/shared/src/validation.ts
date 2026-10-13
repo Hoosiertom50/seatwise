@@ -84,8 +84,10 @@ export const WEB_ADDRESS_LIKE = new RegExp(
     // the run's start), so a long name is read once rather than once from every letter -- a
     // 4,000-character run of fullwidth letters took half a second.
     String.raw`(?<![\p{L}\p{N}-])-*[\p{L}\p{N}][\p{L}\p{N}-]*[\p{L}\p{N}-]${FULL_STOP}\p{L}{2,}`,
-    String.raw`[\p{L}\p{N}]-*${DOT}(?:${DOMAIN_ENDINGS})(?![\p{L}\p{N}])`,
-    String.raw`[\p{L}\p{N}](?:\s*${DOT}\s*|\s+dot\s+)(?:${SPACED_LETTER_ENDINGS})(?![\p{L}\p{N}])`,
+    // PR #114 review: a letter's own vowel signs before the dot too -- "का.com" is a Hindi syllable
+    // (a letter and its vowel sign) then ".com", and the sign stopped the match.
+    String.raw`[\p{L}\p{N}]\p{M}*-*${DOT}(?:${DOMAIN_ENDINGS})(?![\p{L}\p{N}])`,
+    String.raw`[\p{L}\p{N}]\p{M}*(?:\s*${DOT}\s*|\s+dot\s+)(?:${SPACED_LETTER_ENDINGS})(?![\p{L}\p{N}])`,
   ].join("|"),
   "iu"
 );
@@ -105,13 +107,27 @@ export const NO_WEB_ADDRESS_MESSAGE = "Can't look like a web address";
 const HIDDEN_CHARACTERS = /[\p{Default_Ignorable_Code_Point}\p{Variation_Selector}]/gu;
 const LETTER_AND_MARKS = /(\p{L}?)(\p{M}+)/gu;
 const KEEPS_ITS_MARKS = /^(?![\p{Script=Latin}\p{Script=Greek}\p{Script=Cyrillic}])\p{L}$/u;
-const SCRIPT_OWN_MARK = /(?!\p{Script=Inherited})\p{M}/gu;
+// PR #114 review: "its own script" is checked -- a Tamil vowel sign after a Devanagari letter
+// ("क" + U+0BBE) is taken out, as any mark from another script is. A letter of a script not listed
+// here keeps no marks.
+const SCRIPTS_WITH_VOWEL_SIGNS = [
+  "Devanagari", "Bengali", "Gurmukhi", "Gujarati", "Oriya", "Tamil", "Telugu", "Kannada", "Malayalam",
+  "Sinhala", "Thai", "Lao", "Tibetan", "Myanmar", "Khmer", "Arabic", "Hebrew", "Syriac", "Thaana",
+].map((script) => ({
+  letter: new RegExp(String.raw`^\p{Script=${script}}$`, "u"),
+  mark: new RegExp(String.raw`\p{Script_Extensions=${script}}`, "u"),
+}));
+function scriptOwnMarks(letter: string, marks: string): string {
+  const script = SCRIPTS_WITH_VOWEL_SIGNS.find((s) => s.letter.test(letter));
+  if (!script) return "";
+  return [...marks].filter((m) => !/\p{Script=Inherited}/u.test(m) && script.mark.test(m)).join("");
+}
 // TS-265: marks drawn as a dot below or beside a letter -- "evil" + U+0323 + "com" reads as
 // "evil.com" (saved as "eviḷcom"). Only checked against the endings scam links use, right after
 // (see DOTTED_ENDING), since Vietnamese and transliterated names have letters with a dot below
 // ("Thịnh", "Ngọc", "Kṛṣṇa").
 const DOT_LIKE_MARK = /[\u0323\u0358\u05C5\u065C\u093C\u09BC\u0A3C\u0ABC\u0B3C\u0CBC\u{1D16D}]/u;
-const DOTTED_ENDING = new RegExp(String.raw`[\p{L}\p{N}]-*${DOT}(?:${DOMAIN_ENDINGS})(?![\p{L}\p{N}])`, "iu");
+const DOTTED_ENDING = new RegExp(String.raw`[\p{L}\p{N}]\p{M}*-*${DOT}(?:${DOMAIN_ENDINGS})(?![\p{L}\p{N}])`, "iu");
 
 /** TS-265: the copies of `value` the web-address and phone checks also look at (see above). */
 function foldedCopies(value: string): { plain: string; dotted: string } {
@@ -121,7 +137,7 @@ function foldedCopies(value: string): { plain: string; dotted: string } {
   let plain = "";
   for (const match of decomposed.matchAll(LETTER_AND_MARKS)) {
     const [whole, letter, marks] = match;
-    const kept = KEEPS_ITS_MARKS.test(letter) ? marks.match(SCRIPT_OWN_MARK)?.join("") ?? "" : "";
+    const kept = KEEPS_ITS_MARKS.test(letter) ? scriptOwnMarks(letter, marks) : "";
     const before = decomposed.slice(last, match.index);
     plain += before + letter + kept;
     // PR #114 review: when a mark is drawn as a dot, the letter is followed by the dot alone -- a

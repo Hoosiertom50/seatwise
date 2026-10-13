@@ -130,6 +130,9 @@ const LOOKS_LIKE_A_WEB_ADDRESS = [
   "\u0627\u065Ccom", // Arabic
   "\u0915\u093Ccom", // Devanagari nukta
   "\u0A15\u0A3Ccom", // Gurmukhi nukta
+  // A vowel sign before ".com" (PR #114 review): the letter's own (Hindi "का", Tamil "கா"), or one
+  // from another script (a Tamil sign after a Devanagari or Bengali letter).
+  "\u0915\u093E.com", "\u0B95\u0BBE.com", "\u0915\u0BBE.com", "\u0995\u0BBE.net", "\u0915\u093E . com",
   "evil-.com",
   "x-.com",
   // still caught, as before
