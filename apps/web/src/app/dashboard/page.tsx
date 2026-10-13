@@ -11,6 +11,7 @@ import { pastWeddingDateQuestion } from "@/lib/past-wedding-date";
 import { formatGuestCounts, type WeddingSummaryDTO, type SeatingTemplateDTO } from "@seatwise/shared";
 // TS-264: bell · Account · Log out, the same on every signed-in page.
 import { SignedInHeader } from "@/components/SignedInHeader";
+import { LOG_OUT, LOG_OUT_FAILED_MESSAGE, logOutThisDevice } from "@/lib/log-out";
 import { EmailVerificationNotice } from "@/components/EmailVerificationNotice";
 // TS-193: the same limits the server checks (packages/shared/src/field-limits.ts).
 import { FIELD_LIMITS } from "@seatwise/shared";
@@ -279,6 +280,28 @@ export default function DashboardPage() {
   }
 
   // TS-264: Log out (TS-175/TS-204) is in the shared SignedInHeader now, on every signed-in page.
+  // Leaving the dashboard (Log out, Account, a notification's wedding) with something typed in the
+  // "Add a wedding" form asks first, as the wedding page does -- it used to log out and lose it.
+  const [pendingLeave, setPendingLeave] = useState<string | null>(null);
+  const [logOutError, setLogOutError] = useState<string | null>(null);
+  const createFormTyped = [newName, newDate, newVenue, newNote].some((v) => v.trim() !== "");
+  function onLeave(href: string): boolean {
+    if (!createFormTyped) return true;
+    setLogOutError(null);
+    setPendingLeave(href);
+    return false;
+  }
+  async function leaveWithoutSaving() {
+    const href = pendingLeave;
+    setPendingLeave(null);
+    if (href === LOG_OUT) {
+      if (await logOutThisDevice()) router.replace("/login");
+      else setLogOutError(LOG_OUT_FAILED_MESSAGE);
+    } else if (href) {
+      router.push(href);
+    }
+  }
+
   if (loading) {
     return <main className="flex flex-1 items-center justify-center text-neutral-500 dark:text-neutral-400">Loading...</main>;
   }
@@ -288,6 +311,8 @@ export default function DashboardPage() {
       {/* TS-264: the same bell · Account · Log out as every other signed-in page. */}
       <div className="mb-8">
         <SignedInHeader
+          onLeave={onLeave}
+          logOutError={logOutError}
           left={
             <>
               <h1 className="text-xl font-semibold sm:text-2xl">Your weddings</h1>
@@ -296,6 +321,41 @@ export default function DashboardPage() {
           }
         />
       </div>
+
+      {pendingLeave && (
+        <div
+          role="alertdialog"
+          aria-labelledby="dashboard-unsaved-question"
+          // TS-212: Escape means Stay, as in every other question in the app.
+          onKeyDown={(e) => {
+            if (e.key === "Escape") {
+              e.preventDefault();
+              e.stopPropagation();
+              setPendingLeave(null);
+            }
+          }}
+          className="mb-6 flex flex-wrap items-center gap-3 rounded-md bg-amber-50 dark:bg-amber-950 px-4 py-3 text-sm text-amber-900 dark:text-amber-200"
+        >
+          <span id="dashboard-unsaved-question" className="flex-1">
+            You&apos;ve started adding a wedding. Leave and lose what you typed?
+          </span>
+          <button
+            type="button"
+            autoFocus
+            onClick={() => setPendingLeave(null)}
+            className="min-h-11 rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800"
+          >
+            Stay
+          </button>
+          <button
+            type="button"
+            onClick={() => void leaveWithoutSaving()}
+            className="min-h-11 rounded-md bg-red-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-red-800"
+          >
+            Leave without saving
+          </button>
+        </div>
+      )}
 
       {/* TS-164 */}
       <EmailVerificationNotice />

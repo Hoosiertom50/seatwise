@@ -19,6 +19,22 @@ export interface CreateWeddingInput {
 }
 
 export class DashboardPage extends BasePage {
+  /** TS-264: the question shown when leaving with something typed in "Add a wedding". */
+  leaveQuestion() {
+    return this.page.getByRole("alertdialog", { name: /started adding a wedding/ });
+  }
+  async stayOnDashboard(): Promise<void> {
+    await this.leaveQuestion().getByRole("button", { name: "Stay", exact: true }).click();
+  }
+  async leaveWithoutSaving(): Promise<void> {
+    await this.leaveQuestion().getByRole("button", { name: "Leave without saving", exact: true }).click();
+  }
+
+  /** TS-264: the "Add a wedding" form's name box (for typing without submitting). */
+  weddingNameInput() {
+    return this.nameInput();
+  }
+
   private nameInput() {
     return this.page.locator("#new-wedding-name");
   }

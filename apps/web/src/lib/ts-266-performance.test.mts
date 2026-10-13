@@ -309,6 +309,45 @@ test("TS-266 (local database): emailing members together gives the same results 
   });
 });
 
+test("TS-266 (local database, PR #114 review): a batch held back by its account's share never sits on the site-wide count, even for a moment", { skip }, async () => {
+  await rolledBack(async (q) => {
+    const env = { NODE_ENV: "production", SMTP_USER: "seatwise.test@example.test", SMTP_PASSWORD: "x", EMAIL_DAILY_LIMIT: "20" };
+    const settled = randomUUID();
+    await q.query(
+      `INSERT INTO "users" (id, email, "passwordHash", name, "createdAt", "updatedAt") VALUES ($1, $2, 'x', 'TS-266 settled', now() - interval '30 days', now())`,
+      [settled, `ts266-${settled}@example.test`]
+    );
+    const everyday = "email:global:24h:everyday";
+    const share = db.accountShareKey(settled);
+    await clear(q, [everyday, share]);
+    const hour = hourStart(Date.now());
+    await setCount(q, everyday, hour, 3);
+    await setCount(q, share, hour, 3); // 2 of this account's 5 left
+    db.setEmailSenderForTests(async () => {});
+    // After every statement the batch makes, look at the site-wide count: it may rise only by the
+    // emails that passed the account's share (2), never by the whole batch (8).
+    let highest = 0;
+    const everydayNow = async () => (await totals(q, [everyday]))[everyday];
+    const watch = (run: (sql: string, params?: unknown[]) => Promise<unknown>) => async (sql: string, params?: unknown[]) => {
+      const result = await run(sql, params);
+      highest = Math.max(highest, await everydayNow());
+      return result;
+    };
+    const p = pool as unknown as { connect: () => Promise<{ query: (s: string, p?: unknown[]) => Promise<unknown>; release: () => void }>; query: (s: string, p?: unknown[]) => Promise<unknown> };
+    const inner = p.connect;
+    p.connect = async () => {
+      const c = await inner();
+      return { ...c, query: watch(c.query) };
+    };
+    p.query = watch(p.query);
+    const to = Array.from({ length: 8 }, (_, i) => `member${i}@example.test`);
+    const results = await quietly(() => db.sendEmailsToWeddingMembers(to, "S", "T", env, { account: settled }));
+    assert.equal(results.filter((r) => r === "sent").length, 2);
+    assert.equal(highest, 5, "the site-wide count only ever held the 2 that went (3 + 2)");
+    assert.equal(await everydayNow(), 5);
+  });
+});
+
 test("TS-266 (local database): a notification to 8 members with room for 5 emails sends 5, as one at a time did -- even with a send failing", { skip }, async () => {
   const saved = { ...process.env };
   delete process.env.EMAIL_TRANSPORT;

@@ -18,7 +18,12 @@ import { patchWedding } from "../data/api.js";
 
 // Far enough either side of today that no time zone makes it today.
 const PAST = "2020-05-16";
-const FUTURE = "2030-05-18";
+// Always about two years ahead of the day the test runs, so it never becomes a past date.
+const FUTURE = (() => {
+  const d = new Date();
+  d.setFullYear(d.getFullYear() + 2);
+  return d.toISOString().slice(0, 10);
+})();
 
 // Two of the page's 4-second checks, with headroom.
 const WITHIN_SECONDS = { timeout: 10_000 };
@@ -33,7 +38,7 @@ defineQualityTest(
     objective:
       "Confirms (TS-263) that pressing Add wedding with a date before today shows 'This date (MM-DD-YYYY) has already passed — is that right?' and creates nothing; that 'Change it' closes the question, keeps the typed date and puts focus in the date box; that Add wedding asks again and 'Save anyway' then creates the wedding with that past date and opens it; and that a future date creates the wedding with no question.",
     expectedOutcome:
-      "The question reads 'This date (05-16-2020) has already passed — is that right?' and no wedding with that name exists yet. After Change it: no question, the date box is focused and still reads 2020-05-16. After Save anyway: the browser is on the new wedding's page and the server has eventDate 2020-05-16. A wedding dated 2030-05-18 opens straight away.",
+      "The question reads 'This date (05-16-2020) has already passed — is that right?' and no wedding with that name exists yet. After Change it: no question, the date box is focused and still reads 2020-05-16. After Save anyway: the browser is on the new wedding's page and the server has eventDate 2020-05-16. A wedding dated about two years ahead opens straight away.",
     requirementIds: ["REQ-ACCOUNT-WEDDING-MANAGEMENT"],
     tags: ["@mutating", "@feature:account", "@risk:normal", "@suite:regression"],
   },
@@ -85,7 +90,7 @@ defineQualityTest(
     objective:
       "Confirms (TS-263) that in the owner's Date and venue box, Save with a date before today shows the 'has already passed' question and saves nothing; that 'Change it' closes it with the typed date kept and focus in the date box; that Save then 'Save anyway' saves the past date; that saving only a new venue while that past date is saved asks nothing; and that a future date saves with no question.",
     expectedOutcome:
-      "The question reads 'This date (05-16-2020) has already passed — is that right?' and the server's eventDate is unchanged (null). After Change it: no question, the date box is focused and reads 2020-05-16. After Save anyway: the PATCH answers 200, 'Saved' shows and the server has 2020-05-16. A new venue then saves with no question, and 2030-05-18 saves with no question.",
+      "The question reads 'This date (05-16-2020) has already passed — is that right?' and the server's eventDate is unchanged (null). After Change it: no question, the date box is focused and reads 2020-05-16. After Save anyway: the PATCH answers 200, 'Saved' shows and the server has 2020-05-16. A new venue then saves with no question, and a date two years ahead saves with no question.",
     requirementIds: ["REQ-ACCOUNT-WEDDING-MANAGEMENT"],
     tags: ["@mutating", "@feature:account", "@risk:normal", "@suite:regression"],
   },

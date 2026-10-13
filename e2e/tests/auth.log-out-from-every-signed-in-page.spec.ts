@@ -194,3 +194,50 @@ defineQualityTest(
     }
   },
 );
+
+defineQualityTest(
+  {
+    id: "auth.log-out-from-every-signed-in-page.dashboard-typed-wedding-asks-first",
+    title: "Log out on the dashboard with a half-typed new wedding asks first: Stay keeps the typing, Leave without saving logs out",
+    objective:
+      "Confirms (TS-264, PR #114 review) that the dashboard's Log out goes through an unsaved-changes question when something has been typed in the 'Add a wedding' form: Stay keeps the typing and the session; Log out then Leave without saving lands on the sign-in page with the session over. With nothing typed, Log out goes straight through (covered by the other tests).",
+    expectedOutcome:
+      "After the first Log out: the question 'You've started adding a wedding. Leave and lose what you typed?' shows, the address is still the dashboard and /auth/me answers 200. After Stay: no question, the wedding-name box still reads the typed name. After Log out and Leave without saving: the browser is on /login and /auth/me answers 401.",
+    requirementIds: ["REQ-ACCOUNT-WEDDING-MANAGEMENT", "REQ-NON-FUNCTIONAL"],
+    tags: ["@mutating", "@feature:authentication", "@risk:normal", "@suite:regression"],
+  },
+  async ({ browser }, testInfo) => {
+    const { devices, signedIn, cleanUp } = await accountOnTwoDevices(browser, testInfo.workerIndex, "dash-unsaved");
+    const [one] = devices;
+    try {
+      const page = await one.newPage();
+      const dashboard = new DashboardPage(page);
+      const header = new SignedInHeader(page);
+      await dashboard.goto();
+      await dashboard.weddingNameInput().fill("Half-typed wedding");
+      const question = dashboard.leaveQuestion();
+
+      await test.step("Log out asks first, and nothing is logged out yet", async () => {
+        await header.pressLogOut();
+        await expect(question).toBeVisible();
+        await expect(page).toHaveURL(/\/dashboard$/);
+        expect(await signedIn(one)).toBe(200);
+      });
+
+      await test.step("Stay keeps the typing and the session", async () => {
+        await dashboard.stayOnDashboard();
+        await expect(question).toHaveCount(0);
+        await expect(dashboard.weddingNameInput()).toHaveValue("Half-typed wedding");
+        expect(await signedIn(one)).toBe(200);
+      });
+
+      await test.step("Log out, then Leave without saving, logs out", async () => {
+        await header.pressLogOut();
+        await Promise.all([page.waitForURL(/\/login/), dashboard.leaveWithoutSaving()]);
+        expect(await signedIn(one)).toBe(401);
+      });
+    } finally {
+      await cleanUp();
+    }
+  },
+);

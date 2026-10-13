@@ -866,28 +866,38 @@ async function sendMemberRound(
     }
     steps.push({ counter: dailyCounter, limit: limits.everyday - limits.plannerFloor, refused: "limited", what: `limit for emails of ${limits.everyday - limits.plannerFloor}` });
 
-    // Real counts: every one in a single statement. Test stand-ins: one hit at a time.
-    const keyed = steps.filter((s) => s.counter.key);
-    const counted = await hitRateLimits(keyed.map((s) => ({ key: s.counter.key!, limit: s.limit, windowSeconds: ROLLING_SPAN_SECONDS, n })));
-    keyed.forEach((s, i) => taken.push({ step: s, windowStart: counted[i].windowStart, n }));
+    // One count at a time, in sendEmail's order, each for only the emails that passed the ones
+    // before -- and what doesn't fit is given back from every count straight away. So a batch held
+    // back by its account's share never sits, even for a moment, on the site-wide counts after it
+    // (another account's email checked meanwhile would see room that's really there). Real counts:
+    // one statement per count. Test stand-ins: one hit at a time.
     for (const s of steps) {
-      const k = keyed.indexOf(s);
-      if (k >= 0) {
-        fits.push(counted[k].fits);
+      if (fit === 0) {
+        fits.push(0);
         continue;
       }
-      let last: Counted | null = null;
-      for (let i = 0; i < n; i++) {
-        last = await s.counter.hit();
-        const entry = taken.find((t) => t.step === s);
-        if (entry) entry.n++;
-        else taken.push({ step: s, windowStart: last.windowStart, n: 1 });
+      let stepFits: number;
+      if (s.counter.key) {
+        const [counted] = await hitRateLimits([{ key: s.counter.key, limit: s.limit, windowSeconds: ROLLING_SPAN_SECONDS, n: fit }]);
+        taken.push({ step: s, windowStart: counted.windowStart, n: fit });
+        stepFits = counted.fits;
+      } else {
+        let last: Counted | null = null;
+        for (let i = 0; i < fit; i++) {
+          last = await s.counter.hit();
+          const entry = taken.find((t) => t.step === s);
+          if (entry) entry.n++;
+          else taken.push({ step: s, windowStart: last.windowStart, n: 1 });
+        }
+        stepFits = Math.max(0, Math.min(fit, s.limit - (last!.count - fit)));
       }
-      fits.push(Math.max(0, Math.min(n, s.limit - (last!.count - n))));
+      fits.push(stepFits);
+      // The i-th email (from 0) goes only if every count so far still has room for it (more than i).
+      if (stepFits < fit) {
+        await giveBackFromEach(fit - stepFits);
+        fit = stepFits;
+      }
     }
-    // The i-th email (from 0) goes only if every count still has room for it (more than i).
-    fit = Math.min(n, ...fits);
-    await giveBackFromEach(n - fit);
   } catch (err) {
     await giveBackFromEach(n).catch(() => {});
     console.error(`[email] not sent to ${n} member(s): the email counts couldn't be checked: ${errorText(err)}`);
