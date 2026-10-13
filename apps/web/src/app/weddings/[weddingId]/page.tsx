@@ -171,7 +171,15 @@ export default function WeddingDetailPage() {
     const active = document.activeElement;
     const inSaveOnLeaveBox = active instanceof HTMLElement && active.hasAttribute("data-blur-save");
     if (!inSaveOnLeaveBox && !unsaved.isSaving()) {
-      if (!unsaved.hasUnsaved()) return true;
+      // PR #114 review: Log out (which signs out before it leaves), or anything pressed while the
+      // page is still taking its extra Back entry off after a save, goes through the page's own
+      // leaving, which waits for that Back -- it used to cancel the next page, so Log out could
+      // sign out and leave the wedding page on screen.
+      if (!unsaved.hasUnsaved() && href !== LOG_OUT && !unsaved.guardSettling()) return true;
+      if (!unsaved.hasUnsaved()) {
+        void leaveAfterSaves(href);
+        return false;
+      }
       rememberOpener();
       setPendingHref(href);
       return false;
@@ -218,10 +226,12 @@ export default function WeddingDetailPage() {
         questionOpener.current = null;
         return;
       }
+      await unsaved.whenGuardSettled();
       unsaved.releaseForLink();
       router.replace("/login");
       return;
     }
+    await unsaved.whenGuardSettled();
     // TS-175: replace the page's extra history entry rather than leaving it behind (Back from the
     // next page used to land on it, a dead copy of this one).
     if (unsaved.releaseForLink()) router.replace(href);

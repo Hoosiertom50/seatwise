@@ -134,6 +134,8 @@ export function useUnsavedChangesProvider({ onBackRequested }: { onBackRequested
   const pageUrl = useRef<string | null>(null);
   /** A Back the page made itself (taking the extra entry off) -- not the user's. */
   const ignoreNextPop = useRef(false);
+  /** Waiting for that Back to land (see whenGuardSettled). */
+  const guardSettled = useRef<(() => void)[]>([]);
   /** Set while the page is leaving on purpose, so the extra entry isn't taken off in the meantime. */
   // TS-218: a LeavingFlag (unsaved-registry.ts), so a cancelled reload's mark can be lifted.
   const [leaving] = useState(() => new LeavingFlag());
@@ -194,6 +196,7 @@ export function useUnsavedChangesProvider({ onBackRequested }: { onBackRequested
       if (ignoreNextPop.current) {
         ignoreNextPop.current = false;
         reconcile();
+        for (const settled of guardSettled.current.splice(0)) settled();
         return;
       }
       if (leaving.value) return;
@@ -209,6 +212,23 @@ export function useUnsavedChangesProvider({ onBackRequested }: { onBackRequested
     return () => window.removeEventListener("popstate", onPop);
   }, [reconcile, needsGuard, leaving]);
 
+  /**
+   * PR #114 review: true while the page's own Back (taking its extra entry off, just after a save)
+   * hasn't landed yet. Opening another page then -- Log out's sign-in page, say -- was cancelled
+   * by that Back, leaving a signed-out wedding page on screen.
+   */
+  const guardSettling = useCallback(() => ignoreNextPop.current, []);
+  /** Resolves once that Back has landed (or after half a second, so leaving never hangs). */
+  const whenGuardSettled = useCallback(
+    () =>
+      ignoreNextPop.current
+        ? new Promise<void>((resolve) => {
+            guardSettled.current.push(resolve);
+            window.setTimeout(resolve, 500);
+          })
+        : Promise.resolve(),
+    []
+  );
   const hasUnsaved = useCallback(() => registry.hasUnsaved(), [registry]);
   const clear = useCallback(() => registry.clearDirty(), [registry]);
   /** TS-206: waits for every save-on-leave box's save; true when all of them saved. */
@@ -255,6 +275,8 @@ export function useUnsavedChangesProvider({ onBackRequested }: { onBackRequested
     dismissNote,
     releaseForLink,
     goBackPastPage,
+    guardSettling,
+    whenGuardSettled,
     Provider: UnsavedChangesContext.Provider,
   };
 }

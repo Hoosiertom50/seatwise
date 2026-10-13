@@ -418,3 +418,35 @@ defineQualityTest(
     }
   },
 );
+
+defineQualityTest(
+  {
+    id: "auth.log-out-from-every-signed-in-page.right-after-a-save",
+    title: "Log out pressed the moment a guest's name has saved still lands on the sign-in page",
+    objective:
+      "Confirms (TS-264, PR #114 review) that Log out pressed just as a save-on-leave box's save answers -- while the page is still taking its extra Back history entry off -- signs out and lands on the sign-in page; that Back used to cancel the sign-in page, leaving a signed-out wedding page on screen.",
+    expectedOutcome: "The browser ends on /login and /auth/me answers 401.",
+    requirementIds: ["REQ-ACCOUNT-WEDDING-MANAGEMENT", "REQ-NON-FUNCTIONAL"],
+    tags: ["@mutating", "@feature:authentication", "@risk:high", "@suite:regression"],
+  },
+  async ({ browser }, testInfo) => {
+    const { devices, signedIn, cleanUp } = await accountOnTwoDevices(browser, testInfo.workerIndex, "header-after-save");
+    const [one] = devices;
+    try {
+      const setup = new WeddingDataSetup(one.request);
+      const wedding = await setup.createWedding(uniqueTitle(testInfo.workerIndex, "After Save Wedding"));
+      await setup.createGuest(wedding.id, { firstName: "Ann", lastName: "Lee" });
+      const page = await one.newPage();
+      const guests = new WeddingGuestsPage(page);
+      const header = new SignedInHeader(page);
+      await guests.goto(wedding.id);
+      const saved = page.waitForResponse((r) => r.request().method() === "PATCH" && /\/guests\/[^/]+$/.test(new URL(r.url()).pathname));
+      await guests.guestRow("Ann Lee").editFirstName("Anne");
+      await saved;
+      await Promise.all([page.waitForURL(/\/login/), header.pressLogOut()]);
+      expect(await signedIn(one)).toBe(401);
+    } finally {
+      await cleanUp();
+    }
+  },
+);
