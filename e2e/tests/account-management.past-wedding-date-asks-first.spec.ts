@@ -9,6 +9,7 @@
  * apps/web/src/lib/past-wedding-date.test.mts.
  */
 
+import type { Request } from "@playwright/test";
 import { expect, defineQualityTest, test } from "../fixtures/index.js";
 import { DashboardPage } from "../pages/DashboardPage.js";
 import { CollaboratorsTabPage } from "../pages/CollaboratorsTabPage.js";
@@ -41,9 +42,9 @@ defineQualityTest(
     id: "account-management.past-wedding-date-asks-first.create-form",
     title: "creating a wedding with a past date asks first: Change it goes back to the date box, Save anyway creates it",
     objective:
-      "Confirms (TS-263) that pressing Add wedding with a date before today shows 'This date (MM-DD-YYYY) has already passed — is that right?' and creates nothing; that 'Change it' closes the question, keeps the typed date and puts focus in the date box; that Add wedding asks again and 'Save anyway' then creates the wedding with that past date and opens it; and that a future date creates the wedding with no question.",
+      "Confirms (TS-263) that pressing Add wedding with a date before today shows 'This date (MM-DD-YYYY) has already passed — is that right?' and creates nothing; that 'Change it' closes the question, keeps the typed date and puts focus in the date box; that Save anyway with the name cleared while the question is up is stopped by the form's own check and sends nothing (PR #114 review); puts focus in the date box; that Add wedding asks again and 'Save anyway' then creates the wedding with that past date and opens it; and that a future date creates the wedding with no question.",
     expectedOutcome:
-      "The question reads 'This date (05-16-2020) has already passed — is that right?' and no wedding with that name exists yet. After Change it: no question, the date box is focused and still reads 2020-05-16. After Save anyway: the browser is on the new wedding's page and the server has eventDate 2020-05-16. A wedding dated about two years ahead opens straight away.",
+      "The question reads 'This date (05-16-2020) has already passed — is that right?' and no wedding with that name exists yet. After Change it: no question, the date box is focused and still reads 2020-05-16. With the name cleared, Save anyway leaves the name box invalid, stays on the dashboard and sends no create request. After Save anyway: the browser is on the new wedding's page and the server has eventDate 2020-05-16. A wedding dated about two years ahead opens straight away.",
     requirementIds: ["REQ-ACCOUNT-WEDDING-MANAGEMENT"],
     tags: ["@mutating", "@feature:account", "@risk:normal", "@suite:regression"],
   },
@@ -69,7 +70,27 @@ defineQualityTest(
       expect(await listNames()).not.toContain(name);
     });
 
+    await test.step("Save anyway with the name cleared meanwhile is stopped by the form's own check", async () => {
+      await dashboard.submitNewWedding(name, PAST);
+      await expect(dashboard.pastDateQuestion()).toBeVisible();
+      const creates: string[] = [];
+      const onRequest = (r: Request) => {
+        if (r.method() === "POST" && new URL(r.url()).pathname === "/api/v1/weddings") creates.push(r.url());
+      };
+      page.on("request", onRequest);
+      try {
+        await dashboard.weddingNameInput().fill("");
+        await dashboard.pressSaveDateAnyway();
+        expect(await dashboard.weddingNameIsValid()).toBe(false);
+        await expect(page).toHaveURL(/\/dashboard$/);
+        expect(creates).toEqual([]);
+      } finally {
+        page.off("request", onRequest);
+      }
+    });
+
     await test.step("Save anyway creates the wedding with the past date and opens it", async () => {
+      await dashboard.goto();
       await dashboard.submitNewWedding(name, PAST);
       await expect(dashboard.pastDateQuestion()).toBeVisible();
       await dashboard.saveDateAnyway();

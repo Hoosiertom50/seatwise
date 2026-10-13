@@ -263,6 +263,16 @@ export class DashboardPage extends BasePage {
     ]);
   }
 
+  /** PR #114 review: "Save anyway" without waiting for a page (the form's own checks can stop it). */
+  async pressSaveDateAnyway(): Promise<void> {
+    await this.pastDateQuestion().getByRole("button", { name: "Save anyway", exact: true }).click();
+  }
+
+  /** PR #114 review: whether the browser's own check finds the wedding-name box filled in. */
+  async weddingNameIsValid(): Promise<boolean> {
+    return this.nameInput().evaluate((el) => (el as HTMLInputElement).validity.valid);
+  }
+
   /** TS-263: "Change it" -- closes the question and puts focus back in the date box. */
   async changeDate(): Promise<void> {
     await this.pastDateQuestion().getByRole("button", { name: "Change it", exact: true }).click();

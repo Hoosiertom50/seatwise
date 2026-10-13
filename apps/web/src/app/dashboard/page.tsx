@@ -200,12 +200,23 @@ export default function DashboardPage() {
     }
   }
 
+  // PR #114 review: "Save anyway" submits the form (so a name cleared, or both template boxes
+  // unticked, while the question was up is caught as with Add wedding), saying yes to this one date.
+  const createForm = useRef<HTMLFormElement>(null);
+  const pastDateConfirmed = useRef<string | null>(null);
+  function onSaveAnyway(date: string) {
+    pastDateConfirmed.current = date;
+    createForm.current?.requestSubmit();
+  }
+
   async function onCreate(e: React.FormEvent) {
     e.preventDefault();
+    const confirmed = pastDateConfirmed.current;
+    pastDateConfirmed.current = null;
     // TS-263: a date before today (in the planner's own time zone) is only saved once they say so
     // -- it used to be saved without a word, and it's usually the wrong year.
     const question = pastWeddingDateQuestion(newDate, localTodayIso());
-    if (question) {
+    if (question && confirmed !== newDate) {
       setError(null);
       setDateQuestion({ value: newDate, message: question });
       return;
@@ -370,6 +381,7 @@ export default function DashboardPage() {
       <EmailVerificationNotice />
 
       <form
+        ref={createForm}
         onSubmit={onCreate}
         className="mb-8 flex flex-col gap-3 rounded-lg border border-neutral-200 dark:border-neutral-700 p-4"
       >
@@ -455,8 +467,8 @@ export default function DashboardPage() {
               </span>
               <button
                 type="button"
-                onClick={() => void createWedding()}
-                disabled={creating}
+                onClick={() => onSaveAnyway(dateQuestion.value)}
+                disabled={creating || (!!selectedTemplateId && !applyTemplateTables && !applyTemplateRules)}
                 className="min-h-11 rounded-md bg-amber-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-amber-800 disabled:opacity-50"
               >
                 Save anyway
