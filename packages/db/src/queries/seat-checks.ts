@@ -19,35 +19,68 @@ export interface Queryable {
 // (FR-3.x), a Restricted table's required-guest list (FR-3.7a), must-not-sit-together (FR-3.1)
 // against whoever else is at that table, and (TS-150) must-sit-together against a partner seated
 // at a different table. Capacity is checked by resyncTables, which sees the whole table.
-// TS-259: worked out in SQL for every seat a re-check reads, in the same statement (this used to be
-// checkGuestHardRuleViolation, three more queries per guest). One column per rule, so the flag's
-// reason -- and the message the planner sees -- is told apart exactly as before:
+// TS-259: the table rules are worked out in SQL for every seat a re-check reads, in the same
+// statement (this used to be checkGuestHardRuleViolation, three more queries per guest). One column
+// per rule, so the flag's reason -- and the message the planner sees -- is told apart exactly as before:
 //   "accessibleBroken": needs an accessible table and this one isn't;
 //   "restrictedBroken": the table is Restricted and the guest isn't on its list;
-//   "otherBroken": (TS-173) on another Restricted table's list, so they belong at that table and no
-//     other; or a must-not partner seated at this table, or a must-sit partner seated at a different
-//     one, in the same plan version (a partner with no seat is no conflict).
-// Uses the aliases sa (seat_assignments), g (guests) and t (the seat's seating_tables row);
-// $1 is the plan version's id and $3 the wedding's.
+//   "requiredElsewhere": (TS-173) on another Restricted table's list, so they belong at that table
+//     and no other.
+// TS-260: the seating rules between guests (must-sit / must-not) are no longer in this statement --
+// see seatingRuleConflicts. Their check joined every seat against every other seat when Postgres
+// thought the plan had almost no seats (a brand-new plan version isn't in its statistics yet), which
+// took 16-20 s on a 2,000-guest wedding with a few thousand rules.
+// Uses the aliases sa (seat_assignments), g (guests) and t (the seat's seating_tables row).
 const SEAT_RULE_COLUMNS = `
   (g."requiresAccessibleTable" AND NOT t."isAccessible") AS "accessibleBroken",
   (t."isRestricted" AND NOT EXISTS (
      SELECT 1 FROM "restricted_table_guests" rtg WHERE rtg."tableId" = t.id AND rtg."guestId" = sa."guestId"
   )) AS "restrictedBroken",
-  (EXISTS (
+  EXISTS (
      SELECT 1 FROM "restricted_table_guests" rtg JOIN "seating_tables" t2 ON t2.id = rtg."tableId"
      WHERE rtg."guestId" = sa."guestId" AND rtg."tableId" <> t.id AND t2."isRestricted"
-   ) OR EXISTS (
-     SELECT 1
-     FROM "guest_relationships" gr
-     JOIN "seat_assignments" sa2
-       ON sa2."planVersionId" = $1 AND sa2."guestId" <> sa."guestId"
-       AND ((gr."guestAId" = sa."guestId" AND gr."guestBId" = sa2."guestId")
-         OR (gr."guestBId" = sa."guestId" AND gr."guestAId" = sa2."guestId"))
-     WHERE gr."weddingId" = $3
-       AND ((gr.type = 'MUST_NOT_SIT_TOGETHER' AND sa2."seatingTableId" = t.id)
-         OR (gr.type = 'MUST_SIT_TOGETHER' AND sa2."seatingTableId" <> t.id))
-   )) AS "otherBroken"`;
+  ) AS "requiredElsewhere"`;
+
+// TS-260: which guests break a must-sit-together or must-not-sit-together rule in this plan version,
+// worked out here from two plain reads -- the wedding's hard rules, and where everyone in the plan
+// is seated -- instead of in the database. Exactly the rules the SQL used to apply: a guest breaks a
+// rule when the partner is seated in the same plan version at the same table (must-not) or at a
+// different one (must-sit); a partner with no seat in this plan is no conflict; a rule naming the
+// same guest twice is ignored; only this wedding's rules count. Both guests of a broken rule are
+// returned (each one sees the other). Soft rules (prefer near, avoid) never flag anyone.
+// Locks: none are taken here and none are needed beyond what the re-check already holds. The old
+// statement read these same rows (other seats in the plan, the rules) without locking them too; every
+// change to a seat in the plan waits for the current plan's lock, which the caller already holds
+// (lockCurrentPlan / lockCurrentPlanOrWedding, before any table), and so does adding a rule
+// (createRelationship), so neither can change between these reads and the flags being written.
+// Removing a rule doesn't take the plan's lock, but its own re-check (resyncGuestsSeats) does and
+// runs after it -- so a removal that lands between these reads is put right there, just as one that
+// landed while the old single statement waited for its turn was.
+async function seatingRuleConflicts(client: Queryable, weddingId: string, planVersionId: string): Promise<Set<string>> {
+  const { rows: rules } = await client.query(
+    `SELECT "guestAId", "guestBId", type FROM "guest_relationships"
+     WHERE "weddingId" = $1 AND type IN ('MUST_SIT_TOGETHER', 'MUST_NOT_SIT_TOGETHER')`,
+    [weddingId]
+  );
+  const broken = new Set<string>();
+  if (rules.length === 0) return broken;
+  const { rows: seats } = await client.query(
+    `SELECT "guestId", "seatingTableId" AS "tableId" FROM "seat_assignments" WHERE "planVersionId" = $1`,
+    [planVersionId]
+  );
+  const tableOf = new Map(seats.map((r) => [r.guestId as string, r.tableId as string]));
+  for (const r of rules as { guestAId: string; guestBId: string; type: string }[]) {
+    if (r.guestAId === r.guestBId) continue;
+    const a = tableOf.get(r.guestAId);
+    const b = tableOf.get(r.guestBId);
+    if (a === undefined || b === undefined) continue;
+    if ((r.type === "MUST_NOT_SIT_TOGETHER" && a === b) || (r.type === "MUST_SIT_TOGETHER" && a !== b)) {
+      broken.add(r.guestAId);
+      broken.add(r.guestBId);
+    }
+  }
+  return broken;
+}
 
 // TS-181: when a plan-history entry happened, for "Modified since approval". A change's own
 // transaction may have started before the plan was approved and only got its turn (the plan's
@@ -93,7 +126,8 @@ export const SEAT_ORDER = `g."isLocked" DESC, sa."createdAt", g.id`;
 // 2,000-guest wedding (minutes from a laptop to the live database, seconds on the live site, all
 // under the wedding's lock). Now: lock the tables; lock and read every seat at them, with the
 // rules above worked out in the same statement; count the seats in JS as before; write the flags
-// that changed in one UPDATE. Locks are still tables (by id), then seats -- inside the documented
+// that changed in one UPDATE. TS-260: plus the seating rules, read in two plain queries and checked
+// in JS (seatingRuleConflicts) -- 4 or 5 queries in all. Locks are still tables (by id), then seats -- inside the documented
 // order (wedding -> current plan -> restricted lists -> tables -> guests and seats) -- the tables
 // are now all locked before any seat rather than table by table, which only tightens it.
 export async function resyncTables(
@@ -131,7 +165,7 @@ export async function resyncTables(
      WHERE sa."planVersionId" = $1 AND sa."seatingTableId" = ANY($2::text[])
      ORDER BY sa."seatingTableId" COLLATE "C", ${SEAT_ORDER}
      FOR NO KEY UPDATE OF sa`,
-    [planVersionId, tables.map((t) => t.id), weddingId]
+    [planVersionId, tables.map((t) => t.id)]
   );
   const seated = rows as {
     id: string;
@@ -142,8 +176,10 @@ export async function resyncTables(
     needsReassignment: boolean;
     accessibleBroken: boolean;
     restrictedBroken: boolean;
-    otherBroken: boolean;
+    requiredElsewhere: boolean;
   }[];
+  // TS-260: read after the seats are locked, so the lock order is unchanged (tables, then seats).
+  const ruleBrokenFor = seated.length > 0 ? await seatingRuleConflicts(client, weddingId, planVersionId) : new Set<string>();
   const capacityOf = new Map(tables.map((t) => [t.id, t.capacity]));
 
   const newlyFlagged: NewlyFlaggedSeat[] = [];
@@ -151,7 +187,9 @@ export async function resyncTables(
   const changedFlags: boolean[] = [];
   const seatsUsedAt = new Map<string, number>();
   for (const a of seated) {
-    const ruleBroken = a.accessibleBroken || a.restrictedBroken || a.otherBroken;
+    // "rule" (the reason below) covers both: required at another table, or a seating rule.
+    const otherBroken = a.requiredElsewhere || ruleBrokenFor.has(a.guestId);
+    const ruleBroken = a.accessibleBroken || a.restrictedBroken || otherBroken;
     const seatsUsed = seatsUsedAt.get(a.tableId) ?? 0;
     // A guest already flagged for a broken rule doesn't take up one of the table's seats.
     const fits = ruleBroken ? true : seatsUsed + a.headcount <= capacityOf.get(a.tableId)!;
