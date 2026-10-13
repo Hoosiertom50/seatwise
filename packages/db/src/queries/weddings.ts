@@ -1,6 +1,7 @@
 import { randomUUID } from "crypto";
 import { pool, beginTransaction } from "../pool";
 import { TemplateNotFoundError } from "./templates";
+import { insertSeatingTableCopies } from "./table-copies";
 import { lockCurrentPlan, lockRestrictedLists } from "./seat-checks";
 
 export interface WeddingRow {
@@ -191,30 +192,8 @@ export async function createWedding(
     );
     const wedding = rows[0];
 
-    for (const t of templateTables) {
-      await client.query(
-        `INSERT INTO "seating_tables"
-           (id, "weddingId", label, capacity, "isRestricted", "isAccessible", "isLocked", purpose,
-            "purposeCriterionType", "purposeCriterionValue", "singleSideOnly", shape, "positionX", "positionY", "updatedAt")
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::"TablePurposeCriterionType", $10, $11, $12::"TableShape", $13, $14, now())`,
-        [
-          randomUUID(),
-          id,
-          t.label,
-          t.capacity,
-          t.isRestricted,
-          t.isAccessible,
-          t.isLocked,
-          t.purpose,
-          t.purposeCriterionType,
-          t.purposeCriterionValue,
-          t.singleSideOnly,
-          t.shape,
-          t.positionX,
-          t.positionY,
-        ]
-      );
-    }
+    // TS-261: the template's tables in one INSERT (it was one per table), in the template's order.
+    await insertSeatingTableCopies(client, id, templateTables);
 
     await client.query("COMMIT");
     return { ...wedding, guestCount: 0, peopleCount: 0, attendingCount: 0 };

@@ -342,6 +342,80 @@ export async function insertNotification(weddingId: string, recipientUserId: str
   }
 }
 
+/**
+ * TS-261: insertNotification for many recipients at once -- one transaction with the same checks and
+ * the same lock order (the wedding KEY SHARE, then the recipients' accounts, then their access
+ * rows, each set in id order), then one INSERT for everyone who is still the wedding's owner or a
+ * collaborator. Returns those people's ids; anyone else gets nothing written. It used to be a
+ * transaction of about six statements per recipient.
+ */
+export async function insertNotifications(
+  weddingId: string,
+  recipientUserIds: string[],
+  type: string,
+  message: string
+): Promise<Set<string>> {
+  const ids = [...new Set(recipientUserIds)].sort();
+  if (ids.length === 0) return new Set();
+  const client = await pool.connect();
+  let commitSent = false;
+  try {
+    await beginTransaction(client);
+    const { rows: wedding } = await client.query<{ ownerId: string }>(
+      `SELECT "ownerId" FROM "weddings" WHERE id = $1 FOR KEY SHARE`,
+      [weddingId]
+    );
+    const members = new Set<string>();
+    if (wedding[0]) {
+      const { rows: accounts } = await client.query<{ id: string }>(
+        `SELECT id FROM "users" WHERE id = ANY($1::text[]) ORDER BY id FOR KEY SHARE`,
+        [ids]
+      );
+      const existing = accounts.map((a) => a.id);
+      if (existing.includes(wedding[0].ownerId)) members.add(wedding[0].ownerId);
+      const others = existing.filter((id) => id !== wedding[0].ownerId);
+      if (others.length > 0) {
+        const { rows: access } = await client.query<{ userId: string }>(
+          `SELECT "userId" FROM "wedding_collaborators" WHERE "weddingId" = $1 AND "userId" = ANY($2::text[])
+            ORDER BY "userId" FOR KEY SHARE`,
+          [weddingId, others]
+        );
+        for (const a of access) members.add(a.userId);
+      }
+    }
+    if (members.size > 0) {
+      const written = ids.filter((id) => members.has(id));
+      await client.query(
+        `INSERT INTO "notifications" (id, "weddingId", "recipientUserId", type, message)
+         SELECT v.id, $2, v."recipientUserId", $3::"NotificationType", $4
+           FROM unnest($1::text[], $5::text[]) AS v(id, "recipientUserId")`,
+        [written.map(() => randomUUID()), weddingId, type, message, written]
+      );
+    }
+    commitSent = true;
+    await client.query("COMMIT");
+    return members;
+  } catch (err) {
+    if (commitSent) throw new NotificationBatchOutcomeUnknown(err);
+    await client.query("ROLLBACK").catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * TS-261: the batch's COMMIT was sent but its answer never came back (the connection dropped), so
+ * the notifications may well have been saved. Trying each recipient again could then notify them
+ * twice, so the caller doesn't.
+ */
+export class NotificationBatchOutcomeUnknown extends Error {
+  constructor(cause: unknown) {
+    super("The notifications' COMMIT got no answer; they may have been saved.");
+    this.cause = cause;
+  }
+}
+
 const errorCode = (err: unknown) => {
   const code = (err as { code?: string } | null)?.code;
   return code ? `database error ${code}` : err instanceof Error ? err.message : String(err);
@@ -384,9 +458,27 @@ async function notifyEveryone(
   );
   const recipients = onlyUserIds ? everyone.filter((r) => onlyUserIds.includes(r.id)) : everyone;
 
-  const notified: typeof recipients = [];
-  for (const recipient of recipients) {
-    if (recipient.id === actorUserId) continue;
+  const toNotify = recipients.filter((r) => r.id !== actorUserId);
+  let notified: typeof recipients = [];
+  // TS-261: everyone written in one go (see insertNotifications) -- the same "still a member at
+  // this moment" check, under the same locks, as one at a time below.
+  let writtenTogether = false;
+  if (toNotify.length > 1) {
+    try {
+      const members = await insertNotifications(weddingId, toNotify.map((r) => r.id), type, message);
+      notified = toNotify.filter((r) => members.has(r.id));
+      writtenTogether = true;
+    } catch (err) {
+      if (err instanceof NotificationBatchOutcomeUnknown) {
+        // They may already have the notification -- don't risk a second one (or a second email).
+        console.error(`[notify] couldn't confirm a ${type} notification was saved: ${errorCode(err.cause)}`);
+        writtenTogether = true;
+      }
+      // Otherwise nothing was written (one transaction, rolled back). TS-194: one recipient's
+      // failure mustn't stop the others hearing about it, so they're tried one at a time instead.
+    }
+  }
+  for (const recipient of writtenTogether ? [] : toNotify) {
     // TS-186: written only if they're still the owner or a collaborator at this moment -- someone
     // removed while this was running (between the list above and here) gets neither the
     // notification nor the email. TS-234: their access row is share-locked (FOR KEY SHARE) as it's

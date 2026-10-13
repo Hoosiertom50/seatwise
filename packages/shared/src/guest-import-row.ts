@@ -12,6 +12,8 @@ import {
   hasMixedScriptWord,
   NO_MIXED_SCRIPT_MESSAGE,
   normalizePersonName,
+  hasHiddenCharacters,
+  NO_HIDDEN_CHARACTERS_MESSAGE,
 } from "./validation";
 import { parseGuestSide, parseGuestSideCode, sideMismatchMessage, guestSideLabel } from "./guest-side";
 import { hasForbiddenControlCharacter, CONTROL_CHARACTER_MESSAGE, LINE_BREAK_MESSAGE } from "./safe-text";
@@ -119,6 +121,9 @@ export function parseGuestImportRow(
     } else if (hasUnreadableCharacters(value)) {
       // TS-198: say why, rather than "can only contain letters".
       errors.push(unreadableCellMessage(`${label} "${value}"`));
+    } else if (hasHiddenCharacters(value)) {
+      // TS-262: same rule as adding a guest by hand.
+      errors.push(`${label} "${value}" is invalid: ${NO_HIDDEN_CHARACTERS_MESSAGE.toLowerCase()}.`);
     } else if (!PERSON_NAME_PATTERN.test(value)) {
       errors.push(`${label} "${value}" is invalid: ${PERSON_NAME_MESSAGE.toLowerCase()}.`);
     } else if (looksLikeWebAddress(value)) {

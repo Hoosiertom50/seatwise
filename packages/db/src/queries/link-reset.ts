@@ -1,6 +1,35 @@
+import type { PoolClient } from "pg";
 import { pool, beginTransaction } from "../pool";
 import { newLinkToken } from "../link-tokens";
 import { lockWeddingRow } from "./wedding-lock";
+
+// TS-261: a brand-new token for each of these (already locked) rows -- made here one by one, the
+// same way the single-link "regenerate" makes one -- then all written in a single UPDATE. It used
+// to be one UPDATE per guest and per vendor: about 2,200 round trips at the caps, all while holding
+// the wedding's lock. Nothing is sent when there are no rows.
+const TOKEN_COLUMNS = {
+  guests: { encrypted: "rsvpToken", hash: "rsvpTokenHash" },
+  vendors: { encrypted: "shareToken", hash: "shareTokenHash" },
+} as const;
+async function writeFreshTokens(client: PoolClient, table: keyof typeof TOKEN_COLUMNS, rows: { id: string }[]): Promise<void> {
+  if (rows.length === 0) return;
+  const ids: string[] = [];
+  const encrypted: string[] = [];
+  const hashes: string[] = [];
+  for (const row of rows) {
+    const fresh = newLinkToken();
+    ids.push(row.id);
+    encrypted.push(fresh.encrypted);
+    hashes.push(fresh.hash);
+  }
+  const { encrypted: encryptedColumn, hash: hashColumn } = TOKEN_COLUMNS[table];
+  await client.query(
+    `UPDATE "${table}" AS t SET "${encryptedColumn}" = v.encrypted, "${hashColumn}" = v.hash
+       FROM unnest($1::text[], $2::text[], $3::text[]) AS v(id, encrypted, hash)
+      WHERE t.id = v.id`,
+    [ids, encrypted, hashes]
+  );
+}
 
 export interface ResetLinksResult {
   guestLinks: number;
@@ -42,27 +71,14 @@ export async function resetWeddingLinkTokens(weddingId: string, actorUserId: str
        ORDER BY id FOR UPDATE`,
       [weddingId]
     );
-    for (const g of guests) {
-      const fresh = newLinkToken();
-      await client.query(`UPDATE "guests" SET "rsvpToken" = $1, "rsvpTokenHash" = $2 WHERE id = $3`, [
-        fresh.encrypted,
-        fresh.hash,
-        g.id,
-      ]);
-    }
+    // TS-261: the rows are locked above, in id order; one UPDATE then rewrites all of them.
+    await writeFreshTokens(client, "guests", guests);
     const { rows: vendors } = await client.query(
       `SELECT id FROM "vendors" WHERE "weddingId" = $1 AND ("shareTokenHash" IS NOT NULL OR "shareToken" IS NOT NULL)
        ORDER BY id FOR UPDATE`,
       [weddingId]
     );
-    for (const v of vendors) {
-      const fresh = newLinkToken();
-      await client.query(`UPDATE "vendors" SET "shareToken" = $1, "shareTokenHash" = $2 WHERE id = $3`, [
-        fresh.encrypted,
-        fresh.hash,
-        v.id,
-      ]);
-    }
+    await writeFreshTokens(client, "vendors", vendors);
     await client.query("COMMIT");
     return { guestLinks: guests.length, vendorLinks: vendors.length };
   } catch (err) {
