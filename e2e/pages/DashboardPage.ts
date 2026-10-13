@@ -221,6 +221,37 @@ export class DashboardPage extends BasePage {
     await Promise.all([this.page.waitForURL(/\/weddings\/[^/]+$/), this.addWeddingButton().click()]);
   }
 
+  /** TS-263: the create form's date box (focus goes back to it after "Change it"). */
+  newWeddingDateBox() {
+    return this.dateInput();
+  }
+
+  /** TS-263: fills the name and date and presses Add wedding, staying wherever the app leaves you
+   * (a past date stays on the dashboard with the "already passed" question). */
+  async submitNewWedding(name: string, date: string): Promise<void> {
+    await this.nameInput().fill(name);
+    await this.dateInput().fill(date);
+    await this.addWeddingButton().click();
+  }
+
+  /** TS-263: the "This date (MM-DD-YYYY) has already passed — is that right?" question. */
+  pastDateQuestion() {
+    return this.page.getByRole("alertdialog").filter({ hasText: /has already passed/ });
+  }
+
+  /** TS-263: "Save anyway" -- creates the wedding and waits for its page to open. */
+  async saveDateAnyway(): Promise<void> {
+    await Promise.all([
+      this.page.waitForURL(/\/weddings\/[^/]+$/),
+      this.pastDateQuestion().getByRole("button", { name: "Save anyway", exact: true }).click(),
+    ]);
+  }
+
+  /** TS-263: "Change it" -- closes the question and puts focus back in the date box. */
+  async changeDate(): Promise<void> {
+    await this.pastDateQuestion().getByRole("button", { name: "Change it", exact: true }).click();
+  }
+
   /** Clicks a wedding's list link and waits for the resulting navigation to its detail page. */
   /** TS-91: the owner-only "Duplicate layout" button beside a wedding's row. Clicking it creates the
    * copy and navigates into it. */

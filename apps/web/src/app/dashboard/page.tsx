@@ -6,6 +6,8 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { api, ApiError, apiErrorMessage } from "@/lib/api-client";
 import { formatDate, localTodayIso } from "@/lib/display-format";
+// TS-263: asks before creating a wedding whose date has already passed.
+import { pastWeddingDateQuestion } from "@/lib/past-wedding-date";
 import { formatGuestCounts, type WeddingSummaryDTO, type SeatingTemplateDTO } from "@seatwise/shared";
 import { NotificationsBell } from "@/components/NotificationsBell";
 import { EmailVerificationNotice } from "@/components/EmailVerificationNotice";
@@ -82,6 +84,8 @@ export default function DashboardPage() {
   const [newNote, setNewNote] = useState("");
   const [showNote, setShowNote] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // TS-263: a past date waiting for "Save anyway" (the date and the question asked about it).
+  const [dateQuestion, setDateQuestion] = useState<{ value: string; message: string } | null>(null);
 
   // TS-19 (FR-14.4): "start from an existing template" is offered right in this create form --
   // templates are a portfolio-level asset (not scoped to any one wedding), so they're fetched
@@ -196,6 +200,20 @@ export default function DashboardPage() {
 
   async function onCreate(e: React.FormEvent) {
     e.preventDefault();
+    // TS-263: a date before today (in the planner's own time zone) is only saved once they say so
+    // -- it used to be saved without a word, and it's usually the wrong year.
+    const question = pastWeddingDateQuestion(newDate, localTodayIso());
+    if (question) {
+      setError(null);
+      setDateQuestion({ value: newDate, message: question });
+      return;
+    }
+    await createWedding();
+  }
+
+  // TS-263: also "Save anyway" -- creates the wedding with the date that was asked about.
+  async function createWedding() {
+    setDateQuestion(null);
     setError(null);
     setCreating(true);
     try {
@@ -231,6 +249,13 @@ export default function DashboardPage() {
     } finally {
       setCreating(false);
     }
+  }
+
+  // TS-263: "Change it" -- the typed date stays (usually only the year is wrong) and the date box
+  // gets focus.
+  function onChangeDate() {
+    setDateQuestion(null);
+    setTimeout(() => document.getElementById("new-wedding-date")?.focus(), 0);
   }
 
   async function onDeleteTemplate(id: string) {
@@ -332,7 +357,11 @@ export default function DashboardPage() {
               type="date"
               className="rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
               value={newDate}
-              onChange={(e) => setNewDate(e.target.value)}
+              onChange={(e) => {
+                setNewDate(e.target.value);
+                // TS-263: a new date is a new answer -- the question was about the old one.
+                setDateQuestion(null);
+              }}
             />
           </div>
           <div className="flex-1">
@@ -354,6 +383,46 @@ export default function DashboardPage() {
           >
             {creating ? "Adding..." : "Add wedding"}
           </button>
+        </div>
+        {/* TS-263: asks before creating a wedding whose date has already passed. Right after Add
+            wedding, so it's the next Tab stop. The region is always on the page, so the question is
+            announced when it appears (TS-212). */}
+        <div aria-live="assertive" data-testid="new-wedding-date-question-region">
+          {dateQuestion && (
+            <div
+              role="alertdialog"
+              aria-labelledby="new-wedding-date-question"
+              // TS-212: Escape means "Change it", like the other questions in the app.
+              onKeyDown={(e) => {
+                if (e.key === "Escape") {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  onChangeDate();
+                }
+              }}
+              className="flex flex-wrap items-center gap-3 rounded-md bg-amber-50 dark:bg-amber-950 px-3 py-2 text-sm text-amber-900 dark:text-amber-200"
+            >
+              {/* basis-60: on a phone the buttons go under the question rather than squeezing it. */}
+              <span id="new-wedding-date-question" className="flex-1 basis-60">
+                {dateQuestion.message}
+              </span>
+              <button
+                type="button"
+                onClick={() => void createWedding()}
+                disabled={creating}
+                className="min-h-11 rounded-md bg-amber-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-amber-800 disabled:opacity-50"
+              >
+                Save anyway
+              </button>
+              <button
+                type="button"
+                onClick={onChangeDate}
+                className="min-h-11 rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800"
+              >
+                Change it
+              </button>
+            </div>
+          )}
         </div>
         {/* TS-19 (FR-14.4): entirely optional -- leaving this at "Start from scratch" behaves
             exactly as before this feature existed. */}
