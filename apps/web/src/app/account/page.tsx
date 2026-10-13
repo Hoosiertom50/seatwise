@@ -6,6 +6,8 @@ import { useRouter } from "next/navigation";
 import { api, ApiError } from "@/lib/api-client";
 import { ConfirmDeleteButton } from "@/components/ConfirmDeleteButton";
 import { AppearanceSetting } from "@/components/AppearanceSetting";
+// TS-264: bell · Account · Log out, the same on every signed-in page.
+import { SignedInHeader } from "@/components/SignedInHeader";
 import { SUPPORT_EMAIL, SUPPORT_MAILTO, SUPPORT_PROMISE } from "@/lib/support";
 // TS-193: the same limits the server checks (packages/shared/src/field-limits.ts).
 import { FIELD_LIMITS } from "@seatwise/shared";
@@ -111,9 +113,15 @@ export default function AccountPage() {
 
   return (
     <main className="mx-auto max-w-xl px-4 py-10">
-      <Link href="/dashboard" className="text-sm text-neutral-500 dark:text-neutral-400 underline">
-        ← Back to your weddings
-      </Link>
+      {/* TS-264: the same bell · Account · Log out as every other signed-in page. */}
+      <SignedInHeader
+        onAccountPage
+        left={
+          <Link href="/dashboard" className="inline-flex min-h-11 items-center text-sm text-neutral-500 dark:text-neutral-400 underline">
+            ← Back to your weddings
+          </Link>
+        }
+      />
       <h1 className="mb-1 mt-4 text-2xl font-semibold">Your account</h1>
       {/* TS-199: a long name or address wraps instead of running off a phone screen. */}
       <p className="mb-8 break-words text-sm text-neutral-600 dark:text-neutral-300 [overflow-wrap:anywhere]">

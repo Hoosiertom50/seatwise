@@ -9,7 +9,8 @@ import { formatDate, localTodayIso } from "@/lib/display-format";
 // TS-263: asks before creating a wedding whose date has already passed.
 import { pastWeddingDateQuestion } from "@/lib/past-wedding-date";
 import { formatGuestCounts, type WeddingSummaryDTO, type SeatingTemplateDTO } from "@seatwise/shared";
-import { NotificationsBell } from "@/components/NotificationsBell";
+// TS-264: bell · Account · Log out, the same on every signed-in page.
+import { SignedInHeader } from "@/components/SignedInHeader";
 import { EmailVerificationNotice } from "@/components/EmailVerificationNotice";
 // TS-193: the same limits the server checks (packages/shared/src/field-limits.ts).
 import { FIELD_LIMITS } from "@seatwise/shared";
@@ -277,46 +278,23 @@ export default function DashboardPage() {
     }
   }
 
-  // TS-175: a failed log out says so (it failed silently), and a successful one replaces this
-  // page in history, so Back doesn't bounce between the dashboard and the sign-in page.
-  // TS-204 (Tom's decision): this device only -- "Log out on all devices" is on the Account page.
-  async function onLogout() {
-    try {
-      await api.post("/api/v1/auth/logout");
-    } catch {
-      setError("Couldn't log out — check your connection and try again.");
-      return;
-    }
-    router.replace("/login");
-  }
-
+  // TS-264: Log out (TS-175/TS-204) is in the shared SignedInHeader now, on every signed-in page.
   if (loading) {
     return <main className="flex flex-1 items-center justify-center text-neutral-500 dark:text-neutral-400">Loading...</main>;
   }
 
   return (
     <main className="mx-auto w-full max-w-[1600px] flex-1 px-6 py-10">
-      <div className="mb-8 flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold">Your weddings</h1>
-          {userName && <p className="text-sm text-neutral-500 dark:text-neutral-400">Signed in as {userName}</p>}
-        </div>
-        <div className="flex items-center gap-2">
-          <NotificationsBell />
-          {/* TS-105 */}
-          <Link
-            href="/account"
-            className="rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800"
-          >
-            Account
-          </Link>
-          <button
-            onClick={onLogout}
-            className="rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800"
-          >
-            Log out
-          </button>
-        </div>
+      {/* TS-264: the same bell · Account · Log out as every other signed-in page. */}
+      <div className="mb-8">
+        <SignedInHeader
+          left={
+            <>
+              <h1 className="text-xl font-semibold sm:text-2xl">Your weddings</h1>
+              {userName && <p className="text-sm text-neutral-500 dark:text-neutral-400">Signed in as {userName}</p>}
+            </>
+          }
+        />
       </div>
 
       {/* TS-164 */}
