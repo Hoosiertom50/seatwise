@@ -285,7 +285,7 @@ test("TS-261: quick-create is one INSERT for 2 tables or 100, with the same name
 // --- Notifications
 
 const MEMBERS_READ = /UNION/;
-function members(n: number, opts: { removed?: string[]; failBatch?: boolean } = {}) {
+function members(n: number, opts: { removed?: string[]; failBatch?: boolean; failCommit?: boolean } = {}) {
   const everyone = ["owner", ...ids("c", n)].map((id) => ({ id, email: `${id}@example.invalid`, emailVerifiedAt: null, wantsEmail: false }));
   return standIn((sql, params) => {
     if (/^SELECT "ownerId", name, "emailNotificationsEnabled" FROM "weddings"/.test(sql)) return [{ ownerId: "owner", name: "W", emailNotificationsEnabled: false }];
@@ -298,6 +298,7 @@ function members(n: number, opts: { removed?: string[]; failBatch?: boolean } = 
     }
     if (/^SELECT 1 FROM "wedding_collaborators" .* FOR KEY SHARE$/.test(sql)) return opts.removed?.includes(params[1] as string) ? [] : [{}];
     if (/^INSERT INTO "notifications" .* unnest/.test(sql) && opts.failBatch) throw Object.assign(new Error("busy"), { code: "40P01" });
+    if (sql === "COMMIT" && opts.failCommit) throw new Error("Connection terminated unexpectedly");
     return undefined;
   });
 }
@@ -342,6 +343,14 @@ test("TS-261: if writing them together fails, each is tried on their own, as bef
   assert.ok(at(log, /^ROLLBACK$/) > at(log, /unnest/), "the failed batch is rolled back");
   const singles = log.filter((s) => /^INSERT INTO "notifications" .* VALUES/.test(s.sql)).map((s) => s.params[2]);
   assert.deepEqual(singles, ["c00000", "c00002"]);
+});
+
+test("TS-261: if the batch's COMMIT gets no answer, nobody is notified a second time", async () => {
+  const log = members(3, { failCommit: true });
+  await db.notifyWeddingCollaborators("w1", "owner", "GUEST_ADDED", "x");
+  assert.equal(count(log, /unnest/), 1, "the batch was sent once");
+  assert.equal(count(log, /^INSERT INTO "notifications" .* VALUES/), 0, "no one-at-a-time retries -- they may already have it");
+  assert.equal(count(log, /^ROLLBACK$/), 0, "nothing to roll back once COMMIT was sent");
 });
 
 test("TS-261: one recipient still goes the one-at-a-time way (nothing changes for them)", async () => {

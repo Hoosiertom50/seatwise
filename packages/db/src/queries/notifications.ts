@@ -358,6 +358,7 @@ export async function insertNotifications(
   const ids = [...new Set(recipientUserIds)].sort();
   if (ids.length === 0) return new Set();
   const client = await pool.connect();
+  let commitSent = false;
   try {
     await beginTransaction(client);
     const { rows: wedding } = await client.query<{ ownerId: string }>(
@@ -391,13 +392,27 @@ export async function insertNotifications(
         [written.map(() => randomUUID()), weddingId, type, message, written]
       );
     }
+    commitSent = true;
     await client.query("COMMIT");
     return members;
   } catch (err) {
+    if (commitSent) throw new NotificationBatchOutcomeUnknown(err);
     await client.query("ROLLBACK").catch(() => {});
     throw err;
   } finally {
     client.release();
+  }
+}
+
+/**
+ * TS-261: the batch's COMMIT was sent but its answer never came back (the connection dropped), so
+ * the notifications may well have been saved. Trying each recipient again could then notify them
+ * twice, so the caller doesn't.
+ */
+export class NotificationBatchOutcomeUnknown extends Error {
+  constructor(cause: unknown) {
+    super("The notifications' COMMIT got no answer; they may have been saved.");
+    this.cause = cause;
   }
 }
 
@@ -453,9 +468,14 @@ async function notifyEveryone(
       const members = await insertNotifications(weddingId, toNotify.map((r) => r.id), type, message);
       notified = toNotify.filter((r) => members.has(r.id));
       writtenTogether = true;
-    } catch {
-      // Nothing was written (one transaction). TS-194: one recipient's failure mustn't stop the
-      // others hearing about it, so they're tried one at a time instead, as before.
+    } catch (err) {
+      if (err instanceof NotificationBatchOutcomeUnknown) {
+        // They may already have the notification -- don't risk a second one (or a second email).
+        console.error(`[notify] couldn't confirm a ${type} notification was saved: ${errorCode(err.cause)}`);
+        writtenTogether = true;
+      }
+      // Otherwise nothing was written (one transaction, rolled back). TS-194: one recipient's
+      // failure mustn't stop the others hearing about it, so they're tried one at a time instead.
     }
   }
   for (const recipient of writtenTogether ? [] : toNotify) {
