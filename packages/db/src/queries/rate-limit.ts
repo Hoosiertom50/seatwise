@@ -239,6 +239,76 @@ export async function hitRateLimit(key: string, limit: number, windowSeconds: nu
   };
 }
 
+/**
+ * TS-266: `n` hits against each of several limits at once -- one upsert for every key, then one read
+ * of the earlier windows they still count -- instead of two statements per hit per key. For each,
+ * says how many of the `n` fit: the first `fits` hits would each have been allowed had they been
+ * counted one at a time (hitRateLimit), the rest refused. All `n` stay counted on every key; the
+ * caller gives back what it doesn't use (undoRateLimitHits with the returned windowStart), exactly as
+ * a refused hitRateLimit is given back. Keys must be different from each other.
+ */
+export async function hitRateLimits(
+  hits: { key: string; limit: number; windowSeconds: number; n: number }[]
+): Promise<{ fits: number; windowStart: Date }[]> {
+  if (hits.length === 0) return [];
+  if (new Set(hits.map((h) => h.key)).size !== hits.length) throw new Error("hitRateLimits: each key at most once");
+  const nowMs = Date.now();
+  const starts = hits.map((h) => windowStartFor(nowMs, bucketMsFor(h.windowSeconds)));
+  // In key order, so two batches at once lock the rows in the same order.
+  const order = hits.map((_, i) => i).sort((a, b) => (hits[a].key < hits[b].key ? -1 : hits[a].key > hits[b].key ? 1 : 0));
+  const { rows } = await pool.query<{ key: string; count: number }>(
+    `INSERT INTO "rate_limit_counters" (key, "windowStart", count)
+     SELECT v.key, v."windowStart"::timestamp, v.n FROM unnest($1::text[], $2::text[], $3::int[]) WITH ORDINALITY AS v(key, "windowStart", n, ord)
+     ORDER BY v.ord
+     ON CONFLICT (key, "windowStart") DO UPDATE SET count = "rate_limit_counters".count + EXCLUDED.count
+     RETURNING key, count`,
+    [order.map((i) => hits[i].key), order.map((i) => utc(starts[i])), order.map((i) => hits[i].n)]
+  );
+  pruneOldCounters();
+  const after = new Map(rows.map((r) => [r.key, Number(r.count)]));
+  // The windows each limit still counts besides the current one: the previous window of a sliding
+  // limit, or the earlier hours of a rolling one.
+  let earlier: { key: string; startMs: number; count: number }[];
+  try {
+    ({ rows: earlier } = await pool.query<{ key: string; startMs: number; count: number }>(
+      `SELECT r.key, (EXTRACT(EPOCH FROM r."windowStart") * 1000)::float8 AS "startMs", r.count
+         FROM unnest($1::text[], $2::text[], $3::text[]) AS v(key, "from", "until")
+         JOIN "rate_limit_counters" r ON r.key = v.key AND r."windowStart" >= v."from"::timestamp AND r."windowStart" < v."until"::timestamp`,
+      [
+        hits.map((h) => h.key),
+        // A sliding limit's previous window starts one window back; a rolling one's earliest counted hour, its span back.
+        hits.map((h, i) => utc(new Date(starts[i].getTime() - h.windowSeconds * 1000))),
+        starts.map((s) => utc(s)),
+      ]
+    ));
+  } catch (err) {
+    // Like refundIfFails: the caller only sees an error, so the hits are taken back here.
+    await undoRateLimitHits(hits.map((h, i) => ({ key: h.key, windowStart: starts[i], n: h.n }))).catch(() => {});
+    throw err;
+  }
+  return hits.map((h, i) => {
+    const windowStart = starts[i];
+    const before = (after.get(h.key) ?? h.n) - h.n;
+    const theirs = earlier.filter((w) => w.key === h.key);
+    const alsoCounted = rolls(h.windowSeconds)
+      ? rollingTotal(0, theirs, windowStart.getTime(), h.windowSeconds)
+      : carriedOver(theirs.reduce((sum, w) => sum + Number(w.count), 0), windowStart, h.windowSeconds * 1000, nowMs);
+    return { fits: Math.max(0, Math.min(h.n, h.limit - alsoCounted - before)), windowStart };
+  });
+}
+
+/** TS-266: takes back `n` hits from each key's window (as undoRateLimitHit does one) -- one statement. */
+export async function undoRateLimitHits(items: { key: string; windowStart: Date; n: number }[]): Promise<void> {
+  const some = items.filter((i) => i.n > 0);
+  if (some.length === 0) return;
+  await pool.query(
+    `UPDATE "rate_limit_counters" r SET count = GREATEST(r.count - v.n, 0)
+       FROM unnest($1::text[], $2::text[], $3::int[]) AS v(key, "windowStart", n)
+      WHERE r.key = v.key AND r."windowStart" = v."windowStart"::timestamp`,
+    [some.map((i) => i.key), some.map((i) => utc(i.windowStart)), some.map((i) => i.n)]
+  );
+}
+
 // Opportunistic cleanup, ~1 request in 100. TS-194: windows older than two days are never read again
 // (the rolling 24-hour email counts read back 25 hourly windows, so one day was too soon).
 function pruneOldCounters(): void {

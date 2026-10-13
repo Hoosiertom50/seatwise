@@ -423,9 +423,12 @@ export async function createPlanVersionWithAssignments(
     // TS-169: the plan was worked out from the guest list as it was before this transaction; a
     // guest who declined (or was marked Not Attending) since then doesn't keep a seat in it.
     // Attendance changes take the same wedding lock, so they land either before this or after it.
+    // TS-266: the not-attending guests are read once into a list first. As a plain IN, Postgres
+    // could check every new seat against every one of the wedding's guests when its statistics
+    // didn't know this plan or wedding yet (~350 ms on a freshly imported 2,000-guest wedding).
     await client.query(
       `DELETE FROM "seat_assignments" WHERE "planVersionId" = $1
-         AND "guestId" IN (SELECT id FROM "guests" WHERE "weddingId" = $2 AND "dayOfAttendance" <> 'ATTENDING')`,
+         AND "guestId" = ANY(ARRAY(SELECT id FROM "guests" WHERE "weddingId" = $2 AND "dayOfAttendance" <> 'ATTENDING'))`,
       [planVersionId, weddingId]
     );
     await checkNewVersion(client, weddingId, planVersionId);
@@ -436,7 +439,7 @@ export async function createPlanVersionWithAssignments(
     const { rows: countRows } = await client.query(
       `SELECT (SELECT COUNT(*)::int FROM "seat_assignments" WHERE "planVersionId" = $1) AS "seated",
               (SELECT COUNT(*)::int FROM "guests" g WHERE g."weddingId" = $2 AND g."dayOfAttendance" = 'ATTENDING'
-                 AND NOT EXISTS (SELECT 1 FROM "seat_assignments" sa WHERE sa."planVersionId" = $1 AND sa."guestId" = g.id)
+                 AND g.id NOT IN (SELECT sa."guestId" FROM "seat_assignments" sa WHERE sa."planVersionId" = $1) -- TS-266
               ) AS "unassigned"`,
       [planVersionId, weddingId]
     );
@@ -570,7 +573,7 @@ export async function recomputeCurrentPlanCompleteness(
       const { rows: countRows } = await client.query(
         `SELECT pv."isComplete",
            (SELECT COUNT(*)::int FROM "guests" g WHERE g."weddingId" = $1 AND g."dayOfAttendance" = 'ATTENDING'
-              AND NOT EXISTS (SELECT 1 FROM "seat_assignments" sa WHERE sa."planVersionId" = $2 AND sa."guestId" = g.id)
+              AND g.id NOT IN (SELECT sa."guestId" FROM "seat_assignments" sa WHERE sa."planVersionId" = $2) -- TS-266
            ) AS "unassignedCount",
            (SELECT COUNT(*)::int FROM "seat_assignments" WHERE "planVersionId" = $2 AND "needsReassignment" = true)
              AS "needsReassignmentCount"
@@ -606,7 +609,10 @@ export async function listPlanVersionsForWedding(weddingId: string): Promise<Pla
        SELECT COUNT(*)::int AS n FROM "guests" WHERE "weddingId" = $1 AND "dayOfAttendance" = 'ATTENDING'
      ),
      seated AS (
-       SELECT sa."planVersionId", COUNT(DISTINCT sa."guestId")::int AS count,
+       -- TS-266: COUNT(*), not COUNT(DISTINCT "guestId") -- a guest has at most one seat per plan
+       -- version (unique "planVersionId", "guestId"), so it's the same number without sorting
+       -- every seat of every version (which went to disk at 50 versions).
+       SELECT sa."planVersionId", COUNT(*)::int AS count,
               bool_or(sa."needsReassignment") AS "anyFlagged"
        FROM "seat_assignments" sa
        JOIN "guests" g ON g.id = sa."guestId" AND g."dayOfAttendance" = 'ATTENDING'
@@ -1290,9 +1296,7 @@ export async function moveGuestAssignment(
     const { rows: unassignedCountRows } = await client.query(
       `SELECT
          (SELECT COUNT(*)::int FROM "guests" g WHERE g."weddingId" = $1 AND g."dayOfAttendance" = 'ATTENDING'
-            AND NOT EXISTS (
-              SELECT 1 FROM "seat_assignments" sa WHERE sa."planVersionId" = $2 AND sa."guestId" = g.id
-            )
+            AND g.id NOT IN (SELECT sa."guestId" FROM "seat_assignments" sa WHERE sa."planVersionId" = $2) -- TS-266
          ) AS "count",
          -- FR-4.6: a guest flagged Needs Reassignment elsewhere in this plan (e.g. a table they
          -- need was unmarked Accessible) also keeps the plan incomplete -- this move alone
@@ -1463,9 +1467,7 @@ export async function unassignGuestFromPlan(
     const { rows: unassignedCountRows } = await client.query(
       `SELECT
          (SELECT COUNT(*)::int FROM "guests" g WHERE g."weddingId" = $1 AND g."dayOfAttendance" = 'ATTENDING'
-            AND NOT EXISTS (
-              SELECT 1 FROM "seat_assignments" sa WHERE sa."planVersionId" = $2 AND sa."guestId" = g.id
-            )
+            AND g.id NOT IN (SELECT sa."guestId" FROM "seat_assignments" sa WHERE sa."planVersionId" = $2) -- TS-266
          ) AS "count",
          (SELECT COUNT(*)::int FROM "seat_assignments" WHERE "planVersionId" = $2 AND "needsReassignment" = true)
            AS "needsReassignmentCount"`,
