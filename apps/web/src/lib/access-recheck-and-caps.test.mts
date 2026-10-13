@@ -186,7 +186,8 @@ test("TS-205: quick-create past the cap says how many more fit", async () => {
   // Exactly up to the cap is fine.
   fakeDatabase(weddingWithCount(290));
   await quickCreateSeatingTables("wedding", { count: 10, capacity: 8, shape: "ROUND", labelPrefix: "Table" }).catch(() => {});
-  assert.ok(log.filter((s) => s.startsWith("INSERT INTO \"seating_tables\"")).length === 10);
+  // TS-261: all ten tables in one INSERT.
+  assert.ok(log.filter((s) => s.startsWith("INSERT INTO \"seating_tables\"")).length === 1);
 });
 
 test("TS-205: guests past 2,000 are refused", async () => {

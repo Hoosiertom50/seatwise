@@ -226,21 +226,29 @@ export async function quickCreateSeatingTables(
       input.labelPrefix,
       input.count
     );
-    const created: SeatingTableRow[] = [];
-    for (let i = 0; i < input.count; i++) {
-      const id = randomUUID();
-      const { x, y } = gridPosition(startIndex + i);
-      const { rows } = await client.query(
-        `INSERT INTO "seating_tables"
-           (id, "weddingId", label, capacity, shape, "positionX", "positionY", "updatedAt")
-         VALUES ($1, $2, $3, $4, $5::"TableShape", $6, $7, now())
-         RETURNING id, "weddingId", label, capacity, "isRestricted", "isAccessible", "isLocked",
-                   purpose, "purposeCriterionType", "purposeCriterionValue", "singleSideOnly", shape,
-                   "positionX", "positionY", revision, "createdAt", "updatedAt"`,
-        [id, weddingId, labels[i], input.capacity, input.shape, x, y]
-      );
-      created.push({ ...rows[0], requiredGuestIds: [] });
-    }
+    // TS-261: every new table in one INSERT (it was one per table). The rows come back keyed by id
+    // and are put in the order they were made, so the caller gets them in label order as before.
+    const ids = labels.map(() => randomUUID());
+    const positions = labels.map((_, i) => gridPosition(startIndex + i));
+    const { rows } = labels.length
+      ? await client.query(
+          `INSERT INTO "seating_tables"
+             (id, "weddingId", label, capacity, shape, "positionX", "positionY", "updatedAt")
+           SELECT v.id, $2, v.label, $4, $5::"TableShape", v.x, v.y, now()
+             FROM unnest($1::text[], $3::text[], $6::double precision[], $7::double precision[])
+                  WITH ORDINALITY AS v(id, label, x, y, n)
+            ORDER BY v.n
+           RETURNING id, "weddingId", label, capacity, "isRestricted", "isAccessible", "isLocked",
+                     purpose, "purposeCriterionType", "purposeCriterionValue", "singleSideOnly", shape,
+                     "positionX", "positionY", revision, "createdAt", "updatedAt"`,
+          [ids, weddingId, labels, input.capacity, input.shape, positions.map((p) => p.x), positions.map((p) => p.y)]
+        )
+      : { rows: [] };
+    const byId = new Map(rows.map((r) => [r.id as string, r]));
+    const created: SeatingTableRow[] = ids.flatMap((id) => {
+      const row = byId.get(id);
+      return row ? [{ ...row, requiredGuestIds: [] }] : [];
+    });
     await client.query("COMMIT");
     return created;
   } catch (err) {
