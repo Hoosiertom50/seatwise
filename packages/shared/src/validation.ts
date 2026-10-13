@@ -18,8 +18,22 @@ export const PERSON_NAME_MESSAGE =
 // and copied text can hold a no-break space -- both used to be refused as "can only contain
 // letters...". Before the name rules run, ’ ‘ ʼ become a plain ' and a no-break space becomes a
 // space; the plain form is what's saved. (One character for one, so lengths don't change.)
+// TS-262: and the name is put in its composed form (NFC): an "é" pasted as "e" plus a separate
+// accent mark becomes the one letter "é", so a real accented name is saved the usual way. (That
+// can make a name shorter; the length is checked after.)
 export function normalizePersonName(value: string): string {
-  return value.replace(/[’‘ʼ]/g, "'").replace(/ /g, " ");
+  return value.replace(/[’‘ʼ]/g, "'").replace(/ /g, " ").normalize("NFC");
+}
+
+// TS-262: some characters show nothing at all -- the combining grapheme joiner (U+034F), the
+// variation selectors (U+FE00-FE0F, U+E0100-E01EF, U+180B-180F), zero-width spaces and joiners
+// (U+200B-200D, U+2060, U+FEFF), the soft hyphen, the Hangul fillers. Put inside "evil.com" one hid
+// it from the web-address check while the name still read "evil.com" in an email. A person's or a
+// wedding's name can't hold them; real accents (José, Nguyễn, Ó Súilleabháin) are not among them.
+const HIDDEN_CHARACTER = /[\p{Default_Ignorable_Code_Point}\p{Variation_Selector}]/u;
+export const NO_HIDDEN_CHARACTERS_MESSAGE = "Can't contain hidden characters — retype it or paste it as plain text";
+export function hasHiddenCharacters(value: string): boolean {
+  return HIDDEN_CHARACTER.test(value);
 }
 
 // A wedding's name is a title, not a person's name -- "Alex & Jordan's Wedding", "Smith-Jones
@@ -64,8 +78,15 @@ export const WEB_ADDRESS_LIKE = new RegExp(
   "iu"
 );
 export const NO_WEB_ADDRESS_MESSAGE = "Can't look like a web address";
+// TS-262: the check also runs on a copy with accent marks and hidden characters taken out -- an
+// invisible mark inside "com" ("evil.c" + U+034F + "om") stopped the match, though it still reads
+// (and can link) as "evil.com". Taking characters out only joins letters up, so the copy never
+// misses what the plain check finds.
+const MARK_OR_HIDDEN = /[\p{M}\p{Default_Ignorable_Code_Point}\p{Variation_Selector}]/gu;
 export function looksLikeWebAddress(value: string): boolean {
-  return WEB_ADDRESS_LIKE.test(value);
+  if (WEB_ADDRESS_LIKE.test(value)) return true;
+  const withoutMarks = value.replace(MARK_OR_HIDDEN, "");
+  return withoutMarks !== value && WEB_ADDRESS_LIKE.test(withoutMarks);
 }
 
 // TS-171: a wedding's name may hold numbers (a year, a date), but not a phone number -- the name
@@ -77,8 +98,11 @@ export function looksLikeWebAddress(value: string): boolean {
 // the digits too ("800, 555, 1234" is still a number to call).
 export const PHONE_NUMBER_LIKE = /\p{Nd}(?:[\s.,'’/()[\]_\u2010-\u2015-]*\p{Nd}){6,}/u;
 export const NO_PHONE_NUMBER_MESSAGE = "Can't contain a long run of digits, like a phone number (7 or more)";
+// TS-262: and, like the web-address check, on a copy without accent marks or hidden characters.
 export function looksLikePhoneNumber(value: string): boolean {
-  return PHONE_NUMBER_LIKE.test(value);
+  if (PHONE_NUMBER_LIKE.test(value)) return true;
+  const withoutMarks = value.replace(MARK_OR_HIDDEN, "");
+  return withoutMarks !== value && PHONE_NUMBER_LIKE.test(withoutMarks);
 }
 
 // TS-178: a word written partly in Latin letters and partly in look-alike Cyrillic or Greek ones
