@@ -83,6 +83,17 @@ test("TS-265: other real names, accented or with a dot below, still pass", () =>
   }
 });
 
+// PR #114 review: a middle dot is how Japanese and Catalan names are written. The name fields'
+// letters-only rule refuses it on its own; the web-address check doesn't count it as a dot except
+// before the endings scam links use, so text with one isn't swapped for the neutral notification.
+test("TS-265: a middle dot between names isn't a web address (only before com, net...)", () => {
+  for (const name of ["ジョン・スミス", "エミリー・ブラウン", "Gal·la", "Pere·Joan", "Mary・Jane", "Paul·lí"]) {
+    assert.equal(looksLikeWebAddress(name), false, name);
+    assert.equal(emailSafeNotificationText(`${name} was added to Table 3`), `${name} was added to Table 3`, name);
+  }
+  for (const v of ["paypal・com", "evil·net", "shop・xyz"]) assert.equal(looksLikeWebAddress(v), true, v);
+});
+
 test("TS-265: every name in the sample import file still passes", () => {
   const csv = readFileSync(path.join(import.meta.dirname, "../../../../docs/sample-guest-import.csv"), "utf8");
   const { headers, rows } = parseCsv(csv.replace(/^﻿/, ""));
@@ -195,7 +206,7 @@ test("TS-265: Mac í after a vowel is caught again (Eloísa, Thaís, Raíssa, Mo
 });
 
 test("TS-265: windows-1252 names with ’ still import (Ja’nae, Da’shawn, Ta’kia, Kenya’, Andre’, Rene’, Ka’iulani)", () => {
-  for (const name of ["Ja’nae", "Da’shawn", "Ta’kia", "Kenya’", "Andre’", "Rene’", "Ka’iulani", "La’shawn", "Ke’shawn"]) {
+  for (const name of ["Ja’nae", "Da’shawn", "Ta’kia", "Kenya’", "Andre’", "Rene’", "Ka’iulani", "La’shawn", "Ke’shawn", "o’sullivan", "o’shea", "a’sante"]) {
     assert.equal(looksLikeMacRoman(name, true, true, false), false, name);
     assert.deepEqual(
       importOne(bytesFor("windows-1252", `First name,Last name\r\n${name},Lee\r\n`)),

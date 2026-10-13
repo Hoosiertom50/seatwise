@@ -69,6 +69,10 @@ const SPACED_DOMAIN_ENDINGS = "com|net|org|info|biz|xyz|site|online|shop|click|i
 // every name rule. Fullwidth, small and other compatibility forms of a period (U+FE52, U+2024...)
 // are folded to a plain one before the check (see looksLikeWebAddress).
 const DOT = String.raw`[.\u3002\uFF0E\uFF61\u00B7\u0387\u0660\u06F0\u0701\u0702\u1427\u16EB\u2022\u2024\u2027\u2219\u22C5\u2E31\u30FB\uA4F8\uA60E\uA78F\uFE52\uFF65\u{10101}\u{10A50}]`;
+// PR #114 review: before any other ending, only a real full stop counts -- a middle dot is how
+// Japanese ("\u30B8\u30E7\u30F3\u30FB\u30B9\u30DF\u30B9") and Catalan ("Gal\u00B7la") names are written, so the middle dots above
+// count only before the endings scam links use.
+const FULL_STOP = String.raw`[.\u3002\uFF0E\uFF61\u0701\u0702\u2024\uA60E\uFE52\u{10A50}]`;
 // TS-258: "com" becomes c\s*o\s*m, so "c o m" is caught as well.
 const SPACED_LETTER_ENDINGS = SPACED_DOMAIN_ENDINGS.split("|")
   .map((ending) => [...ending].join(String.raw`\s*`))
@@ -79,7 +83,7 @@ export const WEB_ADDRESS_LIKE = new RegExp(
     // run of letters, digits and hyphens starts (anything it found from inside a run it finds from
     // the run's start), so a long name is read once rather than once from every letter -- a
     // 4,000-character run of fullwidth letters took half a second.
-    String.raw`(?<![\p{L}\p{N}-])-*[\p{L}\p{N}][\p{L}\p{N}-]*[\p{L}\p{N}-]${DOT}\p{L}{2,}`,
+    String.raw`(?<![\p{L}\p{N}-])-*[\p{L}\p{N}][\p{L}\p{N}-]*[\p{L}\p{N}-]${FULL_STOP}\p{L}{2,}`,
     String.raw`[\p{L}\p{N}]-*${DOT}(?:${DOMAIN_ENDINGS})(?![\p{L}\p{N}])`,
     String.raw`[\p{L}\p{N}](?:\s*${DOT}\s*|\s+dot\s+)(?:${SPACED_LETTER_ENDINGS})(?![\p{L}\p{N}])`,
   ].join("|"),

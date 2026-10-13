@@ -238,9 +238,11 @@ const MAC_ROMAN_IN_A_NAME = new RegExp(
 // came in as "Elo'sa", "Tha's"... A few spellings those names have and the Windows ones above don't
 // count too: o’s and a’s not before h ("Elo’sa", "Mo’ses", "Tha’s", "La’s" -- "Da’shawn" has a’sh),
 // u’z and a’z ("Ru’z", "Ma’z"), and ’ss ("Ra’ssa").
+// PR #114 review: only inside a word -- the í is never a name's first letter, and a lowercase
+// "o’sullivan" or "o’shea" in a windows-1252 file is an Irish O’, not Mac "oísullivan".
 const MAC_ROMAN_IN_A_NAME_UNLESS_WINDOWS = new RegExp(
   [
-    `[^\\P{Ll}aeiou]’\\p{Ll}|u’s|[ao]’s(?!h)|[au]’z|’ss`,
+    `[^\\P{Ll}aeiou]’\\p{Ll}|(?<=\\p{L})(?:u’s|[ao]’s(?!h)|[au]’z)|\\p{L}’ss`,
     `\\p{L}š(?:(?!le)[rhlnmsfdgbwzc]|tt|tz|th|pf|pp)`,
     `[aAõ][b-df-hj-np-tv-z]+õ(?![aeiouõ])`,
   ].join("|"),
