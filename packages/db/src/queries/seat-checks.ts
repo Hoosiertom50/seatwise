@@ -380,11 +380,13 @@ export async function refreshPlanCompleteness(
 // at all just gets "none" a few times over, which costs next to nothing.
 const LOCK_CURRENT_PLAN_ATTEMPTS = 4;
 
-export async function lockCurrentPlan(q: Queryable, weddingId: string): Promise<string | null> {
+// TS-265: `forDelete` -- the wedding delete takes the row FOR UPDATE (what deleting it needs) from
+// the start; see deleteWeddingForOwner.
+export async function lockCurrentPlan(q: Queryable, weddingId: string, forDelete = false): Promise<string | null> {
   for (let attempt = 1; attempt <= LOCK_CURRENT_PLAN_ATTEMPTS; attempt++) {
     // TS-187: NO KEY UPDATE -- see resyncTables.
     const { rows } = await q.query(
-      `SELECT id FROM "plan_versions" WHERE "weddingId" = $1 AND "isCurrent" FOR NO KEY UPDATE`,
+      `SELECT id FROM "plan_versions" WHERE "weddingId" = $1 AND "isCurrent" ${forDelete ? "FOR UPDATE" : "FOR NO KEY UPDATE"}`,
       [weddingId]
     );
     if (rows[0]) return rows[0].id as string;
