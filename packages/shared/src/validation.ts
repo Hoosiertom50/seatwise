@@ -64,15 +64,23 @@ export const WEDDING_NAME_MESSAGE =
 // after it, so "Lee . Kim", "St. Pierre" and "J. R. R. Smith" pass.
 const DOMAIN_ENDINGS = "com|net|org|info|biz|io|co|ly|app|xyz|top|site|online|shop|store|link|click|live|club|vip|icu|ru|cn|tk|gg";
 const SPACED_DOMAIN_ENDINGS = "com|net|org|info|biz|xyz|site|online|shop|click|icu|ru|cn";
-const DOT = String.raw`[.\u3002\uFF0E\uFF61]`; // a period, or one of the look-alike dots
+// TS-265: and the other characters that look like a period or a raised dot -- some are letters
+// (U+A4F8 Lisu, U+A78F Latin sinological dot, U+1427 Canadian syllabics), so "paypalꓸcom" passed
+// every name rule. Fullwidth, small and other compatibility forms of a period (U+FE52, U+2024...)
+// are folded to a plain one before the check (see looksLikeWebAddress).
+const DOT = String.raw`[.\u3002\uFF0E\uFF61\u00B7\u0387\u0660\u06F0\u0701\u0702\u1427\u16EB\u2022\u2024\u2027\u2219\u22C5\u2E31\u30FB\uA4F8\uA60E\uA78F\uFE52\uFF65\u{10101}\u{10A50}]`;
 // TS-258: "com" becomes c\s*o\s*m, so "c o m" is caught as well.
 const SPACED_LETTER_ENDINGS = SPACED_DOMAIN_ENDINGS.split("|")
   .map((ending) => [...ending].join(String.raw`\s*`))
   .join("|");
 export const WEB_ADDRESS_LIKE = new RegExp(
   [
-    String.raw`[\p{L}\p{N}][\p{L}\p{N}-]*[\p{L}\p{N}]${DOT}\p{L}{2,}`,
-    String.raw`[\p{L}\p{N}]${DOT}(?:${DOMAIN_ENDINGS})(?![\p{L}\p{N}])`,
+    // TS-265: hyphens just before the dot too ("evil-.com", "x-.com"). And it starts only where a
+    // run of letters, digits and hyphens starts (anything it found from inside a run it finds from
+    // the run's start), so a long name is read once rather than once from every letter -- a
+    // 4,000-character run of fullwidth letters took half a second.
+    String.raw`(?<![\p{L}\p{N}-])-*[\p{L}\p{N}][\p{L}\p{N}-]*[\p{L}\p{N}-]${DOT}\p{L}{2,}`,
+    String.raw`[\p{L}\p{N}]-*${DOT}(?:${DOMAIN_ENDINGS})(?![\p{L}\p{N}])`,
     String.raw`[\p{L}\p{N}](?:\s*${DOT}\s*|\s+dot\s+)(?:${SPACED_LETTER_ENDINGS})(?![\p{L}\p{N}])`,
   ].join("|"),
   "iu"
@@ -82,11 +90,47 @@ export const NO_WEB_ADDRESS_MESSAGE = "Can't look like a web address";
 // invisible mark inside "com" ("evil.c" + U+034F + "om") stopped the match, though it still reads
 // (and can link) as "evil.com". Taking characters out only joins letters up, so the copy never
 // misses what the plain check finds.
-const MARK_OR_HIDDEN = /[\p{M}\p{Default_Ignorable_Code_Point}\p{Variation_Selector}]/gu;
+// TS-265: the copy took out every mark, and in Tamil, Hindi and other Indic scripts the vowels
+// after a letter are marks -- so an initial written without a space ("இரா.செழியன்", "श्री.रामचंद्र",
+// "आर.किरण") joined up into "letters.letters" and was refused. Now a mark is kept when it belongs to
+// the letter's own script and follows a letter of a script other than Latin, Greek or Cyrillic (a
+// Tamil vowel after a Tamil letter); accents (José, Nguyễn) and marks put after a Latin letter or a
+// dot are still taken out. And the copy is now in its compatibility form (NFKC), so fullwidth,
+// math, superscript and small forms read as the plain letters and dots they look like ("x.ｃｏｍ",
+// "evil . ｃｏｍ", "x.ᶜᵒᵐ", "evil﹒com").
+const HIDDEN_CHARACTERS = /[\p{Default_Ignorable_Code_Point}\p{Variation_Selector}]/gu;
+const LETTER_AND_MARKS = /(\p{L}?)(\p{M}+)/gu;
+const KEEPS_ITS_MARKS = /^(?![\p{Script=Latin}\p{Script=Greek}\p{Script=Cyrillic}])\p{L}$/u;
+const SCRIPT_OWN_MARK = /(?!\p{Script=Inherited})\p{M}/gu;
+// TS-265: marks drawn as a dot below or beside a letter -- "evil" + U+0323 + "com" reads as
+// "evil.com" (saved as "eviḷcom"). Only checked against the endings scam links use, right after
+// (see DOTTED_ENDING), since Vietnamese and transliterated names have letters with a dot below
+// ("Thịnh", "Ngọc", "Kṛṣṇa").
+const DOT_LIKE_MARK = /[\u0323\u0358\u05C5\u065C\u093C\u09BC\u0A3C\u0ABC\u0B3C\u0CBC\u{1D16D}]/u;
+const DOTTED_ENDING = new RegExp(String.raw`[\p{L}\p{N}]-*${DOT}(?:${DOMAIN_ENDINGS})(?![\p{L}\p{N}])`, "iu");
+
+/** TS-265: the copies of `value` the web-address and phone checks also look at (see above). */
+function foldedCopies(value: string): { plain: string; dotted: string } {
+  const decomposed = value.normalize("NFKD").replace(HIDDEN_CHARACTERS, "");
+  let dotted = "";
+  let last = 0;
+  let plain = "";
+  for (const match of decomposed.matchAll(LETTER_AND_MARKS)) {
+    const [whole, letter, marks] = match;
+    const kept = KEEPS_ITS_MARKS.test(letter) ? marks.match(SCRIPT_OWN_MARK)?.join("") ?? "" : "";
+    const before = decomposed.slice(last, match.index);
+    plain += before + letter + kept;
+    dotted += before + letter + kept + (DOT_LIKE_MARK.test(marks) ? "." : "");
+    last = match.index + whole.length;
+  }
+  const rest = decomposed.slice(last);
+  return { plain: (plain + rest).normalize("NFKC"), dotted: (dotted + rest).normalize("NFKC") };
+}
+
 export function looksLikeWebAddress(value: string): boolean {
   if (WEB_ADDRESS_LIKE.test(value)) return true;
-  const withoutMarks = value.replace(MARK_OR_HIDDEN, "");
-  return withoutMarks !== value && WEB_ADDRESS_LIKE.test(withoutMarks);
+  const { plain, dotted } = foldedCopies(value);
+  return (plain !== value && WEB_ADDRESS_LIKE.test(plain)) || (dotted !== plain && DOTTED_ENDING.test(dotted));
 }
 
 // TS-171: a wedding's name may hold numbers (a year, a date), but not a phone number -- the name
@@ -99,10 +143,11 @@ export function looksLikeWebAddress(value: string): boolean {
 export const PHONE_NUMBER_LIKE = /\p{Nd}(?:[\s.,'’/()[\]_\u2010-\u2015-]*\p{Nd}){6,}/u;
 export const NO_PHONE_NUMBER_MESSAGE = "Can't contain a long run of digits, like a phone number (7 or more)";
 // TS-262: and, like the web-address check, on a copy without accent marks or hidden characters.
+// TS-265: the same copy as the web-address check, so superscript digits ("⁸⁰⁰⁵⁵⁵¹²³⁴") count too.
 export function looksLikePhoneNumber(value: string): boolean {
   if (PHONE_NUMBER_LIKE.test(value)) return true;
-  const withoutMarks = value.replace(MARK_OR_HIDDEN, "");
-  return withoutMarks !== value && PHONE_NUMBER_LIKE.test(withoutMarks);
+  const { plain } = foldedCopies(value);
+  return plain !== value && PHONE_NUMBER_LIKE.test(plain);
 }
 
 // TS-178: a word written partly in Latin letters and partly in look-alike Cyrillic or Greek ones

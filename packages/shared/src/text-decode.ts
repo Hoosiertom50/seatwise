@@ -234,9 +234,13 @@ const MAC_ROMAN_IN_A_NAME = new RegExp(
 // ’ counts ("Mar’a", "Garc’a", "Mart’nez"), plus "u’s" (Mac "Luís", "Luísa"), which those names
 // don't have. "Shan’tel" (n before ’) still looks exactly like Mac "Ben’tez" (Benítez), so a lone
 // one is still refused; with any other Windows sign in the file it imports.
+// TS-265: that let Mac í after a vowel through -- "Eloísa", "Thaís", "Raíssa", "Moíses", "Ruíz"
+// came in as "Elo'sa", "Tha's"... A few spellings those names have and the Windows ones above don't
+// count too: o’s and a’s not before h ("Elo’sa", "Mo’ses", "Tha’s", "La’s" -- "Da’shawn" has a’sh),
+// u’z and a’z ("Ru’z", "Ma’z"), and ’ss ("Ra’ssa").
 const MAC_ROMAN_IN_A_NAME_UNLESS_WINDOWS = new RegExp(
   [
-    `[^\\P{Ll}aeiou]’\\p{Ll}|u’s`,
+    `[^\\P{Ll}aeiou]’\\p{Ll}|u’s|[ao]’s(?!h)|[au]’z|’ss`,
     `\\p{L}š(?:(?!le)[rhlnmsfdgbwzc]|tt|tz|th|pf|pp)`,
     `[aAõ][b-df-hj-np-tv-z]+õ(?![aeiouõ])`,
   ].join("|"),
