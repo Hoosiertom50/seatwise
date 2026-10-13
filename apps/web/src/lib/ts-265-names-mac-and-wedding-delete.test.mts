@@ -115,6 +115,10 @@ const LOOKS_LIKE_A_WEB_ADDRESS = [
   "ev܁com", // U+0701 Syriac full stop
   "eviḷcom", // a dot below between letters (saved as "eviḷcom")
   "evil़com", // a nukta (a dot below) after a Latin letter
+  // A dot-like mark that belongs to the letter's own script (and so is kept with it) -- PR #114.
+  "\u0627\u065Ccom", // Arabic
+  "\u0915\u093Ccom", // Devanagari nukta
+  "\u0A15\u0A3Ccom", // Gurmukhi nukta
   "evil-.com",
   "x-.com",
   // still caught, as before

@@ -120,7 +120,9 @@ function foldedCopies(value: string): { plain: string; dotted: string } {
     const kept = KEEPS_ITS_MARKS.test(letter) ? marks.match(SCRIPT_OWN_MARK)?.join("") ?? "" : "";
     const before = decomposed.slice(last, match.index);
     plain += before + letter + kept;
-    dotted += before + letter + kept + (DOT_LIKE_MARK.test(marks) ? "." : "");
+    // PR #114 review: when a mark is drawn as a dot, the letter is followed by the dot alone -- a
+    // kept mark (an Arabic or Devanagari dot after its own letter) sat between them and hid the ending.
+    dotted += before + letter + (DOT_LIKE_MARK.test(marks) ? "." : kept);
     last = match.index + whole.length;
   }
   const rest = decomposed.slice(last);
