@@ -207,6 +207,9 @@ export default function DashboardPage() {
   function onSaveAnyway(date: string) {
     pastDateConfirmed.current = date;
     createForm.current?.requestSubmit();
+    // The submit (onCreate) has read it by now; if the form's own check stopped the submit, the
+    // yes mustn't carry over to a later Add wedding with the same date.
+    pastDateConfirmed.current = null;
   }
 
   async function onCreate(e: React.FormEvent) {
