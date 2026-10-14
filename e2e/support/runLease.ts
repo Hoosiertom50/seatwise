@@ -18,16 +18,25 @@ const HOLDER = Symbol.for("seatwise.e2e.runLease");
 
 type LeaseHolder = { [HOLDER]?: Client };
 
+/** The lease connection's socket (pg keeps it on client.connection.stream). */
+function leaseSocket(client: Client): { ref?: () => void; unref?: () => void } | undefined {
+  return (client as unknown as { connection?: { stream?: { ref?: () => void; unref?: () => void } } }).connection?.stream;
+}
+
 /** Takes this run's share of the lease. Never fails the run: without it, the sweep just can't tell. */
 export async function takeRunLease(): Promise<void> {
   const url = resolveDatabaseUrl();
   if (!url || !isLocalDatabaseUrl(url)) return;
   const client = new Client({ connectionString: url, connectionTimeoutMillis: 3_000 });
+  // Review 15: a connection the database ends (a restart, pg_terminate_backend) is just a lease let
+  // go of -- unhandled, its error crashed the whole run with no report.
+  client.on("error", () => undefined);
   try {
     await client.connect();
     await client.query("SELECT pg_advisory_lock_shared($1)", [RUN_LEASE_KEY]);
-    // Not waiting on this connection keeps the runner from exiting early on its account.
-    (client as unknown as { connection?: { stream?: { unref?: () => void } } }).connection?.stream?.unref?.();
+    // Not waiting on this connection keeps the runner from staying alive on its account if the run
+    // ends without its teardown. (releaseRunLease hooks it back in before closing it.)
+    leaseSocket(client)?.unref?.();
     (globalThis as LeaseHolder)[HOLDER] = client;
   } catch {
     await client.end().catch(() => undefined);
@@ -38,7 +47,12 @@ export async function takeRunLease(): Promise<void> {
 export async function releaseRunLease(): Promise<void> {
   const client = (globalThis as LeaseHolder)[HOLDER];
   delete (globalThis as LeaseHolder)[HOLDER];
-  await client?.end().catch(() => undefined);
+  if (!client) return;
+  // Review 15: hooked back in first -- waiting to close an unhooked connection was all that was left,
+  // so Node ended the run in the middle of its teardown with exit code 0, before the results and
+  // reports were written (a run with failed tests looked like a pass).
+  leaseSocket(client)?.ref?.();
+  await client.end().catch(() => undefined);
 }
 
 /**
