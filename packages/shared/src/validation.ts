@@ -160,8 +160,11 @@ const DOT_LIKE_MARK = /[\u0307\u0323\u0358\u05C5\u065C\u0902\u093C\u09BC\u0A3C\u
 // is LATIN_MARK_DOT, not "."; marks of other scripts (an Arabic or Devanagari dot) are "." as before.
 const LATIN_MARK_DOT = "\uE000";
 const LONGER_ENDINGS = DOMAIN_ENDINGS.split("|").filter((ending) => ending.length > 2).join("|");
+// PR #115 review: a dot-like accent on the ending's last letter ("eviḷcoṁ") doesn't hide it -- after
+// a dot-like accent the ending may be followed by one. Igbo and Yoruba names are still kept safe by
+// LONGER_ENDINGS; after a real dot it stays as before ("A.Mẹ" is an initial and a name).
 const DOTTED_ENDING = new RegExp(
-  String.raw`[\p{L}\p{N}]\p{M}*-*(?:${DOT}(?:${DOMAIN_ENDINGS})|${LATIN_MARK_DOT}(?:${LONGER_ENDINGS}))(?![\p{L}\p{N}${LATIN_MARK_DOT}])`,
+  String.raw`[\p{L}\p{N}]\p{M}*-*(?:${DOT}(?:${DOMAIN_ENDINGS})(?![\p{L}\p{N}${LATIN_MARK_DOT}])|${LATIN_MARK_DOT}(?:${LONGER_ENDINGS})(?![\p{L}\p{N}]))`,
   "iu"
 );
 

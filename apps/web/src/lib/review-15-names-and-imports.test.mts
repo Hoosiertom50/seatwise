@@ -172,3 +172,18 @@ test("PR #115: a middle dot before a non-Latin web ending reads as a web address
   // A Latin ending after a middle dot still takes a full stop (a common scam ending is caught anyway).
   assert.equal(looksLikeWebAddress(`بنك${middleDot}de`), false);
 });
+
+// PR #115 review (Copilot round 4).
+test("PR #115: a dot-like accent on the ending's last letter doesn't hide a web address", () => {
+  const dotBelow = "\u0323";
+  const dotAbove = "\u0307";
+  for (const name of [`evil${dotBelow}com${dotAbove}`, `evil${dotBelow}com${dotBelow}`, `evil${dotBelow}net${dotBelow}`]) {
+    assert.equal(looksLikeWebAddress(name), true, name);
+    assert.equal(weddingNameField.safeParse(name).success, false, name);
+  }
+  // Igbo and Yoruba names with dots below still pass.
+  for (const name of ["Ọrụ", "Ngozi Ọkọnkwọ", "Adéṣọlá Ọ̀kọ̀", "Ṣọlá Ọ̀ṣun", "Ọmọ́tọ́lá", "Chukwuemeka Ọnwụ"]) {
+    assert.equal(looksLikeWebAddress(name), false, name);
+  }
+});
+

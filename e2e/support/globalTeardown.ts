@@ -118,7 +118,10 @@ export function selectedProjects(argv: readonly string[]): string[] | null {
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg.startsWith("--project=")) names.push(arg.slice("--project=".length));
-    else if (arg === "--project" && i + 1 < argv.length) names.push(argv[++i]);
+    // PR #115 review: Playwright takes every name after `--project` up to the next option
+    // ("--project unit chromium" is both) -- only the first was read, so that run counted as
+    // database-free: it took no lease (and skipped the sweep) while running Chromium.
+    else if (arg === "--project") while (i + 1 < argv.length && !argv[i + 1].startsWith("-")) names.push(argv[++i]);
   }
   return names.length > 0 ? names : null;
 }
