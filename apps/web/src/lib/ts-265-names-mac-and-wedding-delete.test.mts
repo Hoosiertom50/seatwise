@@ -427,3 +427,15 @@ test("TS-265: on the local database, a delete doesn't deadlock with a change hol
     await setup.end().catch(() => {});
   }
 });
+
+test("Review 15: a wedding name typed with a curly apostrophe or a no-break space is saved with plain ones", () => {
+  for (const [typed, saved] of [
+    ["Sarah’s Wedding", "Sarah's Wedding"],
+    ["O’Brien & Ja’siah", "O'Brien & Ja'siah"],
+    ["Ana & Lee", "Ana & Lee"],
+  ]) {
+    const parsed = weddingNameField.safeParse(typed);
+    assert.equal(parsed.success, true, typed);
+    assert.equal(parsed.data, saved, typed);
+  }
+});
