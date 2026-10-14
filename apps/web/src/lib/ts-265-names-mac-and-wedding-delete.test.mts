@@ -172,6 +172,18 @@ test("TS-265: superscript digits count as a phone number", () => {
     assert.equal(weddingNameField.safeParse(v).success, false, v);
   }
   for (const v of ["Smith & Jones 2026", "Alex & Jordan 10-5-26"]) assert.equal(weddingNameField.safeParse(v).success, true, v);
+  // Review 15: titles and times with "&" between small numbers aren't phone numbers (review 14 had
+  // refused them), while dash-shaped letters and digit-shaped letters between digit groups are.
+  for (const v of ["Oct 9 & 10, 2026", "June 12 & 13, 2026", "Priya & Raj - Oct 30 & 31, 2026", "Sept 5, 6 & 7 2026", "11-20 & 11-21-26", "10.09.26 & 10.10.26", "Rooms 101, 102 & 103", "Smith Wedding 2026 & 2027", "Sam & Alex 10.5.26 & 10.6.26"]) {
+    assert.equal(looksLikePhoneNumber(v), false, v);
+    assert.equal(weddingNameField.safeParse(v).success, true, v);
+  }
+  for (const v of ["Photos 3:00-3:30 & 4:15", "Toasts 7:15/7:30/7:45", "Hair & makeup 8:00-12:00"]) {
+    assert.equal(emailSafeNotificationText(v), v, v);
+  }
+  for (const v of ["Call 800ー555ー1234", "800ｰ555ｰ1234", "800ـ555ـ1234", "800ˉ555ˉ1234", "800ㆍ555ㆍ1234", "Call 800ㅡ555ㅡ1234", "800一555一1234", "800ǀ555ǀ1234", "800ꓸ555ꓸ1234", "800ʼ555ʼ1234", "Call 8OO 555 l234", "Call 8ОО 555 12З4", "800:555:1234"]) {
+    assert.equal(looksLikePhoneNumber(v), true, v);
+  }
 });
 
 test("TS-265: the web-address and phone checks stay fast on long text (no quadratic slow-down)", () => {

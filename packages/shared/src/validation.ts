@@ -195,17 +195,54 @@ export function looksLikeWebAddress(value: string): boolean {
 //
 // TS-178: commas, apostrophes, slashes, brackets, underscores and other dashes are ignored between
 // the digits too ("800, 555, 1234" is still a number to call).
-// Review 14: anything that isn't a letter counts as a gap between digits -- "&", "!" and the minus
-// sign (U+2212) let "Call 800&555&1234" into wedding names and invite emails.
-export const PHONE_NUMBER_LIKE = /\p{Nd}(?:[^\p{L}\p{Nd}]*\p{Nd}){6,}/u;
+export const PHONE_NUMBER_LIKE = /\p{Nd}(?:[\s.,'’/()[\]_\u2010-\u2015-]*\p{Nd}){6,}/u;
 export const NO_PHONE_NUMBER_MESSAGE = "Can't contain a long run of digits, like a phone number (7 or more)";
+
+// Review 14/15: other marks between digit groups ("800&555&1234", "800−555−1234", "800ー555ー1234"
+// with a dash-shaped letter) join them too -- but only between groups of three digits or more with
+// no space around, as a phone number is written. "Oct 9 & 10, 2026", "2026 & 2027" and "3:00-3:30 &
+// 4:15" stay wedding names and times (review 14 joined every mark, and refused them).
+const ALWAYS_A_GAP = /^[\s.,'’/()[\]_\u2010-\u2015-]*$/u;
+// Letters drawn as a dash or a dot (modifier letters, the prolonged-sound mark ー, Arabic tatweel,
+// Hangul ㅡ and ㆍ (and the forms the folded copy turns them into), the CJK "one" 一, click ǀ, and
+// the dot-shaped letters in DOT).
+const DASH_SHAPED_LETTER = /[\p{Lm}\u01C0\u0640\u1173\u119E\u1427\u1428\u3161\u318D\u30FC\u4E00\uA4F8\uA78F\uFF70]/gu;
+// Letters drawn like digits, counted as digits when they touch one ("8OO", "l234", Cyrillic "12З4").
+const DIGIT_SHAPED = "Oo\u041E\u043ElI\u0406\u0417";
+const DIGIT_SHAPED_VALUE: Record<string, string> = {
+  O: "0", o: "0", "\u041E": "0", "\u043E": "0", l: "1", I: "1", "\u0406": "1", "\u0417": "3",
+};
+// (The second form only starts where a run of those letters starts, so a long run is read once.)
+const DIGIT_SHAPED_RUN = new RegExp(String.raw`(?<=\p{Nd})[${DIGIT_SHAPED}]+|(?<![${DIGIT_SHAPED}])[${DIGIT_SHAPED}]+(?=\p{Nd})`, "gu");
+
+function hasPhoneRun(text: string): boolean {
+  let run = 0;
+  let previousGroup = 0;
+  let lastEnd = -1;
+  for (const match of text.matchAll(/\p{Nd}+/gu)) {
+    const group = match[0].length;
+    const gap = lastEnd < 0 ? null : text.slice(lastEnd, match.index);
+    const joins =
+      gap !== null &&
+      (ALWAYS_A_GAP.test(gap) || (!/[\p{L}\s]/u.test(gap) && previousGroup >= 3 && group >= 3));
+    run = joins ? run + group : group;
+    if (run >= 7) return true;
+    previousGroup = group;
+    lastEnd = match.index + group;
+  }
+  return false;
+}
+
 // TS-262: and, like the web-address check, on a copy without accent marks or hidden characters.
 // TS-265: the same copy as the web-address check, so superscript digits ("⁸⁰⁰⁵⁵⁵¹²³⁴") count too.
 export function looksLikePhoneNumber(value: string): boolean {
   if (PHONE_NUMBER_LIKE.test(value)) return true;
   // Review 14: numbers with no plain form (dingbat and double-circled digits, "❽⓿⓿") count as digits.
-  const plain = foldedCopies(value).plain.replace(/\p{No}/gu, "0");
-  return plain !== value && PHONE_NUMBER_LIKE.test(plain);
+  const plain = foldedCopies(value)
+    .plain.replace(/\p{No}/gu, "0")
+    .replace(DIGIT_SHAPED_RUN, (letters) => [...letters].map((c) => DIGIT_SHAPED_VALUE[c] ?? c).join(""))
+    .replace(DASH_SHAPED_LETTER, "~");
+  return hasPhoneRun(plain);
 }
 
 // TS-178: a word written partly in Latin letters and partly in look-alike Cyrillic or Greek ones
