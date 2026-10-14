@@ -74,6 +74,8 @@ test("TS-265: other real names, accented or with a dot below, still pass", () =>
     "Mary-Kate", "D'Arcy", "Zoë", "Łukasz", "Dvořák", "Иванова", "Ελένη", "김철수", "山田太郎", "ร.ศักดิ์ชัย",
     // Review 14: Igbo and Yoruba vowels with a dot below before "ru" (it read as ".ru").
     "Ụrụ", "Ọrụ", "Ịru", "Ẹ̀rù", "Ìyáọ̀ru", "Ọnụọha", "Ọkọrọ",
+    // Review 14: initials before "Bharat", Arabic with vowel marks, letters with a dot above.
+    "राम.भारत", "أحمد.عَلي", "संजय", "Żaneta Brzęczyszczykiewicz", "Jonė", "İlker",
   ];
   for (const name of names) {
     assert.equal(looksLikeWebAddress(name), false, name);
@@ -132,6 +134,9 @@ const LOOKS_LIKE_A_WEB_ADDRESS = [
   "\u0627\u065Ccom", // Arabic
   "\u0915\u093Ccom", // Devanagari nukta
   "\u0A15\u0A3Ccom", // Gurmukhi nukta
+  // Review 14 (security review): the other dot look-alikes, and web addresses in Indian scripts.
+  "paypal\u02D1com", "paypal\u0E3Acom", "evil\u1037com", "evil\u0307com",
+  "पेपाल.de", "श्री.de", "गूगल.भारत", "ஸ்டேட்வங்கி.இந்தியா", "bankका.de",
   "eviḷnet", // a dot below before a longer ending (two-letter ones are how Igbo/Yoruba names look)
   // A vowel sign before ".com" (PR #114 review): the letter's own (Hindi "का", Tamil "கா"), or one
   // from another script (a Tamil sign after a Devanagari or Bengali letter).
@@ -161,6 +166,12 @@ test("TS-265: superscript digits count as a phone number", () => {
   assert.equal(looksLikePhoneNumber("Call ⁸⁰⁰⁵⁵⁵¹²³⁴"), true);
   assert.equal(weddingNameField.safeParse("Call ⁸⁰⁰⁵⁵⁵¹²³⁴").success, false);
   assert.equal(looksLikePhoneNumber("Est. 2026"), false);
+  // Review 14: any non-letter between the digits, and dingbat digits, count too.
+  for (const v of ["Call 800&555&1234 to RSVP", "Call 800!555!1234", "Call ❽⓿⓿ ❺❺❺ ❶❷❸❹", "Call 800\u2212555\u22121234"]) {
+    assert.equal(looksLikePhoneNumber(v), true, v);
+    assert.equal(weddingNameField.safeParse(v).success, false, v);
+  }
+  for (const v of ["Smith & Jones 2026", "Alex & Jordan 10-5-26"]) assert.equal(weddingNameField.safeParse(v).success, true, v);
 });
 
 test("TS-265: the web-address and phone checks stay fast on long text (no quadratic slow-down)", () => {

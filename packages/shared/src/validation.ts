@@ -68,11 +68,19 @@ const SPACED_DOMAIN_ENDINGS = "com|net|org|info|biz|xyz|site|online|shop|click|i
 // (U+A4F8 Lisu, U+A78F Latin sinological dot, U+1427 Canadian syllabics), so "paypalꓸcom" passed
 // every name rule. Fullwidth, small and other compatibility forms of a period (U+FE52, U+2024...)
 // are folded to a plain one before the check (see looksLikeWebAddress).
-const DOT = String.raw`[.\u3002\uFF0E\uFF61\u00B7\u0387\u0660\u06F0\u0701\u0702\u1427\u16EB\u2022\u2024\u2027\u2219\u22C5\u2E31\u30FB\uA4F8\uA60E\uA78F\uFE52\uFF65\u{10101}\u{10A50}]`;
+// Review 14: and U+02D1 (a modifier letter drawn as a raised dot, "paypal\u02D1com").
+const DOT = String.raw`[.\u3002\uFF0E\uFF61\u00B7\u02D1\u0387\u0660\u06F0\u0701\u0702\u1427\u16EB\u2022\u2024\u2027\u2219\u22C5\u2E31\u30FB\uA4F8\uA60E\uA78F\uFE52\uFF65\u{10101}\u{10A50}]`;
 // PR #114 review: before any other ending, only a real full stop counts -- a middle dot is how
 // Japanese ("\u30B8\u30E7\u30F3\u30FB\u30B9\u30DF\u30B9") and Catalan ("Gal\u00B7la") names are written, so the middle dots above
 // count only before the endings scam links use.
 const FULL_STOP = String.raw`[.\u3002\uFF0E\uFF61\u0701\u0702\u2024\uA60E\uFE52\u{10A50}]`;
+// Review 14: the web-address endings written in Indian scripts (with vowel signs, so the
+// letters.letters check above doesn't see them): India's in eleven scripts, Sri Lanka's and
+// Singapore's. Their letters as written (NFC).
+const INDIC_ENDINGS = [
+  "भारत", "भारतम्", "भारोत", "ভারত", "ভাৰত", "ਭਾਰਤ", "ભારત", "ଭାରତ", "இந்தியா", "భారత్", "ಭಾರತ", "ഭാരതം",
+  "بھارت", "ڀارت", "ලංකා", "இலங்கை", "சிங்கப்பூர்",
+].join("|");
 // TS-258: "com" becomes c\s*o\s*m, so "c o m" is caught as well.
 const SPACED_LETTER_ENDINGS = SPACED_DOMAIN_ENDINGS.split("|")
   .map((ending) => [...ending].join(String.raw`\s*`))
@@ -88,6 +96,17 @@ export const WEB_ADDRESS_LIKE = new RegExp(
     // (a letter and its vowel sign) then ".com", and the sign stopped the match.
     String.raw`[\p{L}\p{N}]\p{M}*-*${DOT}(?:${DOMAIN_ENDINGS})(?![\p{L}\p{N}])`,
     String.raw`[\p{L}\p{N}]\p{M}*(?:\s*${DOT}\s*|\s+dot\s+)(?:${SPACED_LETTER_ENDINGS})(?![\p{L}\p{N}])`,
+    // Review 14: a word whose letters carry vowel signs (Hindi, Tamil...), then a dot and Latin
+    // letters -- "पेपाल.de" is a real address. An initial without a space before a name in the same
+    // script ("आर.किरण", "இரா.செழியன்") still passes: only Latin letters after the dot count here.
+    // (Letters and marks are read one way only -- a run of them, then each mark and the letters after
+    // it -- so a long run with no dot is read once; two open-ended parts either side of a mark made
+    // 20,000 Tamil letters take four seconds.)
+    String.raw`(?<![\p{L}\p{M}\p{N}-])[\p{L}\p{N}][\p{L}\p{N}-]*(?:\p{M}[\p{L}\p{N}-]*)+${FULL_STOP}\p{Script=Latin}{2,}`,
+    // Review 14: and three or more letters before an Indic-script ending (".भारत" -- "India" --
+    // and the same in other Indian scripts, Sri Lanka's, Singapore's in Tamil). Two letters or
+    // fewer is an initial ("राम.भारत", R. Bharat, a common name), not a web address.
+    String.raw`(?<![\p{L}\p{M}\p{N}-])(?:\p{L}\p{M}*){3,}${FULL_STOP}(?:${INDIC_ENDINGS})(?![\p{L}\p{M}])`,
   ].join("|"),
   "iu"
 );
@@ -120,17 +139,22 @@ const SCRIPTS_WITH_VOWEL_SIGNS = [
 function scriptOwnMarks(letter: string, marks: string): string {
   const script = SCRIPTS_WITH_VOWEL_SIGNS.find((s) => s.letter.test(letter));
   if (!script) return "";
-  return [...marks].filter((m) => !/\p{Script=Inherited}/u.test(m) && script.mark.test(m)).join("");
+  // Review 14: by Script_Extensions alone -- Arabic vowel marks (harakat) are "Inherited" but listed
+  // for Arabic, and taking them out made "أحمد.عَلي" read as letters.letters.
+  return [...marks].filter((m) => script.mark.test(m)).join("");
 }
 // TS-265: marks drawn as a dot below or beside a letter -- "evil" + U+0323 + "com" reads as
 // "evil.com" (saved as "eviḷcom"). Only checked against the endings scam links use, right after
 // (see DOTTED_ENDING), since Vietnamese and transliterated names have letters with a dot below
 // ("Thịnh", "Ngọc", "Kṛṣṇa").
-const DOT_LIKE_MARK = /[\u0323\u0358\u05C5\u065C\u093C\u09BC\u0A3C\u0ABC\u0B3C\u0CBC\u{1D16D}]/u;
+// Review 14: and the other marks drawn as a dot (above, below or beside): combining dot above,
+// Thai phinthu, Myanmar dot below, Vedic dot below, Lepcha and Telugu nuktas, Batak tompi, Tai Tham
+// dot, Tamil and Devanagari anusvara.
+const DOT_LIKE_MARK = /[\u0307\u0323\u0358\u05C5\u065C\u0902\u093C\u09BC\u0A3C\u0ABC\u0B3C\u0B82\u0C3C\u0CBC\u0E3A\u1037\u1A7F\u1BE6\u1C37\u1CDD\u{1D16D}]/u;
 // Review 14: a dot below a Latin letter stands for a dot only before the longer endings -- Igbo and
 // Yoruba write vowels with a dot below, so "Ọrụ" (Igbo) read as "O.ru" and was refused. In the copy it
 // is LATIN_MARK_DOT, not "."; marks of other scripts (an Arabic or Devanagari dot) are "." as before.
-const LATIN_MARK_DOT = "";
+const LATIN_MARK_DOT = "\uE000";
 const LONGER_ENDINGS = DOMAIN_ENDINGS.split("|").filter((ending) => ending.length > 2).join("|");
 const DOTTED_ENDING = new RegExp(
   String.raw`[\p{L}\p{N}]\p{M}*-*(?:${DOT}(?:${DOMAIN_ENDINGS})|${LATIN_MARK_DOT}(?:${LONGER_ENDINGS}))(?![\p{L}\p{N}${LATIN_MARK_DOT}])`,
@@ -171,13 +195,16 @@ export function looksLikeWebAddress(value: string): boolean {
 //
 // TS-178: commas, apostrophes, slashes, brackets, underscores and other dashes are ignored between
 // the digits too ("800, 555, 1234" is still a number to call).
-export const PHONE_NUMBER_LIKE = /\p{Nd}(?:[\s.,'’/()[\]_\u2010-\u2015-]*\p{Nd}){6,}/u;
+// Review 14: anything that isn't a letter counts as a gap between digits -- "&", "!" and the minus
+// sign (U+2212) let "Call 800&555&1234" into wedding names and invite emails.
+export const PHONE_NUMBER_LIKE = /\p{Nd}(?:[^\p{L}\p{Nd}]*\p{Nd}){6,}/u;
 export const NO_PHONE_NUMBER_MESSAGE = "Can't contain a long run of digits, like a phone number (7 or more)";
 // TS-262: and, like the web-address check, on a copy without accent marks or hidden characters.
 // TS-265: the same copy as the web-address check, so superscript digits ("⁸⁰⁰⁵⁵⁵¹²³⁴") count too.
 export function looksLikePhoneNumber(value: string): boolean {
   if (PHONE_NUMBER_LIKE.test(value)) return true;
-  const { plain } = foldedCopies(value);
+  // Review 14: numbers with no plain form (dingbat and double-circled digits, "❽⓿⓿") count as digits.
+  const plain = foldedCopies(value).plain.replace(/\p{No}/gu, "0");
   return plain !== value && PHONE_NUMBER_LIKE.test(plain);
 }
 
@@ -189,5 +216,6 @@ export const NO_MIXED_SCRIPT_MESSAGE = "Can't mix letters from different alphabe
 export function hasMixedScriptWord(value: string): boolean {
   return value
     .split(/[^\p{L}\p{M}]+/u)
-    .some((word) => /\p{Script=Latin}/u.test(word) && /[\p{Script=Cyrillic}\p{Script=Greek}]/u.test(word));
+    // Review 14: Latin with a letter of any other alphabet ("bankका"), not only Cyrillic or Greek.
+    .some((word) => /\p{Script=Latin}/u.test(word) && /(?![\p{Script=Latin}\p{Script=Common}\p{Script=Inherited}])\p{L}/u.test(word));
 }
