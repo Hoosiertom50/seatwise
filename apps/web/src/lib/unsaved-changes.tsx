@@ -34,6 +34,7 @@ export function useUnsavedFields(): {
   clearAll: () => void;
   trackSave: (key: string, save: Promise<unknown>) => Promise<boolean>;
   keepUnsaved: (key: string, field: string, reason: string) => void;
+  noteIfClosed: (field: string, reason: string) => void;
 } {
   const registry = useContext(UnsavedChangesContext);
   const keys = useRef(new Set<string>());
@@ -82,7 +83,21 @@ export function useUnsavedFields(): {
     },
     [markDirty, registry]
   );
-  return useMemo(() => ({ markDirty, clearAll, trackSave, keepUnsaved }), [markDirty, clearAll, trackSave, keepUnsaved]);
+  /**
+   * Review 14: a save refused because the setting was changed elsewhere (409) -- with the tab still
+   * open its box shows the latest and the message says so; once the tab has closed, the page shows
+   * "Couldn't save <field>: <reason>" (the typing used to vanish without a word).
+   */
+  const noteIfClosed = useCallback(
+    (field: string, reason: string) => {
+      if (!mounted.current) registry?.addNote(couldntSaveNote(field, reason));
+    },
+    [registry]
+  );
+  return useMemo(
+    () => ({ markDirty, clearAll, trackSave, keepUnsaved, noteIfClosed }),
+    [markDirty, clearAll, trackSave, keepUnsaved, noteIfClosed]
+  );
 }
 
 /**
@@ -95,6 +110,8 @@ export function useUnsavedChangesProvider({ onBackRequested }: { onBackRequested
   useEffect(() => {
     onBackRef.current = onBackRequested;
   }, [onBackRequested]);
+  /** The latest `reconcile` (below), for the registry's listener. */
+  const reconcileNow = useRef<() => void>(() => {});
   const [count, setCount] = useState(0);
   // TS-206: saves still on their way keep the page's extra history entry (below) in place, so a
   // Back pressed meanwhile is caught and can wait for them.
@@ -106,6 +123,9 @@ export function useUnsavedChangesProvider({ onBackRequested }: { onBackRequested
         setCount(registry.dirtyCount());
         setSaving(registry.isSaving());
         setNotes(registry.notes());
+        // Review 14: the Back guard goes in at once, not after the next render -- a Back pressed in
+        // that instant (typing pasted or filled in, then Back) left without asking.
+        if (registry.hasUnsaved()) reconcileNow.current();
       }),
     [registry]
   );
@@ -187,6 +207,9 @@ export function useUnsavedChangesProvider({ onBackRequested }: { onBackRequested
   useEffect(() => {
     reconcile();
   }, [count, saving, reconcile]);
+  useEffect(() => {
+    reconcileNow.current = reconcile;
+  }, [reconcile]);
 
   useEffect(() => {
     pageUrl.current = window.location.href;

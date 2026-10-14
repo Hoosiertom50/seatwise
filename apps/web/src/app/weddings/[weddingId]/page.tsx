@@ -131,6 +131,9 @@ export default function WeddingDetailPage() {
   const questionOpener = useRef<{ node: HTMLElement; id: string } | null>(null);
   function rememberOpener(preferred?: HTMLElement | null) {
     const active = document.activeElement;
+    // Review 14: asked again while the question is already up (Back pressed then) -- the control that
+    // first asked stays the one focus goes back to, not the question's own button (gone once it closes).
+    if (!preferred && active instanceof HTMLElement && active.closest('[role="alertdialog"]') && questionOpener.current) return;
     const node = preferred ?? (active instanceof HTMLElement && active !== document.body ? active : null);
     questionOpener.current = node ? { node, id: node.id } : null;
   }
@@ -541,6 +544,8 @@ export default function WeddingDetailPage() {
           <Link
             href="/dashboard"
             onClick={(e) => {
+              // Review 14: Safari doesn't focus a clicked link; Stay brings focus back here.
+              e.currentTarget.focus();
               if (!requestLeavePage("/dashboard")) e.preventDefault();
             }}
             className="inline-flex min-h-11 items-center text-sm text-neutral-500 dark:text-neutral-400 hover:underline"
