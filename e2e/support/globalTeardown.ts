@@ -52,13 +52,13 @@
 // leaving them for a day meant a later run that happened to reuse an address started out limited.
 // Same guards as everything else here: never production, only a local database, dry run honoured.
 
-import { Pool } from "pg";
+import type { ClientBase } from "pg";
 import { getEnv } from "./env";
 import { isLocalDatabaseUrl, resolveIsProduction } from "./productionGuard";
 import { TEST_ADDRESS_PREFIXES, TEST_DATA_MARKER } from "../data/ids";
 import { TEST_ACCOUNT_EMAIL_DOMAIN } from "./auth";
 import { resolveDatabaseUrl } from "./testDatabase";
-import { releaseRunLease, takeSweepTurn } from "./runLease";
+import { leaseLostMessage, releaseRunLease, takeSweepTurn, type SweepTurn } from "./runLease";
 
 /** Set PW_TEARDOWN_SWEEP to exactly this to inspect without deleting. Any other value (including
  * unset) sweeps for real -- see guard 2 above for why this is opt-out rather than opt-in. */
@@ -79,7 +79,7 @@ export const TEST_TRIGGER_NAME = /^pw_fail_notify_[0-9a-f]{32}$/;
  * TEST_TRIGGER_NAME exactly (a test account's id), so nothing else can be touched. Logged, never
  * fails the run.
  */
-async function sweepNotificationTriggers(pool: Pool, dryRun: boolean): Promise<void> {
+async function sweepNotificationTriggers(pool: ClientBase, dryRun: boolean): Promise<void> {
   try {
     const { rows: triggers } = await pool.query<{ name: string }>(
       `SELECT t.tgname AS name FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid
@@ -130,11 +130,19 @@ export function onlyDatabaseFreeProjects(argv: readonly string[]): boolean {
 }
 
 export default async function globalTeardown(): Promise<void> {
-  const dryRun = process.env.PW_TEARDOWN_SWEEP === DRY_RUN_VALUE;
   if (onlyDatabaseFreeProjects(process.argv)) return;
+  // PR #115 review: read before letting go of the lease (letting go isn't losing it).
+  const lost = leaseLostMessage();
+  await sweep();
+  // PR #115 review: a run that lost its hold part-way fails, with the reason -- after the sweep, so
+  // its results and reports are still written.
+  if (lost) throw new Error(lost);
+}
 
-  let pool: Pool | undefined;
-  let sweepTurn: { release: () => Promise<void> } | null = null;
+async function sweep(): Promise<void> {
+  const dryRun = process.env.PW_TEARDOWN_SWEEP === DRY_RUN_VALUE;
+
+  let sweepTurn: SweepTurn | null = null;
   // Review 14: this run is done with the database -- let go of its share of the lease first.
   await releaseRunLease();
   try {
@@ -167,7 +175,8 @@ export default async function globalTeardown(): Promise<void> {
       return;
     }
 
-    pool = new Pool({ connectionString });
+    // PR #115 review: every query on the connection holding the lock -- if it ends, so does the sweep.
+    const pool = sweepTurn.client;
 
     // TS-215: notification-breaking triggers (testDatabase.ts's breakNotificationsFor) left by a run
     // killed before the test's own `finally` put things back.
@@ -279,7 +288,6 @@ export default async function globalTeardown(): Promise<void> {
       }`,
     );
   } finally {
-    await pool?.end().catch(() => undefined);
     // PR #115 review: the sweep's turn ends only once it's done (see takeSweepTurn).
     await sweepTurn?.release();
   }

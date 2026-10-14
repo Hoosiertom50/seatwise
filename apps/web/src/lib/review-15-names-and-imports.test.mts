@@ -10,7 +10,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-const { looksLikeWebAddress, looksLikePhoneNumber } = await import("../../../../packages/shared/src/validation");
+const { looksLikeWebAddress, looksLikePhoneNumber, hasHiddenCharacters } = await import("../../../../packages/shared/src/validation");
 const { createGuestSchema } = await import("../../../../packages/shared/src/schemas/guest");
 const { weddingNameField } = await import("../../../../packages/shared/src/schemas/wedding");
 const { signupSchema } = await import("../../../../packages/shared/src/schemas/auth");
@@ -141,4 +141,34 @@ test("PR #115: digits outside the basic plane count once each (an Osmanya year i
   assert.equal(weddingNameField.safeParse(`Est. ${osmanya2026}`).success, true);
   const osmanyaPhone = String.fromCodePoint(0x104a8, 0x104a0, 0x104a0, 0x104a5, 0x104a5, 0x104a5, 0x104a1);
   assert.equal(looksLikePhoneNumber(`Call ${osmanyaPhone}`), true);
+});
+
+// PR #115 review (Copilot round 3).
+test("PR #115: a joiner counts as part of the spelling only between two letters of the same script", () => {
+  const zwnj = "\u200C";
+  const zwj = "\u200D";
+  // Persian and Sinhala spellings still pass.
+  assert.equal(hasHiddenCharacters(`علی${zwnj}رضا`), false);
+  assert.equal(hasHiddenCharacters(`ශ්${zwj}රී`), false);
+  assert.equal(createGuestSchema.safeParse({ firstName: `علی${zwnj}رضا`, lastName: "Ahmadi" }).success, true);
+  // Between two scripts it's a hidden character.
+  for (const name of [`علی${zwnj}राम`, `राम${zwj}علی`, `बैंक${zwnj}ক`]) {
+    assert.equal(hasHiddenCharacters(name), true, name);
+    assert.equal(createGuestSchema.safeParse({ firstName: name, lastName: "Lee" }).success, false, name);
+  }
+});
+
+test("PR #115: a middle dot before a non-Latin web ending reads as a web address, as a full stop does", () => {
+  const middleDot = "\u00B7";
+  const katakanaDot = "\u30FB";
+  for (const name of [`بنك${middleDot}مصر`, `बैंक${middleDot}कॉम`, `بنك${katakanaDot}مصر`]) {
+    assert.equal(looksLikeWebAddress(name), true, name);
+    assert.equal(weddingNameField.safeParse(name).success, false, name);
+  }
+  // Names written with a middle dot still pass -- Japanese, Catalan, and an initial before "Bharat".
+  for (const name of [`ジョン${katakanaDot}スミス`, `Gal${middleDot}la Puig`, `राम${middleDot}भारत`]) {
+    assert.equal(looksLikeWebAddress(name), false, name);
+  }
+  // A Latin ending after a middle dot still takes a full stop (a common scam ending is caught anyway).
+  assert.equal(looksLikeWebAddress(`بنك${middleDot}de`), false);
 });

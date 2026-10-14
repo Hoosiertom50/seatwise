@@ -30,6 +30,11 @@ export class DashboardPage extends BasePage {
     await this.leaveQuestion().getByRole("button", { name: "Leave without saving", exact: true }).click();
   }
 
+  /** The Account link in the page's header. */
+  accountLink() {
+    return this.page.getByRole("navigation", { name: "Your account" }).getByRole("link", { name: "Account", exact: true });
+  }
+
   /** TS-264: the "Add a wedding" form's name box (for typing without submitting). */
   weddingNameInput() {
     return this.nameInput();

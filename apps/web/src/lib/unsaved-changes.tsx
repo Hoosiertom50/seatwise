@@ -37,7 +37,7 @@ export function useUnsavedFields(): {
   clearAll: () => void;
   trackSave: (key: string, save: Promise<unknown>) => Promise<boolean>;
   keepUnsaved: (key: string, field: string, reason: string) => void;
-  noteIfClosed: (field: string, reason: string) => void;
+  noteIfClosed: (key: string, field: string, reason: string) => void;
 } {
   const registry = useContext(UnsavedChangesContext);
   const keys = useRef(new Set<string>());
@@ -46,7 +46,7 @@ export function useUnsavedFields(): {
   // later tab click, reload and Back asked about nothing.
   const mounted = useRef(false);
   // Review 15: refusals answered while the tab was still open, kept for a moment -- see noteIfClosed.
-  const recentRefusals = useRef<{ field: string; reason: string; at: number }[]>([]);
+  const recentRefusals = useRef<{ key: string; field: string; reason: string; at: number }[]>([]);
   useEffect(() => {
     mounted.current = true;
     return () => {
@@ -61,6 +61,9 @@ export function useUnsavedFields(): {
   const markDirty = useCallback(
     (key: string, dirty: boolean) => {
       if (dirty && !mounted.current) return;
+      // PR #115 review: typing in the box again replaces a refusal it had -- its note no longer
+      // applies (a retry that saved used to be followed by "Couldn't save" when the tab closed).
+      if (dirty) recentRefusals.current = recentRefusals.current.filter((r) => r.key !== key);
       if (dirty) keys.current.add(key);
       else keys.current.delete(key);
       registry?.setDirty(key, dirty);
@@ -103,9 +106,9 @@ export function useUnsavedFields(): {
   // in the tab for a moment and was then gone. A refusal from the last couple of seconds is noted
   // when the tab closes.
   const noteIfClosed = useCallback(
-    (field: string, reason: string) => {
+    (key: string, field: string, reason: string) => {
       if (!mounted.current) registry?.addNote(couldntSaveNote(field, reason));
-      else recentRefusals.current.push({ field, reason, at: Date.now() });
+      else recentRefusals.current.push({ key, field, reason, at: Date.now() });
     },
     [registry]
   );
@@ -238,7 +241,12 @@ export function useUnsavedChangesProvider({ onBackRequested }: { onBackRequested
       if (ignoreNextPop.current) {
         ignoreNextPop.current = false;
         reconcile();
-        for (const settled of guardSettled.current.splice(0)) settled();
+        // PR #115 review: told a moment later, once the router has dealt with this Back too -- a page
+        // opened straight away was replaced by the router putting this one back.
+        const waiting = guardSettled.current.splice(0);
+        window.setTimeout(() => {
+          for (const settled of waiting) settled();
+        }, 0);
         return;
       }
       if (leaving.value) return;
@@ -259,18 +267,25 @@ export function useUnsavedChangesProvider({ onBackRequested }: { onBackRequested
    * hasn't landed yet. Opening another page then -- Log out's sign-in page, say -- was cancelled
    * by that Back, leaving a signed-out wedding page on screen.
    */
-  const guardSettling = useCallback(() => ignoreNextPop.current, []);
-  /** Resolves once that Back has landed (or after half a second, so leaving never hangs). */
-  const whenGuardSettled = useCallback(
-    () =>
-      ignoreNextPop.current
-        ? new Promise<void>((resolve) => {
-            guardSettled.current.push(resolve);
-            window.setTimeout(resolve, 500);
-          })
-        : Promise.resolve(),
-    []
+  // PR #115 review: or about to start -- the extra entry is still there with nothing left unsaved,
+  // and the render that takes it off hasn't come yet (a box just emptied, a link clicked in the same
+  // moment). That Back then cancelled the page the link opened.
+  const removalPending = useCallback(
+    () => !leaving.value && !ignoreNextPop.current && onGuardEntry() && !needsGuard(),
+    [leaving, needsGuard]
   );
+  const guardSettling = useCallback(() => ignoreNextPop.current || removalPending(), [removalPending]);
+  /** Resolves once that Back has landed (or after half a second, so leaving never hangs). */
+  const whenGuardSettled = useCallback(() => {
+    // PR #115 review: a Back about to start is started now, and waited for like any other.
+    if (removalPending()) reconcileNow.current();
+    return ignoreNextPop.current
+      ? new Promise<void>((resolve) => {
+          guardSettled.current.push(resolve);
+          window.setTimeout(resolve, 500);
+        })
+      : Promise.resolve();
+  }, [removalPending]);
   const hasUnsaved = useCallback(() => registry.hasUnsaved(), [registry]);
   const clear = useCallback(() => registry.clearDirty(), [registry]);
   /** TS-206: waits for every save-on-leave box's save; true when all of them saved. */

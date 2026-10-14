@@ -48,8 +48,9 @@ test("while the sweep has its turn, a new run can't take its share of the lease"
   test.skip(turn === null, "a test run holds the lease (this one, with a browser project)");
   const other = new Client({ connectionString: url, connectionTimeoutMillis: 2_000 });
   other.on("error", () => undefined);
-  await other.connect();
   try {
+    // PR #115 review: connected inside the try, so a failed connection still lets go of the turn.
+    await other.connect();
     const during = await other.query<{ ok: boolean }>("SELECT pg_try_advisory_lock_shared($1) AS ok", [RUN_LEASE_KEY]);
     expect(during.rows[0].ok).toBe(false);
     await turn!.release();
@@ -59,5 +60,64 @@ test("while the sweep has its turn, a new run can't take its share of the lease"
   } finally {
     await turn?.release();
     await other.end().catch(() => undefined);
+  }
+});
+
+// PR #115 review: a local database the lease can't be taken on stops the run before any test (it used
+// to go on unprotected). Nothing listens on port 1, so the connection is refused.
+test("a run that can't take its share of the lease on a local database stops, saying why", () => {
+  const result = spawnSync(TSX_BIN, [SCRIPT], {
+    cwd: REPO_ROOT,
+    encoding: "utf-8",
+    timeout: 30_000,
+    env: { ...process.env, DATABASE_URL: "postgresql://nobody@127.0.0.1:1/zz_no_database" },
+  });
+  expect(result.status).not.toBe(0);
+  expect(result.stderr).toContain("Couldn't take this test run's hold on the local database");
+  expect(result.stdout.trim()).not.toBe("released");
+});
+
+/** Ends a connection from the database's side, as a restart or pg_terminate_backend would. */
+async function endFromTheDatabaseSide(url: string, pid: number): Promise<void> {
+  const admin = new Client({ connectionString: url, connectionTimeoutMillis: 2_000 });
+  admin.on("error", () => undefined);
+  try {
+    await admin.connect();
+    await admin.query("SELECT pg_terminate_backend($1)", [pid]);
+  } finally {
+    await admin.end().catch(() => undefined);
+  }
+}
+
+// PR #115 review: the sweep runs on the connection holding its lock -- once that connection ends (and
+// with it the lock), the sweep's next query fails instead of going on unprotected.
+test("once the sweep's connection ends, the sweep can't go on", async () => {
+  test.skip(!(await localDatabaseReachable()), "no local database to hold the lease on");
+  const { takeSweepTurn } = await import("../../e2e/support/runLease");
+  const url = resolveDatabaseUrl()!;
+  const turn = await takeSweepTurn(url);
+  test.skip(turn === null, "a test run holds the lease (this one, with a browser project)");
+  try {
+    await endFromTheDatabaseSide(url, (turn!.client as unknown as { processID: number }).processID);
+    await expect(turn!.client.query("SELECT 1")).rejects.toThrow();
+  } finally {
+    await turn?.release();
+  }
+});
+
+// PR #115 review: a run whose share ends part-way is told why, so its teardown can fail the run.
+test("a run whose share of the lease ends part-way is told why", async () => {
+  test.skip(!(await localDatabaseReachable()), "no local database to hold the lease on");
+  const { takeRunLease, releaseRunLease, leaseLostMessage } = await import("../../e2e/support/runLease");
+  const url = resolveDatabaseUrl()!;
+  await takeRunLease();
+  try {
+    expect(leaseLostMessage()).toBeNull();
+    const holder = (globalThis as Record<symbol, unknown>)[Symbol.for("seatwise.e2e.runLease")] as { processID: number };
+    await endFromTheDatabaseSide(url, holder.processID);
+    await expect.poll(() => leaseLostMessage(), { timeout: 5_000 }).toContain("lost its hold on the local database");
+  } finally {
+    await releaseRunLease();
+    delete (globalThis as Record<symbol, unknown>)[Symbol.for("seatwise.e2e.runLeaseLost")];
   }
 });

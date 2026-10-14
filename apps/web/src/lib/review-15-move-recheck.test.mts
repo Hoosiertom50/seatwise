@@ -125,8 +125,11 @@ async function moveWhileChanged(
   change: (c: PgClient) => Promise<void>
 ) {
   const holder = await localClient();
-  const other = await localClient();
+  // PR #115 review: inside the try, so a second connection that fails still closes the first.
+  let other: PgClient | undefined;
   try {
+    other = await localClient();
+    const watcher = other;
     await holder.query("BEGIN");
     await holder.query(`SELECT id FROM "plan_versions" WHERE id = $1 FOR NO KEY UPDATE`, [w.planId]);
     const { rows } = await holder.query(`SELECT pg_backend_pid() AS pid`);
@@ -138,18 +141,18 @@ async function moveWhileChanged(
     // Wait until the move (its first checks done) is waiting on the plan.
     const deadline = Date.now() + 10_000;
     for (;;) {
-      const { rows: waiting } = await other.query(`SELECT COUNT(*)::int AS n FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid))`, [holderPid]);
+      const { rows: waiting } = await watcher.query(`SELECT COUNT(*)::int AS n FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid))`, [holderPid]);
       if ((waiting[0].n as number) >= 1) break;
       assert.ok(Date.now() < deadline, "the move never waited on the plan");
       await new Promise((resolve) => setTimeout(resolve, 20));
     }
-    await change(other);
+    await change(watcher);
     await holder.query("ROLLBACK");
     return await moving;
   } finally {
     await holder.query("ROLLBACK").catch(() => {});
     await holder.end().catch(() => {});
-    await other.end().catch(() => {});
+    await other?.end().catch(() => {});
   }
 }
 

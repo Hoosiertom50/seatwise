@@ -61,7 +61,12 @@ export default function AccountPage() {
     leaveOpener.current = active instanceof HTMLElement ? active : null;
   }
   function onLeave(href: string): boolean {
-    if (password === "") return true;
+    if (password === "") {
+      // PR #115 review: as on the dashboard -- just emptied, leave once its Back entry is off.
+      if (!unsaved.guardSettling()) return true;
+      void leaveOnceSettled(href);
+      return false;
+    }
     rememberOpener();
     setLogOutError(null);
     setPendingLeave(href);
@@ -72,9 +77,17 @@ export default function AccountPage() {
     setLogOutError(null);
     setPendingLeave(BACK);
   }
+  async function leaveOnceSettled(href: string) {
+    await unsaved.whenGuardSettled();
+    await leaveFor(href);
+  }
   async function leaveWithoutSaving() {
     const href = pendingLeave;
     setPendingLeave(null);
+    if (href) await leaveFor(href);
+    leaveOpener.current = null;
+  }
+  async function leaveFor(href: string) {
     // Review 14: the typed password stays until the page really goes -- a Log out that failed used
     // to clear it anyway, and focus fell to the top of the page instead of going back to Log out.
     if (href === BACK) {
@@ -90,12 +103,11 @@ export default function AccountPage() {
       }
     } else if (href === LOG_OUT_EVERYWHERE) {
       await onLogOutEverywhere();
-    } else if (href) {
+    } else {
       setPassword("");
       if (unsaved.releaseForLink()) router.replace(href);
       else router.push(href);
     }
-    leaveOpener.current = null;
   }
   /** Review 14: the links in "Delete my account" ask first too (a click that opens a new tab doesn't). */
   function onLinkClick(e: React.MouseEvent<HTMLAnchorElement>, href: string) {

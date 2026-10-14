@@ -277,7 +277,7 @@ export function CollaboratorsTab({
       // TS-246: this box now shows the latest, so it no longer counts as changed underneath.
       changedUnderneath.current.delete(fieldKey as SettingsBoxKey);
       // Review 14: with the tab already closed, the page says this wasn't saved, and why.
-      settingFields.noteIfClosed(field, reason);
+      settingFields.noteIfClosed(fieldKey, field, reason);
     } else settingFields.keepUnsaved(fieldKey, field, reason);
     return false;
   }

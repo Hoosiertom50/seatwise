@@ -344,7 +344,14 @@ export default function DashboardPage() {
     leaveOpener.current = active instanceof HTMLElement ? active : null;
   }
   function onLeave(href: string): boolean {
-    if (!createFormTyped) return true;
+    if (!createFormTyped) {
+      // PR #115 review: just emptied, the form's Back entry is still being taken off -- that Back
+      // cancelled a page opened meanwhile (the link did nothing). Leave once it has landed, as the
+      // wedding page does.
+      if (!unsaved.guardSettling()) return true;
+      void leaveOnceSettled(href);
+      return false;
+    }
     rememberOpener();
     setLogOutError(null);
     setPendingLeave(href);
@@ -361,9 +368,17 @@ export default function DashboardPage() {
     if (unsaved.releaseForLink()) router.replace(href);
     else router.push(href);
   }
+  async function leaveOnceSettled(href: string) {
+    await unsaved.whenGuardSettled();
+    await leaveFor(href);
+  }
   async function leaveWithoutSaving() {
     const href = pendingLeave;
     setPendingLeave(null);
+    if (href) await leaveFor(href);
+    leaveOpener.current = null;
+  }
+  async function leaveFor(href: string) {
     if (href === BACK) {
       // Past the extra entry and this page; opened in a fresh tab there's nothing before it.
       unsaved.goBackPastPage(() => router.replace("/"));
@@ -376,13 +391,12 @@ export default function DashboardPage() {
         // Review 14: focus back on Log out (it fell to the top of the page), as on the wedding page.
         leaveOpener.current?.focus();
       }
-    } else if (href?.startsWith(DUPLICATE)) {
+    } else if (href.startsWith(DUPLICATE)) {
       const w = weddings.find((x) => x.id === href.slice(DUPLICATE.length));
       if (w) await onDuplicate(w);
-    } else if (href) {
+    } else {
       openPage(href);
     }
-    leaveOpener.current = null;
   }
   /** Review 14: a wedding in the list -- a plain click asks first (a click that opens a new tab doesn't). */
   function onWeddingLinkClick(e: React.MouseEvent<HTMLAnchorElement>, href: string) {

@@ -20,6 +20,7 @@ import { TEST_ACCOUNT_EMAIL_DOMAIN } from "../support/auth.js";
 import { watchBrowserQuestions } from "../support/browserQuestions.js";
 import { failRequests } from "../support/networkFaults.js";
 import { patchWedding } from "../data/api.js";
+import { emptyThenClickAtOnce } from "../support/emptyThenClick.js";
 
 defineQualityTest(
   {
@@ -198,5 +199,79 @@ defineQualityTest(
     } finally {
       await context.close();
     }
+  },
+);
+
+defineQualityTest(
+  {
+    id: "cross-cutting.leaving-a-page-review-15.retry-saved-before-the-tab-closes",
+    title: "a wedding name refused, then saved on a retry, leaves no Couldn't save note when its tab closes",
+    objective:
+      "Confirms (PR #115 review) that when a Wedding name save is refused (409, the name was changed elsewhere), the planner types a new name and it saves, and they open the Guests tab within a couple of seconds of the refusal, no 'Couldn't save the wedding name' note shows -- the retry saved, so the earlier refusal no longer applies.",
+    expectedOutcome: "After the retry saves, the Guests tab opens, and the Collaborators tab is opened again (showing the retried name): no note containing \"Couldn't save the wedding name\" shows.",
+    requirementIds: ["REQ-NON-FUNCTIONAL"],
+    tags: ["@mutating", "@feature:collaboration", "@risk:normal", "@suite:regression"],
+  },
+  async ({ managedWedding, page, context }) => {
+    const detail = new WeddingDetailPage(page);
+    const collaborators = new CollaboratorsTabPage(page);
+    await collaborators.goto(managedWedding.id);
+    await collaborators.weddingNameInput().fill(`${managedWedding.name} Mine`);
+    expect((await patchWedding(context.request, managedWedding.id, { data: { name: `${managedWedding.name} Elsewhere` } })).ok()).toBe(true);
+    const refused = page.waitForResponse((r) => r.request().method() === "PATCH" && r.status() === 409);
+    await collaborators.weddingNameInput().press("Tab");
+    await refused;
+    await collaborators.weddingNameInput().fill(`${managedWedding.name} Retry`);
+    const saved = page.waitForResponse((r) => r.request().method() === "PATCH" && r.ok());
+    await collaborators.weddingNameInput().press("Tab");
+    await saved;
+    await detail.clickTab("Guests");
+    await expect(detail.tab("Guests")).toHaveAttribute("aria-selected", "true");
+    // The page's notes stay across tabs, and one would show a render after the tab closed -- so look
+    // once the page has gone on to another tab and back.
+    await detail.clickTab("Collaborators");
+    await expect(collaborators.weddingNameInput()).toHaveValue(`${managedWedding.name} Retry`);
+    await expect(detail.unsavedNotes().filter({ hasText: "Couldn't save the wedding name" })).toHaveCount(0);
+  },
+);
+
+defineQualityTest(
+  {
+    id: "cross-cutting.leaving-a-page-review-15.dashboard-link-right-after-emptying",
+    title: "the dashboard's Account link opens the Account page even when followed the moment the Add a wedding form is emptied",
+    objective:
+      "Confirms (PR #115 review) that emptying the dashboard's 'Add a wedding' name box and following the Account link in the same moment still opens the Account page -- emptying the form starts the page's own Back (taking its extra history entry off), and that Back used to cancel the Account page, leaving the dashboard on screen.",
+    expectedOutcome: "The address ends on /account.",
+    requirementIds: ["REQ-NON-FUNCTIONAL"],
+    tags: ["@mutating", "@feature:portfolio", "@risk:normal", "@suite:regression"],
+  },
+  async ({ account, page }, testInfo) => {
+    void account;
+    const dashboard = new DashboardPage(page);
+    await dashboard.goto();
+    await dashboard.weddingNameInput().fill(uniqueTitle(testInfo.workerIndex, "Emptied"));
+    await emptyThenClickAtOnce(dashboard.weddingNameInput(), dashboard.accountLink());
+    await expect(page).toHaveURL(/\/account$/);
+  },
+);
+
+defineQualityTest(
+  {
+    id: "cross-cutting.leaving-a-page-review-15.account-link-right-after-emptying",
+    title: "the Account page's Back to your weddings link opens the dashboard even when followed the moment the password box is emptied",
+    objective:
+      "Confirms (PR #115 review) that on the Account page, emptying the 'Delete my account' password box and following '← Back to your weddings' in the same moment still opens the dashboard (the page's own Back, taking its extra history entry off, used to cancel it).",
+    expectedOutcome: "The address ends on /dashboard.",
+    requirementIds: ["REQ-ACCOUNT-WEDDING-MANAGEMENT", "REQ-NON-FUNCTIONAL"],
+    tags: ["@mutating", "@feature:account", "@risk:normal", "@suite:regression"],
+  },
+  async ({ account, page }) => {
+    void account;
+    const accountPage = new AccountPage(page);
+    await new DashboardPage(page).goto();
+    await accountPage.goto();
+    await accountPage.typeDeletePassword("not-my-password");
+    await emptyThenClickAtOnce(accountPage.deletePasswordInput(), accountPage.backToWeddingsLink());
+    await expect(page).toHaveURL(/\/dashboard$/);
   },
 );

@@ -42,8 +42,13 @@ export const NO_HIDDEN_CHARACTERS_MESSAGE = "Can't contain hidden characters —
 // Review 15 (Tom, 10-14): a zero-width non-joiner or joiner between two letters of a script typed
 // with them (Persian "علی‌رضا", Sinhala "ශ්‍රී", Indian scripts) is part of the spelling; anywhere
 // else (a Latin name, the start or end, between scripts) it's still a hidden character.
-const JOINED_SCRIPT = String.raw`[\p{Script=Arabic}\p{Script=Syriac}\p{Script=Thaana}\p{Script=Devanagari}\p{Script=Bengali}\p{Script=Gurmukhi}\p{Script=Gujarati}\p{Script=Oriya}\p{Script=Tamil}\p{Script=Telugu}\p{Script=Kannada}\p{Script=Malayalam}\p{Script=Sinhala}]`;
-const JOINER_IN_A_WORD = new RegExp(String.raw`(?<=${JOINED_SCRIPT}\p{M}*)[\u200C\u200D](?=${JOINED_SCRIPT})`, "gu");
+// PR #115 review: both letters of the same script -- one each side of two scripts ("علی" then "राम")
+// is still a hidden character.
+const JOINED_SCRIPTS = ["Arabic", "Syriac", "Thaana", "Devanagari", "Bengali", "Gurmukhi", "Gujarati", "Oriya", "Tamil", "Telugu", "Kannada", "Malayalam", "Sinhala"];
+const JOINER_IN_A_WORD = new RegExp(
+  JOINED_SCRIPTS.map((script) => String.raw`(?<=\p{Script=${script}}\p{M}*)[\u200C\u200D](?=\p{Script=${script}})`).join("|"),
+  "gu"
+);
 export function hasHiddenCharacters(value: string): boolean {
   return HIDDEN_CHARACTER.test(value.replace(JOINER_IN_A_WORD, ""));
 }
@@ -192,10 +197,13 @@ const NON_LATIN_ENDING_SET = new Set(NON_LATIN_ENDINGS.map(bare));
 const NAME_LIKE_ENDING_SET = new Set(NAME_LIKE_ENDINGS.map(bare));
 // A run of letters, marks, digits and hyphens, a full stop, and the label after it (looked at, not
 // taken, so "a.b.c" is read as a.b and b.c). Starting only where a run starts keeps it linear.
+// PR #115 review: any dot, a middle dot too -- before a non-Latin ending it reads as a web address
+// ("بنك·مصر", as "بنك.مصر" does). The check for a Latin ending after it still takes a full stop only.
 const LABEL_DOT_LABEL = new RegExp(
-  String.raw`(?<![\p{L}\p{M}\p{N}-])([\p{L}\p{M}\p{N}-]+)${FULL_STOP}(?=([\p{L}\p{M}\p{N}-]+))`,
+  String.raw`(?<![\p{L}\p{M}\p{N}-])([\p{L}\p{M}\p{N}-]+)(${DOT})(?=([\p{L}\p{M}\p{N}-]+))`,
   "gu"
 );
+const IS_FULL_STOP = new RegExp(String.raw`^${FULL_STOP}$`, "u");
 // PR #115 review: a script's own sign is decided as for the folded copy (scriptOwnMarks) -- by the
 // letter's script -- so Arabic vowel marks ("Inherited", but Arabic's) count ("بنكِ.de"), and a Latin
 // letter's accents still don't ("Ọ̀.Adé").
@@ -206,11 +214,11 @@ function hasScriptOwnSign(word: string): boolean {
   return false;
 }
 function nonLatinAddress(text: string): boolean {
-  for (const [, left, right] of text.matchAll(LABEL_DOT_LABEL)) {
+  for (const [, left, dot, right] of text.matchAll(LABEL_DOT_LABEL)) {
     const letters = (left.match(/[\p{L}\p{N}]/gu) ?? []).length;
     const ending = bare(right);
     if (NON_LATIN_ENDING_SET.has(ending) && letters >= (NAME_LIKE_ENDING_SET.has(ending) ? 3 : 1)) return true;
-    if (letters >= 3 && hasScriptOwnSign(left) && /^\p{Script=Latin}{2,}$/u.test(right)) return true;
+    if (IS_FULL_STOP.test(dot) && letters >= 3 && hasScriptOwnSign(left) && /^\p{Script=Latin}{2,}$/u.test(right)) return true;
   }
   return false;
 }
