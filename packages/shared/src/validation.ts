@@ -12,7 +12,12 @@ import { NAME_LIKE_ENDINGS, NON_LATIN_ENDINGS } from "./web-address-endings";
 // combining marks some accented characters decompose into. Requires the first character to be a
 // letter so a name can't be just "-" or "'" on its own (the field's own .min(1)/.trim() already
 // rejects blank/whitespace-only separately).
-export const PERSON_NAME_PATTERN = /^[\p{L}\p{M}][\p{L}\p{M} '.-]*$/u;
+// Review 15 (Tom, 10-14): and, between two letters only, the marks some spellings need there -- a
+// middle dot (Catalan "Gal·la", Japanese "ジョン・スミス"), the Hebrew maqaf, the Tibetan tsheg,
+// and the zero-width joiners Persian, Sinhala and Indian scripts are typed with (which joiners
+// count as hidden characters is decided in hasHiddenCharacters below).
+const BETWEEN_LETTERS = String.raw`(?<=[\p{L}\p{M}])[\u00B7\u30FB\uFF65\u05BE\u0F0B\u200C\u200D](?=\p{L})`;
+export const PERSON_NAME_PATTERN = new RegExp(String.raw`^[\p{L}\p{M}](?:[\p{L}\p{M} '.-]|${BETWEEN_LETTERS})*$`, "u");
 export const PERSON_NAME_MESSAGE =
   "Can only contain letters, spaces, hyphens, apostrophes, and periods";
 
@@ -34,14 +39,22 @@ export function normalizePersonName(value: string): string {
 // wedding's name can't hold them; real accents (José, Nguyễn, Ó Súilleabháin) are not among them.
 const HIDDEN_CHARACTER = /[\p{Default_Ignorable_Code_Point}\p{Variation_Selector}]/u;
 export const NO_HIDDEN_CHARACTERS_MESSAGE = "Can't contain hidden characters — retype it or paste it as plain text";
+// Review 15 (Tom, 10-14): a zero-width non-joiner or joiner between two letters of a script typed
+// with them (Persian "علی‌رضا", Sinhala "ශ්‍රී", Indian scripts) is part of the spelling; anywhere
+// else (a Latin name, the start or end, between scripts) it's still a hidden character.
+const JOINED_SCRIPT = String.raw`[\p{Script=Arabic}\p{Script=Syriac}\p{Script=Thaana}\p{Script=Devanagari}\p{Script=Bengali}\p{Script=Gurmukhi}\p{Script=Gujarati}\p{Script=Oriya}\p{Script=Tamil}\p{Script=Telugu}\p{Script=Kannada}\p{Script=Malayalam}\p{Script=Sinhala}]`;
+const JOINER_IN_A_WORD = new RegExp(String.raw`(?<=${JOINED_SCRIPT}\p{M}*)[\u200C\u200D](?=${JOINED_SCRIPT})`, "gu");
 export function hasHiddenCharacters(value: string): boolean {
-  return HIDDEN_CHARACTER.test(value);
+  return HIDDEN_CHARACTER.test(value.replace(JOINER_IN_A_WORD, ""));
 }
 
 // A wedding's name is a title, not a person's name -- "Alex & Jordan's Wedding", "Smith-Jones
 // Wedding, Est. 2026" -- so this allowlist is deliberately wider than PERSON_NAME_PATTERN: it
 // adds digits, ampersands, commas, and exclamation points on top of the same base set.
-export const WEDDING_NAME_PATTERN = /^[\p{L}\p{N}\p{M}][\p{L}\p{N}\p{M} '&,.!-]*$/u;
+export const WEDDING_NAME_PATTERN = new RegExp(
+  String.raw`^[\p{L}\p{N}\p{M}](?:[\p{L}\p{N}\p{M} '&,.!-]|${BETWEEN_LETTERS})*$`,
+  "u"
+);
 export const WEDDING_NAME_MESSAGE =
   "Can only contain letters, numbers, spaces, and common punctuation ( ' & , . ! - )";
 
@@ -64,7 +77,9 @@ export const WEDDING_NAME_MESSAGE =
 // which reads as a web address once the spaces are taken out. The spaced-dot check now allows
 // spaces between the ending's letters too; it still needs a dot (or "dot") and a whole ending
 // after it, so "Lee . Kim", "St. Pierre" and "J. R. R. Smith" pass.
-const DOMAIN_ENDINGS = "com|net|org|info|biz|io|co|ly|app|xyz|top|site|online|shop|store|link|click|live|club|vip|icu|ru|cn|tk|gg";
+// Review 15: and the short-link hosts one letter long (t.me, m.me, j.mp) -- not de, in, to, ca, au,
+// fr, us or page, which follow an initial in real names ("R.De Silva", "J.Page").
+const DOMAIN_ENDINGS = "com|net|org|info|biz|io|co|ly|app|xyz|top|site|online|shop|store|link|click|live|club|vip|icu|ru|cn|tk|gg|me|mp|tv|gl|uk";
 const SPACED_DOMAIN_ENDINGS = "com|net|org|info|biz|xyz|site|online|shop|click|icu|ru|cn";
 // TS-265: and the other characters that look like a period or a raised dot -- some are letters
 // (U+A4F8 Lisu, U+A78F Latin sinological dot, U+1427 Canadian syllabics), so "paypalꓸcom" passed

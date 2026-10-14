@@ -211,6 +211,10 @@ const MAC_ROMAN_IN_A_NAME = new RegExp(
     `\\p{L}œ(?![ui])\\p{Ll}`,
     `(?:\\p{Ll}‘|[^\\P{Ll}aeiou]’)(?![\\p{L}\\p{M}])(?<!['‘"“][\\p{L}\\p{M}]*[’‘])(?<![‘"“][\\p{L}\\p{M} .-]*[’‘])`,
     `\\p{Ll}[ÕÔ]\\p{L}|\\p{Lu}[ÕÔ]\\p{Lu}\\p{Ll}`,
+    // Review 15: Irish "Ní" (N’ then a space), "Ó" (a lone î), and œ/Œ (Ï inside a word, Î starting one).
+    `\\p{Lu}’(?![\\p{L}\\p{M}’'])`,
+    `(?<![\\p{L}\\p{M}])[îÎ](?![\\p{L}\\p{M}])`,
+    `\\p{L}Ï\\p{Ll}|(?<![\\p{L}\\p{M}])Î\\p{Ll}`,
   ].join("|"),
   "u"
 );
@@ -246,13 +250,18 @@ const MAC_ROMAN_IN_A_NAME = new RegExp(
 // "Ja’siah", "Da’sia", "Ma’zie", "Ka’zon", "Le’ssa" -- which look exactly like Mac "Mo’ses" and
 // "Ra’ssa" (Moíses, Raíssa); the Windows names win, as before TS-265. Further into a name ("Elo’sa",
 // "Helo’sa", "Tha’s") nothing changes.
+// Review 15: y counts as a vowel before ’ ("Ny’asia", "Ky’ree", "Jy’mir"), and further into a name
+// the vowel before ’ must follow a consonant ("Elo’sa", "Tha’s") -- after another vowel it's a
+// Windows name ("Tia’sia", "Mia’sia", "Nia’zia"); a’s counts only at a name's end or one letter
+// before it ("Tha’s", not "Sha’sia"), and ’ss only as a’ss ("Bre’ssa" imports). And the Mac's
+// dotless ı after a capital I too ("Ilgõn" for Ilgın).
 const MAC_ROMAN_IN_A_NAME_UNLESS_WINDOWS = new RegExp(
   [
-    `[^\\P{Ll}aeiou]’\\p{Ll}`,
-    `(?<=\\p{L}\\p{L})(?:u’s|[ao]’s(?!h)|[au]’z)|(?<=\\p{L}\\p{L})\\p{L}’ss`,
+    `[^\\P{Ll}aeiouy]’\\p{Ll}`,
+    `(?<=\\p{L}[^\\P{Ll}aeiouy])(?:u’s|o’s(?!h)|a’s\\p{Ll}?(?!\\p{L})|[au]’z)|(?<=\\p{L}[^\\P{Ll}aeiouy])a’ss`,
     `(?<![\\p{L}’'])\\p{L}(?:u’s|[ao]’s|[au]’z)\\p{Ll}?(?![\\p{L}’'])`,
     `\\p{L}š(?:(?!le)[rhlnmsfdgbwzc]|tt|tz|th|pf|pp)`,
-    `[aAõ][b-df-hj-np-tv-z]+õ(?![aeiouõ])`,
+    `[aAIõ][b-df-hj-np-tv-z]+õ(?![aeiouõ])`,
   ].join("|"),
   "u"
 );
@@ -263,7 +272,7 @@ const MAC_ROMAN_IN_A_NAME_UNLESS_WINDOWS = new RegExp(
 // can't have (the Mac's own ’ is Õ in windows-1252).
 const WINDOWS_SMALL_ACCENTED = "à-ôø-ÿö";
 const WINDOWS_LETTERS = new RegExp(
-  `\\p{Ll}[${WINDOWS_SMALL_ACCENTED}]|\\p{Lu}[${WINDOWS_SMALL_ACCENTED}]\\p{Ll}|\\p{Lu}’|’\\p{Lu}`,
+  `\\p{Ll}[${WINDOWS_SMALL_ACCENTED}]|\\p{Lu}[${WINDOWS_SMALL_ACCENTED}]\\p{Ll}|\\p{Lu}’(?=\\p{L})|’\\p{Lu}`,
   "u"
 );
 // TS-243: Mac capitals Á Ó Ú È Í Î Ô Ò Â Ê Ë are small accented letters in windows-1252 (ç î ò é ê
