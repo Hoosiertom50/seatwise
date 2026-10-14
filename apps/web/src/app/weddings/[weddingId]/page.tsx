@@ -124,6 +124,17 @@ export default function WeddingDetailPage() {
   // TS-166: leaving the wedding page itself ("Back to dashboard") asks the same question; the
   // browser's own prompt only covers closing or reloading the page, not links inside the app.
   const [pendingHref, setPendingHref] = useState<string | null>(null);
+  // Review 15: the question opens where it can be seen -- asked from a control further down (a wedding
+  // in the list, a link at the bottom) or after Back restored the scroll position, it used to open
+  // above the screen with focus on its off-screen Stay (WebKit on a phone; Chromium after Back).
+  const leaveQuestionRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!(pendingTab || pendingHref)) return;
+    const frame = requestAnimationFrame(() =>
+      requestAnimationFrame(() => leaveQuestionRef.current?.scrollIntoView({ block: "nearest" }))
+    );
+    return () => cancelAnimationFrame(frame);
+  }, [pendingTab, pendingHref]);
   // TS-191: the control that brought up the "unsaved changes" question, so focus can go back to it
   // when the question closes (it used to fall to the top of the page).
   // TS-199: remembered by id too -- a guest row's box is often drawn anew (after a save elsewhere on
@@ -637,6 +648,7 @@ export default function WeddingDetailPage() {
       {/* TS-159 */}
       {(pendingTab || pendingHref) && (
         <div
+          ref={leaveQuestionRef}
           role="alertdialog"
           aria-labelledby="unsaved-question"
           // TS-212: Escape means Stay, as in every other question in the app.

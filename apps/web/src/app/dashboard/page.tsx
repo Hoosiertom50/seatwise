@@ -313,6 +313,17 @@ export default function DashboardPage() {
   // Log out, Account, a wedding in the list and Duplicate layout (which opens the copy).
   const [pendingLeave, setPendingLeave] = useState<string | null>(null);
   const leaveOpener = useRef<HTMLElement | null>(null);
+  // Review 15: the question opens where it can be seen -- asked from a control further down (a wedding
+  // in the list, a link at the bottom) or after Back restored the scroll position, it used to open
+  // above the screen with focus on its off-screen Stay (WebKit on a phone; Chromium after Back).
+  const leaveQuestionRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!(pendingLeave)) return;
+    const frame = requestAnimationFrame(() =>
+      requestAnimationFrame(() => leaveQuestionRef.current?.scrollIntoView({ block: "nearest" }))
+    );
+    return () => cancelAnimationFrame(frame);
+  }, [pendingLeave]);
   function stay() {
     setPendingLeave(null);
     leaveOpener.current?.focus();
@@ -329,7 +340,7 @@ export default function DashboardPage() {
    * the question is already up (Back pressed then), the first control is kept. */
   function rememberOpener() {
     const active = document.activeElement;
-    if (active instanceof HTMLElement && active.closest('[role="alertdialog"]')) return;
+    if (leaveOpener.current && active instanceof HTMLElement && active.closest('[role="alertdialog"]')) return;
     leaveOpener.current = active instanceof HTMLElement ? active : null;
   }
   function onLeave(href: string): boolean {
@@ -402,6 +413,7 @@ export default function DashboardPage() {
 
       {pendingLeave && (
         <div
+          ref={leaveQuestionRef}
           role="alertdialog"
           aria-labelledby="dashboard-unsaved-question"
           // TS-212: Escape means Stay, as in every other question in the app.

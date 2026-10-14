@@ -251,6 +251,11 @@ export class DashboardPage extends BasePage {
   }
 
   /** TS-263: the "This date (MM-DD-YYYY) has already passed — is that right?" question. */
+  /** Review 15: the past-date question's "Change it" button (where focus starts). */
+  pastDateChangeItButton() {
+    return this.pastDateQuestion().getByRole("button", { name: "Change it", exact: true });
+  }
+
   pastDateQuestion() {
     return this.page.getByRole("alertdialog").filter({ hasText: /has already passed/ });
   }
