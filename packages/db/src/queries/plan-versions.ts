@@ -1159,7 +1159,6 @@ export async function moveGuestAssignment(
     [planVersionId, targetTableId]
   );
   const occupants = occupantRows.filter((o) => !unitIds.has(o.guestId));
-  const occupantHeadcount = occupants.reduce((sum, o) => sum + o.headcount, 0);
 
   // TS-189: the whole group is already at that table -- nothing to move. Answered before the
   // checks below (a table that's over its seats would otherwise refuse a "move" that changes
@@ -1178,57 +1177,71 @@ export async function moveGuestAssignment(
       .join(", ")}`;
 
   // --- Hard rules — any failure blocks the move outright, nothing changes. ---
-  if (occupantHeadcount + unitHeadcount > targetTable.capacity) {
-    throw new ManualMoveError(
-      `${guestLabel(unit.length, unit.map((g) => g.id))} can't be seated at "${targetTable.label}" ` +
-        `— it only has ${Math.max(targetTable.capacity - occupantHeadcount, 0)} seat(s) left, but ` +
-        `${unitHeadcount} ${unitHeadcount === 1 ? "is" : "are"} needed` +
-        `${unit.length > 1 ? " (everyone in this must-sit-together group moves together)" : ""}.`
-    );
-  }
-  if (unitNeedsAccessible && !targetTable.isAccessible) {
-    const needAccessible = unit.filter((g) => g.requiresAccessibleTable).map((g) => g.id);
-    throw new ManualMoveError(
-      `${guestLabel(needAccessible.length, needAccessible)} require${
-        needAccessible.length === 1 ? "s" : ""
-      } an accessible table, and "${targetTable.label}" isn't marked as one.`
-    );
-  }
-  for (const member of unit) {
-    const conflicts = mustNotByGuest.get(member.id);
-    if (!conflicts) continue;
-    const conflictingOccupant = occupants.find((o) => conflicts.has(o.guestId));
-    if (conflictingOccupant) {
+  // Review 14: checked here, and again under the plan's lock below against the table, its guests,
+  // the rules and the required lists as they are then -- moves sent at the same moment without
+  // expectedRevision all passed this first check and overfilled the table.
+  const checkHardRules = (state: {
+    table: { label: string; capacity: number; isAccessible: boolean; isRestricted: boolean };
+    occupants: { guestId: string; headcount: number; name: string }[];
+    mustNotByGuest: Map<string, Set<string>>;
+    requiredTableByGuestId: Map<string, { tableId: string; tableLabel: string }>;
+    requiredGuestIdsForTargetTable: Set<string>;
+  }) => {
+    const table = state.table;
+    const occupiedSeats = state.occupants.reduce((sum, o) => sum + o.headcount, 0);
+    if (occupiedSeats + unitHeadcount > table.capacity) {
       throw new ManualMoveError(
-        `${member.name} has a "must not sit together" rule with ${conflictingOccupant.name}, ` +
-          `who's already seated at "${targetTable.label}".`
+        `${guestLabel(unit.length, unit.map((g) => g.id))} can't be seated at "${table.label}" ` +
+          `— it only has ${Math.max(table.capacity - occupiedSeats, 0)} seat(s) left, but ` +
+          `${unitHeadcount} ${unitHeadcount === 1 ? "is" : "are"} needed` +
+          `${unit.length > 1 ? " (everyone in this must-sit-together group moves together)" : ""}.`
       );
     }
-  }
-  // FR-3.7a: a guest required at a Restricted table can only ever be moved to that exact table
-  // (or unassigned) -- never anywhere else, since that would "remove" them from the list's
-  // seating without actually taking them off the list.
-  for (const member of unit) {
-    const required = requiredTableByGuestId.get(member.id);
-    if (required && required.tableId !== targetTableId) {
+    if (unitNeedsAccessible && !table.isAccessible) {
+      const needAccessible = unit.filter((g) => g.requiresAccessibleTable).map((g) => g.id);
       throw new ManualMoveError(
-        `${member.name} is required at "${required.tableLabel}" and can't be moved elsewhere ` +
-          `while they're on its required-guest list.`
+        `${guestLabel(needAccessible.length, needAccessible)} require${
+          needAccessible.length === 1 ? "s" : ""
+        } an accessible table, and "${table.label}" isn't marked as one.`
       );
     }
-  }
-  // FR-3.7a: a Restricted table can only ever hold the guests on its required list -- moving
-  // anyone else there is blocked, the same as moving a listed guest away from it above.
-  if (targetTable.isRestricted) {
-    const unlisted = unit.filter((member) => !requiredGuestIdsForTargetTable.has(member.id));
-    if (unlisted.length > 0) {
-      const names = unlisted.map((g) => g.name).join(", ");
-      throw new ManualMoveError(
-        `"${targetTable.label}" is a Restricted table — only guests on its required-guest list ` +
-          `can be seated there, and ${names} ${unlisted.length === 1 ? "isn't" : "aren't"} on it.`
-      );
+    for (const member of unit) {
+      const conflicts = state.mustNotByGuest.get(member.id);
+      if (!conflicts) continue;
+      const conflictingOccupant = state.occupants.find((o) => conflicts.has(o.guestId));
+      if (conflictingOccupant) {
+        throw new ManualMoveError(
+          `${member.name} has a "must not sit together" rule with ${conflictingOccupant.name}, ` +
+            `who's already seated at "${table.label}".`
+        );
+      }
     }
-  }
+    // FR-3.7a: a guest required at a Restricted table can only ever be moved to that exact table
+    // (or unassigned) -- never anywhere else, since that would "remove" them from the list's
+    // seating without actually taking them off the list.
+    for (const member of unit) {
+      const required = state.requiredTableByGuestId.get(member.id);
+      if (required && required.tableId !== targetTableId) {
+        throw new ManualMoveError(
+          `${member.name} is required at "${required.tableLabel}" and can't be moved elsewhere ` +
+            `while they're on its required-guest list.`
+        );
+      }
+    }
+    // FR-3.7a: a Restricted table can only ever hold the guests on its required list -- moving
+    // anyone else there is blocked, the same as moving a listed guest away from it above.
+    if (table.isRestricted) {
+      const unlisted = unit.filter((member) => !state.requiredGuestIdsForTargetTable.has(member.id));
+      if (unlisted.length > 0) {
+        const names = unlisted.map((g) => g.name).join(", ");
+        throw new ManualMoveError(
+          `"${table.label}" is a Restricted table — only guests on its required-guest list ` +
+            `can be seated there, and ${names} ${unlisted.length === 1 ? "isn't" : "aren't"} on it.`
+        );
+      }
+    }
+  };
+  checkHardRules({ table: targetTable, occupants, mustNotByGuest, requiredTableByGuestId, requiredGuestIdsForTargetTable });
 
   // --- Soft rules — allowed, but returned as a non-blocking warning. ---
   // FR-0.2 AC2: every such warning names the affected preference and references the applied
@@ -1289,6 +1302,47 @@ export async function moveGuestAssignment(
       const unchanged = await getPlanVersionDetail(planVersionId, weddingId, client);
       if (!unchanged) throw new ManualMoveError("Plan version not found.");
       return { planVersion: { ...unchanged, warnings: [] }, warnings: [] };
+    }
+    // Review 14: the hard rules again, under the plan's lock (moves, table edits, rule changes and
+    // required-list changes all take it), against the table and its guests as they are now.
+    {
+      const { rows: tableNow } = await client.query(
+        `SELECT label, capacity, "isAccessible", "isRestricted" FROM "seating_tables" WHERE id = $1 AND "weddingId" = $2`,
+        [targetTableId, weddingId]
+      );
+      if (!tableNow[0]) throw new ManualMoveError("Table not found.");
+      const { rows: occupantsNow } = await client.query(
+        `SELECT sa."guestId", g.headcount, (g."firstName" || ' ' || g."lastName") AS name
+         FROM "seat_assignments" sa JOIN "guests" g ON g.id = sa."guestId"
+         WHERE sa."planVersionId" = $1 AND sa."seatingTableId" = $2 AND NOT (sa."guestId" = ANY($3::text[]))`,
+        [planVersionId, targetTableId, unitIds]
+      );
+      const { rows: mustNotNow } = await client.query(
+        `SELECT "guestAId", "guestBId" FROM "guest_relationships"
+         WHERE "weddingId" = $1 AND type = 'MUST_NOT_SIT_TOGETHER'
+           AND ("guestAId" = ANY($2::text[]) OR "guestBId" = ANY($2::text[]))`,
+        [weddingId, unitIds]
+      );
+      const mustNotNowByGuest = new Map<string, Set<string>>();
+      for (const r of mustNotNow) {
+        for (const [a, b] of [[r.guestAId, r.guestBId], [r.guestBId, r.guestAId]]) {
+          if (!mustNotNowByGuest.has(a)) mustNotNowByGuest.set(a, new Set());
+          mustNotNowByGuest.get(a)!.add(b);
+        }
+      }
+      const { rows: requiredNow } = await client.query(
+        `SELECT rtg."guestId", rtg."tableId", t.label AS "tableLabel"
+         FROM "restricted_table_guests" rtg JOIN "seating_tables" t ON t.id = rtg."tableId"
+         WHERE t."weddingId" = $1 AND t."isRestricted" AND (rtg."guestId" = ANY($2::text[]) OR rtg."tableId" = $3)`,
+        [weddingId, unitIds, targetTableId]
+      );
+      checkHardRules({
+        table: tableNow[0],
+        occupants: occupantsNow,
+        mustNotByGuest: mustNotNowByGuest,
+        requiredTableByGuestId: new Map(requiredNow.map((r) => [r.guestId, { tableId: r.tableId, tableLabel: r.tableLabel }])),
+        requiredGuestIdsForTargetTable: new Set(requiredNow.filter((r) => r.tableId === targetTableId).map((r) => r.guestId)),
+      });
     }
     const affectedBefore = await tablesAffectedBy(client, weddingId, planVersionId, unitIds);
     // TS-181: a guest moved to a different table is seated there now (SEAT_ORDER counts them last).
