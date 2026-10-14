@@ -134,12 +134,16 @@ export function useUnsavedChangesProvider({ onBackRequested }: { onBackRequested
   useEffect(() => {
     if (count === 0) return;
     const warn = (e: BeforeUnloadEvent) => {
+      // Review 15: asked again as it fires -- "Leave without saving" then Log out clears the input and
+      // opens the sign-in page in the same moment, before this listener comes off with the next
+      // render, and the browser asked "Leave site?" on top of the page's own question.
+      if (!registry.hasUnsaved()) return;
       e.preventDefault();
       e.returnValue = "";
     };
     window.addEventListener("beforeunload", warn);
     return () => window.removeEventListener("beforeunload", warn);
-  }, [count]);
+  }, [count, registry]);
 
 
   // TS-170: the browser's Back button (or a back swipe) moves within the app without unloading the

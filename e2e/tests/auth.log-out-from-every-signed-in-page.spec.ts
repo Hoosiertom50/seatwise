@@ -26,6 +26,7 @@ import { uniqueTestAddress, uniqueTitle, uniqueToken } from "../data/ids.js";
 import { TEST_ACCOUNT_EMAIL_DOMAIN } from "../support/auth.js";
 import { confirmTestAccountEmail } from "../support/testDatabase.js";
 import { delayPagesOwnBack } from "../support/slowDevice.js";
+import { watchBrowserQuestions } from "../support/browserQuestions.js";
 
 /**
  * A fresh account signed in on two "devices" (browser contexts). Logging out ends the session the
@@ -146,7 +147,14 @@ defineQualityTest(
       await test.step("Log out, then Leave without saving, logs out", async () => {
         await header.pressLogOut();
         await expect(detail.unsavedChangesPrompt()).toBeVisible();
-        await Promise.all([page.waitForURL(/\/login/), detail.leaveTabWithoutSaving()]);
+        // Review 15: and the browser doesn't ask "Leave site?" on top -- straight to sign-in.
+        const questions = watchBrowserQuestions(page);
+        try {
+          await Promise.all([page.waitForURL(/\/login/, { timeout: 1_500 }), detail.leaveTabWithoutSaving()]);
+        } finally {
+          questions.stop();
+        }
+        expect(questions.asked).toEqual([]);
         expect(await signedIn(one)).toBe(401);
       });
     } finally {
@@ -236,7 +244,14 @@ defineQualityTest(
 
       await test.step("Log out, then Leave without saving, logs out", async () => {
         await header.pressLogOut();
-        await Promise.all([page.waitForURL(/\/login/), dashboard.leaveWithoutSaving()]);
+        // Review 15: and the browser doesn't ask "Leave site?" on top -- straight to sign-in.
+        const questions = watchBrowserQuestions(page);
+        try {
+          await Promise.all([page.waitForURL(/\/login/, { timeout: 1_500 }), dashboard.leaveWithoutSaving()]);
+        } finally {
+          questions.stop();
+        }
+        expect(questions.asked).toEqual([]);
         expect(await signedIn(one)).toBe(401);
       });
     } finally {
@@ -298,7 +313,14 @@ defineQualityTest(
 
       await test.step("Log out, then Leave without saving, logs out", async () => {
         await header.pressLogOut();
-        await Promise.all([page.waitForURL(/\/login/), account.leaveWithoutSaving()]);
+        // Review 15: and the browser doesn't ask "Leave site?" on top -- straight to sign-in.
+        const questions = watchBrowserQuestions(page);
+        try {
+          await Promise.all([page.waitForURL(/\/login/, { timeout: 1_500 }), account.leaveWithoutSaving()]);
+        } finally {
+          questions.stop();
+        }
+        expect(questions.asked).toEqual([]);
         expect(await signedIn(one)).toBe(401);
       });
     } finally {
@@ -407,7 +429,14 @@ defineQualityTest(
       await test.step("Log out, then Leave without saving, logs out without saving the venue", async () => {
         await header.pressLogOut();
         await expect(detail.unsavedChangesPrompt()).toBeVisible();
-        await Promise.all([page.waitForURL(/\/login/), detail.leaveTabWithoutSaving()]);
+        // Review 15: and the browser doesn't ask "Leave site?" on top -- straight to sign-in.
+        const questions = watchBrowserQuestions(page);
+        try {
+          await Promise.all([page.waitForURL(/\/login/, { timeout: 1_500 }), detail.leaveTabWithoutSaving()]);
+        } finally {
+          questions.stop();
+        }
+        expect(questions.asked).toEqual([]);
         expect(await signedIn(one)).toBe(401);
         const saved = ((await (await two.request.get(`/api/v1/weddings/${wedding.id}`)).json()) as {
           wedding: { venueName: string | null };
