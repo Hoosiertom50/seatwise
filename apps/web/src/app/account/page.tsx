@@ -13,6 +13,9 @@ import { SUPPORT_EMAIL, SUPPORT_MAILTO, SUPPORT_PROMISE } from "@/lib/support";
 // TS-193: the same limits the server checks (packages/shared/src/field-limits.ts).
 import { FIELD_LIMITS } from "@seatwise/shared";
 
+// Review 14: "Log out on all devices" waiting on the leave question.
+const LOG_OUT_EVERYWHERE = "log-out-everywhere";
+
 // TS-105: the signed-in planner's account page -- who they're signed in as, and deleting the
 // account. Deleting needs the password, and is refused while they still own any wedding (Tom's
 // decision, 2026-10-01): the page then lists those weddings with a link to hand each one off.
@@ -42,13 +45,27 @@ export default function AccountPage() {
   async function leaveWithoutSaving() {
     const href = pendingLeave;
     setPendingLeave(null);
-    setPassword("");
+    // Review 14: the typed password stays until the page really goes -- a Log out that failed used
+    // to clear it anyway, and focus fell to the top of the page instead of going back to Log out.
     if (href === LOG_OUT) {
       if (await logOutThisDevice()) router.replace("/login");
-      else setLogOutError(LOG_OUT_FAILED_MESSAGE);
+      else {
+        setLogOutError(LOG_OUT_FAILED_MESSAGE);
+        leaveOpener.current?.focus();
+      }
+    } else if (href === LOG_OUT_EVERYWHERE) {
+      await onLogOutEverywhere();
     } else if (href) {
+      setPassword("");
       router.push(href);
     }
+    leaveOpener.current = null;
+  }
+  /** Review 14: the links in "Delete my account" ask first too (a click that opens a new tab doesn't). */
+  function onLinkClick(e: React.MouseEvent<HTMLAnchorElement>, href: string) {
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+    e.currentTarget.focus(); // Safari doesn't focus a clicked link; Stay brings focus back here.
+    if (!onLeave(href)) e.preventDefault();
   }
   const [error, setError] = useState<string | null>(null);
   const [ownedWeddings, setOwnedWeddings] = useState<{ id: string; name: string }[]>([]);
@@ -71,7 +88,7 @@ export default function AccountPage() {
       });
   }, [router, loadAttempt]);
 
-  // TS-204 (Tom's decision): "Log out" (on the dashboard) signs out this device only; this signs
+  // TS-204 (Tom's decision): "Log out" (at the top of every page) signs out this device only; this signs
   // out every device -- other browsers, phones, the mobile app -- the way a password reset does.
   const [signOutError, setSignOutError] = useState<string | null>(null);
   const [signingOutEverywhere, setSigningOutEverywhere] = useState(false);
@@ -230,7 +247,11 @@ export default function AccountPage() {
         </p>
         <button
           type="button"
-          onClick={onLogOutEverywhere}
+          onClick={(e) => {
+            // Review 14: with a password typed in "Delete my account", this asks first like Log out.
+            e.currentTarget.focus();
+            if (onLeave(LOG_OUT_EVERYWHERE)) void onLogOutEverywhere();
+          }}
           disabled={signingOutEverywhere}
           className="rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50"
         >
@@ -291,7 +312,7 @@ export default function AccountPage() {
           <ul className="mt-2 list-inside list-disc text-sm">
             {ownedWeddings.map((w) => (
               <li key={w.id}>
-                <Link href={`/weddings/${w.id}`} className="underline">
+                <Link href={`/weddings/${w.id}`} onClick={(e) => onLinkClick(e, `/weddings/${w.id}`)} className="underline">
                   {w.name}
                 </Link>{" "}
                 — open it, then Collaborators → Hand off this wedding (once someone else has access), or

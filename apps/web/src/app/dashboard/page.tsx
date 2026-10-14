@@ -16,6 +16,9 @@ import { EmailVerificationNotice } from "@/components/EmailVerificationNotice";
 // TS-193: the same limits the server checks (packages/shared/src/field-limits.ts).
 import { FIELD_LIMITS } from "@seatwise/shared";
 
+// Review 14: "Duplicate layout" waiting on the leave question (the wedding's id follows).
+const DUPLICATE = "duplicate:";
+
 // TS-19 (FR-14.2): human-readable labels for a template's captured rule-shape.
 const SIDE_MIXING_LABELS: Record<string, string> = {
   KEEP_SEPARATE: "Keep sides separate",
@@ -294,8 +297,9 @@ export default function DashboardPage() {
   }
 
   // TS-264: Log out (TS-175/TS-204) is in the shared SignedInHeader now, on every signed-in page.
-  // Leaving the dashboard (Log out, Account, a notification's wedding) with something typed in the
-  // "Add a wedding" form asks first, as the wedding page does -- it used to log out and lose it.
+  // Leaving the dashboard with something typed in the "Add a wedding" form asks first, as the
+  // wedding page does -- it used to log out and lose it. Review 14: every way off the page asks --
+  // Log out, Account, a wedding in the list and Duplicate layout (which opens the copy).
   const [pendingLeave, setPendingLeave] = useState<string | null>(null);
   const leaveOpener = useRef<HTMLElement | null>(null);
   function stay() {
@@ -319,10 +323,24 @@ export default function DashboardPage() {
     setPendingLeave(null);
     if (href === LOG_OUT) {
       if (await logOutThisDevice()) router.replace("/login");
-      else setLogOutError(LOG_OUT_FAILED_MESSAGE);
+      else {
+        setLogOutError(LOG_OUT_FAILED_MESSAGE);
+        // Review 14: focus back on Log out (it fell to the top of the page), as on the wedding page.
+        leaveOpener.current?.focus();
+      }
+    } else if (href?.startsWith(DUPLICATE)) {
+      const w = weddings.find((x) => x.id === href.slice(DUPLICATE.length));
+      if (w) await onDuplicate(w);
     } else if (href) {
       router.push(href);
     }
+    leaveOpener.current = null;
+  }
+  /** Review 14: a wedding in the list -- a plain click asks first (a click that opens a new tab doesn't). */
+  function onWeddingLinkClick(e: React.MouseEvent<HTMLAnchorElement>, href: string) {
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+    e.currentTarget.focus(); // Safari doesn't focus a clicked link; Stay brings focus back here.
+    if (!onLeave(href)) e.preventDefault();
   }
 
   if (loading) {
@@ -709,6 +727,7 @@ export default function DashboardPage() {
                 <li key={w.id} className="flex items-stretch gap-2">
                   <Link
                     href={`/weddings/${w.id}`}
+                    onClick={(e) => onWeddingLinkClick(e, `/weddings/${w.id}`)}
                     className="flex min-w-0 flex-1 flex-col gap-2 rounded-lg border border-neutral-200 dark:border-neutral-700 px-4 py-3 hover:border-neutral-400 dark:hover:border-neutral-500 sm:flex-row sm:items-center sm:justify-between"
                   >
                     {/* TS-199: a long name or venue wraps instead of running off a phone screen. */}
@@ -756,7 +775,10 @@ export default function DashboardPage() {
                   {userId && w.ownerId === userId && (
                     <button
                       type="button"
-                      onClick={() => onDuplicate(w)}
+                      onClick={(e) => {
+                        e.currentTarget.focus();
+                        if (onLeave(DUPLICATE + w.id)) void onDuplicate(w);
+                      }}
                       disabled={duplicatingId !== null}
                       aria-label={`Duplicate layout of ${w.name}`}
                       title="Start a new wedding with this one's tables and seating settings (no guests)"
