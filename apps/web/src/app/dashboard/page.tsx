@@ -11,7 +11,7 @@ import { pastWeddingDateQuestion } from "@/lib/past-wedding-date";
 import { formatGuestCounts, type WeddingSummaryDTO, type SeatingTemplateDTO } from "@seatwise/shared";
 // TS-264: bell · Account · Log out, the same on every signed-in page.
 import { SignedInHeader } from "@/components/SignedInHeader";
-import { LOG_OUT, LOG_OUT_FAILED_MESSAGE, logOutThisDevice } from "@/lib/log-out";
+import { LOG_OUT, LOG_OUT_FAILED_MESSAGE, goToSignIn, logOutThisDevice } from "@/lib/log-out";
 import { useUnsavedChangesProvider } from "@/lib/unsaved-changes";
 import { EmailVerificationNotice } from "@/components/EmailVerificationNotice";
 // TS-193: the same limits the server checks (packages/shared/src/field-limits.ts).
@@ -359,7 +359,7 @@ export default function DashboardPage() {
     } else if (href === LOG_OUT) {
       if (await logOutThisDevice()) {
         unsaved.releaseForLink();
-        router.replace("/login");
+        goToSignIn();
       } else {
         setLogOutError(LOG_OUT_FAILED_MESSAGE);
         // Review 14: focus back on Log out (it fell to the top of the page), as on the wedding page.

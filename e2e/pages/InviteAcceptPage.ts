@@ -20,7 +20,7 @@ const STATE_TEXT: Record<InvitePageState, string> = {
 
 export class InviteAcceptPage extends BasePage {
   async goto(token: string): Promise<void> {
-    await this.page.goto(`/invites/${token}`);
+    await this.open(`/invites/${token}`);
     await this.page.getByRole("heading", { name: "Wedding invite", exact: true }).waitFor();
   }
 

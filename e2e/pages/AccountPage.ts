@@ -7,7 +7,7 @@ import { ConfirmDelete } from "../components/ConfirmDelete.js";
 
 export class AccountPage extends BasePage {
   async goto(): Promise<void> {
-    await this.page.goto("/account");
+    await this.open("/account");
     await this.page.getByRole("heading", { name: "Your account", exact: true }).waitFor();
   }
 

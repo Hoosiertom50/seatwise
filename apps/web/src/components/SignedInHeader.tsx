@@ -2,9 +2,8 @@
 
 import { useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { NotificationsBell } from "@/components/NotificationsBell";
-import { LOG_OUT, LOG_OUT_FAILED_MESSAGE, logOutThisDevice } from "@/lib/log-out";
+import { LOG_OUT, LOG_OUT_FAILED_MESSAGE, goToSignIn, logOutThisDevice } from "@/lib/log-out";
 
 const CONTROL =
   "flex min-h-11 items-center rounded-md border border-neutral-300 dark:border-neutral-600 px-3 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800";
@@ -38,7 +37,6 @@ export function SignedInHeader({
   /** On the Account page the Account link is the current page. */
   onAccountPage?: boolean;
 }) {
-  const router = useRouter();
   const [error, setError] = useState<string | null>(null);
   const loggingOut = useRef(false);
   const logOutButton = useRef<HTMLButtonElement>(null);
@@ -54,7 +52,7 @@ export function SignedInHeader({
     if (loggingOut.current) return;
     loggingOut.current = true;
     try {
-      if (await logOutThisDevice()) router.replace("/login");
+      if (await logOutThisDevice()) goToSignIn();
       else setError(LOG_OUT_FAILED_MESSAGE);
     } finally {
       loggingOut.current = false;

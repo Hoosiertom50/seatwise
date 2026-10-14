@@ -7,7 +7,7 @@ import { BasePage } from "./BasePage.js";
 
 export class PasswordResetPages extends BasePage {
   async gotoLogin(): Promise<void> {
-    await this.page.goto("/login");
+    await this.open("/login");
   }
 
   forgotPasswordLink() {
@@ -15,7 +15,7 @@ export class PasswordResetPages extends BasePage {
   }
 
   async gotoForgotPassword(): Promise<void> {
-    await this.page.goto("/forgot-password");
+    await this.open("/forgot-password");
   }
 
   /** Follows the sign-in page's link and waits for the request form. */
@@ -44,7 +44,7 @@ export class PasswordResetPages extends BasePage {
   }
 
   async gotoResetLink(token: string): Promise<void> {
-    await this.page.goto(`/reset-password/${token}`);
+    await this.open(`/reset-password/${token}`);
   }
 
   async chooseNewPassword(password: string, confirm = password): Promise<void> {

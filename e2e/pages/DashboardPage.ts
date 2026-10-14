@@ -92,7 +92,7 @@ export class DashboardPage extends BasePage {
   }
 
   async goto(): Promise<void> {
-    await this.page.goto("/dashboard");
+    await this.open("/dashboard");
   }
 
   /** The list link for a wedding whose visible name contains this text. Also carries the row's

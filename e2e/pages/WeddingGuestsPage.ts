@@ -47,7 +47,7 @@ export class WeddingGuestsPage extends BasePage {
   }
 
   async goto(weddingId: string): Promise<void> {
-    await this.page.goto(`/weddings/${weddingId}`);
+    await this.open(`/weddings/${weddingId}`);
   }
 
   async openGuestsTab(): Promise<void> {

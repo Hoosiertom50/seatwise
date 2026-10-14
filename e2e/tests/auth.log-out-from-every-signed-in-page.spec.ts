@@ -25,6 +25,7 @@ import { WeddingDataSetup } from "../data/api.js";
 import { uniqueTestAddress, uniqueTitle, uniqueToken } from "../data/ids.js";
 import { TEST_ACCOUNT_EMAIL_DOMAIN } from "../support/auth.js";
 import { confirmTestAccountEmail } from "../support/testDatabase.js";
+import { delayPagesOwnBack } from "../support/slowDevice.js";
 
 /**
  * A fresh account signed in on two "devices" (browser contexts). Logging out ends the session the
@@ -444,6 +445,41 @@ defineQualityTest(
       await guests.guestRow("Ann Lee").editFirstName("Anne");
       await saved;
       await Promise.all([page.waitForURL(/\/login/), header.pressLogOut()]);
+      expect(await signedIn(one)).toBe(401);
+    } finally {
+      await cleanUp();
+    }
+  },
+);
+
+defineQualityTest(
+  {
+    id: "auth.log-out-from-every-signed-in-page.on-a-slow-device-right-after-a-save",
+    title: "Log out right after a save on a slow device still lands on the sign-in page (the page's own Back held 300 ms)",
+    objective:
+      "Confirms (review 14) that when the page's own Back -- taking its extra history entry off just after a save -- lands only after the log-out has answered (as on a slow or busy device; played here by holding history.back() for 300 ms), Log out still lands on the sign-in page. It used to end the session but leave the wedding page, guest names and all, on screen.",
+    expectedOutcome: "After saving a guest's first name and pressing Log out at once: the browser is on /login, the wedding's name is no longer on screen, and /auth/me answers 401.",
+    requirementIds: ["REQ-ACCOUNT-WEDDING-MANAGEMENT", "REQ-NON-FUNCTIONAL"],
+    tags: ["@mutating", "@feature:authentication", "@risk:high", "@suite:regression"],
+  },
+  async ({ browser }, testInfo) => {
+    const { devices, signedIn, cleanUp } = await accountOnTwoDevices(browser, testInfo.workerIndex, "header-slow");
+    const [one] = devices;
+    try {
+      const setup = new WeddingDataSetup(one.request);
+      const wedding = await setup.createWedding(uniqueTitle(testInfo.workerIndex, "Slow Device Wedding"));
+      await setup.createGuest(wedding.id, { firstName: "Ann", lastName: "Lee" });
+      const page = await one.newPage();
+      // A slow device: the page's own Back lands 300 ms late.
+      await delayPagesOwnBack(page, 300);
+      const guests = new WeddingGuestsPage(page);
+      const header = new SignedInHeader(page);
+      await guests.goto(wedding.id);
+      const saved = page.waitForResponse((r) => r.request().method() === "PATCH" && /\/guests\/[^/]+$/.test(new URL(r.url()).pathname));
+      await guests.guestRow("Ann Lee").editFirstName("Anne");
+      await saved;
+      await Promise.all([page.waitForURL(/\/login/, { timeout: 10_000 }), header.pressLogOut()]);
+      await expect(new WeddingDetailPage(page).textLocator(wedding.name)).toHaveCount(0);
       expect(await signedIn(one)).toBe(401);
     } finally {
       await cleanUp();

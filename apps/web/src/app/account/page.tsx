@@ -8,7 +8,7 @@ import { ConfirmDeleteButton } from "@/components/ConfirmDeleteButton";
 import { AppearanceSetting } from "@/components/AppearanceSetting";
 // TS-264: bell · Account · Log out, the same on every signed-in page.
 import { SignedInHeader } from "@/components/SignedInHeader";
-import { LOG_OUT, LOG_OUT_FAILED_MESSAGE, logOutThisDevice } from "@/lib/log-out";
+import { LOG_OUT, LOG_OUT_FAILED_MESSAGE, goToSignIn, logOutThisDevice } from "@/lib/log-out";
 import { SUPPORT_EMAIL, SUPPORT_MAILTO, SUPPORT_PROMISE } from "@/lib/support";
 // TS-193: the same limits the server checks (packages/shared/src/field-limits.ts).
 import { FIELD_LIMITS } from "@seatwise/shared";
@@ -48,7 +48,7 @@ export default function AccountPage() {
     // Review 14: the typed password stays until the page really goes -- a Log out that failed used
     // to clear it anyway, and focus fell to the top of the page instead of going back to Log out.
     if (href === LOG_OUT) {
-      if (await logOutThisDevice()) router.replace("/login");
+      if (await logOutThisDevice()) goToSignIn();
       else {
         setLogOutError(LOG_OUT_FAILED_MESSAGE);
         leaveOpener.current?.focus();
@@ -109,7 +109,7 @@ export default function AccountPage() {
       setSigningOutEverywhere(false);
       return;
     }
-    router.replace("/login");
+    goToSignIn();
   }
 
   async function onDelete() {

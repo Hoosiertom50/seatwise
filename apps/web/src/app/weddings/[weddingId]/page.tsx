@@ -21,7 +21,7 @@ import { BudgetTab } from "./components/BudgetTab";
 import { GettingStarted, loadGettingStartedCounts, type GettingStartedCounts } from "./components/GettingStarted";
 // TS-264: bell · Account · Log out, the same on every signed-in page.
 import { SignedInHeader } from "@/components/SignedInHeader";
-import { LOG_OUT, LOG_OUT_FAILED_MESSAGE, logOutThisDevice } from "@/lib/log-out";
+import { LOG_OUT, LOG_OUT_FAILED_MESSAGE, goToSignIn, logOutThisDevice } from "@/lib/log-out";
 import { EmailVerificationNotice } from "@/components/EmailVerificationNotice";
 import { SaveStatusIndicator } from "@/components/SaveStatusIndicator";
 import { saveStatusStore } from "@/lib/save-status";
@@ -231,7 +231,7 @@ export default function WeddingDetailPage() {
       }
       await unsaved.whenGuardSettled();
       unsaved.releaseForLink();
-      router.replace("/login");
+      goToSignIn();
       return;
     }
     await unsaved.whenGuardSettled();

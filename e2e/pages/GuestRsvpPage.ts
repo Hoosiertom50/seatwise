@@ -53,7 +53,7 @@ export class GuestRsvpPage extends BasePage {
   }
 
   async goto(token: string): Promise<void> {
-    await this.page.goto(`/rsvp/${token}`);
+    await this.open(`/rsvp/${token}`);
   }
 
   /** TS-98: any text on the page (e.g. the too-many-attempts message, or the invalid-link one). */
