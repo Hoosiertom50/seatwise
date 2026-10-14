@@ -226,8 +226,15 @@ function nonLatinAddress(text: string): boolean {
   return false;
 }
 
+// PR #115 review: the marks names may now hold between two letters (BETWEEN_LETTERS) -- a middle dot,
+// a Hebrew maqaf, a Tibetan tsheg, a joiner -- split a word in two for the checks below, so "l·l.cat"
+// and "א־ב.il" read as one letter before the dot and passed. They're also checked without them
+// ("ll.cat"); a name with no dot after them ("Gal·la", "בן־עמי") is unchanged.
+const SEPARATOR_BETWEEN_LETTERS = /(?<=[\p{L}\p{M}])[\u00B7\u30FB\uFF65\u05BE\u0F0B\u200C\u200D](?=\p{L})/gu;
 export function looksLikeWebAddress(value: string): boolean {
   if (WEB_ADDRESS_LIKE.test(value) || nonLatinAddress(value)) return true;
+  const joined = value.replace(SEPARATOR_BETWEEN_LETTERS, "");
+  if (joined !== value && (WEB_ADDRESS_LIKE.test(joined) || nonLatinAddress(joined))) return true;
   const { plain, dotted } = foldedCopies(value);
   return (
     (plain !== value && (WEB_ADDRESS_LIKE.test(plain) || nonLatinAddress(plain))) ||

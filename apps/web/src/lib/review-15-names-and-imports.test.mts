@@ -201,3 +201,18 @@ test("PR #115: Romanian names starting with Î import from a Windows file that s
     assert.equal(importOne(bytesFor("macintosh", `First name,Last name\r\n${first},${last}\r\n`)), "refused", `${first} ${last}`);
   }
 });
+
+// PR #115 review (Copilot round 6).
+test("PR #115: a separator between two letters doesn't hide a web address", () => {
+  const middleDot = "\u00B7";
+  const maqaf = "\u05BE";
+  for (const name of [`l${middleDot}l.cat`, `א${maqaf}ב.il`]) {
+    assert.equal(looksLikeWebAddress(name), true, name);
+    assert.equal(weddingNameField.safeParse(name).success, false, name);
+  }
+  // Names that use them still pass.
+  for (const name of [`Gal${middleDot}la`, `Col${middleDot}lell Puig`, `בן${maqaf}עמי`, "ジョン\u30FBスミス"]) {
+    assert.equal(looksLikeWebAddress(name), false, name);
+  }
+});
+

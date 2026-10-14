@@ -18,7 +18,7 @@ import { WeddingDetailPage } from "../pages/WeddingDetailPage.js";
 import { uniqueTestAddress, uniqueTitle, uniqueToken } from "../data/ids.js";
 import { TEST_ACCOUNT_EMAIL_DOMAIN } from "../support/auth.js";
 import { watchBrowserQuestions } from "../support/browserQuestions.js";
-import { failRequests } from "../support/networkFaults.js";
+import { delayResponses, failRequests } from "../support/networkFaults.js";
 import { patchWedding } from "../data/api.js";
 import { emptyThenClickAtOnce } from "../support/emptyThenClick.js";
 import { waitForPageToSettle } from "../support/pageSettled.js";
@@ -279,3 +279,40 @@ defineQualityTest(
     await expect(page).toHaveURL(/\/dashboard$/);
   },
 );
+
+defineQualityTest(
+  {
+    id: "cross-cutting.leaving-a-page-review-15.typed-while-logging-out",
+    title: "typing in the Add a wedding form while Log out is on its way still opens the sign-in page, with no browser question",
+    objective:
+      "Confirms (PR #115 review) that on the dashboard with nothing typed, pressing Log out and then typing in the 'Add a wedding' name box before the log out has finished still opens the sign-in page once it has -- the session is over, so the browser's 'Leave site?' question isn't asked (cancelling it used to leave the signed-out dashboard on screen).",
+    expectedOutcome: "After the slowed log out finishes: the address ends on /login and no browser question was asked.",
+    requirementIds: ["REQ-NON-FUNCTIONAL"],
+    tags: ["@mutating", "@feature:authentication", "@risk:normal", "@suite:regression"],
+  },
+  async ({ browser }, testInfo) => {
+    const context = await browser.newContext({ extraHTTPHeaders: { "x-forwarded-for": uniqueTestAddress() } });
+    try {
+      const token = uniqueToken(testInfo.workerIndex);
+      const email = `pw-tester-logout-typing-${token}${TEST_ACCOUNT_EMAIL_DOMAIN}`;
+      expect((await context.request.post("/api/v1/auth/signup", { data: { name: `Playwright Tester ${token}`, email, password: `pw-${token}-long-enough` } })).ok()).toBe(true);
+      const page = await context.newPage();
+      const dashboard = new DashboardPage(page);
+      await dashboard.goto();
+      const slowLogOut = await delayResponses(page, /\/api\/v1\/auth\/logout$/, "POST", 1_500);
+      const questions = watchBrowserQuestions(page);
+      try {
+        await dashboard.logout();
+        await dashboard.weddingNameInput().fill(uniqueTitle(testInfo.workerIndex, "Typed While Leaving"));
+        await expect(page).toHaveURL(/\/login$/);
+      } finally {
+        questions.stop();
+        await slowLogOut.clear();
+      }
+      expect(questions.asked).toEqual([]);
+    } finally {
+      await context.close();
+    }
+  },
+);
+

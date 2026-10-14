@@ -25,7 +25,16 @@ export const LOG_OUT_FAILED_MESSAGE = "Couldn't log out — check your connectio
  * screen, e.g. on a shared Day-of tablet. A page load also leaves nothing of the old page in memory.
  * If the page is somehow still here a moment later, it goes again.
  */
+// PR #115 review: once the page is going to the sign-in page, the session is over and nothing typed
+// can be saved -- so the browser isn't asked "Leave site?" (see the provider in unsaved-changes.tsx).
+// Typing in a form while a log out was on its way made it ask, and Cancel left the signed-out page.
+let signingOut = false;
+export function isSigningOut(): boolean {
+  return signingOut;
+}
+
 export function goToSignIn(): void {
+  signingOut = true;
   window.location.replace("/login");
   window.setTimeout(() => window.location.replace("/login"), 2000);
 }

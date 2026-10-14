@@ -2,6 +2,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { UnsavedRegistry, LeavingFlag, couldntSaveNote, type UnsavedNote } from "./unsaved-registry";
+import { isSigningOut } from "./log-out";
 
 // TS-159: the wedding page shows one tab at a time, so switching tabs used to throw away whatever
 // was half-typed in the tab being left (an Add guest / table / vendor form, an open edit, a draft
@@ -155,7 +156,8 @@ export function useUnsavedChangesProvider({ onBackRequested }: { onBackRequested
       // Review 15: asked again as it fires -- "Leave without saving" then Log out clears the input and
       // opens the sign-in page in the same moment, before this listener comes off with the next
       // render, and the browser asked "Leave site?" on top of the page's own question.
-      if (!registry.hasUnsaved()) return;
+      // PR #115 review: nor while going to the sign-in page after a log out (see goToSignIn).
+      if (!registry.hasUnsaved() || isSigningOut()) return;
       e.preventDefault();
       e.returnValue = "";
     };
