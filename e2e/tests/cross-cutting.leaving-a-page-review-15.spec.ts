@@ -21,6 +21,7 @@ import { watchBrowserQuestions } from "../support/browserQuestions.js";
 import { failRequests } from "../support/networkFaults.js";
 import { patchWedding } from "../data/api.js";
 import { emptyThenClickAtOnce } from "../support/emptyThenClick.js";
+import { waitForPageToSettle } from "../support/pageSettled.js";
 
 defineQualityTest(
   {
@@ -194,6 +195,9 @@ defineQualityTest(
         questions.stop();
       }
       expect(questions.asked).toEqual([]);
+      // The reloaded page takes its leftover extra history entry off with a Back of its own; a Back
+      // pressed in those few milliseconds was cancelled by it on Firefox (NS_BINDING_ABORTED).
+      await waitForPageToSettle(page);
       await page.goBack();
       await expect(page).not.toHaveURL(/\/account$/);
     } finally {
