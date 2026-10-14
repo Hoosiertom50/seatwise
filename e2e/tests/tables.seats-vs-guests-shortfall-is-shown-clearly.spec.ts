@@ -15,6 +15,7 @@
 import { expect, defineQualityTest, test } from "../fixtures/index.js";
 import { uniquePersonName } from "../data/ids.js";
 import { TablesTabPage } from "../pages/TablesTabPage.js";
+import { reloadOnceSettled } from "../support/pageSettled.js";
 
 defineQualityTest(
   {
@@ -54,7 +55,7 @@ defineQualityTest(
 
     await test.step("Act: add one more Attending guest, pushing headcount past capacity", async () => {
       await weddingData.createGuest(managedWedding.id, uniquePersonName(testInfo.workerIndex));
-      await page.reload();
+      await reloadOnceSettled(page);
       // A full reload re-renders the wedding-detail page from scratch, defaulting back to its
       // first tab -- re-open Tables rather than assuming the reload preserves which tab was open.
       await tablesTabPage.openTablesTab();

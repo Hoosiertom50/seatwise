@@ -12,10 +12,12 @@
 
 import { expect, defineQualityTest, test } from "../fixtures/index.js";
 import { AccountPage } from "../pages/AccountPage.js";
+import { CollaboratorsTabPage } from "../pages/CollaboratorsTabPage.js";
 import { DashboardPage } from "../pages/DashboardPage.js";
 import { WeddingDetailPage } from "../pages/WeddingDetailPage.js";
 import { uniqueTitle } from "../data/ids.js";
 import { failRequests } from "../support/networkFaults.js";
+import { patchWedding } from "../data/api.js";
 
 defineQualityTest(
   {
@@ -128,5 +130,28 @@ defineQualityTest(
     } finally {
       await fault.clear();
     }
+  },
+);
+
+defineQualityTest(
+  {
+    id: "cross-cutting.leaving-a-page-review-15.refusal-just-before-the-tab-closes",
+    title: "a wedding name refused just before its tab closes (mouse held on the next tab) still leaves a Couldn't save note",
+    objective:
+      "Confirms (review 15) that when the Wedding name box is typed in, the name is changed elsewhere meanwhile, and the planner presses the Guests tab -- the refusal (409) arriving while the mouse is still down, so the Collaborators tab is still open when it comes back and closes just after -- the page shows 'Couldn't save the wedding name: …' (it only did when the tab had closed before the answer came).",
+    expectedOutcome: "After the mouse comes up on Guests: the Guests tab is open and a note containing \"Couldn't save the wedding name\" shows.",
+    requirementIds: ["REQ-NON-FUNCTIONAL"],
+    tags: ["@mutating", "@feature:collaboration", "@risk:normal", "@suite:regression"],
+  },
+  async ({ managedWedding, page, context }) => {
+    const detail = new WeddingDetailPage(page);
+    const collaborators = new CollaboratorsTabPage(page);
+    await collaborators.goto(managedWedding.id);
+    await collaborators.weddingNameInput().fill(`${managedWedding.name} Mine`);
+    expect((await patchWedding(context.request, managedWedding.id, { data: { name: `${managedWedding.name} Elsewhere` } })).ok()).toBe(true);
+    const refused = page.waitForResponse((r) => r.request().method() === "PATCH" && r.status() === 409);
+    await detail.pressTabHeldUntil("Guests", refused);
+    await expect(detail.tab("Guests")).toHaveAttribute("aria-selected", "true");
+    await expect(detail.unsavedNotes().filter({ hasText: "Couldn't save the wedding name" })).toBeVisible();
   },
 );

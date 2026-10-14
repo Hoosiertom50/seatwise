@@ -24,6 +24,7 @@
  */
 
 import type { Locator, Page } from "@playwright/test";
+import { waitForPageToSettle } from "../support/pageSettled";
 
 export abstract class BasePage {
   constructor(protected readonly page: Page) {}
@@ -36,9 +37,7 @@ export abstract class BasePage {
    * unsaved input the entry stays on purpose, and the page is opened anyway.
    */
   protected async open(url: string): Promise<void> {
-    await this.page
-      .waitForFunction(() => window.history.state?.seatwiseGuard !== true, undefined, { timeout: 2_000 })
-      .catch(() => {});
+    await waitForPageToSettle(this.page);
     await this.page.goto(url);
   }
 

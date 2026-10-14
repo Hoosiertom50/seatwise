@@ -20,6 +20,7 @@ import { failRequests, loseResponses } from "../support/networkFaults.js";
 import { InviteAcceptPage } from "../pages/InviteAcceptPage.js";
 import { PlanTabPage } from "../pages/PlanTabPage.js";
 import { WeddingGuestsPage } from "../pages/WeddingGuestsPage.js";
+import { reloadOnceSettled } from "../support/pageSettled.js";
 
 defineQualityTest(
   {
@@ -50,7 +51,7 @@ defineQualityTest(
       await row.removeConfirmation().confirm();
       await expect(row.locator()).toHaveCount(0);
       await expect(guests.message("Couldn't delete that guest.")).toHaveCount(0);
-      await page.reload();
+      await reloadOnceSettled(page);
       await expect(guests.guestListHeading()).toBeVisible();
       await expect(row.locator()).toHaveCount(0);
       expect((await weddingData.listGuests(w)).some((g) => g.id === guest.id)).toBe(false);

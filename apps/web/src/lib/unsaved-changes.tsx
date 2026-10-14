@@ -29,6 +29,9 @@ export function useUnsavedChanges(key: string, dirty: boolean): void {
  * time (dirty while its text differs from what's saved); `clearAll` forgets every field this
  * component reported, and leaving the component does the same.
  */
+/** Review 15: how recent a refusal must be to be noted when its tab closes (see noteIfClosed). */
+const RECENT_REFUSAL_MS = 2_000;
+
 export function useUnsavedFields(): {
   markDirty: (key: string, dirty: boolean) => void;
   clearAll: () => void;
@@ -42,12 +45,19 @@ export function useUnsavedFields(): {
   // can't mark its box unsaved -- the box is gone, and the mark could never be cleared, so every
   // later tab click, reload and Back asked about nothing.
   const mounted = useRef(false);
+  // Review 15: refusals answered while the tab was still open, kept for a moment -- see noteIfClosed.
+  const recentRefusals = useRef<{ field: string; reason: string; at: number }[]>([]);
   useEffect(() => {
     mounted.current = true;
     return () => {
       mounted.current = false;
+      const now = Date.now();
+      for (const r of recentRefusals.current) {
+        if (now - r.at < RECENT_REFUSAL_MS) registry?.addNote(couldntSaveNote(r.field, r.reason));
+      }
+      recentRefusals.current = [];
     };
-  }, []);
+  }, [registry]);
   const markDirty = useCallback(
     (key: string, dirty: boolean) => {
       if (dirty && !mounted.current) return;
@@ -88,9 +98,14 @@ export function useUnsavedFields(): {
    * open its box shows the latest and the message says so; once the tab has closed, the page shows
    * "Couldn't save <field>: <reason>" (the typing used to vanish without a word).
    */
+  // Review 15: and when the answer comes back just before the tab closes -- the save starts as the
+  // mouse goes down on another tab, the tab switches as it comes up, and a refusal in between showed
+  // in the tab for a moment and was then gone. A refusal from the last couple of seconds is noted
+  // when the tab closes.
   const noteIfClosed = useCallback(
     (field: string, reason: string) => {
       if (!mounted.current) registry?.addNote(couldntSaveNote(field, reason));
+      else recentRefusals.current.push({ field, reason, at: Date.now() });
     },
     [registry]
   );

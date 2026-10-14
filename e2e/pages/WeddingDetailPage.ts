@@ -229,6 +229,20 @@ export class WeddingDetailPage extends BasePage {
     return this.page.locator(":focus");
   }
 
+  /**
+   * Review 15: presses a tab the way a person does -- mouse down (which leaves the box being typed in,
+   * so it saves), then mouse up only once `answered` settles -- so the save's answer arrives while
+   * this tab is still open and the tab closes just after.
+   */
+  async pressTabHeldUntil(label: string, answered: Promise<unknown>): Promise<void> {
+    const box = await this.tab(label).boundingBox();
+    if (!box) throw new Error(`tab "${label}" isn't on screen`);
+    await this.page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await this.page.mouse.down();
+    await answered;
+    await this.page.mouse.up();
+  }
+
   /** TS-206: the page-level "Couldn't save <field>: <reason>" notes, shown near the tabs for a save
    * that failed after its tab was closed. */
   unsavedNotes() {
