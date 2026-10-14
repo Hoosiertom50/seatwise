@@ -1,3 +1,5 @@
+import { NAME_LIKE_ENDINGS, NON_LATIN_ENDINGS } from "./web-address-endings";
+
 // Name-field character validation (planner-reported UX gap, 2026-09-10 -- no ticket, a direct
 // ask after noticing name fields would silently accept digits/symbols/emoji). This is an
 // allowlist wide enough to admit how real names actually look -- accented letters (José,
@@ -74,13 +76,6 @@ const DOT = String.raw`[.\u3002\uFF0E\uFF61\u00B7\u02D1\u0387\u0660\u06F0\u0701\
 // Japanese ("\u30B8\u30E7\u30F3\u30FB\u30B9\u30DF\u30B9") and Catalan ("Gal\u00B7la") names are written, so the middle dots above
 // count only before the endings scam links use.
 const FULL_STOP = String.raw`[.\u3002\uFF0E\uFF61\u0701\u0702\u2024\uA60E\uFE52\u{10A50}]`;
-// Review 14: the web-address endings written in Indian scripts (with vowel signs, so the
-// letters.letters check above doesn't see them): India's in eleven scripts, Sri Lanka's and
-// Singapore's. Their letters as written (NFC).
-const INDIC_ENDINGS = [
-  "भारत", "भारतम्", "भारोत", "ভারত", "ভাৰত", "ਭਾਰਤ", "ભારત", "ଭାରତ", "இந்தியா", "భారత్", "ಭಾರತ", "ഭാരതം",
-  "بھارت", "ڀارت", "ලංකා", "இலங்கை", "சிங்கப்பூர்",
-].join("|");
 // TS-258: "com" becomes c\s*o\s*m, so "c o m" is caught as well.
 const SPACED_LETTER_ENDINGS = SPACED_DOMAIN_ENDINGS.split("|")
   .map((ending) => [...ending].join(String.raw`\s*`))
@@ -96,17 +91,6 @@ export const WEB_ADDRESS_LIKE = new RegExp(
     // (a letter and its vowel sign) then ".com", and the sign stopped the match.
     String.raw`[\p{L}\p{N}]\p{M}*-*${DOT}(?:${DOMAIN_ENDINGS})(?![\p{L}\p{N}])`,
     String.raw`[\p{L}\p{N}]\p{M}*(?:\s*${DOT}\s*|\s+dot\s+)(?:${SPACED_LETTER_ENDINGS})(?![\p{L}\p{N}])`,
-    // Review 14: a word whose letters carry vowel signs (Hindi, Tamil...), then a dot and Latin
-    // letters -- "पेपाल.de" is a real address. An initial without a space before a name in the same
-    // script ("आर.किरण", "இரா.செழியன்") still passes: only Latin letters after the dot count here.
-    // (Letters and marks are read one way only -- a run of them, then each mark and the letters after
-    // it -- so a long run with no dot is read once; two open-ended parts either side of a mark made
-    // 20,000 Tamil letters take four seconds.)
-    String.raw`(?<![\p{L}\p{M}\p{N}-])[\p{L}\p{N}][\p{L}\p{N}-]*(?:\p{M}[\p{L}\p{N}-]*)+${FULL_STOP}\p{Script=Latin}{2,}`,
-    // Review 14: and three or more letters before an Indic-script ending (".भारत" -- "India" --
-    // and the same in other Indian scripts, Sri Lanka's, Singapore's in Tamil). Two letters or
-    // fewer is an initial ("राम.भारत", R. Bharat, a common name), not a web address.
-    String.raw`(?<![\p{L}\p{M}\p{N}-])(?:\p{L}\p{M}*){3,}${FULL_STOP}(?:${INDIC_ENDINGS})(?![\p{L}\p{M}])`,
   ].join("|"),
   "iu"
 );
@@ -182,10 +166,39 @@ function foldedCopies(value: string): { plain: string; dotted: string } {
   return { plain: (plain + rest).normalize("NFKC"), dotted: (dotted + rest).normalize("NFKC") };
 }
 
+// Review 15: a word, a dot, and an ending written in another script ("बैंक.कॉम", "بنكِ.مصر",
+// "สวัสดี.ไทย") -- the letters.letters check above misses them when the letters carry vowel signs.
+// Before an ending that is also a name ("भारत", Bharat) only three or more letters count, so an
+// initial ("राम.भारत") passes. And a word whose own vowel signs (not accents) sit before the dot,
+// then Latin letters ("पेपाल.de") -- again three or more letters, so "राम.Kumar", "श्री.Ram" and
+// Yoruba "Ọ̀.Adé" (accents, not a script's own signs) pass, as they always did.
+const bare = (label: string) => label.normalize("NFC").toLowerCase().replace(/\p{M}/gu, "");
+const NON_LATIN_ENDING_SET = new Set(NON_LATIN_ENDINGS.map(bare));
+const NAME_LIKE_ENDING_SET = new Set(NAME_LIKE_ENDINGS.map(bare));
+// A run of letters, marks, digits and hyphens, a full stop, and the label after it (looked at, not
+// taken, so "a.b.c" is read as a.b and b.c). Starting only where a run starts keeps it linear.
+const LABEL_DOT_LABEL = new RegExp(
+  String.raw`(?<![\p{L}\p{M}\p{N}-])([\p{L}\p{M}\p{N}-]+)${FULL_STOP}(?=([\p{L}\p{M}\p{N}-]+))`,
+  "gu"
+);
+const SCRIPT_OWN_SIGN = /(?!\p{Script=Inherited})\p{M}/u;
+function nonLatinAddress(text: string): boolean {
+  for (const [, left, right] of text.matchAll(LABEL_DOT_LABEL)) {
+    const letters = (left.match(/[\p{L}\p{N}]/gu) ?? []).length;
+    const ending = bare(right);
+    if (NON_LATIN_ENDING_SET.has(ending) && letters >= (NAME_LIKE_ENDING_SET.has(ending) ? 3 : 1)) return true;
+    if (letters >= 3 && SCRIPT_OWN_SIGN.test(left) && /^\p{Script=Latin}{2,}$/u.test(right)) return true;
+  }
+  return false;
+}
+
 export function looksLikeWebAddress(value: string): boolean {
-  if (WEB_ADDRESS_LIKE.test(value)) return true;
+  if (WEB_ADDRESS_LIKE.test(value) || nonLatinAddress(value)) return true;
   const { plain, dotted } = foldedCopies(value);
-  return (plain !== value && WEB_ADDRESS_LIKE.test(plain)) || (dotted !== plain && DOTTED_ENDING.test(dotted));
+  return (
+    (plain !== value && (WEB_ADDRESS_LIKE.test(plain) || nonLatinAddress(plain))) ||
+    (dotted !== plain && DOTTED_ENDING.test(dotted))
+  );
 }
 
 // TS-171: a wedding's name may hold numbers (a year, a date), but not a phone number -- the name

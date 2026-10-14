@@ -76,6 +76,8 @@ test("TS-265: other real names, accented or with a dot below, still pass", () =>
     "Ụrụ", "Ọrụ", "Ịru", "Ẹ̀rù", "Ìyáọ̀ru", "Ọnụọha", "Ọkọrọ",
     // Review 14: initials before "Bharat", Arabic with vowel marks, letters with a dot above.
     "राम.भारत", "أحمد.عَلي", "संजय", "Żaneta Brzęczyszczykiewicz", "Jonė", "İlker",
+    // Review 15: an initial before a Latin name -- a script's own vowel sign (two letters) or accents.
+    "राम.Kumar", "श्री.Ram", "श्री.de", "Ọ̀.Adé", "Ẹ̀.Smith",
   ];
   for (const name of names) {
     assert.equal(looksLikeWebAddress(name), false, name);
@@ -136,7 +138,10 @@ const LOOKS_LIKE_A_WEB_ADDRESS = [
   "\u0A15\u0A3Ccom", // Gurmukhi nukta
   // Review 14 (security review): the other dot look-alikes, and web addresses in Indian scripts.
   "paypal\u02D1com", "paypal\u0E3Acom", "evil\u1037com", "evil\u0307com",
-  "पेपाल.de", "श्री.de", "गूगल.भारत", "ஸ்டேட்வங்கி.இந்தியா", "bankका.de",
+  "पेपाल.de", "गूगल.भारत", "ஸ்டேட்வங்கி.இந்தியா", "bankका.de",
+  // Review 15: every non-Latin ending in IANA's list (Hindi .com, Arabic .مصر with a vowel mark,
+  // Thai, Bengali), and digits before India's.
+  "बैंक.कॉम", "बैंक.नेट", "بنكِ.مصر", "بنكِ.كوم", "مِثَال.مَصْر", "สวัสดี.ไทย", "ব্যাংক.বাংলা", "2026.भारत",
   "eviḷnet", // a dot below before a longer ending (two-letter ones are how Igbo/Yoruba names look)
   // A vowel sign before ".com" (PR #114 review): the letter's own (Hindi "का", Tamil "கா"), or one
   // from another script (a Tamil sign after a Devanagari or Bengali letter).
