@@ -119,6 +119,15 @@ test("PR #115: a quoted nickname's closing ’ isn't the Irish-Ní Mac sign", ()
   assert.equal(looksLikeMacRoman("N’ Bhriain", true, true, false), true);
 });
 
+// PR #115 review (Copilot round 2).
+test("PR #115: a nickname of several words, or with a hyphen or dot, isn't the Irish-Ní Mac sign", () => {
+  for (const cell of ["Robert ‘Bobby J’", "Robert ‘A-J’", "Robert ‘A.J’", "Robert “Bobby J’"]) {
+    assert.equal(looksLikeMacRoman(cell, true, true, false), false, cell);
+  }
+  assert.deepEqual(importOne(bytesFor("windows-1252", "First name,Last name\r\nRobert ‘Bobby J’,Lee\r\n")), { firstName: "Robert 'Bobby J'", lastName: "Lee" });
+  for (const cell of ["N’ Bhriain", "Máire N’ Bhriain"]) assert.equal(looksLikeMacRoman(cell, true, true, false), true, cell);
+});
+
 test("PR #115: Arabic with a vowel mark before a dot and Latin letters is a web address", () => {
   assert.equal(looksLikeWebAddress("بنكِ.de"), true);
   assert.equal(looksLikeWebAddress("بنك.de"), true);
