@@ -605,3 +605,76 @@ test("TS-266 (throwaway local database): unseated-guest checks stay fast on a ne
     await admin.query(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);
   }
 });
+
+// Review 14: the plan-version list's seat counts read only this wedding's versions' seats, by id,
+// leaving out guests who aren't attending by id -- the same numbers as the join it replaces (which
+// Postgres re-ran once per version on missing or out-of-date statistics: 9-11 s at 50 versions).
+const OLD_PLAN_VERSION_LIST = `WITH attending AS (
+    SELECT COUNT(*)::int AS n FROM "guests" WHERE "weddingId" = $1 AND "dayOfAttendance" = 'ATTENDING'
+  ), seated AS (
+    SELECT sa."planVersionId", COUNT(*)::int AS count, bool_or(sa."needsReassignment") AS "anyFlagged"
+    FROM "seat_assignments" sa
+    JOIN "guests" g ON g.id = sa."guestId" AND g."dayOfAttendance" = 'ATTENDING'
+    JOIN "plan_versions" p ON p.id = sa."planVersionId" AND p."weddingId" = $1
+    GROUP BY sa."planVersionId"
+  )
+  SELECT pv.id, CASE WHEN pv."isCurrent" THEN pv."isComplete"
+                     ELSE COALESCE(sa.count, 0) >= attending.n AND NOT COALESCE(sa."anyFlagged", false) END AS "isComplete",
+         COALESCE(sa.count, 0)::int AS "assignedGuestCount",
+         GREATEST(attending.n - COALESCE(sa.count, 0)::int, 0) AS "unassignedGuestCount"
+  FROM "plan_versions" pv CROSS JOIN attending LEFT JOIN seated sa ON sa."planVersionId" = pv.id
+  WHERE pv."weddingId" = $1 ORDER BY pv."versionNumber" DESC`;
+
+test("Review 14 (local database): the plan-version list counts seats exactly as before", { skip }, async () => {
+  await rolledBack(async (q) => {
+    const ownerId = `r14-${randomUUID()}`;
+    await q.query(`INSERT INTO "users" (id, email, "passwordHash", name, "updatedAt") VALUES ($1, $2, 'x', 'Owner', now())`, [ownerId, `${ownerId}@example.invalid`]);
+    // Two weddings, so seats and guests of the other one must not be counted.
+    const weddings = [`r14w-${randomUUID()}`, `r14w-${randomUUID()}`];
+    for (const w of weddings) {
+      await q.query(`INSERT INTO "weddings" (id, "ownerId", name, "updatedAt") VALUES ($1, $2, 'W', now())`, [w, ownerId]);
+      const table = `${w}-t`;
+      await q.query(`INSERT INTO "seating_tables" (id, "weddingId", label, capacity, "updatedAt") VALUES ($1, $2, 'T', 500, now())`, [table, w]);
+      const attendance = ["ATTENDING", "ATTENDING", "ATTENDING", "NOT_ATTENDING", "ATTENDING", "NOT_ATTENDING", "ATTENDING", "ATTENDING"];
+      const guests = attendance.map((_, i) => `${w}-g${i}`);
+      for (const [i, g] of guests.entries()) {
+        await q.query(
+          `INSERT INTO "guests" (id, "weddingId", "firstName", "lastName", "dayOfAttendance", "updatedAt") VALUES ($1, $2, 'G', 'L', $3, now())`,
+          [g, w, attendance[i]]
+        );
+      }
+      // Versions: everyone seated; part seated with a flag; nobody; only those not attending; current.
+      const plans: { seats: number[]; flagged: number[]; current?: boolean }[] = [
+        { seats: [0, 1, 2, 3, 4, 5, 6, 7], flagged: [] },
+        { seats: [0, 1, 3, 4], flagged: [1, 3] },
+        { seats: [], flagged: [] },
+        { seats: [3, 5], flagged: [5] },
+        { seats: [0, 2, 4, 6, 7], flagged: [], current: true },
+      ];
+      for (const [v, plan] of plans.entries()) {
+        const pv = `${w}-v${v}`;
+        await q.query(
+          `INSERT INTO "plan_versions" (id, "weddingId", "versionNumber", "isCurrent", "isComplete") VALUES ($1, $2, $3, $4, $5)`,
+          [pv, w, v + 1, plan.current ?? false, false]
+        );
+        for (const s of plan.seats) {
+          await q.query(
+            `INSERT INTO "seat_assignments" (id, "planVersionId", "guestId", "seatingTableId", "needsReassignment", "updatedAt") VALUES ($1, $2, $3, $4, $5, now())`,
+            [`${pv}-s${s}`, pv, guests[s], table, plan.flagged.includes(s)]
+          );
+        }
+      }
+    }
+    for (const w of weddings) {
+      const before = (await q.query(OLD_PLAN_VERSION_LIST, [w])).rows;
+      const now = (await db.listPlanVersionsForWedding(w)).map((r) => ({
+        id: r.id,
+        isComplete: r.isComplete,
+        assignedGuestCount: r.assignedGuestCount,
+        unassignedGuestCount: r.unassignedGuestCount,
+      }));
+      assert.deepEqual(now, before);
+      assert.deepEqual(now.map((r) => r.assignedGuestCount), [5, 0, 0, 3, 6], "only attending guests' seats count");
+    }
+  });
+});

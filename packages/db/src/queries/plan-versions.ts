@@ -605,19 +605,37 @@ export async function recomputeCurrentPlanCompleteness(
 // plan's own is kept up to date by every change).
 export async function listPlanVersionsForWedding(weddingId: string): Promise<PlanVersionRow[]> {
   const { rows } = await pool.query(
-    `WITH attending AS (
+    `WITH attending AS MATERIALIZED (
        SELECT COUNT(*)::int AS n FROM "guests" WHERE "weddingId" = $1 AND "dayOfAttendance" = 'ATTENDING'
      ),
-     seated AS (
+     -- Review 14: MATERIALIZED -- worked out once. Folded into the query below, Postgres re-ran it
+     -- once per version when its statistics were out of date (2,500 seat counts at 50 versions).
+     seated AS MATERIALIZED (
        -- TS-266: COUNT(*), not COUNT(DISTINCT "guestId") -- a guest has at most one seat per plan
        -- version (unique "planVersionId", "guestId"), so it's the same number without sorting
        -- every seat of every version (which went to disk at 50 versions).
-       SELECT sa."planVersionId", COUNT(*)::int AS count,
-              bool_or(sa."needsReassignment") AS "anyFlagged"
-       FROM "seat_assignments" sa
-       JOIN "guests" g ON g.id = sa."guestId" AND g."dayOfAttendance" = 'ATTENDING'
-       JOIN "plan_versions" p ON p.id = sa."planVersionId" AND p."weddingId" = $1
-       GROUP BY sa."planVersionId"
+       -- Review 14: each of this wedding's versions counts its own seats (through the version's
+       -- index, whatever Postgres's statistics say), less the seats of guests who aren't attending
+       -- (read by guest id). Joining the guests and versions instead read every seat in the
+       -- database, and when the statistics were missing or out of date it re-counted them once per
+       -- version (9-11 s at 50 versions of a 2,000-guest wedding).
+       SELECT p.id AS "planVersionId", (a.count - COALESCE(n.count, 0))::int AS count,
+              a.flagged - COALESCE(n.flagged, 0) > 0 AS "anyFlagged"
+       FROM "plan_versions" p
+       CROSS JOIN LATERAL (
+         SELECT COUNT(*) AS count, COUNT(*) FILTER (WHERE sa."needsReassignment") AS flagged
+         FROM "seat_assignments" sa
+         WHERE sa."planVersionId" = p.id
+       ) a
+       LEFT JOIN (
+         SELECT sa."planVersionId", COUNT(*) AS count, COUNT(*) FILTER (WHERE sa."needsReassignment") AS flagged
+         FROM "seat_assignments" sa
+         WHERE sa."guestId" = ANY(ARRAY(
+                 SELECT id FROM "guests" WHERE "weddingId" = $1 AND "dayOfAttendance" <> 'ATTENDING'))
+           AND sa."planVersionId" = ANY(ARRAY(SELECT id FROM "plan_versions" WHERE "weddingId" = $1))
+         GROUP BY sa."planVersionId"
+       ) n ON n."planVersionId" = p.id
+       WHERE p."weddingId" = $1
      )
      SELECT pv.id, pv."weddingId", pv."versionNumber", pv.label, pv.status,
             CASE WHEN pv."isCurrent" THEN pv."isComplete"
