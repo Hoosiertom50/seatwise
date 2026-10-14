@@ -211,12 +211,11 @@ const MAC_ROMAN_IN_A_NAME = new RegExp(
     `\\p{L}œ(?![ui])\\p{Ll}`,
     `(?:\\p{Ll}‘|[^\\P{Ll}aeiou]’)(?![\\p{L}\\p{M}])(?<!['‘"“][\\p{L}\\p{M}]*[’‘])(?<![‘"“][\\p{L}\\p{M} .-]*[’‘])`,
     `\\p{Ll}[ÕÔ]\\p{L}|\\p{Lu}[ÕÔ]\\p{Lu}\\p{Ll}`,
-    // Review 15: Irish "Ní" (N’ then a space), "Ó" (a lone î), and œ/Œ (Ï inside a word, Î starting one).
+    // Review 15: Irish "Ní" (N’ then a space), and œ (Ï inside a word). ("Ó" and Œ: see below.)
     // PR #115 review: not the closing ’ of a quoted nickname, one word or several ("Robert ‘AJ’",
     // "‘Bobby J’", "‘A-J’") -- the same exclusions as the small-letter rule above.
     `\\p{Lu}’(?![\\p{L}\\p{M}’'])(?<!['‘"“][\\p{L}\\p{M}]*’)(?<![‘"“][\\p{L}\\p{M} .-]*’)`,
-    `(?<![\\p{L}\\p{M}])[îÎ](?![\\p{L}\\p{M}])`,
-    `\\p{L}Ï\\p{Ll}|(?<![\\p{L}\\p{M}])Î\\p{Ll}`,
+    `\\p{L}Ï\\p{Ll}`,
   ].join("|"),
   "u"
 );
@@ -264,6 +263,11 @@ const MAC_ROMAN_IN_A_NAME_UNLESS_WINDOWS = new RegExp(
     `(?<![\\p{L}’'])\\p{L}(?:u’s|[ao]’s|[au]’z)\\p{Ll}?(?![\\p{L}’'])`,
     `\\p{L}š(?:(?!le)[rhlnmsfdgbwzc]|tt|tz|th|pf|pp)`,
     `[aAIõ][b-df-hj-np-tv-z]+õ(?![aeiouõ])`,
+    // PR #115 review: Irish "Ó" (a lone î or Î) and Œ starting a word (Î, "Îuvray") -- moved here from
+    // MAC_ROMAN_IN_A_NAME: Romanian names start with Î ("Întorsureanu", the initial "Î."), so with
+    // any other Windows sign in the file they import.
+    `(?<![\\p{L}\\p{M}])[îÎ](?![\\p{L}\\p{M}])`,
+    `(?<![\\p{L}\\p{M}])Î\\p{Ll}`,
   ].join("|"),
   "u"
 );

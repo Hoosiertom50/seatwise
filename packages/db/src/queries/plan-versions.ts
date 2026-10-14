@@ -1163,15 +1163,12 @@ export async function moveGuestAssignment(
   );
   const occupants = occupantRows.filter((o) => !unitIds.has(o.guestId));
 
-  // TS-189: the whole group is already at that table -- nothing to move. Answered before the
-  // checks below (a table that's over its seats would otherwise refuse a "move" that changes
-  // nothing), and checked again under the plan's lock before anything is written.
-  if (unit.length > 0 && unit.every((member) => occupantRows.some((o) => o.guestId === member.id))) {
-    const unchanged = await getPlanVersionDetail(planVersionId, weddingId);
-    if (unchanged && (expectedRevision === undefined || unchanged.revision === expectedRevision)) {
-      return { planVersion: { ...unchanged, warnings: [] }, warnings: [] };
-    }
-  }
+  // TS-189: the whole group is already at that table -- nothing to move. The checks below are
+  // skipped for it (a table that's over its seats would otherwise refuse a "move" that changes
+  // nothing). PR #115 review: it's no longer answered here, though -- only under the plan's lock,
+  // once the must-sit group has been read again (a partner linked meanwhile, seated elsewhere, was
+  // left there while this answered "nothing to move" for the old group).
+  const alreadyAtTarget = unit.length > 0 && unit.every((member) => occupantRows.some((o) => o.guestId === member.id));
 
   const guestLabel = (n: number, ids: string[]) =>
     `${n === 1 ? "Guest" : "Guests"} ${unit
@@ -1247,7 +1244,9 @@ export async function moveGuestAssignment(
       }
     }
   };
-  checkHardRules({ table: targetTable, occupants, mustNotByGuest, requiredTableByGuestId, requiredGuestIdsForTargetTable, members: unit });
+  if (!alreadyAtTarget) {
+    checkHardRules({ table: targetTable, occupants, mustNotByGuest, requiredTableByGuestId, requiredGuestIdsForTargetTable, members: unit });
+  }
 
   // --- Soft rules — allowed, but returned as a non-blocking warning. ---
   // FR-0.2 AC2: every such warning names the affected preference and references the applied
@@ -1296,6 +1295,13 @@ export async function moveGuestAssignment(
       [unitIds]
     );
     if (absent[0]) throw new ManualMoveError(`${absent[0].name} is marked Not Attending, so they can't be seated.`);
+    // Review 15: the group itself as it is now -- a must-sit rule added a moment before (which doesn't
+    // move the plan's revision) used to be checked against the copy read before the lock, and the
+    // move went through split. PR #115 review: before the "nothing to move" answer below too.
+    const groupNow = await findMustSitTogetherUnit(weddingId, guestId, client);
+    if (groupNow.length !== unitIds.length || groupNow.some((member) => !unitIds.includes(member.id))) {
+      throw new ManualMoveError(MUST_SIT_GROUP_CHANGED_MESSAGE);
+    }
     // TS-189: under the lock -- if the whole group is already there, nothing is written (no
     // revision bump, history line or notification for a move that moved nobody).
     const { rows: alreadyThere } = await client.query(
@@ -1312,14 +1318,10 @@ export async function moveGuestAssignment(
     // Review 14: the hard rules again, under the plan's lock (moves, table edits, rule changes and
     // required-list changes all take it), against the table and its guests as they are now.
     {
-      // Review 15: the group itself as it is now -- a must-sit rule added, or a party size or an
-      // accessible-table need changed, a moment before (none of which moves the plan's revision)
-      // used to be checked against the copy read before the lock, and the move went through split
-      // or over the table's seats.
-      const groupNow = await findMustSitTogetherUnit(weddingId, guestId, client);
-      if (groupNow.length !== unitIds.length || groupNow.some((member) => !unitIds.includes(member.id))) {
-        throw new ManualMoveError(MUST_SIT_GROUP_CHANGED_MESSAGE);
-      }
+      // Review 15: the group's party sizes and accessible-table needs as they are now (the group
+      // itself was read again above) -- changed a moment before (which doesn't move the plan's
+      // revision), they used to be checked against the copy read before the lock, and the move went
+      // over the table's seats.
       const { rows: membersNow } = await client.query(
         `SELECT id, headcount, "requiresAccessibleTable" FROM "guests" WHERE id = ANY($1::text[]) AND "weddingId" = $2`,
         [unitIds, weddingId]

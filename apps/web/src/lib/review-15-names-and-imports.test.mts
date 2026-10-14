@@ -81,7 +81,7 @@ function bytesFor(encoding: string, text: string): Uint8Array {
 }
 const NAMES = { firstName: "First name", lastName: "Last name" };
 const SIDES = { sideLabel1: "Bride", sideLabel2: "Groom" };
-function importOne(bytes: Uint8Array): "refused" | { firstName: string; lastName: string } {
+function importOne(bytes: Uint8Array, row = 0): "refused" | { firstName: string; lastName: string } {
   const { text, encoding } = decodeCsvFile(bytes);
   const prepared = prepareImportCsv(text, encoding, NAMES);
   if ("error" in prepared) {
@@ -89,9 +89,9 @@ function importOne(bytes: Uint8Array): "refused" | { firstName: string; lastName
     return "refused";
   }
   const { headers, rows } = parseCsv(prepared.csv);
-  const row = parseGuestImportRow(rows[0], headers, NAMES, SIDES);
-  assert.deepEqual(row.errors, []);
-  return { firstName: row.data.firstName!, lastName: row.data.lastName! };
+  const parsed = parseGuestImportRow(rows[row], headers, NAMES, SIDES);
+  assert.deepEqual(parsed.errors, []);
+  return { firstName: parsed.data.firstName!, lastName: parsed.data.lastName! };
 }
 
 test("B6: windows-1252 names with ’ after a y or after two vowels import", () => {
@@ -187,3 +187,17 @@ test("PR #115: a dot-like accent on the ending's last letter doesn't hide a web 
   }
 });
 
+
+test("PR #115: Romanian names starting with Î import from a Windows file that shows it's one", () => {
+  for (const [first, last] of [["Ion", "Întorsureanu"], ["Î.", "Popescu"]]) {
+    assert.deepEqual(
+      importOne(bytesFor("windows-1252", `First name,Last name\r\nZoé,Lee\r\n${first},${last}\r\n`), 1),
+      { firstName: first, lastName: last },
+      `${first} ${last}`
+    );
+  }
+  // With nothing else in the file to show it's Windows, a Mac file's "Ó Briain" and "Œuvray" are still caught.
+  for (const [first, last] of [["Sean", "Ó Briain"], ["Anne", "Œuvray"]]) {
+    assert.equal(importOne(bytesFor("macintosh", `First name,Last name\r\n${first},${last}\r\n`)), "refused", `${first} ${last}`);
+  }
+});

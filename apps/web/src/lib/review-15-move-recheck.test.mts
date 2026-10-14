@@ -122,7 +122,8 @@ async function weddingWithAFullishTable(setup: PgClient) {
 /** Holds the plan's lock (as an edit does), starts the move, makes `change` while it waits, lets go. */
 async function moveWhileChanged(
   w: Awaited<ReturnType<typeof weddingWithAFullishTable>>,
-  change: (c: PgClient) => Promise<void>
+  change: (c: PgClient) => Promise<void>,
+  target: string = w.tableA
 ) {
   const holder = await localClient();
   // PR #115 review: inside the try, so a second connection that fails still closes the first.
@@ -134,7 +135,7 @@ async function moveWhileChanged(
     await holder.query(`SELECT id FROM "plan_versions" WHERE id = $1 FOR NO KEY UPDATE`, [w.planId]);
     const { rows } = await holder.query(`SELECT pg_backend_pid() AS pid`);
     const holderPid = rows[0].pid as number;
-    const moving = moveGuestAssignment(w.planId, w.weddingId, w.guest.Xavier, w.tableA, w.ownerId).then(
+    const moving = moveGuestAssignment(w.planId, w.weddingId, w.guest.Xavier, target, w.ownerId).then(
       (v) => ({ ok: true as const, v }),
       (e: Error) => ({ ok: false as const, message: e.message })
     );
@@ -221,3 +222,29 @@ test("Review 15: a must-sit rule added while a move waits is checked -- the move
     assert.deepEqual((await seatsAt(setup, w.planId, w.tableB)).guests, ["Xavier", "Yara"]);
   });
 });
+
+// PR #115 review: a "move" to the table the guest is already at is checked against the must-sit group
+// as it is under the plan's lock too -- a partner linked meanwhile, seated elsewhere, used to be left
+// there while the move answered "nothing to move" for the old group.
+test("PR #115: a must-sit partner linked while a move to the guest's own table waits is checked -- refused, not a silent no-op", { skip }, async () => {
+  await withWedding(async (w, setup) => {
+    const result = await moveWhileChanged(
+      w,
+      (c) =>
+        c
+          .query(`INSERT INTO "guest_relationships" (id, "weddingId", "guestAId", "guestBId", type) VALUES ($1, $2, $3, $4, 'MUST_SIT_TOGETHER')`, [
+            randomUUID(),
+            w.weddingId,
+            w.guest.Xavier,
+            w.guest.Ann,
+          ])
+          .then(() => {}),
+      w.tableB
+    );
+    assert.equal(result.ok, false);
+    assert.match(result.ok ? "" : result.message, /must-sit-together group changed/);
+    assert.deepEqual((await seatsAt(setup, w.planId, w.tableA)).guests, ["Ann", "Bea", "Cy"]);
+    assert.deepEqual((await seatsAt(setup, w.planId, w.tableB)).guests, ["Xavier", "Yara"]);
+  });
+});
+
