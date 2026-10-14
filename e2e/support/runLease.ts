@@ -56,17 +56,29 @@ export async function releaseRunLease(): Promise<void> {
 }
 
 /**
- * True when another run still holds the lease. Checked on a connection of its own: an exclusive
- * try-lock only succeeds when nobody holds a share, and is let go of at once.
+ * The sweep's turn: the lease taken exclusively, on a connection of its own, or null when another
+ * run still holds a share. PR #115 review: held for the whole sweep and let go of afterwards
+ * (`release`) -- let go of at once, a run starting in between took its share, signed up its
+ * accounts, and the sweep still going deleted them. A run starting during the sweep now waits for it.
  */
-export async function anotherRunIsActive(connectionString: string): Promise<boolean> {
+export async function takeSweepTurn(connectionString: string): Promise<{ release: () => Promise<void> } | null> {
   const client = new Client({ connectionString, connectionTimeoutMillis: 3_000 });
+  client.on("error", () => undefined);
   try {
     await client.connect();
     const { rows } = await client.query<{ free: boolean }>("SELECT pg_try_advisory_lock($1) AS free", [RUN_LEASE_KEY]);
-    if (rows[0]?.free) await client.query("SELECT pg_advisory_unlock($1)", [RUN_LEASE_KEY]);
-    return !rows[0]?.free;
-  } finally {
+    if (!rows[0]?.free) {
+      await client.end().catch(() => undefined);
+      return null;
+    }
+    return {
+      release: async () => {
+        await client.query("SELECT pg_advisory_unlock($1)", [RUN_LEASE_KEY]).catch(() => undefined);
+        await client.end().catch(() => undefined);
+      },
+    };
+  } catch (err) {
     await client.end().catch(() => undefined);
+    throw err;
   }
 }

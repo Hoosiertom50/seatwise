@@ -15,7 +15,9 @@ import { AccountPage } from "../pages/AccountPage.js";
 import { CollaboratorsTabPage } from "../pages/CollaboratorsTabPage.js";
 import { DashboardPage } from "../pages/DashboardPage.js";
 import { WeddingDetailPage } from "../pages/WeddingDetailPage.js";
-import { uniqueTitle } from "../data/ids.js";
+import { uniqueTestAddress, uniqueTitle, uniqueToken } from "../data/ids.js";
+import { TEST_ACCOUNT_EMAIL_DOMAIN } from "../support/auth.js";
+import { watchBrowserQuestions } from "../support/browserQuestions.js";
 import { failRequests } from "../support/networkFaults.js";
 import { patchWedding } from "../data/api.js";
 
@@ -136,9 +138,9 @@ defineQualityTest(
 defineQualityTest(
   {
     id: "cross-cutting.leaving-a-page-review-15.refusal-just-before-the-tab-closes",
-    title: "a wedding name refused just before its tab closes (mouse held on the next tab) still leaves a Couldn't save note",
+    title: "a wedding name refused just before its tab closes still leaves a Couldn't save note",
     objective:
-      "Confirms (review 15) that when the Wedding name box is typed in, the name is changed elsewhere meanwhile, and the planner presses the Guests tab -- the refusal (409) arriving while the mouse is still down, so the Collaborators tab is still open when it comes back and closes just after -- the page shows 'Couldn't save the wedding name: …' (it only did when the tab had closed before the answer came).",
+      "Confirms (review 15) that when the Wedding name box is typed in, the name is changed elsewhere meanwhile, and the planner presses the Guests tab -- the refusal (409) arriving while the Collaborators tab is still open (as when the mouse is held down on Guests), and the tab closing just after -- the page shows 'Couldn't save the wedding name: …' (it only did when the tab had closed before the answer came).",
     expectedOutcome: "After the mouse comes up on Guests: the Guests tab is open and a note containing \"Couldn't save the wedding name\" shows.",
     requirementIds: ["REQ-NON-FUNCTIONAL"],
     tags: ["@mutating", "@feature:collaboration", "@risk:normal", "@suite:regression"],
@@ -149,9 +151,52 @@ defineQualityTest(
     await collaborators.goto(managedWedding.id);
     await collaborators.weddingNameInput().fill(`${managedWedding.name} Mine`);
     expect((await patchWedding(context.request, managedWedding.id, { data: { name: `${managedWedding.name} Elsewhere` } })).ok()).toBe(true);
+    // Leave the box (it saves), wait for the refusal while this tab is still open, then open Guests --
+    // the moment a person pressing and holding the Guests tab gets to.
     const refused = page.waitForResponse((r) => r.request().method() === "PATCH" && r.status() === 409);
-    await detail.pressTabHeldUntil("Guests", refused);
+    await collaborators.weddingNameInput().press("Tab");
+    await refused;
+    await detail.clickTab("Guests");
     await expect(detail.tab("Guests")).toHaveAttribute("aria-selected", "true");
     await expect(detail.unsavedNotes().filter({ hasText: "Couldn't save the wedding name" })).toBeVisible();
+  },
+);
+
+defineQualityTest(
+  {
+    id: "cross-cutting.leaving-a-page-review-15.after-deleting-the-account",
+    title: "after deleting the account, a reload asks nothing and Back leaves the page",
+    objective:
+      "Confirms (PR #115 review) that once an account is deleted from the Account page, the typed password no longer counts as unsaved: reloading the 'deleted' page brings up no browser question, and the browser's Back leaves /account (it used to ask a question that page never shows, so Back did nothing).",
+    expectedOutcome: "After the delete: the 'deleted' heading shows; a reload asks no browser question; Back lands on a page other than /account.",
+    requirementIds: ["REQ-ACCOUNT-WEDDING-MANAGEMENT", "REQ-NON-FUNCTIONAL"],
+    tags: ["@mutating", "@feature:account", "@risk:normal", "@suite:regression"],
+  },
+  async ({ browser }, testInfo) => {
+    const context = await browser.newContext({ extraHTTPHeaders: { "x-forwarded-for": uniqueTestAddress() } });
+    try {
+      const token = uniqueToken(testInfo.workerIndex);
+      const email = `pw-tester-deleted-${token}${TEST_ACCOUNT_EMAIL_DOMAIN}`;
+      const password = `pw-${token}-long-enough`;
+      expect((await context.request.post("/api/v1/auth/signup", { data: { name: `Playwright Tester ${token}`, email, password } })).ok()).toBe(true);
+      const page = await context.newPage();
+      const accountPage = new AccountPage(page);
+      await new DashboardPage(page).goto();
+      await accountPage.goto();
+      await accountPage.deleteAccount(password);
+      await expect(accountPage.deletedHeading()).toBeVisible();
+
+      const questions = watchBrowserQuestions(page);
+      try {
+        await page.reload();
+      } finally {
+        questions.stop();
+      }
+      expect(questions.asked).toEqual([]);
+      await page.goBack();
+      await expect(page).not.toHaveURL(/\/account$/);
+    } finally {
+      await context.close();
+    }
   },
 );

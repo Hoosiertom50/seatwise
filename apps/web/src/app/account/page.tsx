@@ -160,6 +160,10 @@ export default function AccountPage() {
     setOwnedWeddings([]);
     try {
       await api.delete("/api/v1/auth/me", { password });
+      // PR #115 review: the password isn't unsaved input any more -- left counting, a reload of the
+      // "deleted" page warned, and Back asked a question that page never shows (so Back did nothing).
+      setPassword("");
+      unsaved.clear();
       setDeleted(true);
     } catch (err) {
       if (err instanceof ApiError && err.status === 409 && Array.isArray(err.data?.ownedWeddings)) {

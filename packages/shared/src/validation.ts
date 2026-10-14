@@ -196,13 +196,21 @@ const LABEL_DOT_LABEL = new RegExp(
   String.raw`(?<![\p{L}\p{M}\p{N}-])([\p{L}\p{M}\p{N}-]+)${FULL_STOP}(?=([\p{L}\p{M}\p{N}-]+))`,
   "gu"
 );
-const SCRIPT_OWN_SIGN = /(?!\p{Script=Inherited})\p{M}/u;
+// PR #115 review: a script's own sign is decided as for the folded copy (scriptOwnMarks) -- by the
+// letter's script -- so Arabic vowel marks ("Inherited", but Arabic's) count ("بنكِ.de"), and a Latin
+// letter's accents still don't ("Ọ̀.Adé").
+function hasScriptOwnSign(word: string): boolean {
+  for (const [, letter, marks] of word.normalize("NFD").matchAll(LETTER_AND_MARKS)) {
+    if (KEEPS_ITS_MARKS.test(letter) && scriptOwnMarks(letter, marks) !== "") return true;
+  }
+  return false;
+}
 function nonLatinAddress(text: string): boolean {
   for (const [, left, right] of text.matchAll(LABEL_DOT_LABEL)) {
     const letters = (left.match(/[\p{L}\p{N}]/gu) ?? []).length;
     const ending = bare(right);
     if (NON_LATIN_ENDING_SET.has(ending) && letters >= (NAME_LIKE_ENDING_SET.has(ending) ? 3 : 1)) return true;
-    if (letters >= 3 && SCRIPT_OWN_SIGN.test(left) && /^\p{Script=Latin}{2,}$/u.test(right)) return true;
+    if (letters >= 3 && hasScriptOwnSign(left) && /^\p{Script=Latin}{2,}$/u.test(right)) return true;
   }
   return false;
 }
@@ -248,7 +256,9 @@ function hasPhoneRun(text: string): boolean {
   let previousGroup = 0;
   let lastEnd = -1;
   for (const match of text.matchAll(/\p{Nd}+/gu)) {
-    const group = match[0].length;
+    // PR #115 review: digits counted as characters, not UTF-16 units -- a digit outside the basic plane
+    // (Osmanya "𐒢𐒠𐒢𐒦", 2026) counted twice, and a year read as a phone number.
+    const group = [...match[0]].length;
     const gap = lastEnd < 0 ? null : text.slice(lastEnd, match.index);
     const joins =
       gap !== null &&
@@ -256,7 +266,7 @@ function hasPhoneRun(text: string): boolean {
     run = joins ? run + group : group;
     if (run >= 7) return true;
     previousGroup = group;
-    lastEnd = match.index + group;
+    lastEnd = match.index + match[0].length;
   }
   return false;
 }

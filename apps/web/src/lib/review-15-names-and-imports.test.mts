@@ -10,7 +10,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-const { looksLikeWebAddress } = await import("../../../../packages/shared/src/validation");
+const { looksLikeWebAddress, looksLikePhoneNumber } = await import("../../../../packages/shared/src/validation");
 const { createGuestSchema } = await import("../../../../packages/shared/src/schemas/guest");
 const { weddingNameField } = await import("../../../../packages/shared/src/schemas/wedding");
 const { signupSchema } = await import("../../../../packages/shared/src/schemas/auth");
@@ -110,4 +110,26 @@ test("B7: Mac Roman files whose only accents are Irish Í/Ó, œ or Turkish ı a
   for (const [first, last] of [["Seán", "Ó Briain"], ["Marc", "Bœuf"], ["Áine", "Ní Bhriain"]]) {
     assert.deepEqual(importOne(bytesFor("windows-1252", `First name,Last name\r\n${first},${last}\r\n`)), { firstName: first, lastName: last }, `${first} ${last}`);
   }
+});
+
+// PR #115 review (Copilot round 1).
+test("PR #115: a quoted nickname's closing ’ isn't the Irish-Ní Mac sign", () => {
+  assert.equal(looksLikeMacRoman("Robert ‘AJ’", true, true, false), false);
+  assert.deepEqual(importOne(bytesFor("windows-1252", "First name,Last name\r\nRobert ‘AJ’,Lee\r\n")), { firstName: "Robert 'AJ'", lastName: "Lee" });
+  assert.equal(looksLikeMacRoman("N’ Bhriain", true, true, false), true);
+});
+
+test("PR #115: Arabic with a vowel mark before a dot and Latin letters is a web address", () => {
+  assert.equal(looksLikeWebAddress("بنكِ.de"), true);
+  assert.equal(looksLikeWebAddress("بنك.de"), true);
+  // A Latin letter's accents are still not a script's own sign.
+  assert.equal(looksLikeWebAddress("Ọ̀.Adé"), false);
+});
+
+test("PR #115: digits outside the basic plane count once each (an Osmanya year isn't a phone number)", () => {
+  const osmanya2026 = String.fromCodePoint(0x104a2, 0x104a0, 0x104a2, 0x104a6);
+  assert.equal(looksLikePhoneNumber(`Est. ${osmanya2026}`), false);
+  assert.equal(weddingNameField.safeParse(`Est. ${osmanya2026}`).success, true);
+  const osmanyaPhone = String.fromCodePoint(0x104a8, 0x104a0, 0x104a0, 0x104a5, 0x104a5, 0x104a5, 0x104a1);
+  assert.equal(looksLikePhoneNumber(`Call ${osmanyaPhone}`), true);
 });

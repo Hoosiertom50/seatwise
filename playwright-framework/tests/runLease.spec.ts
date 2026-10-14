@@ -36,3 +36,28 @@ test("letting go of the run lease doesn't end the process before it finishes", a
   expect(result.stdout.trim()).toBe("released");
   expect(result.status).toBe(0);
 });
+
+// PR #115 review: the sweep keeps its turn (the lease taken exclusively) until it lets go -- a run
+// starting meanwhile can't take its share, so its accounts aren't swept as it signs them up.
+test("while the sweep has its turn, a new run can't take its share of the lease", async () => {
+  test.skip(!(await localDatabaseReachable()), "no local database to hold the lease on");
+  const { takeSweepTurn, RUN_LEASE_KEY } = await import("../../e2e/support/runLease");
+  const url = resolveDatabaseUrl()!;
+  const turn = await takeSweepTurn(url);
+  // A browser project in this same run (pnpm pw:test) holds a share, as it should -- nothing to check then.
+  test.skip(turn === null, "a test run holds the lease (this one, with a browser project)");
+  const other = new Client({ connectionString: url, connectionTimeoutMillis: 2_000 });
+  other.on("error", () => undefined);
+  await other.connect();
+  try {
+    const during = await other.query<{ ok: boolean }>("SELECT pg_try_advisory_lock_shared($1) AS ok", [RUN_LEASE_KEY]);
+    expect(during.rows[0].ok).toBe(false);
+    await turn!.release();
+    const afterwards = await other.query<{ ok: boolean }>("SELECT pg_try_advisory_lock_shared($1) AS ok", [RUN_LEASE_KEY]);
+    expect(afterwards.rows[0].ok).toBe(true);
+    await other.query("SELECT pg_advisory_unlock_shared($1)", [RUN_LEASE_KEY]);
+  } finally {
+    await turn?.release();
+    await other.end().catch(() => undefined);
+  }
+});

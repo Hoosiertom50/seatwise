@@ -212,7 +212,7 @@ const MAC_ROMAN_IN_A_NAME = new RegExp(
     `(?:\\p{Ll}‘|[^\\P{Ll}aeiou]’)(?![\\p{L}\\p{M}])(?<!['‘"“][\\p{L}\\p{M}]*[’‘])(?<![‘"“][\\p{L}\\p{M} .-]*[’‘])`,
     `\\p{Ll}[ÕÔ]\\p{L}|\\p{Lu}[ÕÔ]\\p{Lu}\\p{Ll}`,
     // Review 15: Irish "Ní" (N’ then a space), "Ó" (a lone î), and œ/Œ (Ï inside a word, Î starting one).
-    `\\p{Lu}’(?![\\p{L}\\p{M}’'])`,
+    `\\p{Lu}’(?![\\p{L}\\p{M}’'])(?<!['‘"“][\\p{L}\\p{M}]*’)`,
     `(?<![\\p{L}\\p{M}])[îÎ](?![\\p{L}\\p{M}])`,
     `\\p{L}Ï\\p{Ll}|(?<![\\p{L}\\p{M}])Î\\p{Ll}`,
   ].join("|"),
