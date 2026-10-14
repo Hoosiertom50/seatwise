@@ -240,9 +240,17 @@ const MAC_ROMAN_IN_A_NAME = new RegExp(
 // u’z and a’z ("Ru’z", "Ma’z"), and ’ss ("Ra’ssa").
 // PR #114 review: only inside a word -- the í is never a name's first letter, and a lowercase
 // "o’sullivan" or "o’shea" in a windows-1252 file is an Irish O’, not Mac "oísullivan".
+// Review 14 (Tom, 10-14): with the ’ right after a name's second letter they count only when the
+// name ends there or one letter later -- Mac "La’s", "Lu’s", "Lu’sa", "Ru’z", "Ma’z" (Laís, Luís,
+// Luísa, Ruíz, Maíz). TS-265 had refused the windows-1252 names TS-262 let in -- "Na’sir",
+// "Ja’siah", "Da’sia", "Ma’zie", "Ka’zon", "Le’ssa" -- which look exactly like Mac "Mo’ses" and
+// "Ra’ssa" (Moíses, Raíssa); the Windows names win, as before TS-265. Further into a name ("Elo’sa",
+// "Helo’sa", "Tha’s") nothing changes.
 const MAC_ROMAN_IN_A_NAME_UNLESS_WINDOWS = new RegExp(
   [
-    `[^\\P{Ll}aeiou]’\\p{Ll}|(?<=\\p{L})(?:u’s|[ao]’s(?!h)|[au]’z)|\\p{L}’ss`,
+    `[^\\P{Ll}aeiou]’\\p{Ll}`,
+    `(?<=\\p{L}\\p{L})(?:u’s|[ao]’s(?!h)|[au]’z)|(?<=\\p{L}\\p{L})\\p{L}’ss`,
+    `(?<![\\p{L}’'])\\p{L}(?:u’s|[ao]’s|[au]’z)\\p{Ll}?(?![\\p{L}’'])`,
     `\\p{L}š(?:(?!le)[rhlnmsfdgbwzc]|tt|tz|th|pf|pp)`,
     `[aAõ][b-df-hj-np-tv-z]+õ(?![aeiouõ])`,
   ].join("|"),

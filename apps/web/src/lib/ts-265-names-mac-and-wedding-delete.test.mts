@@ -198,8 +198,10 @@ function importOne(bytes: Uint8Array): "refused" | { firstName: string; lastName
   return { firstName: row.data.firstName!, lastName: row.data.lastName! };
 }
 
-test("TS-265: Mac í after a vowel is caught again (Eloísa, Thaís, Raíssa, Moíses, Ruíz...)", () => {
-  for (const name of ["Eloísa", "Heloísa", "Thaís", "Laís", "Raíssa", "Moíses", "Ruíz", "Maíz", "Luís", "Luísa"]) {
+// Review 14 (Tom, 10-14): Raíssa and Moíses are no longer here -- as "Ra’ssa" and "Mo’ses" they look
+// exactly like windows-1252 "Le’ssa" and "Ka’zon", which must import (see the next test).
+test("TS-265: Mac í after a vowel is caught again (Eloísa, Thaís, Laís, Ruíz, Luísa...)", () => {
+  for (const name of ["Eloísa", "Heloísa", "Thaís", "Laís", "Ruíz", "Maíz", "Luís", "Luísa"]) {
     // As a windows-1252 file shows it: Mac í is ’.
     assert.equal(looksLikeMacRoman(name.replace("í", "’"), true, true, false), true, name);
     // From real Mac Roman bytes -- before, "Elo'sa" was saved without a word.
@@ -209,7 +211,9 @@ test("TS-265: Mac í after a vowel is caught again (Eloísa, Thaís, Raíssa, Mo
 });
 
 test("TS-265: windows-1252 names with ’ still import (Ja’nae, Da’shawn, Ta’kia, Kenya’, Andre’, Rene’, Ka’iulani)", () => {
-  for (const name of ["Ja’nae", "Da’shawn", "Ta’kia", "Kenya’", "Andre’", "Rene’", "Ka’iulani", "La’shawn", "Ke’shawn", "o’sullivan", "o’shea", "a’sante"]) {
+  for (const name of ["Ja’nae", "Da’shawn", "Ta’kia", "Kenya’", "Andre’", "Rene’", "Ka’iulani", "La’shawn", "Ke’shawn", "o’sullivan", "o’shea", "a’sante",
+    // Review 14: imported after TS-262, refused again by TS-265 -- Tom: they must import.
+    "Ja’siah", "La’sonya", "Da’sia", "Na’sir", "Ka’sandra", "Ta’sia", "Jo’sette", "Ma’zie", "Ja’zmine", "Da’zhane", "Ka’zon", "Le’ssa"]) {
     assert.equal(looksLikeMacRoman(name, true, true, false), false, name);
     assert.deepEqual(
       importOne(bytesFor("windows-1252", `First name,Last name\r\n${name},Lee\r\n`)),
