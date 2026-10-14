@@ -72,6 +72,8 @@ test("TS-265: other real names, accented or with a dot below, still pass", () =>
     "José", "José".normalize("NFD"), "Thị Lan Nguyễn", "Thịnh", "Ngọc", "Ngọc".normalize("NFD"), "Kṛṣṇa", "Adébáyọ̀", "Ọlá",
     "Muḥammad", "Ó Súilleabháin", "J.R. Smith", "St. Clair", "J. R. R. Smith", "Lee . Kim", "Ana B. De Souza", "J. Link",
     "Mary-Kate", "D'Arcy", "Zoë", "Łukasz", "Dvořák", "Иванова", "Ελένη", "김철수", "山田太郎", "ร.ศักดิ์ชัย",
+    // Review 14: Igbo and Yoruba vowels with a dot below before "ru" (it read as ".ru").
+    "Ụrụ", "Ọrụ", "Ịru", "Ẹ̀rù", "Ìyáọ̀ru", "Ọnụọha", "Ọkọrọ",
   ];
   for (const name of names) {
     assert.equal(looksLikeWebAddress(name), false, name);
@@ -130,6 +132,7 @@ const LOOKS_LIKE_A_WEB_ADDRESS = [
   "\u0627\u065Ccom", // Arabic
   "\u0915\u093Ccom", // Devanagari nukta
   "\u0A15\u0A3Ccom", // Gurmukhi nukta
+  "eviḷnet", // a dot below before a longer ending (two-letter ones are how Igbo/Yoruba names look)
   // A vowel sign before ".com" (PR #114 review): the letter's own (Hindi "का", Tamil "கா"), or one
   // from another script (a Tamil sign after a Devanagari or Bengali letter).
   "\u0915\u093E.com", "\u0B95\u0BBE.com", "\u0915\u0BBE.com", "\u0995\u0BBE.net", "\u0915\u093E . com",

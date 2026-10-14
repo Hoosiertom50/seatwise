@@ -127,7 +127,15 @@ function scriptOwnMarks(letter: string, marks: string): string {
 // (see DOTTED_ENDING), since Vietnamese and transliterated names have letters with a dot below
 // ("Thịnh", "Ngọc", "Kṛṣṇa").
 const DOT_LIKE_MARK = /[\u0323\u0358\u05C5\u065C\u093C\u09BC\u0A3C\u0ABC\u0B3C\u0CBC\u{1D16D}]/u;
-const DOTTED_ENDING = new RegExp(String.raw`[\p{L}\p{N}]\p{M}*-*${DOT}(?:${DOMAIN_ENDINGS})(?![\p{L}\p{N}])`, "iu");
+// Review 14: a dot below a Latin letter stands for a dot only before the longer endings -- Igbo and
+// Yoruba write vowels with a dot below, so "Ọrụ" (Igbo) read as "O.ru" and was refused. In the copy it
+// is LATIN_MARK_DOT, not "."; marks of other scripts (an Arabic or Devanagari dot) are "." as before.
+const LATIN_MARK_DOT = "";
+const LONGER_ENDINGS = DOMAIN_ENDINGS.split("|").filter((ending) => ending.length > 2).join("|");
+const DOTTED_ENDING = new RegExp(
+  String.raw`[\p{L}\p{N}]\p{M}*-*(?:${DOT}(?:${DOMAIN_ENDINGS})|${LATIN_MARK_DOT}(?:${LONGER_ENDINGS}))(?![\p{L}\p{N}${LATIN_MARK_DOT}])`,
+  "iu"
+);
 
 /** TS-265: the copies of `value` the web-address and phone checks also look at (see above). */
 function foldedCopies(value: string): { plain: string; dotted: string } {
@@ -142,7 +150,8 @@ function foldedCopies(value: string): { plain: string; dotted: string } {
     plain += before + letter + kept;
     // PR #114 review: when a mark is drawn as a dot, the letter is followed by the dot alone -- a
     // kept mark (an Arabic or Devanagari dot after its own letter) sat between them and hid the ending.
-    dotted += before + letter + (DOT_LIKE_MARK.test(marks) ? "." : kept);
+    const markDot = KEEPS_ITS_MARKS.test(letter) ? "." : LATIN_MARK_DOT;
+    dotted += before + letter + (DOT_LIKE_MARK.test(marks) ? markDot : kept);
     last = match.index + whole.length;
   }
   const rest = decomposed.slice(last);
