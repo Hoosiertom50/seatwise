@@ -1018,6 +1018,11 @@ export async function getPlanVersionDetail(
   };
 }
 
+// Review 15: the guest's must-sit-together group changed (a rule added or removed) while the move was
+// on its way -- moving the group as it was read would split the one there is now.
+const MUST_SIT_GROUP_CHANGED_MESSAGE =
+  "This guest's must-sit-together group changed a moment ago — nothing was moved. Check the plan and move them again.";
+
 // FR-7.1/FR-7.2/FR-7.3/FR-7.6 (TS-10, Manual Adjustment): move a guest — and, since guests
 // forced together by MUST_SIT_TOGETHER always share a table, their whole forced-together unit —
 // to a different table within the Current Plan Version. A hard-rule violation (capacity, a
@@ -1134,8 +1139,6 @@ export async function moveGuestAssignment(
   // nobody and calling it done.
   if (unit.length === 0) throw new ManualMoveError(`${guest.name} is marked Not Attending, so they can't be seated.`);
   const unitIds = new Set(unit.map((g) => g.id));
-  const unitHeadcount = unit.reduce((sum, g) => sum + g.headcount, 0);
-  const unitNeedsAccessible = unit.some((g) => g.requiresAccessibleTable);
 
   const mustNotByGuest = new Map<string, Set<string>>();
   const avoidByGuest = new Map<string, Set<string>>();
@@ -1186,19 +1189,22 @@ export async function moveGuestAssignment(
     mustNotByGuest: Map<string, Set<string>>;
     requiredTableByGuestId: Map<string, { tableId: string; tableLabel: string }>;
     requiredGuestIdsForTargetTable: Set<string>;
+    /** Review 15: the group's own party sizes and accessible-table needs, as read for this check. */
+    members: { id: string; headcount: number; requiresAccessibleTable: boolean }[];
   }) => {
     const table = state.table;
     const occupiedSeats = state.occupants.reduce((sum, o) => sum + o.headcount, 0);
-    if (occupiedSeats + unitHeadcount > table.capacity) {
+    const seatsNeeded = state.members.reduce((sum, g) => sum + g.headcount, 0);
+    if (occupiedSeats + seatsNeeded > table.capacity) {
       throw new ManualMoveError(
         `${guestLabel(unit.length, unit.map((g) => g.id))} can't be seated at "${table.label}" ` +
           `— it only has ${Math.max(table.capacity - occupiedSeats, 0)} seat(s) left, but ` +
-          `${unitHeadcount} ${unitHeadcount === 1 ? "is" : "are"} needed` +
+          `${seatsNeeded} ${seatsNeeded === 1 ? "is" : "are"} needed` +
           `${unit.length > 1 ? " (everyone in this must-sit-together group moves together)" : ""}.`
       );
     }
-    if (unitNeedsAccessible && !table.isAccessible) {
-      const needAccessible = unit.filter((g) => g.requiresAccessibleTable).map((g) => g.id);
+    if (state.members.some((g) => g.requiresAccessibleTable) && !table.isAccessible) {
+      const needAccessible = state.members.filter((g) => g.requiresAccessibleTable).map((g) => g.id);
       throw new ManualMoveError(
         `${guestLabel(needAccessible.length, needAccessible)} require${
           needAccessible.length === 1 ? "s" : ""
@@ -1241,7 +1247,7 @@ export async function moveGuestAssignment(
       }
     }
   };
-  checkHardRules({ table: targetTable, occupants, mustNotByGuest, requiredTableByGuestId, requiredGuestIdsForTargetTable });
+  checkHardRules({ table: targetTable, occupants, mustNotByGuest, requiredTableByGuestId, requiredGuestIdsForTargetTable, members: unit });
 
   // --- Soft rules — allowed, but returned as a non-blocking warning. ---
   // FR-0.2 AC2: every such warning names the affected preference and references the applied
@@ -1306,6 +1312,18 @@ export async function moveGuestAssignment(
     // Review 14: the hard rules again, under the plan's lock (moves, table edits, rule changes and
     // required-list changes all take it), against the table and its guests as they are now.
     {
+      // Review 15: the group itself as it is now -- a must-sit rule added, or a party size or an
+      // accessible-table need changed, a moment before (none of which moves the plan's revision)
+      // used to be checked against the copy read before the lock, and the move went through split
+      // or over the table's seats.
+      const groupNow = await findMustSitTogetherUnit(weddingId, guestId, client);
+      if (groupNow.length !== unitIds.length || groupNow.some((member) => !unitIds.includes(member.id))) {
+        throw new ManualMoveError(MUST_SIT_GROUP_CHANGED_MESSAGE);
+      }
+      const { rows: membersNow } = await client.query(
+        `SELECT id, headcount, "requiresAccessibleTable" FROM "guests" WHERE id = ANY($1::text[]) AND "weddingId" = $2`,
+        [unitIds, weddingId]
+      );
       const { rows: tableNow } = await client.query(
         `SELECT label, capacity, "isAccessible", "isRestricted" FROM "seating_tables" WHERE id = $1 AND "weddingId" = $2`,
         [targetTableId, weddingId]
@@ -1342,6 +1360,7 @@ export async function moveGuestAssignment(
         mustNotByGuest: mustNotNowByGuest,
         requiredTableByGuestId: new Map(requiredNow.map((r) => [r.guestId, { tableId: r.tableId, tableLabel: r.tableLabel }])),
         requiredGuestIdsForTargetTable: new Set(requiredNow.filter((r) => r.tableId === targetTableId).map((r) => r.guestId)),
+        members: membersNow,
       });
     }
     const affectedBefore = await tablesAffectedBy(client, weddingId, planVersionId, unitIds);
