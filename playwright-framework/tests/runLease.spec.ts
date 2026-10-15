@@ -3,7 +3,7 @@
 // written: the lease connection was unhooked from Node's event loop, so while it closed nothing kept
 // the process alive. This runs the take-and-let-go as its own process and checks it gets to the end.
 // Needs the local database; skipped without one (e.g. a framework-only run with no Postgres).
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { resolve } from "node:path";
 import { Client } from "pg";
 import { test, expect } from "@playwright/test";
@@ -120,4 +120,45 @@ test("a run whose share of the lease ends part-way is told why", async () => {
     await releaseRunLease();
     delete (globalThis as Record<symbol, unknown>)[Symbol.for("seatwise.e2e.runLeaseLost")];
   }
+});
+
+// Review 16: the web unit tests that use the local database hold a share too (see
+// apps/web/src/lib/test-run-lease.mts) -- the sweep used to delete their @example.invalid accounts
+// mid-test when a browser run finished at that moment.
+test("while a unit-test process runs, the sweep doesn't get its turn", async () => {
+  test.skip(!(await localDatabaseReachable()), "no local database to hold the lease on");
+  const { takeSweepTurn } = await import("../../e2e/support/runLease");
+  const url = resolveDatabaseUrl()!;
+  const before = await takeSweepTurn(url);
+  test.skip(before === null, "a test run holds the lease already");
+  await before!.release();
+  const holder = spawn(
+    TSX_BIN,
+    ["--import", "./apps/web/src/lib/test-run-lease.mts", resolve(REPO_ROOT, "playwright-framework/tests/fixtures/unitTestLeaseHolder.mjs")],
+    {
+      cwd: REPO_ROOT,
+      env: { ...process.env, DATABASE_URL: url },
+    }
+  );
+  try {
+    await new Promise<void>((done, fail) => {
+      holder.stdout.on("data", (chunk: Buffer) => {
+        if (chunk.toString().includes("holding")) done();
+      });
+      holder.on("exit", () => fail(new Error("the stand-in unit-test process ended early")));
+    });
+    const during = await takeSweepTurn(url);
+    await during?.release();
+    expect(during).toBeNull();
+  } finally {
+    holder.kill();
+  }
+  // Its share goes with the process.
+  await expect
+    .poll(async () => {
+      const after = await takeSweepTurn(url);
+      await after?.release();
+      return after !== null;
+    }, { timeout: 10_000 })
+    .toBe(true);
 });

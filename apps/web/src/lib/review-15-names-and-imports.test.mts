@@ -251,3 +251,73 @@ test("PR #115: a dot-like accent inside a web ending doesn't hide it", () => {
   }
 });
 
+// Review 16.
+test("Review 16: the joiner check takes time in line with the name's length, not its square", () => {
+  const dotBelow = "\u0323";
+  const fatha = "\u064E";
+  const zwnj = "\u200C";
+  const started = performance.now();
+  assert.equal(hasHiddenCharacters("a" + dotBelow.repeat(19_999)), false);
+  assert.equal(hasHiddenCharacters("ب" + fatha.repeat(19_997) + zwnj + "ب"), false);
+  // A guest import's worth of names made of marks (5,000 rows, two names each) took 17 seconds.
+  for (let i = 0; i < 10_000; i++) hasHiddenCharacters("a" + dotBelow.repeat(99));
+  assert.ok(performance.now() - started < 1_000, `took ${Math.round(performance.now() - started)} ms`);
+  // Still: joiners inside a Persian or Sinhala word are spelling, elsewhere hidden characters.
+  assert.equal(hasHiddenCharacters(`علی${zwnj}رضا`), false);
+  assert.equal(hasHiddenCharacters("ශ්\u200Dරී"), false);
+  assert.equal(hasHiddenCharacters(`علی${zwnj}राम`), true);
+  assert.equal(hasHiddenCharacters(`evil${zwnj}com`), true);
+});
+
+test("Review 16: a capital and a curly apostrophe before a space don't get a Windows file refused", () => {
+  for (const [first, last] of [["Anita", "D’ Souza"], ["Rosa", "D’ Angelo"], ["Sean", "O’ Brien"], ["Bob", "JONES’"], ["Al", "AJ’"]]) {
+    assert.equal(looksLikeMacRoman(last, true, true, false), false, last);
+    assert.deepEqual(
+      importOne(bytesFor("windows-1252", `First name,Last name\r\n${first},${last}\r\n`)),
+      { firstName: first, lastName: last.replace("’", "'") },
+      `${first} ${last}`
+    );
+  }
+  // The Mac's "Ní" (N’ then a space) is still caught when nothing else shows the file is Windows.
+  assert.equal(looksLikeMacRoman("N’ Bhriain", true, true, false), true);
+  assert.equal(importOne(bytesFor("macintosh", "First name,Last name\r\nAine,Ní Bhriain\r\n")), "refused");
+});
+
+test("Review 16: the Tibetan tsheg counts only between two Tibetan letters", () => {
+  const tsheg = "\u0F0B";
+  for (const name of [`paypal${tsheg}com`, `bit${tsheg}ly`]) {
+    assert.equal(createGuestSchema.safeParse({ firstName: name, lastName: "Lee" }).success, false, name);
+    assert.equal(weddingNameField.safeParse(name).success, false, name);
+  }
+  assert.equal(createGuestSchema.safeParse({ firstName: `བཀྲ${tsheg}ཤིས`, lastName: "Dolma" }).success, true);
+});
+
+test("Review 16: a Yoruba or Igbo dot below after an initial isn't read as a two-letter web ending", () => {
+  for (const name of ["A.Mẹ", "T. Mẹ", "Ọrụ", "Ngozi Ọkọnkwọ"]) {
+    assert.equal(looksLikeWebAddress(name), false, name);
+    assert.equal(createGuestSchema.safeParse({ firstName: "Ade", lastName: name }).success, true, name);
+  }
+  // A longer ending still counts, with or without the dot below; two letters with no mark too.
+  for (const name of ["x.cọm", "evil . cọm", "A.Me", "Ana.Mẹ"]) assert.equal(looksLikeWebAddress(name), true, name);
+});
+
+test("Review 16: \"dot\" spelled out takes every web ending; a spaced dot a few more", () => {
+  for (const name of ["evil dot co", "evil dot io", "evil dot me", "evil . me", "paypal . co . uk", "evil dot com"]) {
+    assert.equal(looksLikeWebAddress(name), true, name);
+  }
+  // Names with an initial still pass.
+  for (const name of ["T. Ly", "J. Link", "J. Co", "Ms. Io", "Ana B. Co Morgan", "Dot Smith", "Mary Dot Lee", "St. Pierre"]) {
+    assert.equal(looksLikeWebAddress(name), false, name);
+  }
+});
+
+test("Review 16: Malayalam and Bengali names typed the older way (a joiner after a final virama) pass", () => {
+  for (const name of ["അര്‍ജുന്‍", "മോഹന്‍ലാല്‍", "শরত্‍"]) {
+    assert.equal(hasHiddenCharacters(name), false, name);
+    assert.equal(createGuestSchema.safeParse({ firstName: name, lastName: "Nair" }).success, true, name);
+  }
+  // Anywhere else a joiner at the end of a word is still a hidden character.
+  assert.equal(hasHiddenCharacters("Arjun\u200D"), true);
+  assert.equal(hasHiddenCharacters("राम\u200D"), true);
+});
+
