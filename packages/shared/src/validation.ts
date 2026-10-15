@@ -289,9 +289,11 @@ const SHORT_LINK_HOSTS = new Set(["t.me", "m.me", "j.mp", "t.ly", "t.co"]);
 // any two lowercase letters let "go . me" and "paypal-co . uk" through. PR #116 review: with the
 // capitals required, a chain of web labels ("paypal . co . uk") can't match, so a run of initials
 // before the name ("J. T. Me") is no longer mistaken for one.
-const NAME_TITLE = String.raw`(?:\p{Lu}|Dr|Mr|Ms|Mx|St|Jr|Sr)`;
+// PR #116 review: Mrs and a few more titles, and an initial's own accent marks ("Ọ̀. Me", typed as a
+// letter and a separate mark).
+const NAME_TITLE = String.raw`(?:\p{Lu}|Dr|Mrs|Mr|Ms|Mx|Mme|Prof|Rev|St|Jr|Sr)\p{M}*`;
 const SPACED_INITIAL_THEN_TWO_LETTERS = new RegExp(
-  String.raw`(?<![\p{L}\p{N}'-])${NAME_TITLE}\s*${FULL_STOP}\s+\p{Lu}\p{Ll}(?![\p{L}\p{N}])(?!\s*${FULL_STOP})`,
+  String.raw`(?<![\p{L}\p{N}'-])${NAME_TITLE}\s*${FULL_STOP}\s+\p{Lu}\p{M}*\p{Ll}\p{M}*(?![\p{L}\p{N}])(?!\s*${FULL_STOP})`,
   "gu"
 );
 // Review 17: "Dot" as a name (Dorothy) before an ending that's also a name or a word ("Anna Dot Ly",

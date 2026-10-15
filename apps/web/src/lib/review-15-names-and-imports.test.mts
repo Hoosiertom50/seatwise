@@ -416,3 +416,12 @@ test("PR #116: several initials before a name, and a hyphenated or apostrophe na
   }
   for (const name of ["paypal . co . uk", "Paypal . Co . Uk", "evil Dot Co", "go . me", "paypal-co . uk"]) assert.equal(looksLikeWebAddress(name), true, name);
 });
+
+// PR #116 review (Copilot round 8).
+test("PR #116: Mrs and other titles, and an initial with a separate accent mark, read as names", () => {
+  for (const name of ["Mrs. Me", "Mrs. Mễ", "Mr. & Mrs. Me", "Prof. Uk", "Mme. Mê", "Ọ̀. Me"]) {
+    assert.equal(looksLikeWebAddress(name), false, name);
+    assert.equal(weddingNameField.safeParse(name).success, true, name);
+  }
+  for (const name of ["mrs . me", "evil-mrs . me", "Paypal . Co . Uk"]) assert.equal(looksLikeWebAddress(name), true, name);
+});
