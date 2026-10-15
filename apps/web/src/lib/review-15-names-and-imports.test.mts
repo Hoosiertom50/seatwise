@@ -457,3 +457,24 @@ test("PR #116: the dot-below exception doesn't take the start of a spaced-out we
   for (const name of ["T. Cọ m", "J. Nẹ t"]) assert.equal(looksLikeWebAddress(name), true, name);
   for (const name of ["A.Mẹ", "Ọ.Mẹ", "T. Mẹ", "T. Mẹ J. Ade"]) assert.equal(looksLikeWebAddress(name), false, name);
 });
+
+// Review 24 (Tom, 10-15): a name reading stops only when the letters after it spell out a web ending.
+test("Review 24: names with a single-letter part after the short name pass; spaced-out endings don't", () => {
+  for (const name of ["T. Me O'Brien", "Dr. Uk O'Neill", "Anna Dot Ly O'Hara", "Anna Dot Me D'Souza", "Mrs. Me A-Smith", "T. Me J Smith", "T. Me y Garcia", "Anna Dot Co e Silva", "Kim U. Uk E", "T. Me Özil", "Polka Dot Club", "Tom and Dot Live Here"]) {
+    assert.equal(looksLikeWebAddress(name), false, name);
+  }
+  for (const name of ["T. Co m", "T. Cọ m", "Anna Dot Co m", "T. In fo", "T. Sh op", "T. Si te", "T. Cl ick", "T. On line", "T. Co m.", "Anna Dot Co m.", "T. CO M"]) {
+    assert.equal(looksLikeWebAddress(name), true, name);
+  }
+  const started = performance.now();
+  for (const text of ["A. Me ".repeat(3_300), "T. Co " + "m ".repeat(10_000), "Anna Dot Co" + " ".repeat(20_000) + "m"]) looksLikeWebAddress(text);
+  assert.ok(performance.now() - started < 1_000, `took ${Math.round(performance.now() - started)} ms`);
+});
+
+// Review 25: a capital and a full stop after the short name is another initial.
+test("Review 25: a two-letter name followed by another initial reads as a name", () => {
+  for (const name of ["T. Vi P. Nguyen", "Lê T. Vi P. Nguyễn", "T. Co M. Smith", "Anna Dot Co M. Smith", "Nguyen T. Vi P."]) {
+    assert.equal(looksLikeWebAddress(name), false, name);
+  }
+  for (const name of ["T. Co m.", "Anna Dot Co m.", "T. Ap p."]) assert.equal(looksLikeWebAddress(name), true, name);
+});

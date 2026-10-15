@@ -277,9 +277,51 @@ function markDotBelow(value: string): string {
     .normalize("NFC");
 }
 // Review 16: an initial, a dot and a two-letter word ("A.Me", "T. Me").
-// PR #116 review: not when a lone letter follows -- the rest of a spaced-out ending ("T. Cọ m" is
-// "com" once folded) -- unless it's another initial (as in SPACED_INITIAL_THEN_TWO_LETTERS).
-const INITIAL_THEN_TWO_LETTERS = new RegExp(String.raw`(?<![\p{L}\p{N}])\p{L}\s*${FULL_STOP}\s*\p{L}{2}(?![\p{L}\p{N}])(?!\s+\p{L}(?![\p{L}\p{N}.]))`, "gu");
+// Review 24 (Tom, 10-15): whether a two-letter word and the letters spaced out after it spell a web
+// ending ("Co m" is com, "In fo" is info, "Cọ m" once folded) -- then a name reading doesn't apply.
+// Checked on the letters themselves, so a name part after it ("T. Me O'Brien", "Anna Dot Ly y
+// Garcia") still reads as a name.
+const LONGER_DOMAIN_ENDINGS = DOMAIN_ENDINGS.split("|").filter((ending) => ending.length > 2);
+const LONGEST_ENDING = Math.max(...LONGER_DOMAIN_ENDINGS.map((ending) => ending.length));
+const bareLetters = (text: string) => text.normalize("NFKD").replace(/\p{M}/gu, "").toLowerCase();
+// Reads only the few letters after `from` (skipping spaces and marks), so it takes time in line with
+// what it reads, not with the rest of the text.
+function spellsSpacedEnding(word: string, text: string, from: number): boolean {
+  const start = bareLetters(word);
+  const letters: string[] = [];
+  const endsAt: number[] = [];
+  const capital: boolean[] = [];
+  let i = from;
+  while (i < text.length && letters.length < LONGEST_ENDING) {
+    const ch = String.fromCodePoint(text.codePointAt(i)!);
+    i += ch.length;
+    if (/\s|\p{M}/u.test(ch)) continue;
+    letters.push(bareLetters(ch));
+    endsAt.push(i);
+    capital.push(/\p{Lu}/u.test(ch));
+  }
+  return LONGER_DOMAIN_ENDINGS.some((ending) => {
+    if (ending.length <= start.length || !ending.startsWith(start)) return false;
+    const rest = ending.slice(start.length);
+    if (letters.slice(0, rest.length).join("") !== rest) return false;
+    let after = endsAt[rest.length - 1];
+    while (after < text.length && /\p{M}/u.test(String.fromCodePoint(text.codePointAt(after)!))) after += String.fromCodePoint(text.codePointAt(after)!).length;
+    const next = String.fromCodePoint(text.codePointAt(after) ?? 32);
+    // Review 25: a capital and a full stop is another initial ("T. Vi P. Nguyen"), not the end of "vip".
+    if (capital[rest.length - 1] && new RegExp(`^${FULL_STOP}$`, "u").test(next)) return false;
+    return !/[\p{L}\p{N}]/u.test(next);
+  });
+}
+const LAST_TWO_LETTERS = /(\p{L}\p{M}*\p{L}\p{M}*)$/u;
+/** Replaces the dot in each match that doesn't spell a spaced ending with what follows. */
+function readInitialsAsNames(text: string, pattern: RegExp): string {
+  return text.replace(pattern, (initial: string, offset: number) => {
+    const word = LAST_TWO_LETTERS.exec(initial)?.[1] ?? "";
+    if (spellsSpacedEnding(word, text, offset + initial.length)) return initial;
+    return initial.replace(new RegExp(FULL_STOP, "u"), " ");
+  });
+}
+const INITIAL_THEN_TWO_LETTERS = new RegExp(String.raw`(?<![\p{L}\p{N}])\p{L}\s*${FULL_STOP}\s*\p{L}{2}(?![\p{L}\p{N}])`, "gu");
 
 // Review 17: the one-letter short-link hosts an initial and a two-letter name could spell ("t.mẹ" reads
 // as t.me) -- those still count, written without a space.
@@ -295,11 +337,11 @@ const SHORT_LINK_HOSTS = new Set(["t.me", "m.me", "j.mp", "t.ly", "t.co"]);
 // letter and a separate mark). Tom (10-15): the name after it may be in capitals too ("T. ME", "Mrs. ME",
 // as an all-caps import writes them) -- still after a capital initial or title, so "go . me" and
 // "GO . ME" count as addresses; a spaced "X . UK" passes, which no email app links. PR #116 review: not
-// when a lone letter follows -- that's the rest of a spaced ending ("T. Co m" is "com"), unless it's
-// another initial ("T. Me J. Smith"). The same for "Dot" ("Anna Dot Co m").
+// when the letters after it finish a spaced-out ending ("T. Co m" is "com"; see spellsSpacedEnding).
+// The same for "Dot" ("Anna Dot Co m").
 const NAME_TITLE = String.raw`(?:\p{Lu}|Dr|Mrs|Mr|Ms|Mx|Mme|Prof|Rev|St|Jr|Sr)\p{M}*`;
 const SPACED_INITIAL_THEN_TWO_LETTERS = new RegExp(
-  String.raw`(?<![\p{L}\p{N}'-])${NAME_TITLE}\s*${FULL_STOP}\s+\p{Lu}\p{M}*\p{L}\p{M}*(?![\p{L}\p{N}])(?!\s*${FULL_STOP})(?!\s+\p{L}(?![\p{L}\p{N}.]))`,
+  String.raw`(?<![\p{L}\p{N}'-])${NAME_TITLE}\s*${FULL_STOP}\s+\p{Lu}\p{M}*\p{L}\p{M}*(?![\p{L}\p{N}])(?!\s*${FULL_STOP})`,
   "gu"
 );
 // Review 17: "Dot" as a name (Dorothy) before an ending that's also a name or a word ("Anna Dot Ly",
@@ -310,11 +352,16 @@ const SPACED_INITIAL_THEN_TWO_LETTERS = new RegExp(
 // surname, "Anna Dot Mễ") is among the words after it -- in capitals too ("Anna Dot LY", Tom 10-15). "Dot" is matched first and only
 // then looked behind (looking behind from every position over a run of spaces took time growing with
 // its square).
-const DOT_AS_A_NAME = /Dot(?<=(?:^|(?:^|\s)(?:\p{Lu}[\p{L}\p{M}'’-]*|and|&)\s+)Dot)(?=\s+(?:Ly|LY|Co|CO|Club|CLUB|Live|LIVE|Link|LINK|Me|ME)(?![\p{L}\p{N}])(?!\s+\p{L}(?![\p{L}\p{N}.])))/gu;
+const DOT_AS_A_NAME = /Dot(?<=(?:^|(?:^|\s)(?:\p{Lu}[\p{L}\p{M}'’-]*|and|&)\s+)Dot)(?=\s+(?:Ly|LY|Co|CO|Club|CLUB|Live|LIVE|Link|LINK|Me|ME)(?![\p{L}\p{N}]))/gu;
 function readAsNames(text: string): string {
-  return text
-    .replace(SPACED_INITIAL_THEN_TWO_LETTERS, (initial) => initial.replace(new RegExp(FULL_STOP, "u"), " "))
-    .replace(DOT_AS_A_NAME, "Dott");
+  const initialsRead = readInitialsAsNames(text, SPACED_INITIAL_THEN_TWO_LETTERS);
+  return initialsRead.replace(DOT_AS_A_NAME, (dot: string, offset: number) => {
+    // The word after "Dot" (one of a few short ones -- see DOT_AS_A_NAME), read where it starts.
+    const word = /\s+(\p{L}+)/uy;
+    word.lastIndex = offset + dot.length;
+    const found = word.exec(initialsRead);
+    return found && spellsSpacedEnding(found[1], initialsRead, word.lastIndex) ? dot : "Dott";
+  });
 }
 function webAddressIn(text: string): boolean {
   return WEB_ADDRESS_LIKE.test(readAsNames(text)) || nonLatinAddress(text);
@@ -330,7 +377,7 @@ function addressIn(value: string): boolean {
     // match with no dot below at all ("x.ｍｅ").
     const kept = foldedCopies(markDotBelow(value)).plain;
     if (webAddressIn(kept)) return true;
-    const withoutInitials = plain.replace(INITIAL_THEN_TWO_LETTERS, (initial) => initial.replace(new RegExp(FULL_STOP, "u"), " "));
+    const withoutInitials = readInitialsAsNames(plain, INITIAL_THEN_TWO_LETTERS);
     if (webAddressIn(withoutInitials)) return true;
     for (const [initial] of plain.matchAll(INITIAL_THEN_TWO_LETTERS)) {
       if (SHORT_LINK_HOSTS.has(initial.toLowerCase().replace(new RegExp(FULL_STOP, "gu"), "."))) return true;
