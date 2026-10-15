@@ -407,3 +407,12 @@ test("Review 18: the joiner after a virama needs a Bengali or Malayalam letter, 
   }
 });
 
+
+// PR #116 review (Copilot round 7).
+test("PR #116: several initials before a name, and a hyphenated or apostrophe name before Dot, read as names", () => {
+  for (const name of ["J. T. Me", "J. T. Mễ", "A. B. Mễ", "Mary-Jane Dot Ly", "O'Brien Dot Co", "José Dot Ly"]) {
+    assert.equal(looksLikeWebAddress(name), false, name);
+    assert.equal(weddingNameField.safeParse(name).success, true, name);
+  }
+  for (const name of ["paypal . co . uk", "Paypal . Co . Uk", "evil Dot Co", "go . me", "paypal-co . uk"]) assert.equal(looksLikeWebAddress(name), true, name);
+});

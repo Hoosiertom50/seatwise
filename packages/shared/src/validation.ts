@@ -286,20 +286,22 @@ const SHORT_LINK_HOSTS = new Set(["t.me", "m.me", "j.mp", "t.ly", "t.co"]);
 // Uk") -- the endings a spaced dot takes since review 16 (me, tv, uk) read those as addresses. Not
 // inside a chain of spaced dots ("paypal . co . uk").
 // Review 18: written as a name is -- a capital initial or a known title, and a capitalised name --
-// any two lowercase letters let "go . me" and "paypal-co . uk" through. And the chain is checked
-// after the initial, not from every space (a long run of spaces took time growing with its square).
+// any two lowercase letters let "go . me" and "paypal-co . uk" through. PR #116 review: with the
+// capitals required, a chain of web labels ("paypal . co . uk") can't match, so a run of initials
+// before the name ("J. T. Me") is no longer mistaken for one.
 const NAME_TITLE = String.raw`(?:\p{Lu}|Dr|Mr|Ms|Mx|St|Jr|Sr)`;
 const SPACED_INITIAL_THEN_TWO_LETTERS = new RegExp(
-  String.raw`(?<![\p{L}\p{N}'-])${NAME_TITLE}(?<!${FULL_STOP}\s*\p{L}{1,2})\s*${FULL_STOP}\s+\p{Lu}\p{Ll}(?![\p{L}\p{N}])(?!\s*${FULL_STOP})`,
+  String.raw`(?<![\p{L}\p{N}'-])${NAME_TITLE}\s*${FULL_STOP}\s+\p{Lu}\p{Ll}(?![\p{L}\p{N}])(?!\s*${FULL_STOP})`,
   "gu"
 );
 // Review 17: "Dot" as a name (Dorothy) before an ending that's also a name or a word ("Anna Dot Ly",
 // "Polka Dot Club") -- the spelled-out "dot" takes every ending since review 16.
 // Review 18: as a name is written -- a capitalised name before it (or "and", "&", or nothing) and a
-// capitalised word after it; "evil Dot Co" and "bit Dot Ly" got through. "Dot" is matched first and only
+// capitalised word after it; "evil Dot Co" and "bit Dot Ly" got through. PR #116 review: that name may
+// hold a name's hyphen, apostrophe or accent marks ("Mary-Jane Dot Ly", "O'Brien Dot Co"). "Dot" is matched first and only
 // then looked behind (looking behind from every position over a run of spaces took time growing with
 // its square).
-const DOT_AS_A_NAME = /Dot(?<=(?:^|(?:^|\s)(?:\p{Lu}\p{L}*|and|&)\s+)Dot)(?=\s+(?:Ly|Co|Club|Live|Link)(?![\p{L}\p{N}]))/gu;
+const DOT_AS_A_NAME = /Dot(?<=(?:^|(?:^|\s)(?:\p{Lu}[\p{L}\p{M}'’-]*|and|&)\s+)Dot)(?=\s+(?:Ly|Co|Club|Live|Link)(?![\p{L}\p{N}]))/gu;
 function readAsNames(text: string): string {
   return text
     .replace(SPACED_INITIAL_THEN_TWO_LETTERS, (initial) => initial.replace(new RegExp(FULL_STOP, "u"), " "))
