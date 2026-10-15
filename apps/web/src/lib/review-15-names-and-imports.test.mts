@@ -216,3 +216,17 @@ test("PR #115: a separator between two letters doesn't hide a web address", () =
   }
 });
 
+// PR #115 review (Copilot round 7).
+test("PR #115: a separator and an accent together don't hide a web address", () => {
+  const middleDot = "\u00B7";
+  const macron = "\u0304";
+  const dotBelow = "\u0323";
+  for (const name of [`l${middleDot}l.c${macron}at`, `ev${middleDot}il${dotBelow}com`]) {
+    assert.equal(looksLikeWebAddress(name), true, name);
+    assert.equal(weddingNameField.safeParse(name).success, false, name);
+  }
+  for (const name of [`Gal${middleDot}la`, `Col${middleDot}lell Puig`, "Ngozi Ọkọnkwọ"]) {
+    assert.equal(looksLikeWebAddress(name), false, name);
+  }
+});
+

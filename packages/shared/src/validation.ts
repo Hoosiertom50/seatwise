@@ -232,9 +232,14 @@ function nonLatinAddress(text: string): boolean {
 // ("ll.cat"); a name with no dot after them ("Gal·la", "בן־עמי") is unchanged.
 const SEPARATOR_BETWEEN_LETTERS = /(?<=[\p{L}\p{M}])[\u00B7\u30FB\uFF65\u05BE\u0F0B\u200C\u200D](?=\p{L})/gu;
 export function looksLikeWebAddress(value: string): boolean {
-  if (WEB_ADDRESS_LIKE.test(value) || nonLatinAddress(value)) return true;
+  // PR #115 review: the copy without separators goes through every check, the folded copies too --
+  // an accent as well as a separator ("l·l.c̄at") hid it from both on their own.
   const joined = value.replace(SEPARATOR_BETWEEN_LETTERS, "");
-  if (joined !== value && (WEB_ADDRESS_LIKE.test(joined) || nonLatinAddress(joined))) return true;
+  return addressIn(value) || (joined !== value && addressIn(joined));
+}
+
+function addressIn(value: string): boolean {
+  if (WEB_ADDRESS_LIKE.test(value) || nonLatinAddress(value)) return true;
   const { plain, dotted } = foldedCopies(value);
   return (
     (plain !== value && (WEB_ADDRESS_LIKE.test(plain) || nonLatinAddress(plain))) ||
