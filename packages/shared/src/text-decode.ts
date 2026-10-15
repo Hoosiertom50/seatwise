@@ -209,12 +209,13 @@ const MAC_ROMAN_IN_A_NAME = new RegExp(
     `\\p{L}[¿§]`,
     `(?<!\\p{L})[${MAC_ROMAN_NOT_LETTERS_AT_START}]\\p{L}`,
     `\\p{L}œ(?![ui])\\p{Ll}`,
-    `(?:\\p{Ll}‘|[^\\P{Ll}aeiou]’)(?![\\p{L}\\p{M}])(?<!['‘"“][\\p{L}\\p{M}]*[’‘])(?<![‘"“][\\p{L}\\p{M} .-]*[’‘])`,
+    `(?:\\p{Ll}‘|[^\\P{Ll}aeiou]’)(?![\\p{L}\\p{M}])(?<!['‘"“][\\p{L}\\p{M}]*[’‘])(?<![‘"“][\\p{L}\\p{M} .-]*[’‘])(?<!(?<![\\p{L}\\p{M}])'[\\p{L}\\p{M} .-]*[’‘])`,
     `\\p{Ll}[ÕÔ]\\p{L}|\\p{Lu}[ÕÔ]\\p{Lu}\\p{Ll}`,
     // Review 15: Irish "Ní" (N’ then a space), and œ (Ï inside a word). ("Ó" and Œ: see below.)
     // PR #115 review: not the closing ’ of a quoted nickname, one word or several ("Robert ‘AJ’",
-    // "‘Bobby J’", "‘A-J’") -- the same exclusions as the small-letter rule above.
-    `\\p{Lu}’(?![\\p{L}\\p{M}’'])(?<!['‘"“][\\p{L}\\p{M}]*’)(?<![‘"“][\\p{L}\\p{M} .-]*’)`,
+    // "‘Bobby J’", "‘A-J’") -- the same exclusions as the small-letter rule above. A straight ' opens
+    // one too ("Robert 'Bobby J’"), but only at the start of a word -- O'Neill's doesn't ("O'Neill N’ Bhriain").
+    `\\p{Lu}’(?![\\p{L}\\p{M}’'])(?<!['‘"“][\\p{L}\\p{M}]*’)(?<![‘"“][\\p{L}\\p{M} .-]*’)(?<!(?<![\\p{L}\\p{M}])'[\\p{L}\\p{M} .-]*’)`,
     `\\p{L}Ï\\p{Ll}`,
   ].join("|"),
   "u"

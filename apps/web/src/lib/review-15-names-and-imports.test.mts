@@ -230,3 +230,24 @@ test("PR #115: a separator and an accent together don't hide a web address", () 
   }
 });
 
+// PR #115 review (Copilot round 8).
+test("PR #115: a nickname opened with a straight quote and closed with a curly one isn't a Mac sign", () => {
+  for (const cell of ["Robert 'Bobby J’", "Robert 'A-J’", "Robert 'Lil Bit’"]) {
+    assert.equal(looksLikeMacRoman(cell, true, true, false), false, cell);
+  }
+  // An apostrophe inside a name doesn't open one: the Irish Ní after it is still caught.
+  for (const cell of ["N’ Bhriain", "Máire O'Neill N’ Bhriain"]) assert.equal(looksLikeMacRoman(cell, true, true, false), true, cell);
+});
+
+test("PR #115: a dot-like accent inside a web ending doesn't hide it", () => {
+  const dotBelow = "\u0323";
+  const dotAbove = "\u0307";
+  for (const name of [`evil${dotBelow}co${dotAbove}m`, `evil${dotBelow}c${dotAbove}om`]) {
+    assert.equal(looksLikeWebAddress(name), true, name);
+    assert.equal(weddingNameField.safeParse(name).success, false, name);
+  }
+  for (const name of ["Tọ́pẹ́", "Ọlátọ́pẹ́", "Tẹ̀mítọ́pẹ́", "Ọmọ́tọ́ṣọ̀", "Ṣọ̀pẹ́", "Ọkọrọafọr", "Nwọkọcha"]) {
+    assert.equal(looksLikeWebAddress(name), false, name);
+  }
+});
+
