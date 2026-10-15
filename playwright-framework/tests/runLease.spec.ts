@@ -275,3 +275,74 @@ test("a unit-test process that connects but can't take its share stops", async (
     await sweep!.release();
   }
 });
+
+// Review 17: a unit-test file waiting for a browser run's cleanup says so (it looked like a hang), then runs.
+test("a unit-test process waiting for the sweep says so, then runs", async () => {
+  test.skip(!(await localDatabaseReachable()), "no local database to hold the lease on");
+  const { takeSweepTurn } = await import("../../e2e/support/runLease");
+  const url = resolveDatabaseUrl()!;
+  const sweep = await takeSweepTurn(url);
+  test.skip(sweep === null, "a test run holds the lease already");
+  let released = false;
+  try {
+    const holder = spawn(
+      TSX_BIN,
+      ["--import", "./apps/web/src/lib/test-run-lease.mts", resolve(REPO_ROOT, "playwright-framework/tests/fixtures/unitTestLeaseHolder.mjs")],
+      { cwd: REPO_ROOT, env: { ...process.env, DATABASE_URL: url, HOLD_MS: "100" } }
+    );
+    let stdout = "";
+    holder.stdout.on("data", (chunk: Buffer) => (stdout += chunk.toString()));
+    const exited = new Promise<number | null>((done) => holder.on("exit", (code) => done(code)));
+    await new Promise<void>((done) => holder.stderr.on("data", (chunk: Buffer) => chunk.toString().includes("Waiting for a browser test run's cleanup") && done()));
+    expect(stdout).not.toContain("holding");
+    await sweep!.release();
+    released = true;
+    expect(await exited).toBe(0);
+    expect(stdout).toContain("holding");
+  } finally {
+    if (!released) await sweep!.release();
+  }
+});
+
+
+// PR #116 review: only this database's holders count -- a browser run on another local database (the
+// lease is per database) used to make the sweep here skip instead of waiting for its unit tests.
+test("a browser run on another database doesn't stop the sweep waiting for this database's unit tests", async () => {
+  test.skip(!(await localDatabaseReachable()), "no local database to hold the lease on");
+  const { takeSweepTurn, takeSweepTurnAfterUnitTests, RUN_LEASE_KEY } = await import("../../e2e/support/runLease");
+  const url = resolveDatabaseUrl()!;
+  const free = await takeSweepTurn(url);
+  test.skip(free === null, "a test run holds the lease already");
+  await free!.release();
+
+  const otherName = `zz_r17_lease_${Date.now()}`;
+  const admin = new Client({ connectionString: url, connectionTimeoutMillis: 2_000 });
+  admin.on("error", () => undefined);
+  await admin.connect();
+  await admin.query(`CREATE DATABASE ${otherName}`);
+  const otherUrl = new URL(url);
+  otherUrl.pathname = `/${otherName}`;
+  const otherRun = new Client({ connectionString: otherUrl.toString(), connectionTimeoutMillis: 2_000 });
+  otherRun.on("error", () => undefined);
+  try {
+    await otherRun.connect();
+    await otherRun.query("SELECT pg_advisory_lock_shared($1)", [RUN_LEASE_KEY]);
+    const holder = spawn(
+      TSX_BIN,
+      ["--import", "./apps/web/src/lib/test-run-lease.mts", resolve(REPO_ROOT, "playwright-framework/tests/fixtures/unitTestLeaseHolder.mjs")],
+      { cwd: REPO_ROOT, env: { ...process.env, DATABASE_URL: url, HOLD_MS: "1500" } }
+    );
+    try {
+      await new Promise<void>((done) => holder.stdout.on("data", (chunk: Buffer) => chunk.toString().includes("holding") && done()));
+      const turn = await takeSweepTurnAfterUnitTests(url, 20_000);
+      await turn?.release();
+      expect(turn).not.toBeNull();
+    } finally {
+      holder.kill();
+    }
+  } finally {
+    await otherRun.end().catch(() => undefined);
+    await admin.query(`DROP DATABASE IF EXISTS ${otherName}`).catch(() => undefined);
+    await admin.end().catch(() => undefined);
+  }
+});

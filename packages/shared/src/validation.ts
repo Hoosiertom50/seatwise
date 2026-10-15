@@ -20,8 +20,9 @@ import { NAME_LIKE_ENDINGS, NON_LATIN_ENDINGS } from "./web-address-endings";
 // Latin letters ("paypal" + tsheg + "com") it read as a web address. PR #116 review: letters, not
 // just anything of the Tibetan script -- a Tibetan vowel sign each side let it through again. And a zero-width joiner
 // right after a Bengali or Malayalam virama may end a word: the older way of typing a final
-// consonant (Malayalam "Arjun", Bengali khanda ta).
-const BETWEEN_LETTERS = String.raw`(?<=[\p{L}\p{M}])[\u00B7\u30FB\uFF65\u05BE\u200C\u200D](?=\p{L})|\u0F0B(?<=(?=\p{Script=Tibetan})\p{L}\p{M}*\u0F0B)(?=(?=\p{Script=Tibetan})\p{L})|\u200D(?<=[\u09CD\u0D4D]\u200D)(?![\p{L}\p{M}])`;
+// consonant (Malayalam "Arjun", Bengali khanda ta). Review 17: only after a Bengali or Malayalam letter's
+// virama -- after any letter ("Smith" + virama + joiner) it hid two invisible characters in a name.
+const BETWEEN_LETTERS = String.raw`(?<=[\p{L}\p{M}])[\u00B7\u30FB\uFF65\u05BE\u200C\u200D](?=\p{L})|\u0F0B(?<=(?=\p{Script=Tibetan})\p{L}\p{M}*\u0F0B)(?=(?=\p{Script=Tibetan})\p{L})|\u200D(?<=(?:\p{Script=Bengali}\u09CD|\p{Script=Malayalam}\u0D4D)\u200D)(?![\p{L}\p{M}])`;
 export const PERSON_NAME_PATTERN = new RegExp(String.raw`^[\p{L}\p{M}](?:[\p{L}\p{M} '.-]|${BETWEEN_LETTERS})*$`, "u");
 export const PERSON_NAME_MESSAGE =
   "Can only contain letters, spaces, hyphens, apostrophes, and periods";
@@ -54,7 +55,7 @@ const JOINED_SCRIPTS = ["Arabic", "Syriac", "Thaana", "Devanagari", "Bengali", "
 // behind from every position over a run of marks took time growing with the square of its length
 // (4,000 marks: 2.7 seconds; a 1 MB guest import: 17 seconds of the server's time).
 const JOINER_IN_A_WORD = new RegExp(
-  String.raw`[\u200C\u200D](?:${JOINED_SCRIPTS.map((script) => String.raw`(?<=\p{Script=${script}}\p{M}*.)(?=\p{Script=${script}})`).join("|")}|(?<=[\u09CD\u0D4D]\u200D)(?![\p{L}\p{M}]))`,
+  String.raw`[\u200C\u200D](?:${JOINED_SCRIPTS.map((script) => String.raw`(?<=\p{Script=${script}}\p{M}*.)(?=\p{Script=${script}})`).join("|")}|(?<=(?:\p{Script=Bengali}\u09CD|\p{Script=Malayalam}\u0D4D)\u200D)(?![\p{L}\p{M}]))`,
   "gu"
 );
 export function hasHiddenCharacters(value: string): boolean {
@@ -277,18 +278,43 @@ function markDotBelow(value: string): string {
 // Review 16: an initial, a dot and a two-letter word ("A.Me", "T. Me").
 const INITIAL_THEN_TWO_LETTERS = new RegExp(String.raw`(?<![\p{L}\p{N}])\p{L}\s*${FULL_STOP}\s*\p{L}{2}(?![\p{L}\p{N}])`, "gu");
 
+// Review 17: the one-letter short-link hosts an initial and a two-letter name could spell ("t.mẹ" reads
+// as t.me) -- those still count, written without a space.
+const SHORT_LINK_HOSTS = new Set(["t.me", "m.me", "j.mp", "t.ly", "t.co"]);
+// Review 17: an initial or a short title, a spaced dot and a two-letter name ("T. Mễ", "Dr. Mê", "Jae U.
+// Uk") -- the endings a spaced dot takes since review 16 (me, tv, uk) read those as addresses. Not
+// inside a chain of spaced dots ("paypal . co . uk").
+const SPACED_INITIAL_THEN_TWO_LETTERS = new RegExp(
+  String.raw`(?<![\p{L}\p{N}])(?<!${FULL_STOP}\s*)\p{L}{1,2}\s*${FULL_STOP}\s+\p{L}{2}(?![\p{L}\p{N}])(?!\s*${FULL_STOP})`,
+  "gu"
+);
+// Review 17: "Dot" as a name (Dorothy) before an ending that's also a name or a word ("Anna Dot Ly",
+// "Polka Dot Club") -- the spelled-out "dot" takes every ending since review 16.
+const DOT_AS_A_NAME = /(?<![\p{L}\p{N}])Dot(?=\s+(?:[Ll]y|[Cc]o|[Cc]lub|[Ll]ive|[Ll]ink)(?![\p{L}\p{N}]))/gu;
+function readAsNames(text: string): string {
+  return text
+    .replace(SPACED_INITIAL_THEN_TWO_LETTERS, (initial) => initial.replace(new RegExp(FULL_STOP, "u"), " "))
+    .replace(DOT_AS_A_NAME, "Dott");
+}
+function webAddressIn(text: string): boolean {
+  return WEB_ADDRESS_LIKE.test(readAsNames(text)) || nonLatinAddress(text);
+}
+
 function addressIn(value: string): boolean {
-  if (WEB_ADDRESS_LIKE.test(value) || nonLatinAddress(value)) return true;
+  if (webAddressIn(value)) return true;
   const { plain, dotted } = foldedCopies(value);
-  if (plain !== value && (WEB_ADDRESS_LIKE.test(plain) || nonLatinAddress(plain))) {
+  if (plain !== value && webAddressIn(plain)) {
     // Review 16: when it reads as an address only once a Yoruba or Igbo dot below is taken off, and
     // only as an initial and a two-letter name ("A.Mẹ" read as "A.Me"), it's a name. Anything else
     // still counts -- a longer ending ("x.cọm"), a spaced or spelled-out dot ("evil . mẹ"), or a
     // match with no dot below at all ("x.ｍｅ").
     const kept = foldedCopies(markDotBelow(value)).plain;
-    if (WEB_ADDRESS_LIKE.test(kept) || nonLatinAddress(kept)) return true;
+    if (webAddressIn(kept)) return true;
     const withoutInitials = plain.replace(INITIAL_THEN_TWO_LETTERS, (initial) => initial.replace(new RegExp(FULL_STOP, "u"), " "));
-    if (WEB_ADDRESS_LIKE.test(withoutInitials) || nonLatinAddress(withoutInitials)) return true;
+    if (webAddressIn(withoutInitials)) return true;
+    for (const [initial] of plain.matchAll(INITIAL_THEN_TWO_LETTERS)) {
+      if (SHORT_LINK_HOSTS.has(initial.toLowerCase().replace(new RegExp(FULL_STOP, "gu"), "."))) return true;
+    }
   }
   return dotted !== plain && DOTTED_ENDING.test(dotted);
 }

@@ -363,6 +363,10 @@ export class BudgetTabPage extends BasePage {
     return this.page.getByRole("button", { name: "Cancel", exact: true });
   }
 
+  /** Review 17: the open editor's name box (for checking what's typed in it). */
+  editNameInputLocator() {
+    return this.editNameInput();
+  }
   async setEditName(name: string): Promise<void> {
     await this.editNameInput().fill(name);
   }

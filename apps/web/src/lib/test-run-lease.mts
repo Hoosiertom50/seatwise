@@ -62,7 +62,12 @@ if (url) {
   try {
     await client.connect();
     connected = true;
-    await client.query("SELECT pg_advisory_lock_shared($1)", [RUN_LEASE_KEY]);
+    // Review 17: says so when a browser run's cleanup has the lease -- the wait looked like a hang.
+    const free = (await client.query("SELECT pg_try_advisory_lock_shared($1) AS ok", [RUN_LEASE_KEY])) as { rows: { ok: boolean }[] };
+    if (!free.rows[0]?.ok) {
+      console.error("Waiting for a browser test run's cleanup of the local database to finish...");
+      await client.query("SELECT pg_advisory_lock_shared($1)", [RUN_LEASE_KEY]);
+    }
     held = true;
     // Held until the process ends; not waited on, so the tests' process still ends on its own.
     client.connection?.stream?.unref?.();

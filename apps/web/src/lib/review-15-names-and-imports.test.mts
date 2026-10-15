@@ -348,3 +348,34 @@ test("PR #116: the tsheg needs a Tibetan letter on each side, not just a Tibetan
   }
 });
 
+// Review 17.
+test("Review 17: the Mac's Irish Uí, and Ní at the end of a cell, are caught when nothing shows the file is Windows", () => {
+  for (const cell of ["U’ Bhriain", "N’", "N’ Bhriain"]) assert.equal(looksLikeMacRoman(cell, true, true, false), true, cell);
+  assert.equal(importOne(bytesFor("macintosh", "First name,Last name\r\nNora,Uí Bhriain\r\n")), "refused");
+  // Windows names stay fine.
+  for (const cell of ["D’ Souza", "O’ Brien", "Robert ‘JN’ Lee"]) assert.equal(looksLikeMacRoman(cell, true, true, false), false, cell);
+});
+
+test("Review 17: an initial with a dot below that spells a one-letter short link still counts", () => {
+  const dotBelow = "\u0323";
+  for (const name of [`t.me${dotBelow}`, `t.ly${dotBelow}`, `j.m${dotBelow}p`]) assert.equal(looksLikeWebAddress(name), true, name);
+  for (const name of ["A.Mẹ", "Ọ.Mẹ", "T. Mẹ"]) assert.equal(looksLikeWebAddress(name), false, name);
+});
+
+test("Review 17: a spaced initial or title before a two-letter name, and Dot as a name, aren't web addresses", () => {
+  for (const name of ["T. Mễ", "Dr. Mê", "J. Me", "S. Uk", "Jae U. Uk", "Mr. Uk", "A. Tv", "Anna Dot Ly", "Sam and Dot Ly Wedding", "Mary Dot Co", "Polka Dot Club", "Tom and Dot Live Here"]) {
+    assert.equal(looksLikeWebAddress(name), false, name);
+    assert.equal(weddingNameField.safeParse(name).success, true, name);
+  }
+  // Still caught.
+  for (const name of ["evil . me", "evil dot ly", "evil Dot com", "paypal . co . uk", "t.me", "x.me"]) assert.equal(looksLikeWebAddress(name), true, name);
+});
+
+test("Review 17: a joiner after a virama ends a word only after a Bengali or Malayalam letter", () => {
+  const zwj = "\u200D";
+  for (const name of [`Smith\u09CD${zwj}`, `ab\u09CD${zwj} Smith`]) {
+    assert.equal(createGuestSchema.safeParse({ firstName: name, lastName: "Lee" }).success, false, name);
+  }
+  for (const name of ["അര്‍ജുന്‍", "শরত্‍"]) assert.equal(createGuestSchema.safeParse({ firstName: name, lastName: "Nair" }).success, true, name);
+});
+

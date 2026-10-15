@@ -169,6 +169,18 @@ export class TimelineTabPage extends BasePage {
     await this.editButton(description).click();
   }
 
+  /** Review 17: the open editor's description box (for typing without saving, and checking it). */
+  editDescriptionInputLocator() {
+    return this.editDescriptionInput();
+  }
+  /** Review 17: clicks Save without waiting for its answer. */
+  async clickSaveEdit(): Promise<void> {
+    await this.saveButton().click();
+  }
+  async cancelEdit(): Promise<void> {
+    await this.page.getByRole("button", { name: "Cancel", exact: true }).click();
+  }
+
   /** Waits for the PATCH to resolve before returning -- onSaveEdit updates React state directly
    * from the response body (no separate refetch), so this is the only network call to wait for. */
   async saveEdit(newTime: string, newDescription: string): Promise<void> {

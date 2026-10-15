@@ -268,8 +268,9 @@ const MAC_ROMAN_IN_A_NAME_UNLESS_WINDOWS = new RegExp(
     // Review 15: Irish "Ní" (Mac í is ’ in windows-1252, so "N’ Bhriain"). Review 16: only N’ before a
     // space, and here, not in MAC_ROMAN_IN_A_NAME -- any capital before ’ and a space used to count,
     // even in a file that shows it's Windows, so "D’ Souza", "O’ Brien" or "JONES’" got the whole
-    // import refused. Not the closing ’ of a quoted nickname ("Robert ‘JN’ Lee").
-    `(?<![\\p{L}\\p{M}])N’(?= )(?<!['‘"“][\\p{L}\\p{M}]*’)(?<![‘"“][\\p{L}\\p{M} .-]*’)(?<!(?<![\\p{L}\\p{M}])'[\\p{L}\\p{M} .-]*’)`,
+    // import refused. Not the closing ’ of a quoted nickname ("Robert ‘JN’ Lee"). Review 17: the married
+    // name "Uí" too, and either one ending the cell ("Ní" on its own).
+    `(?<![\\p{L}\\p{M}])[NU]’(?= |$)(?<!['‘"“][\\p{L}\\p{M}]*’)(?<![‘"“][\\p{L}\\p{M} .-]*’)(?<!(?<![\\p{L}\\p{M}])'[\\p{L}\\p{M} .-]*’)`,
   ].join("|"),
   "u"
 );

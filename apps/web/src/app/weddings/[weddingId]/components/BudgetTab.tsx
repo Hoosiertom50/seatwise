@@ -394,9 +394,12 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
         { ...changes, expectedRevision }
       );
       setVendors((cur) => sortVendors(cur.map((v) => (v.id === vendorId ? vendor : v))));
-      setEditingId(null);
-      // TS-212: back to this vendor's Edit button.
-      focusIfLost(`vendor-${vendorId}-edit`);
+      // Review 17: only if this vendor's editor is still the one open (see the Timeline tab).
+      if (editingIdRef.current === vendorId) {
+        setEditingId(null);
+        // TS-212: back to this vendor's Edit button.
+        focusIfLost(`vendor-${vendorId}-edit`);
+      }
       await refreshSummary();
     } catch (err) {
       const fresh = conflictVendor(err);
@@ -404,13 +407,15 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
         setVendors((cur) => cur.map((v) => (v.id === vendorId ? fresh : v)));
         // TS-175: close the editor, as Timeline does. It used to stay open with the old values,
         // and a second Save then wrote them over the other person's change.
-        setEditingId(null);
-        focusIfLost(`vendor-${vendorId}-edit`);
+        if (editingIdRef.current === vendorId) {
+          setEditingId(null);
+          focusIfLost(`vendor-${vendorId}-edit`);
+        }
         setError(`"${fresh.name}" changed since you loaded it (maybe in another tab, or by someone else) — showing the latest. Try again if you still want to make this change.`);
       } else if (isItemGoneError(err)) {
         // TS-209: removed by someone else while this was being edited -- it's gone from the list.
         setVendors((cur) => cur.filter((v) => v.id !== vendorId));
-        setEditingId(null);
+        if (editingIdRef.current === vendorId) setEditingId(null);
         setError("That vendor was removed (maybe in another tab, or by someone else) — the list has been updated.");
       } else {
         // TS-151: say which field was refused, not just "Validation failed".

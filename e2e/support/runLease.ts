@@ -130,10 +130,19 @@ export async function takeSweepTurnAfterUnitTests(connectionString: string, wait
     await client.connect();
     const { rows } = await client.query<{ name: string | null }>(
       `SELECT a.application_name AS name FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid
-       WHERE l.locktype = 'advisory' AND l.objid = $1 AND l.mode = 'ShareLock' AND l.granted`,
+       WHERE l.locktype = 'advisory' AND l.mode = 'ShareLock' AND l.granted
+         -- PR #116 review: this database only (advisory locks are per database, pg_locks isn't),
+         -- and the whole key as one bigint (classid holds its high half, objsubid 1 marks the form).
+         AND l.database = (SELECT oid FROM pg_database WHERE datname = current_database())
+         AND l.classid = ($1::bigint >> 32)::oid AND l.objid = ($1::bigint & 4294967295)::oid AND l.objsubid = 1`,
       [RUN_LEASE_KEY]
     );
-    if (rows.length === 0 || !rows.every((r) => r.name?.startsWith(UNIT_TEST_LEASE_NAME))) {
+    if (rows.length === 0) {
+      // PR #116 review: the last holder let go between the first try and this look -- try again.
+      await client.end().catch(() => undefined);
+      return takeSweepTurn(connectionString);
+    }
+    if (!rows.every((r) => r.name?.startsWith(UNIT_TEST_LEASE_NAME))) {
       await client.end().catch(() => undefined);
       return null;
     }

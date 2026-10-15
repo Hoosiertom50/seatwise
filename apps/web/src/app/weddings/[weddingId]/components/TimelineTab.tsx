@@ -33,6 +33,11 @@ export function TimelineTab({ weddingId, canEdit }: { weddingId: string; canEdit
   const [adding, setAdding] = useState(false);
 
   const [editingId, setEditingId] = useState<string | null>(null);
+  // Review 17: which entry's editor is open now -- a save that comes back late closes only its own.
+  const editingIdRef = useRef(editingId);
+  useEffect(() => {
+    editingIdRef.current = editingId;
+  }, [editingId]);
   const [editTime, setEditTime] = useState("");
   const [editNextDay, setEditNextDay] = useState(false);
   const [editDescription, setEditDescription] = useState("");
@@ -130,9 +135,13 @@ export function TimelineTab({ weddingId, canEdit }: { weddingId: string; canEdit
           .map((e) => (e.id === entryId ? entry : e))
           .sort(compareTimelineEntries)
       );
-      setEditingId(null);
-      // TS-212: back to this entry's Edit button (wherever the new time put it).
-      focusIfLost(`timeline-${entryId}-edit`);
+      // Review 17: only if this entry's editor is still the one open -- after Cancel, another entry
+      // may be open with typing in it, which this used to close (losing it) and take focus from.
+      if (editingIdRef.current === entryId) {
+        setEditingId(null);
+        // TS-212: back to this entry's Edit button (wherever the new time put it).
+        focusIfLost(`timeline-${entryId}-edit`);
+      }
     } catch (err) {
       // TS-92: someone else changed this entry first. Show their version and say plainly that
       // this edit was not saved -- the edit box closes so the stale text can't be mistaken for
@@ -144,8 +153,10 @@ export function TimelineTab({ weddingId, canEdit }: { weddingId: string; canEdit
             .map((e) => (e.id === entryId ? fresh : e))
             .sort(compareTimelineEntries)
         );
-        setEditingId(null);
-        focusIfLost(`timeline-${entryId}-edit`);
+        if (editingIdRef.current === entryId) {
+          setEditingId(null);
+          focusIfLost(`timeline-${entryId}-edit`);
+        }
       }
       setError(apiErrorMessage(err, [], "Couldn't save that change."));
     } finally {
