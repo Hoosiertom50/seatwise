@@ -333,7 +333,7 @@ test("PR #116: the dot-below exception is only for an initial and a two-letter n
     assert.equal(looksLikeWebAddress(name), true, name);
   }
   // The initial-and-name spellings still pass.
-  for (const name of ["A.Mẹ", "T. Mẹ", "Ọrụ", "Tọ́pẹ́"]) assert.equal(looksLikeWebAddress(name), false, name);
+  for (const name of ["A.Mẹ", "T. Mẹ", "Ọ.Mẹ", "Ọ. Mẹ", "Ọrụ", "Tọ́pẹ́"]) assert.equal(looksLikeWebAddress(name), false, name);
 });
 
 test("PR #116: the tsheg needs a Tibetan letter on each side, not just a Tibetan mark", () => {

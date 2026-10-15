@@ -262,14 +262,15 @@ export function looksLikeWebAddress(value: string): boolean {
 }
 
 // Review 16: a dot below a Latin letter is a letter of its own in Yoruba, Igbo and Vietnamese (ẹ, ọ,
-// ụ). For the check below it's marked with a letter that can't be part of a web ending (ǂ), so the
-// copy is folded like every other (compatibility forms, hidden characters, other marks) but "Mẹ"
-// doesn't become "Me".
+// ụ). For the check below such a letter is replaced by one that can't be part of a web ending (ǂ),
+// so the copy is folded like every other (compatibility forms, hidden characters, other marks) but
+// "Mẹ" doesn't become "Me". PR #116 review: replaced, not followed -- an initial stays one letter
+// ("Ọ.Mẹ" was read as two letters, a dot and two letters).
 function markDotBelow(value: string): string {
   return value
     .normalize("NFD")
     .replace(/(\p{Script=Latin})(\p{M}+)/gu, (whole, letter: string, marks: string) =>
-      marks.includes("\u0323") ? letter + marks.replace("\u0323", "") + "\u01C2" : whole
+      marks.includes("\u0323") ? "\u01C2" + marks.replace("\u0323", "") : whole
     )
     .normalize("NFC");
 }
