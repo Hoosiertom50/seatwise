@@ -198,7 +198,10 @@ defineQualityTest(
       // The reloaded page takes its leftover extra history entry off with a Back of its own; a Back
       // pressed in those few milliseconds was cancelled by it on Firefox (NS_BINDING_ABORTED).
       await waitForPageToSettle(page);
-      await page.goBack();
+      // The account is gone, so the page Back reaches (the dashboard) sends the browser on to sign in
+      // while it loads -- Firefox then reports the Back's own load as cancelled (NS_BINDING_ABORTED).
+      // Leaving /account is what's checked, so the Back only has to get going.
+      await page.goBack({ waitUntil: "commit" });
       await expect(page).not.toHaveURL(/\/account$/);
     } finally {
       await context.close();
