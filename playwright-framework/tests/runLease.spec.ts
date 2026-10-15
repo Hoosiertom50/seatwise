@@ -162,3 +162,36 @@ test("while a unit-test process runs, the sweep doesn't get its turn", async () 
     }, { timeout: 10_000 })
     .toBe(true);
 });
+
+// PR #116 review: a unit-test process whose share ends part-way fails, saying why (as an e2e run does).
+test("a unit-test process whose share of the lease ends part-way fails, saying why", async () => {
+  test.skip(!(await localDatabaseReachable()), "no local database to hold the lease on");
+  const url = resolveDatabaseUrl()!;
+  const holder = spawn(
+    TSX_BIN,
+    ["--import", "./apps/web/src/lib/test-run-lease.mts", resolve(REPO_ROOT, "playwright-framework/tests/fixtures/unitTestLeaseHolder.mjs")],
+    { cwd: REPO_ROOT, env: { ...process.env, DATABASE_URL: url, HOLD_MS: "4000" } }
+  );
+  let stderr = "";
+  holder.stderr.on("data", (chunk: Buffer) => (stderr += chunk.toString()));
+  const exited = new Promise<number | null>((done) => holder.on("exit", (code) => done(code)));
+  await new Promise<void>((done) => {
+    holder.stdout.on("data", (chunk: Buffer) => {
+      if (chunk.toString().includes("holding")) done();
+    });
+  });
+  const admin = new Client({ connectionString: url, connectionTimeoutMillis: 2_000 });
+  admin.on("error", () => undefined);
+  await admin.connect();
+  try {
+    const { rows } = await admin.query<{ pid: number }>(
+      "SELECT pid FROM pg_stat_activity WHERE application_name = 'seatwise-unit-test-lease' ORDER BY backend_start DESC LIMIT 1"
+    );
+    expect(rows[0]).toBeTruthy();
+    await admin.query("SELECT pg_terminate_backend($1)", [rows[0].pid]);
+  } finally {
+    await admin.end().catch(() => undefined);
+  }
+  expect(await exited).toBe(1);
+  expect(stderr).toContain("lost its hold on the local database");
+});

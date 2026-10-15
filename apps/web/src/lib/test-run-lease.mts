@@ -37,7 +37,7 @@ type Client = {
   connect: () => Promise<void>;
   query: (text: string, params?: unknown[]) => Promise<unknown>;
   end: () => Promise<void>;
-  on: (event: "error", listener: () => void) => void;
+  on: (event: "error", listener: (err: Error) => void) => void;
   connection?: { stream?: { unref?: () => void } };
 };
 
@@ -48,10 +48,20 @@ if (url) {
   };
   // Named, so the lease can be seen in pg_stat_activity.
   const client = new pg.Client({ connectionString: url, connectionTimeoutMillis: 2_000, application_name: "seatwise-unit-test-lease" });
-  client.on("error", () => undefined);
+  let held = false;
+  // Review 16 (PR #116 review): a lease lost once held (the database restarted, or the connection
+  // was ended) fails this test file with the reason, as an e2e run that loses its lease does -- a
+  // sweep could have deleted its accounts meanwhile. Before it's held, an error is just "no local
+  // database" (below).
+  client.on("error", (err: Error) => {
+    if (!held) return;
+    console.error(`This test file lost its hold on the local database part-way (${err.message}), so a browser run's cleanup may have deleted its test accounts mid-test. Run it again.`);
+    process.exitCode = 1;
+  });
   try {
     await client.connect();
     await client.query("SELECT pg_advisory_lock_shared($1)", [RUN_LEASE_KEY]);
+    held = true;
     // Held until the process ends; not waited on, so the tests' process still ends on its own.
     client.connection?.stream?.unref?.();
   } catch {

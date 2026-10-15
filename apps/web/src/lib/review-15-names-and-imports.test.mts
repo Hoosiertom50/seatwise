@@ -321,3 +321,18 @@ test("Review 16: Malayalam and Bengali names typed the older way (a joiner after
   assert.equal(hasHiddenCharacters("राम\u200D"), true);
 });
 
+// PR #116 review (Copilot).
+test("PR #116: the dot-below exception is only for an initial and a two-letter name", () => {
+  // Compatibility forms with no dot below at all are still caught.
+  for (const name of ["x.\uFF4D\uFF45", "t.\u1D50\u1D49", "x.\uFF4D\uFF45 evil"]) {
+    assert.equal(looksLikeWebAddress(name), true, name);
+    assert.equal(weddingNameField.safeParse(name).success, false, name);
+  }
+  // A spaced or spelled-out dot with a dot below is still caught, and so is a second address beside an initial.
+  for (const name of ["evil . mẹ", "evil dot mẹ", "A.Mẹ evil . mẹ"]) {
+    assert.equal(looksLikeWebAddress(name), true, name);
+  }
+  // The initial-and-name spellings still pass.
+  for (const name of ["A.Mẹ", "T. Mẹ", "Ọrụ", "Tọ́pẹ́"]) assert.equal(looksLikeWebAddress(name), false, name);
+});
+

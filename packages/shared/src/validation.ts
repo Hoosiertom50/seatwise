@@ -132,9 +132,6 @@ function webAddressLike(endings: string, spacedEndings: string, spelledDotEnding
   );
 }
 export const WEB_ADDRESS_LIKE = webAddressLike(DOMAIN_ENDINGS, SPACED_LETTER_ENDINGS, SPELLED_DOT_ENDINGS);
-// Review 16: the same with only the endings three letters or longer -- see addressIn ("A.Mẹ").
-const longerOnly = (endings: string) => endings.split("|").filter((e) => e.replace(/\\s\*/g, "").length > 2).join("|");
-const WEB_ADDRESS_LIKE_LONGER_ENDINGS = webAddressLike(longerOnly(DOMAIN_ENDINGS), longerOnly(SPACED_LETTER_ENDINGS), longerOnly(SPELLED_DOT_ENDINGS));
 export const NO_WEB_ADDRESS_MESSAGE = "Can't look like a web address";
 // TS-262: the check also runs on a copy with accent marks and hidden characters taken out -- an
 // invisible mark inside "com" ("evil.c" + U+034F + "om") stopped the match, though it still reads
@@ -263,25 +260,33 @@ export function looksLikeWebAddress(value: string): boolean {
   return addressIn(value) || (joined !== value && addressIn(joined));
 }
 
-// Review 16: a dot below a Latin letter is a letter of its own in Yoruba, Igbo and Vietnamese
-// (ẹ, ọ, ụ) -- kept in this copy, unlike every other mark.
-const LATIN_DOT_BELOW = /(?<=\p{Script=Latin})\u0323/u;
-function plainKeepingDotBelow(value: string): string {
+// Review 16: a dot below a Latin letter is a letter of its own in Yoruba, Igbo and Vietnamese (ẹ, ọ,
+// ụ). For the check below it's marked with a letter that can't be part of a web ending (ǂ), so the
+// copy is folded like every other (compatibility forms, hidden characters, other marks) but "Mẹ"
+// doesn't become "Me".
+function markDotBelow(value: string): string {
   return value
     .normalize("NFD")
-    .replace(/(\p{Script=Latin})(\p{M}+)/gu, (_, letter: string, marks: string) => letter + (LATIN_DOT_BELOW.test(letter + marks) ? "\u0323" : ""))
+    .replace(/(\p{Script=Latin})(\p{M}+)/gu, (whole, letter: string, marks: string) =>
+      marks.includes("\u0323") ? letter + marks.replace("\u0323", "") + "\u01C2" : whole
+    )
     .normalize("NFC");
 }
+// Review 16: an initial, a dot and a two-letter word ("A.Me", "T. Me").
+const INITIAL_THEN_TWO_LETTERS = new RegExp(String.raw`(?<![\p{L}\p{N}])\p{L}\s*${FULL_STOP}\s*\p{L}{2}(?![\p{L}\p{N}])`, "gu");
 
 function addressIn(value: string): boolean {
   if (WEB_ADDRESS_LIKE.test(value) || nonLatinAddress(value)) return true;
   const { plain, dotted } = foldedCopies(value);
   if (plain !== value && (WEB_ADDRESS_LIKE.test(plain) || nonLatinAddress(plain))) {
-    // Review 16: when it reads as an address only once a Yoruba or Igbo dot below is taken off
-    // ("A.Mẹ", an initial and a name, read as "A.Me"), only a longer ending counts ("x.cọm" does).
-    const kept = plainKeepingDotBelow(value);
-    if (kept === plain || WEB_ADDRESS_LIKE.test(kept) || nonLatinAddress(kept)) return true;
-    if (WEB_ADDRESS_LIKE_LONGER_ENDINGS.test(plain)) return true;
+    // Review 16: when it reads as an address only once a Yoruba or Igbo dot below is taken off, and
+    // only as an initial and a two-letter name ("A.Mẹ" read as "A.Me"), it's a name. Anything else
+    // still counts -- a longer ending ("x.cọm"), a spaced or spelled-out dot ("evil . mẹ"), or a
+    // match with no dot below at all ("x.ｍｅ").
+    const kept = foldedCopies(markDotBelow(value)).plain;
+    if (WEB_ADDRESS_LIKE.test(kept) || nonLatinAddress(kept)) return true;
+    const withoutInitials = plain.replace(INITIAL_THEN_TWO_LETTERS, (initial) => initial.replace(new RegExp(FULL_STOP, "u"), " "));
+    if (WEB_ADDRESS_LIKE.test(withoutInitials) || nonLatinAddress(withoutInitials)) return true;
   }
   return dotted !== plain && DOTTED_ENDING.test(dotted);
 }
