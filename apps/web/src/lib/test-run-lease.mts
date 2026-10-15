@@ -58,14 +58,22 @@ if (url) {
     console.error(`This test file lost its hold on the local database part-way (${err.message}), so a browser run's cleanup may have deleted its test accounts mid-test. Run it again.`);
     process.exitCode = 1;
   });
+  let connected = false;
   try {
     await client.connect();
+    connected = true;
     await client.query("SELECT pg_advisory_lock_shared($1)", [RUN_LEASE_KEY]);
     held = true;
     // Held until the process ends; not waited on, so the tests' process still ends on its own.
     client.connection?.stream?.unref?.();
-  } catch {
-    // No reachable local database: the tests that need one skip themselves.
+  } catch (err) {
     await client.end().catch(() => undefined);
+    // PR #116 review: the database is there but the lease couldn't be taken -- the tests would run
+    // unprotected while a sweep deletes their accounts, so this test file stops instead.
+    if (connected) {
+      console.error(`This test file couldn't take its hold on the local database (${err instanceof Error ? err.message : String(err)}), so it doesn't run. Run it again.`);
+      process.exit(1);
+    }
+    // No reachable local database: the tests that need one skip themselves.
   }
 }

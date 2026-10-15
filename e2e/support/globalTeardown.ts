@@ -58,7 +58,7 @@ import { isLocalDatabaseUrl, resolveIsProduction } from "./productionGuard";
 import { TEST_ADDRESS_PREFIXES, TEST_DATA_MARKER } from "../data/ids";
 import { TEST_ACCOUNT_EMAIL_DOMAIN } from "./auth";
 import { resolveDatabaseUrl } from "./testDatabase";
-import { leaseLostMessage, releaseRunLease, takeSweepTurn, type SweepTurn } from "./runLease";
+import { leaseLostMessage, releaseRunLease, takeSweepTurnAfterUnitTests, type SweepTurn } from "./runLease";
 
 /** Set PW_TEARDOWN_SWEEP to exactly this to inspect without deleting. Any other value (including
  * unset) sweeps for real -- see guard 2 above for why this is opt-out rather than opt-in. */
@@ -172,7 +172,8 @@ async function sweep(): Promise<void> {
     // Review 14: another run still going against this database -- its accounts and weddings would
     // be swept away from under it (it found itself signed out mid-test). The last run to finish
     // sweeps.
-    sweepTurn = await takeSweepTurn(connectionString);
+    // Review 16: unit-test files using the database are waited for (they never sweep themselves).
+    sweepTurn = await takeSweepTurnAfterUnitTests(connectionString);
     if (!sweepTurn) {
       console.log("[teardown-sweep] SKIPPED: another test run is still using this database; the last run to finish sweeps.");
       return;

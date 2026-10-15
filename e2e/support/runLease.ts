@@ -110,3 +110,48 @@ export async function takeSweepTurn(connectionString: string): Promise<SweepTurn
     throw err;
   }
 }
+
+/** The web unit tests' lease connections are named this (apps/web/src/lib/test-run-lease.mts). */
+const UNIT_TEST_LEASE_NAME = "seatwise-unit-test-lease ";
+
+/**
+ * Review 16 (PR #116 review): the sweep's turn when only unit-test processes hold a share. Unit-test
+ * files end within minutes and never sweep -- skipping, as for another browser run, left this run's
+ * accounts and weddings behind until a later run. So it waits for them (up to `waitMs`), while a
+ * browser run's share still means "skip, that run sweeps when it ends". Null when another browser
+ * run holds a share, or the wait ran out.
+ */
+export async function takeSweepTurnAfterUnitTests(connectionString: string, waitMs = 5 * 60_000): Promise<SweepTurn | null> {
+  const turn = await takeSweepTurn(connectionString);
+  if (turn) return turn;
+  const client = new Client({ connectionString, connectionTimeoutMillis: 3_000 });
+  client.on("error", () => undefined);
+  try {
+    await client.connect();
+    const { rows } = await client.query<{ name: string | null }>(
+      `SELECT a.application_name AS name FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid
+       WHERE l.locktype = 'advisory' AND l.objid = $1 AND l.mode = 'ShareLock' AND l.granted`,
+      [RUN_LEASE_KEY]
+    );
+    if (rows.length === 0 || !rows.every((r) => r.name?.startsWith(UNIT_TEST_LEASE_NAME))) {
+      await client.end().catch(() => undefined);
+      return null;
+    }
+    // Waiting for the lock also holds back new shares (Postgres queues them behind it), so a unit-test
+    // file or browser run starting meanwhile waits for the sweep, as with takeSweepTurn.
+    await client.query(`SET lock_timeout = ${Math.max(1, Math.round(waitMs))}`);
+    await client.query("SELECT pg_advisory_lock($1)", [RUN_LEASE_KEY]);
+    await client.query("SET lock_timeout = 0");
+    return {
+      client,
+      release: async () => {
+        await client.query("SELECT pg_advisory_unlock($1)", [RUN_LEASE_KEY]).catch(() => undefined);
+        await client.end().catch(() => undefined);
+      },
+    };
+  } catch {
+    // The wait ran out (lock_timeout), or the connection failed: no turn this time.
+    await client.end().catch(() => undefined);
+    return null;
+  }
+}

@@ -140,10 +140,12 @@ test("while a unit-test process runs, the sweep doesn't get its turn", async () 
       env: { ...process.env, DATABASE_URL: url },
     }
   );
+  let holderPid = "";
   try {
-    await new Promise<void>((done, fail) => {
+    holderPid = await new Promise<string>((done, fail) => {
       holder.stdout.on("data", (chunk: Buffer) => {
-        if (chunk.toString().includes("holding")) done();
+        const found = /holding (\d+)/.exec(chunk.toString());
+        if (found) done(found[1]);
       });
       holder.on("exit", () => fail(new Error("the stand-in unit-test process ended early")));
     });
@@ -153,14 +155,21 @@ test("while a unit-test process runs, the sweep doesn't get its turn", async () 
   } finally {
     holder.kill();
   }
-  // Its share goes with the process.
-  await expect
-    .poll(async () => {
-      const after = await takeSweepTurn(url);
-      await after?.release();
-      return after !== null;
-    }, { timeout: 10_000 })
-    .toBe(true);
+  // Its share goes with the process. PR #116 review: its own lease connection is watched -- not the
+  // whole lease, which another run starting meanwhile may hold quite rightly.
+  const admin = new Client({ connectionString: url, connectionTimeoutMillis: 2_000 });
+  admin.on("error", () => undefined);
+  await admin.connect();
+  try {
+    await expect
+      .poll(async () => {
+        const { rows } = await admin.query("SELECT 1 FROM pg_stat_activity WHERE application_name = $1", [`seatwise-unit-test-lease ${holderPid}`]);
+        return rows.length;
+      }, { timeout: 10_000 })
+      .toBe(0);
+  } finally {
+    await admin.end().catch(() => undefined);
+  }
 });
 
 // PR #116 review: a unit-test process whose share ends part-way fails, saying why (as an e2e run does).
@@ -198,4 +207,71 @@ test("a unit-test process whose share of the lease ends part-way fails, saying w
   }
   expect(await exited).toBe(1);
   expect(stderr).toContain("lost its hold on the local database");
+});
+
+// PR #116 review: the sweep waits for unit-test processes (they never sweep), but not for another
+// browser run (which sweeps when it ends).
+test("the sweep waits for unit-test processes, but not for another browser run", async () => {
+  test.skip(!(await localDatabaseReachable()), "no local database to hold the lease on");
+  const { takeSweepTurn, takeSweepTurnAfterUnitTests, RUN_LEASE_KEY } = await import("../../e2e/support/runLease");
+  const url = resolveDatabaseUrl()!;
+  const free = await takeSweepTurn(url);
+  test.skip(free === null, "a test run holds the lease already");
+  await free!.release();
+
+  // A unit-test process holding a share for about two seconds: the sweep gets its turn once it ends.
+  const holder = spawn(
+    TSX_BIN,
+    ["--import", "./apps/web/src/lib/test-run-lease.mts", resolve(REPO_ROOT, "playwright-framework/tests/fixtures/unitTestLeaseHolder.mjs")],
+    { cwd: REPO_ROOT, env: { ...process.env, DATABASE_URL: url, HOLD_MS: "2000" } }
+  );
+  try {
+    await new Promise<void>((done) => holder.stdout.on("data", (chunk: Buffer) => chunk.toString().includes("holding") && done()));
+    const started = Date.now();
+    const turn = await takeSweepTurnAfterUnitTests(url, 20_000);
+    await turn?.release();
+    expect(turn).not.toBeNull();
+    expect(Date.now() - started).toBeGreaterThan(500);
+  } finally {
+    holder.kill();
+  }
+
+  // A browser run's share (an unnamed connection, as takeRunLease's): no waiting, no turn.
+  const browserRun = new Client({ connectionString: url, connectionTimeoutMillis: 2_000 });
+  browserRun.on("error", () => undefined);
+  await browserRun.connect();
+  try {
+    await browserRun.query("SELECT pg_advisory_lock_shared($1)", [RUN_LEASE_KEY]);
+    const started = Date.now();
+    const turn = await takeSweepTurnAfterUnitTests(url, 20_000);
+    await turn?.release();
+    expect(turn).toBeNull();
+    expect(Date.now() - started).toBeLessThan(5_000);
+  } finally {
+    await browserRun.end().catch(() => undefined);
+  }
+});
+
+// PR #116 review: connected, but the lease can't be taken -- the test file stops rather than run
+// unprotected. (A lock_timeout makes the wait for the lease fail while a sweep holds it.)
+test("a unit-test process that connects but can't take its share stops", async () => {
+  test.skip(!(await localDatabaseReachable()), "no local database to hold the lease on");
+  const { takeSweepTurn } = await import("../../e2e/support/runLease");
+  const url = resolveDatabaseUrl()!;
+  const sweep = await takeSweepTurn(url);
+  test.skip(sweep === null, "a test run holds the lease already");
+  try {
+    const withTimeout = new URL(url);
+    withTimeout.searchParams.set("options", "-c lock_timeout=300");
+    const result = spawnSync(
+      TSX_BIN,
+      ["--import", "./apps/web/src/lib/test-run-lease.mts", resolve(REPO_ROOT, "playwright-framework/tests/fixtures/unitTestLeaseHolder.mjs")],
+      { cwd: REPO_ROOT, encoding: "utf-8", timeout: 30_000, env: { ...process.env, DATABASE_URL: withTimeout.toString(), HOLD_MS: "100" } }
+    );
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("couldn't take its hold on the local database");
+    expect(result.stdout).not.toContain("holding");
+  } finally {
+    await sweep!.release();
+  }
 });
