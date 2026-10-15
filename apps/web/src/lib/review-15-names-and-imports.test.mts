@@ -425,3 +425,12 @@ test("PR #116: Mrs and other titles, and an initial with a separate accent mark,
   }
   for (const name of ["mrs . me", "evil-mrs . me", "Paypal . Co . Uk"]) assert.equal(looksLikeWebAddress(name), true, name);
 });
+
+// PR #116 review (Copilot round 9).
+test("PR #116: Me after Dot as a name reads as a name; a lowercase Dot Me address doesn't", () => {
+  for (const name of ["Anna Dot Me", "Anna Dot Mễ"]) {
+    assert.equal(looksLikeWebAddress(name), false, name);
+    assert.equal(weddingNameField.safeParse(name).success, true, name);
+  }
+  for (const name of ["evil Dot Me", "evil dot me", "Anna dot me"]) assert.equal(looksLikeWebAddress(name), true, name);
+});

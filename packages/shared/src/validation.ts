@@ -300,10 +300,11 @@ const SPACED_INITIAL_THEN_TWO_LETTERS = new RegExp(
 // "Polka Dot Club") -- the spelled-out "dot" takes every ending since review 16.
 // Review 18: as a name is written -- a capitalised name before it (or "and", "&", or nothing) and a
 // capitalised word after it; "evil Dot Co" and "bit Dot Ly" got through. PR #116 review: that name may
-// hold a name's hyphen, apostrophe or accent marks ("Mary-Jane Dot Ly", "O'Brien Dot Co"). "Dot" is matched first and only
+// hold a name's hyphen, apostrophe or accent marks ("Mary-Jane Dot Ly", "O'Brien Dot Co"), and "Me" (the
+// surname, "Anna Dot Mễ") is among the words after it. "Dot" is matched first and only
 // then looked behind (looking behind from every position over a run of spaces took time growing with
 // its square).
-const DOT_AS_A_NAME = /Dot(?<=(?:^|(?:^|\s)(?:\p{Lu}[\p{L}\p{M}'’-]*|and|&)\s+)Dot)(?=\s+(?:Ly|Co|Club|Live|Link)(?![\p{L}\p{N}]))/gu;
+const DOT_AS_A_NAME = /Dot(?<=(?:^|(?:^|\s)(?:\p{Lu}[\p{L}\p{M}'’-]*|and|&)\s+)Dot)(?=\s+(?:Ly|Co|Club|Live|Link|Me)(?![\p{L}\p{N}]))/gu;
 function readAsNames(text: string): string {
   return text
     .replace(SPACED_INITIAL_THEN_TWO_LETTERS, (initial) => initial.replace(new RegExp(FULL_STOP, "u"), " "))
