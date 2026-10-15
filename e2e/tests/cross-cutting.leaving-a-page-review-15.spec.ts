@@ -170,39 +170,50 @@ defineQualityTest(
     title: "after deleting the account, a reload asks nothing and Back leaves the page",
     objective:
       "Confirms (PR #115 review) that once an account is deleted from the Account page, the typed password no longer counts as unsaved: reloading the 'deleted' page brings up no browser question, and the browser's Back leaves /account (it used to ask a question that page never shows, so Back did nothing).",
-    expectedOutcome: "After the delete: the 'deleted' heading shows; a reload asks no browser question; Back lands on a page other than /account.",
+    expectedOutcome: "After a delete: the 'deleted' heading shows and Back lands on a page other than /account. After another delete: a reload asks no browser question and the page goes to the sign-in page.",
     requirementIds: ["REQ-ACCOUNT-WEDDING-MANAGEMENT", "REQ-NON-FUNCTIONAL"],
     tags: ["@mutating", "@feature:account", "@risk:normal", "@suite:regression"],
   },
   async ({ browser }, testInfo) => {
     const context = await browser.newContext({ extraHTTPHeaders: { "x-forwarded-for": uniqueTestAddress() } });
     try {
-      const token = uniqueToken(testInfo.workerIndex);
-      const email = `pw-tester-deleted-${token}${TEST_ACCOUNT_EMAIL_DOMAIN}`;
-      const password = `pw-${token}-long-enough`;
-      expect((await context.request.post("/api/v1/auth/signup", { data: { name: `Playwright Tester ${token}`, email, password } })).ok()).toBe(true);
       const page = await context.newPage();
       const accountPage = new AccountPage(page);
-      await new DashboardPage(page).goto();
-      await accountPage.goto();
-      await accountPage.deleteAccount(password);
-      await expect(accountPage.deletedHeading()).toBeVisible();
+      // Signs up a fresh account in this browser and deletes it from the Account page.
+      const signUpAndDelete = async (suffix: string) => {
+        // Letters only: a name can't hold digits.
+        const token = `${uniqueToken(testInfo.workerIndex)}${suffix}`;
+        const email = `pw-tester-deleted-${token}${TEST_ACCOUNT_EMAIL_DOMAIN}`;
+        const password = `pw-${token}-long-enough`;
+        expect((await context.request.post("/api/v1/auth/signup", { data: { name: `Playwright Tester ${token}`, email, password } })).ok()).toBe(true);
+        await new DashboardPage(page).goto();
+        await accountPage.goto();
+        await accountPage.deleteAccount(password);
+        await expect(accountPage.deletedHeading()).toBeVisible();
+      };
 
-      const questions = watchBrowserQuestions(page);
-      try {
-        await page.reload();
-      } finally {
-        questions.stop();
-      }
-      expect(questions.asked).toEqual([]);
-      // The reloaded page takes its leftover extra history entry off with a Back of its own; a Back
-      // pressed in those few milliseconds was cancelled by it on Firefox (NS_BINDING_ABORTED).
-      await waitForPageToSettle(page);
-      // The account is gone, so the page Back reaches (the dashboard) sends the browser on to sign in
-      // while it loads -- Firefox then reports the Back's own load as cancelled (NS_BINDING_ABORTED).
-      // Leaving /account is what's checked, so the Back only has to get going.
-      await page.goBack({ waitUntil: "commit" });
-      await expect(page).not.toHaveURL(/\/account$/);
+      // Review 16: Back and reload are checked on two accounts -- after a reload the deleted
+      // account's page sends the browser on to sign in, and a Back pressed then was cancelled by
+      // that (Firefox: NS_BINDING_ABORTED).
+      await test.step("Back from the 'deleted' page leaves it", async () => {
+        await signUpAndDelete("a");
+        // The page takes its extra history entry off with a Back of its own first (see pageSettled.ts).
+        await waitForPageToSettle(page);
+        await page.goBack({ waitUntil: "commit" });
+        await expect(page).not.toHaveURL(/\/account$/);
+      });
+
+      await test.step("A reload of the 'deleted' page asks nothing and goes to sign in", async () => {
+        await signUpAndDelete("b");
+        const questions = watchBrowserQuestions(page);
+        try {
+          await page.reload();
+          await expect(page).toHaveURL(/\/login/);
+        } finally {
+          questions.stop();
+        }
+        expect(questions.asked).toEqual([]);
+      });
     } finally {
       await context.close();
     }

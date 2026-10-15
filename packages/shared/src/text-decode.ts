@@ -211,11 +211,7 @@ const MAC_ROMAN_IN_A_NAME = new RegExp(
     `\\p{L}œ(?![ui])\\p{Ll}`,
     `(?:\\p{Ll}‘|[^\\P{Ll}aeiou]’)(?![\\p{L}\\p{M}])(?<!['‘"“][\\p{L}\\p{M}]*[’‘])(?<![‘"“][\\p{L}\\p{M} .-]*[’‘])(?<!(?<![\\p{L}\\p{M}])'[\\p{L}\\p{M} .-]*[’‘])`,
     `\\p{Ll}[ÕÔ]\\p{L}|\\p{Lu}[ÕÔ]\\p{Lu}\\p{Ll}`,
-    // Review 15: Irish "Ní" (N’ then a space), and œ (Ï inside a word). ("Ó" and Œ: see below.)
-    // PR #115 review: not the closing ’ of a quoted nickname, one word or several ("Robert ‘AJ’",
-    // "‘Bobby J’", "‘A-J’") -- the same exclusions as the small-letter rule above. A straight ' opens
-    // one too ("Robert 'Bobby J’"), but only at the start of a word -- O'Neill's doesn't ("O'Neill N’ Bhriain").
-    `\\p{Lu}’(?![\\p{L}\\p{M}’'])(?<!['‘"“][\\p{L}\\p{M}]*’)(?<![‘"“][\\p{L}\\p{M} .-]*’)(?<!(?<![\\p{L}\\p{M}])'[\\p{L}\\p{M} .-]*’)`,
+    // Review 15: œ (Ï inside a word). (Irish "Ní", "Ó" and Œ: see MAC_ROMAN_IN_A_NAME_UNLESS_WINDOWS.)
     `\\p{L}Ï\\p{Ll}`,
   ].join("|"),
   "u"
@@ -269,6 +265,12 @@ const MAC_ROMAN_IN_A_NAME_UNLESS_WINDOWS = new RegExp(
     // any other Windows sign in the file they import.
     `(?<![\\p{L}\\p{M}])[îÎ](?![\\p{L}\\p{M}])`,
     `(?<![\\p{L}\\p{M}])Î\\p{Ll}`,
+    // Review 15: Irish "Ní" (Mac í is ’ in windows-1252, so "N’ Bhriain"). Review 16: only N’ before a
+    // space, and here, not in MAC_ROMAN_IN_A_NAME -- any capital before ’ and a space used to count,
+    // even in a file that shows it's Windows, so "D’ Souza", "O’ Brien" or "JONES’" got the whole
+    // import refused. Not the closing ’ of a quoted nickname ("Robert ‘JN’ Lee"). Review 17: the married
+    // name "Uí" too, and either one ending the cell ("Ní" on its own).
+    `(?<![\\p{L}\\p{M}])[NU]’(?= |$)(?<!['‘"“][\\p{L}\\p{M}]*’)(?<![‘"“][\\p{L}\\p{M} .-]*’)(?<!(?<![\\p{L}\\p{M}])'[\\p{L}\\p{M} .-]*’)`,
   ].join("|"),
   "u"
 );

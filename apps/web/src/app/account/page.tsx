@@ -326,7 +326,8 @@ export default function AccountPage() {
               {signOutNeedsSignIn && (
                 <>
                   {" "}
-                  <Link href="/login?next=/account" className="underline">
+                  {/* Review 16: asks first with a password typed, like every other way off this page. */}
+                  <Link href="/login?next=/account" onClick={(e) => onLinkClick(e, "/login?next=/account")} className="underline">
                     Sign in
                   </Link>
                 </>

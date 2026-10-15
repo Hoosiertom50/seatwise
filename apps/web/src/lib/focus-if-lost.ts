@@ -8,10 +8,16 @@
 // control came back (or was enabled) after the last check, and focus stayed lost. A control that
 // isn't there yet or is disabled can't take focus, so it's tried again.
 const CHECKS_FOR_MS = 1_000;
+// Review 16 (PR #116 CI): only the latest call keeps looking. Two in a row -- Generate's, still going
+// after a new plan was made, then the Restore preview's Cancel -- raced, and the older one could put
+// focus back on Generate first; the newer one then saw focus somewhere and stopped.
+let latest = 0;
 
 export function focusIfLost(id: string): void {
+  const call = ++latest;
   const started = Date.now();
   const restore = () => {
+    if (call !== latest) return;
     const active = document.activeElement;
     if (active && active !== document.body && active.isConnected) {
       // Focus is somewhere -- after the first moment that's settled (someone may have clicked

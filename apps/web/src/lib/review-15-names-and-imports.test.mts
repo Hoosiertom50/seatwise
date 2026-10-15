@@ -251,3 +251,230 @@ test("PR #115: a dot-like accent inside a web ending doesn't hide it", () => {
   }
 });
 
+// Review 16.
+test("Review 16: the joiner check takes time in line with the name's length, not its square", () => {
+  const dotBelow = "\u0323";
+  const fatha = "\u064E";
+  const zwnj = "\u200C";
+  const started = performance.now();
+  assert.equal(hasHiddenCharacters("a" + dotBelow.repeat(19_999)), false);
+  assert.equal(hasHiddenCharacters("ب" + fatha.repeat(19_997) + zwnj + "ب"), false);
+  // A guest import's worth of names made of marks (5,000 rows, two names each) took 17 seconds.
+  for (let i = 0; i < 10_000; i++) hasHiddenCharacters("a" + dotBelow.repeat(99));
+  assert.ok(performance.now() - started < 1_000, `took ${Math.round(performance.now() - started)} ms`);
+  // Still: joiners inside a Persian or Sinhala word are spelling, elsewhere hidden characters.
+  assert.equal(hasHiddenCharacters(`علی${zwnj}رضا`), false);
+  assert.equal(hasHiddenCharacters("ශ්\u200Dරී"), false);
+  assert.equal(hasHiddenCharacters(`علی${zwnj}राम`), true);
+  assert.equal(hasHiddenCharacters(`evil${zwnj}com`), true);
+});
+
+test("Review 16: a capital and a curly apostrophe before a space don't get a Windows file refused", () => {
+  for (const [first, last] of [["Anita", "D’ Souza"], ["Rosa", "D’ Angelo"], ["Sean", "O’ Brien"], ["Bob", "JONES’"], ["Al", "AJ’"]]) {
+    assert.equal(looksLikeMacRoman(last, true, true, false), false, last);
+    assert.deepEqual(
+      importOne(bytesFor("windows-1252", `First name,Last name\r\n${first},${last}\r\n`)),
+      { firstName: first, lastName: last.replace("’", "'") },
+      `${first} ${last}`
+    );
+  }
+  // The Mac's "Ní" (N’ then a space) is still caught when nothing else shows the file is Windows.
+  assert.equal(looksLikeMacRoman("N’ Bhriain", true, true, false), true);
+  assert.equal(importOne(bytesFor("macintosh", "First name,Last name\r\nAine,Ní Bhriain\r\n")), "refused");
+});
+
+test("Review 16: the Tibetan tsheg counts only between two Tibetan letters", () => {
+  const tsheg = "\u0F0B";
+  for (const name of [`paypal${tsheg}com`, `bit${tsheg}ly`]) {
+    assert.equal(createGuestSchema.safeParse({ firstName: name, lastName: "Lee" }).success, false, name);
+    assert.equal(weddingNameField.safeParse(name).success, false, name);
+  }
+  assert.equal(createGuestSchema.safeParse({ firstName: `བཀྲ${tsheg}ཤིས`, lastName: "Dolma" }).success, true);
+});
+
+test("Review 16: a Yoruba or Igbo dot below after an initial isn't read as a two-letter web ending", () => {
+  for (const name of ["A.Mẹ", "T. Mẹ", "Ọrụ", "Ngozi Ọkọnkwọ"]) {
+    assert.equal(looksLikeWebAddress(name), false, name);
+    assert.equal(createGuestSchema.safeParse({ firstName: "Ade", lastName: name }).success, true, name);
+  }
+  // A longer ending still counts, with or without the dot below; two letters with no mark too.
+  for (const name of ["x.cọm", "evil . cọm", "A.Me", "Ana.Mẹ"]) assert.equal(looksLikeWebAddress(name), true, name);
+});
+
+test("Review 16: \"dot\" spelled out takes every web ending; a spaced dot a few more", () => {
+  for (const name of ["evil dot co", "evil dot io", "evil dot me", "evil . me", "paypal . co . uk", "evil dot com"]) {
+    assert.equal(looksLikeWebAddress(name), true, name);
+  }
+  // Names with an initial still pass.
+  for (const name of ["T. Ly", "J. Link", "J. Co", "Ms. Io", "Ana B. Co Morgan", "Dot Smith", "Mary Dot Lee", "St. Pierre"]) {
+    assert.equal(looksLikeWebAddress(name), false, name);
+  }
+});
+
+test("Review 16: Malayalam and Bengali names typed the older way (a joiner after a final virama) pass", () => {
+  for (const name of ["അര്‍ജുന്‍", "മോഹന്‍ലാല്‍", "শরত্‍"]) {
+    assert.equal(hasHiddenCharacters(name), false, name);
+    assert.equal(createGuestSchema.safeParse({ firstName: name, lastName: "Nair" }).success, true, name);
+  }
+  // Anywhere else a joiner at the end of a word is still a hidden character.
+  assert.equal(hasHiddenCharacters("Arjun\u200D"), true);
+  assert.equal(hasHiddenCharacters("राम\u200D"), true);
+});
+
+// PR #116 review (Copilot).
+test("PR #116: the dot-below exception is only for an initial and a two-letter name", () => {
+  // Compatibility forms with no dot below at all are still caught.
+  for (const name of ["x.\uFF4D\uFF45", "t.\u1D50\u1D49", "x.\uFF4D\uFF45 evil"]) {
+    assert.equal(looksLikeWebAddress(name), true, name);
+    assert.equal(weddingNameField.safeParse(name).success, false, name);
+  }
+  // A spaced or spelled-out dot with a dot below is still caught, and so is a second address beside an initial.
+  for (const name of ["evil . mẹ", "evil dot mẹ", "A.Mẹ evil . mẹ"]) {
+    assert.equal(looksLikeWebAddress(name), true, name);
+  }
+  // The initial-and-name spellings still pass.
+  for (const name of ["A.Mẹ", "T. Mẹ", "Ọ.Mẹ", "Ọ. Mẹ", "Ọrụ", "Tọ́pẹ́"]) assert.equal(looksLikeWebAddress(name), false, name);
+});
+
+test("PR #116: the tsheg needs a Tibetan letter on each side, not just a Tibetan mark", () => {
+  const tsheg = "\u0F0B";
+  const aa = "\u0F71";
+  for (const name of [`paypal${aa}${tsheg}${aa}com`, `བཀྲ${tsheg}${tsheg}ཤིས`]) {
+    assert.equal(createGuestSchema.safeParse({ firstName: name, lastName: "Lee" }).success, false, name);
+    assert.equal(weddingNameField.safeParse(name).success, false, name);
+  }
+  for (const name of [`བཀྲ${tsheg}ཤིས`, `ཨ${aa}${tsheg}ཡ`, `བཀྲ${tsheg}ཤིས${tsheg}བདེ${tsheg}ལེགས`]) {
+    assert.equal(createGuestSchema.safeParse({ firstName: name, lastName: "Dolma" }).success, true, name);
+  }
+});
+
+// Review 17.
+test("Review 17: the Mac's Irish Uí, and Ní at the end of a cell, are caught when nothing shows the file is Windows", () => {
+  for (const cell of ["U’ Bhriain", "N’", "N’ Bhriain"]) assert.equal(looksLikeMacRoman(cell, true, true, false), true, cell);
+  assert.equal(importOne(bytesFor("macintosh", "First name,Last name\r\nNora,Uí Bhriain\r\n")), "refused");
+  // Windows names stay fine.
+  for (const cell of ["D’ Souza", "O’ Brien", "Robert ‘JN’ Lee"]) assert.equal(looksLikeMacRoman(cell, true, true, false), false, cell);
+});
+
+test("Review 17: an initial with a dot below that spells a one-letter short link still counts", () => {
+  const dotBelow = "\u0323";
+  for (const name of [`t.me${dotBelow}`, `t.ly${dotBelow}`, `j.m${dotBelow}p`]) assert.equal(looksLikeWebAddress(name), true, name);
+  for (const name of ["A.Mẹ", "Ọ.Mẹ", "T. Mẹ"]) assert.equal(looksLikeWebAddress(name), false, name);
+});
+
+test("Review 17: a spaced initial or title before a two-letter name, and Dot as a name, aren't web addresses", () => {
+  for (const name of ["T. Mễ", "Dr. Mê", "J. Me", "S. Uk", "Jae U. Uk", "Mr. Uk", "A. Tv", "Anna Dot Ly", "Sam and Dot Ly Wedding", "Mary Dot Co", "Polka Dot Club", "Tom and Dot Live Here"]) {
+    assert.equal(looksLikeWebAddress(name), false, name);
+    assert.equal(weddingNameField.safeParse(name).success, true, name);
+  }
+  // Still caught.
+  for (const name of ["evil . me", "evil dot ly", "evil Dot com", "paypal . co . uk", "t.me", "x.me"]) assert.equal(looksLikeWebAddress(name), true, name);
+});
+
+test("Review 17: a joiner after a virama ends a word only after a Bengali or Malayalam letter", () => {
+  const zwj = "\u200D";
+  for (const name of [`Smith\u09CD${zwj}`, `ab\u09CD${zwj} Smith`]) {
+    assert.equal(createGuestSchema.safeParse({ firstName: name, lastName: "Lee" }).success, false, name);
+  }
+  for (const name of ["അര്‍ജുന്‍", "শরত্‍"]) assert.equal(createGuestSchema.safeParse({ firstName: name, lastName: "Nair" }).success, true, name);
+});
+
+// Review 18.
+test("Review 18: the name readings need a name's capitals -- lowercase spaced and Dot addresses still count", () => {
+  for (const name of ["go . me", "x . uk", "ab . tv", "paypal-co . uk", "evil-ab . me", "Visit go . me now", "evil Dot Co", "evil Dot co", "bit Dot Ly", "Visit tinyurl Dot Co", "paypal Dot Co . uk"]) {
+    assert.equal(looksLikeWebAddress(name), true, name);
+    assert.equal(weddingNameField.safeParse(name).success, false, name);
+  }
+  for (const name of ["T. Mễ", "Dr. Mê", "J. Me", "Jae U. Uk", "Mr. Uk", "A. Tv", "Anna Dot Ly", "Sam and Dot Ly Wedding", "Polka Dot Club", "Tom and Dot Live Here", "Dot Ly"]) {
+    assert.equal(looksLikeWebAddress(name), false, name);
+  }
+});
+
+test("Review 18: the name readings take time in line with the name's length", () => {
+  const started = performance.now();
+  for (const text of [" ".repeat(40_000), "a" + " ".repeat(40_000) + ". x", "Ab Dot ".repeat(3_000), "T. Me ".repeat(3_000)]) looksLikeWebAddress(text);
+  assert.ok(performance.now() - started < 1_000, `took ${Math.round(performance.now() - started)} ms`);
+});
+
+test("Review 18: the joiner after a virama needs a Bengali or Malayalam letter, not just one of their marks", () => {
+  const zwj = "\u200D";
+  for (const marks of ["\u09BC\u09CD", "\u09CD\u09CD", "\u09BE\u09CD", "\u0D3E\u0D4D", "\u0D4D\u0D4D"]) {
+    const name = `Smith${marks}${zwj}`;
+    assert.equal(createGuestSchema.safeParse({ firstName: name, lastName: "Lee" }).success, false, name);
+  }
+  for (const name of ["অর্জুন্‍", "পড়্‍", "শরত্‍", "അര്‍ജുന്‍"]) {
+    assert.equal(createGuestSchema.safeParse({ firstName: name, lastName: "Nair" }).success, true, name);
+  }
+});
+
+
+// PR #116 review (Copilot round 7).
+test("PR #116: several initials before a name, and a hyphenated or apostrophe name before Dot, read as names", () => {
+  for (const name of ["J. T. Me", "J. T. Mễ", "A. B. Mễ", "Mary-Jane Dot Ly", "O'Brien Dot Co", "José Dot Ly"]) {
+    assert.equal(looksLikeWebAddress(name), false, name);
+    assert.equal(weddingNameField.safeParse(name).success, true, name);
+  }
+  for (const name of ["paypal . co . uk", "Paypal . Co . Uk", "evil Dot Co", "go . me", "paypal-co . uk"]) assert.equal(looksLikeWebAddress(name), true, name);
+});
+
+// PR #116 review (Copilot round 8).
+test("PR #116: Mrs and other titles, and an initial with a separate accent mark, read as names", () => {
+  for (const name of ["Mrs. Me", "Mrs. Mễ", "Mr. & Mrs. Me", "Prof. Uk", "Mme. Mê", "Ọ̀. Me"]) {
+    assert.equal(looksLikeWebAddress(name), false, name);
+    assert.equal(weddingNameField.safeParse(name).success, true, name);
+  }
+  for (const name of ["mrs . me", "evil-mrs . me", "Paypal . Co . Uk"]) assert.equal(looksLikeWebAddress(name), true, name);
+});
+
+// PR #116 review (Copilot round 9).
+test("PR #116: Me after Dot as a name reads as a name; a lowercase Dot Me address doesn't", () => {
+  for (const name of ["Anna Dot Me", "Anna Dot Mễ"]) {
+    assert.equal(looksLikeWebAddress(name), false, name);
+    assert.equal(weddingNameField.safeParse(name).success, true, name);
+  }
+  for (const name of ["evil Dot Me", "evil dot me", "Anna dot me"]) assert.equal(looksLikeWebAddress(name), true, name);
+});
+
+// Tom (10-15), from PR #116 review: names in capitals after an initial, title or name.
+test("all-caps names after an initial, title or name read as names; lowercase or unnamed ones don't", () => {
+  for (const name of ["J. ME", "T. MỄ", "Mrs. ME", "JAE U. UK", "Anna Dot LY", "Anna Dot ME"]) {
+    assert.equal(looksLikeWebAddress(name), false, name);
+    assert.equal(weddingNameField.safeParse(name).success, true, name);
+  }
+  for (const name of ["go . me", "GO . ME", "evil Dot ME", "EVIL DOT ME", "PAYPAL . CO . UK", "evil . ME", "T.ME"]) {
+    assert.equal(looksLikeWebAddress(name), true, name);
+  }
+});
+
+// PR #116 review (Copilot round 11).
+test("PR #116: a name reading doesn't take the start of a spaced-out web ending", () => {
+  for (const name of ["T. Co m", "J. Ne t", "Anna Dot Co m"]) assert.equal(looksLikeWebAddress(name), true, name);
+  for (const name of ["T. Me J. Smith", "Anna Dot Ly Wedding", "J. T. Me", "Anna Dot Co"]) assert.equal(looksLikeWebAddress(name), false, name);
+});
+
+// PR #116 review (Copilot round 12).
+test("PR #116: the dot-below exception doesn't take the start of a spaced-out web ending", () => {
+  for (const name of ["T. Cọ m", "J. Nẹ t"]) assert.equal(looksLikeWebAddress(name), true, name);
+  for (const name of ["A.Mẹ", "Ọ.Mẹ", "T. Mẹ", "T. Mẹ J. Ade"]) assert.equal(looksLikeWebAddress(name), false, name);
+});
+
+// Review 24 (Tom, 10-15): a name reading stops only when the letters after it spell out a web ending.
+test("Review 24: names with a single-letter part after the short name pass; spaced-out endings don't", () => {
+  for (const name of ["T. Me O'Brien", "Dr. Uk O'Neill", "Anna Dot Ly O'Hara", "Anna Dot Me D'Souza", "Mrs. Me A-Smith", "T. Me J Smith", "T. Me y Garcia", "Anna Dot Co e Silva", "Kim U. Uk E", "T. Me Özil", "Polka Dot Club", "Tom and Dot Live Here"]) {
+    assert.equal(looksLikeWebAddress(name), false, name);
+  }
+  for (const name of ["T. Co m", "T. Cọ m", "Anna Dot Co m", "T. In fo", "T. Sh op", "T. Si te", "T. Cl ick", "T. On line", "T. Co m.", "Anna Dot Co m.", "T. CO M"]) {
+    assert.equal(looksLikeWebAddress(name), true, name);
+  }
+  const started = performance.now();
+  for (const text of ["A. Me ".repeat(3_300), "T. Co " + "m ".repeat(10_000), "Anna Dot Co" + " ".repeat(20_000) + "m"]) looksLikeWebAddress(text);
+  assert.ok(performance.now() - started < 1_000, `took ${Math.round(performance.now() - started)} ms`);
+});
+
+// Review 25: a capital and a full stop after the short name is another initial.
+test("Review 25: a two-letter name followed by another initial reads as a name", () => {
+  for (const name of ["T. Vi P. Nguyen", "Lê T. Vi P. Nguyễn", "T. Co M. Smith", "Anna Dot Co M. Smith", "Nguyen T. Vi P."]) {
+    assert.equal(looksLikeWebAddress(name), false, name);
+  }
+  for (const name of ["T. Co m.", "Anna Dot Co m.", "T. Ap p."]) assert.equal(looksLikeWebAddress(name), true, name);
+});

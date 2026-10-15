@@ -2,6 +2,7 @@
 
 import { useEffect, useSyncExternalStore } from "react";
 import { saveStatusStore, saveStatusView } from "@/lib/save-status";
+import { isSigningOut } from "@/lib/log-out";
 
 function subscribeOnline(listener: () => void) {
   window.addEventListener("online", listener);
@@ -34,6 +35,10 @@ export function SaveStatusIndicator({ unsavedCount = 0 }: { unsavedCount?: numbe
   useEffect(() => {
     if (status.pending === 0) return;
     const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      // Review 16: not once a log out has finished and the page is going to the sign-in page -- the
+      // session is over, so the save can't land anyway. Cancel on that question used to leave the
+      // signed-out wedding page on screen (Log out during a slow Generate, say).
+      if (isSigningOut()) return;
       e.preventDefault();
     };
     window.addEventListener("beforeunload", onBeforeUnload);
