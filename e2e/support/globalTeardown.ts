@@ -173,9 +173,14 @@ async function sweep(): Promise<void> {
     // be swept away from under it (it found itself signed out mid-test). The last run to finish
     // sweeps.
     // Review 16: unit-test files using the database are waited for (they never sweep themselves).
-    sweepTurn = await takeSweepTurnAfterUnitTests(connectionString);
+    const turn = await takeSweepTurnAfterUnitTests(connectionString);
+    if (turn === "timed-out") {
+      console.log("[teardown-sweep] SKIPPED: unit-test files were still using this database after the wait; this run's test accounts are left for the next run's sweep.");
+      return;
+    }
+    sweepTurn = turn;
     if (!sweepTurn) {
-      console.log("[teardown-sweep] SKIPPED: another test run is still using this database; the last run to finish sweeps.");
+      console.log("[teardown-sweep] SKIPPED: another test run is still using this database (or it couldn't be reached); the last run to finish sweeps.");
       return;
     }
 

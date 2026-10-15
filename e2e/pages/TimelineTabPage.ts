@@ -169,6 +169,10 @@ export class TimelineTabPage extends BasePage {
     await this.editButton(description).click();
   }
 
+  /** Review 18: the open editor's time box. */
+  editTimeInputLocator() {
+    return this.editTimeInput();
+  }
   /** Review 17: the open editor's description box (for typing without saving, and checking it). */
   editDescriptionInputLocator() {
     return this.editDescriptionInput();

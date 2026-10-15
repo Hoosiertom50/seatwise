@@ -22,7 +22,8 @@ import { NAME_LIKE_ENDINGS, NON_LATIN_ENDINGS } from "./web-address-endings";
 // right after a Bengali or Malayalam virama may end a word: the older way of typing a final
 // consonant (Malayalam "Arjun", Bengali khanda ta). Review 17: only after a Bengali or Malayalam letter's
 // virama -- after any letter ("Smith" + virama + joiner) it hid two invisible characters in a name.
-const BETWEEN_LETTERS = String.raw`(?<=[\p{L}\p{M}])[\u00B7\u30FB\uFF65\u05BE\u200C\u200D](?=\p{L})|\u0F0B(?<=(?=\p{Script=Tibetan})\p{L}\p{M}*\u0F0B)(?=(?=\p{Script=Tibetan})\p{L})|\u200D(?<=(?:\p{Script=Bengali}\u09CD|\p{Script=Malayalam}\u0D4D)\u200D)(?![\p{L}\p{M}])`;
+// Review 18: a letter of those scripts, not just a mark of theirs (a Bengali nukta, kept for RRA).
+const BETWEEN_LETTERS = String.raw`(?<=[\p{L}\p{M}])[\u00B7\u30FB\uFF65\u05BE\u200C\u200D](?=\p{L})|\u0F0B(?<=(?=\p{Script=Tibetan})\p{L}\p{M}*\u0F0B)(?=(?=\p{Script=Tibetan})\p{L})|\u200D(?<=(?:(?=\p{Script=Bengali})\p{L}\u09BC?\u09CD|(?=\p{Script=Malayalam})\p{L}\u0D4D)\u200D)(?![\p{L}\p{M}])`;
 export const PERSON_NAME_PATTERN = new RegExp(String.raw`^[\p{L}\p{M}](?:[\p{L}\p{M} '.-]|${BETWEEN_LETTERS})*$`, "u");
 export const PERSON_NAME_MESSAGE =
   "Can only contain letters, spaces, hyphens, apostrophes, and periods";
@@ -55,7 +56,7 @@ const JOINED_SCRIPTS = ["Arabic", "Syriac", "Thaana", "Devanagari", "Bengali", "
 // behind from every position over a run of marks took time growing with the square of its length
 // (4,000 marks: 2.7 seconds; a 1 MB guest import: 17 seconds of the server's time).
 const JOINER_IN_A_WORD = new RegExp(
-  String.raw`[\u200C\u200D](?:${JOINED_SCRIPTS.map((script) => String.raw`(?<=\p{Script=${script}}\p{M}*.)(?=\p{Script=${script}})`).join("|")}|(?<=(?:\p{Script=Bengali}\u09CD|\p{Script=Malayalam}\u0D4D)\u200D)(?![\p{L}\p{M}]))`,
+  String.raw`[\u200C\u200D](?:${JOINED_SCRIPTS.map((script) => String.raw`(?<=\p{Script=${script}}\p{M}*.)(?=\p{Script=${script}})`).join("|")}|(?<=(?:(?=\p{Script=Bengali})\p{L}\u09BC?\u09CD|(?=\p{Script=Malayalam})\p{L}\u0D4D)\u200D)(?![\p{L}\p{M}]))`,
   "gu"
 );
 export function hasHiddenCharacters(value: string): boolean {
@@ -284,13 +285,21 @@ const SHORT_LINK_HOSTS = new Set(["t.me", "m.me", "j.mp", "t.ly", "t.co"]);
 // Review 17: an initial or a short title, a spaced dot and a two-letter name ("T. Mễ", "Dr. Mê", "Jae U.
 // Uk") -- the endings a spaced dot takes since review 16 (me, tv, uk) read those as addresses. Not
 // inside a chain of spaced dots ("paypal . co . uk").
+// Review 18: written as a name is -- a capital initial or a known title, and a capitalised name --
+// any two lowercase letters let "go . me" and "paypal-co . uk" through. And the chain is checked
+// after the initial, not from every space (a long run of spaces took time growing with its square).
+const NAME_TITLE = String.raw`(?:\p{Lu}|Dr|Mr|Ms|Mx|St|Jr|Sr)`;
 const SPACED_INITIAL_THEN_TWO_LETTERS = new RegExp(
-  String.raw`(?<![\p{L}\p{N}])(?<!${FULL_STOP}\s*)\p{L}{1,2}\s*${FULL_STOP}\s+\p{L}{2}(?![\p{L}\p{N}])(?!\s*${FULL_STOP})`,
+  String.raw`(?<![\p{L}\p{N}'-])${NAME_TITLE}(?<!${FULL_STOP}\s*\p{L}{1,2})\s*${FULL_STOP}\s+\p{Lu}\p{Ll}(?![\p{L}\p{N}])(?!\s*${FULL_STOP})`,
   "gu"
 );
 // Review 17: "Dot" as a name (Dorothy) before an ending that's also a name or a word ("Anna Dot Ly",
 // "Polka Dot Club") -- the spelled-out "dot" takes every ending since review 16.
-const DOT_AS_A_NAME = /(?<![\p{L}\p{N}])Dot(?=\s+(?:[Ll]y|[Cc]o|[Cc]lub|[Ll]ive|[Ll]ink)(?![\p{L}\p{N}]))/gu;
+// Review 18: as a name is written -- a capitalised name before it (or "and", "&", or nothing) and a
+// capitalised word after it; "evil Dot Co" and "bit Dot Ly" got through. "Dot" is matched first and only
+// then looked behind (looking behind from every position over a run of spaces took time growing with
+// its square).
+const DOT_AS_A_NAME = /Dot(?<=(?:^|(?:^|\s)(?:\p{Lu}\p{L}*|and|&)\s+)Dot)(?=\s+(?:Ly|Co|Club|Live|Link)(?![\p{L}\p{N}]))/gu;
 function readAsNames(text: string): string {
   return text
     .replace(SPACED_INITIAL_THEN_TWO_LETTERS, (initial) => initial.replace(new RegExp(FULL_STOP, "u"), " "))

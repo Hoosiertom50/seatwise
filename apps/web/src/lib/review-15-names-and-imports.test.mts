@@ -379,3 +379,31 @@ test("Review 17: a joiner after a virama ends a word only after a Bengali or Mal
   for (const name of ["അര്‍ജുന്‍", "শরত্‍"]) assert.equal(createGuestSchema.safeParse({ firstName: name, lastName: "Nair" }).success, true, name);
 });
 
+// Review 18.
+test("Review 18: the name readings need a name's capitals -- lowercase spaced and Dot addresses still count", () => {
+  for (const name of ["go . me", "x . uk", "ab . tv", "paypal-co . uk", "evil-ab . me", "Visit go . me now", "evil Dot Co", "evil Dot co", "bit Dot Ly", "Visit tinyurl Dot Co", "paypal Dot Co . uk"]) {
+    assert.equal(looksLikeWebAddress(name), true, name);
+    assert.equal(weddingNameField.safeParse(name).success, false, name);
+  }
+  for (const name of ["T. Mễ", "Dr. Mê", "J. Me", "Jae U. Uk", "Mr. Uk", "A. Tv", "Anna Dot Ly", "Sam and Dot Ly Wedding", "Polka Dot Club", "Tom and Dot Live Here", "Dot Ly"]) {
+    assert.equal(looksLikeWebAddress(name), false, name);
+  }
+});
+
+test("Review 18: the name readings take time in line with the name's length", () => {
+  const started = performance.now();
+  for (const text of [" ".repeat(40_000), "a" + " ".repeat(40_000) + ". x", "Ab Dot ".repeat(3_000), "T. Me ".repeat(3_000)]) looksLikeWebAddress(text);
+  assert.ok(performance.now() - started < 1_000, `took ${Math.round(performance.now() - started)} ms`);
+});
+
+test("Review 18: the joiner after a virama needs a Bengali or Malayalam letter, not just one of their marks", () => {
+  const zwj = "\u200D";
+  for (const marks of ["\u09BC\u09CD", "\u09CD\u09CD", "\u09BE\u09CD", "\u0D3E\u0D4D", "\u0D4D\u0D4D"]) {
+    const name = `Smith${marks}${zwj}`;
+    assert.equal(createGuestSchema.safeParse({ firstName: name, lastName: "Lee" }).success, false, name);
+  }
+  for (const name of ["অর্জুন্‍", "পড়্‍", "শরত্‍", "അര്‍ജുന്‍"]) {
+    assert.equal(createGuestSchema.safeParse({ firstName: name, lastName: "Nair" }).success, true, name);
+  }
+});
+

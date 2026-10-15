@@ -163,6 +163,15 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
     vendorsRef.current = vendors;
     editingIdRef.current = editingId;
   }, [vendors, editingId]);
+  // Review 18: which opening of the editor is on screen -- see the Timeline tab.
+  const editOpening = useRef(0);
+  useEffect(() => {
+    editOpening.current++;
+  }, [editingId]);
+  const stillEditing = (id: string, opening: number) => editingIdRef.current === id && editOpening.current === opening;
+  // Review 18: the version of the vendor the open editor holds -- see the Timeline tab. Moved on when
+  // the editor takes a fresh copy (TS-235, below).
+  const editRevision = useRef<number | undefined>(undefined);
 
   useEffect(() => {
     // TS-235: numbered, so an answer to an earlier load (at the old access level) that arrives late
@@ -187,6 +196,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
           if (!now) setEditingId(null);
           else {
             setEditVendor((cur) => editAfterReload(cur, was, now));
+            editRevision.current = now.revision;
             const wasCost = was ? centsToDollarsString(was.costCents) : null;
             setEditCostText((cur) => (wasCost !== null && cur !== wasCost ? cur : centsToDollarsString(now.costCents)));
           }
@@ -345,6 +355,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
       return;
     }
     setEditingId(vendor.id);
+    editRevision.current = vendor.revision;
     setEditVendor({ ...vendor });
     setEditCostText(centsToDollarsString(vendor.costCents));
     // TS-212: the Edit button is replaced by the form -- focus its first box.
@@ -365,8 +376,9 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
     const problem = amountProblem(editCostText, "Cost", MAX_VENDOR_COST_CENTS, VENDOR_COST_TOO_HIGH_MESSAGE);
     if (problem) return setError(problem);
     setSaving(true);
+    const opening = editOpening.current;
     const loaded = vendors.find((v) => v.id === vendorId);
-    const expectedRevision = loaded?.revision;
+    const expectedRevision = editRevision.current ?? loaded?.revision;
     // TS-180: only what was changed in the edit box is sent, so a field this person never touched
     // (or never saw -- contract notes are hidden from View access) can't be overwritten by a save.
     const edited: Record<string, unknown> = {
@@ -395,7 +407,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
       );
       setVendors((cur) => sortVendors(cur.map((v) => (v.id === vendorId ? vendor : v))));
       // Review 17: only if this vendor's editor is still the one open (see the Timeline tab).
-      if (editingIdRef.current === vendorId) {
+      if (stillEditing(vendorId, opening)) {
         setEditingId(null);
         // TS-212: back to this vendor's Edit button.
         focusIfLost(`vendor-${vendorId}-edit`);
@@ -407,7 +419,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
         setVendors((cur) => cur.map((v) => (v.id === vendorId ? fresh : v)));
         // TS-175: close the editor, as Timeline does. It used to stay open with the old values,
         // and a second Save then wrote them over the other person's change.
-        if (editingIdRef.current === vendorId) {
+        if (stillEditing(vendorId, opening)) {
           setEditingId(null);
           focusIfLost(`vendor-${vendorId}-edit`);
         }
@@ -415,7 +427,7 @@ export function BudgetTab({ weddingId, canEdit }: { weddingId: string; canEdit: 
       } else if (isItemGoneError(err)) {
         // TS-209: removed by someone else while this was being edited -- it's gone from the list.
         setVendors((cur) => cur.filter((v) => v.id !== vendorId));
-        if (editingIdRef.current === vendorId) setEditingId(null);
+        if (stillEditing(vendorId, opening)) setEditingId(null);
         setError("That vendor was removed (maybe in another tab, or by someone else) — the list has been updated.");
       } else {
         // TS-151: say which field was refused, not just "Validation failed".

@@ -119,9 +119,11 @@ const UNIT_TEST_LEASE_NAME = "seatwise-unit-test-lease ";
  * files end within minutes and never sweep -- skipping, as for another browser run, left this run's
  * accounts and weddings behind until a later run. So it waits for them (up to `waitMs`), while a
  * browser run's share still means "skip, that run sweeps when it ends". Null when another browser
- * run holds a share, or the wait ran out.
+ * run holds a share (or the connection failed); "timed-out" when the wait ran out.
  */
-export async function takeSweepTurnAfterUnitTests(connectionString: string, waitMs = 5 * 60_000): Promise<SweepTurn | null> {
+// Review 18: "timed-out" when unit-test files still held it after the wait -- the teardown says so (it
+// used to say another run would sweep, which unit tests never do).
+export async function takeSweepTurnAfterUnitTests(connectionString: string, waitMs = 5 * 60_000): Promise<SweepTurn | null | "timed-out"> {
   const turn = await takeSweepTurn(connectionString);
   if (turn) return turn;
   const client = new Client({ connectionString, connectionTimeoutMillis: 3_000 });
@@ -148,8 +150,17 @@ export async function takeSweepTurnAfterUnitTests(connectionString: string, wait
     }
     // Waiting for the lock also holds back new shares (Postgres queues them behind it), so a unit-test
     // file or browser run starting meanwhile waits for the sweep, as with takeSweepTurn.
+    // Review 18: and says so -- the wait looked like a hang.
+    console.log(`[teardown-sweep] Waiting for unit-test files using this database to finish (up to ${Math.round(waitMs / 60_000) || 1} minute(s))...`);
     await client.query(`SET lock_timeout = ${Math.max(1, Math.round(waitMs))}`);
-    await client.query("SELECT pg_advisory_lock($1)", [RUN_LEASE_KEY]);
+    try {
+      await client.query("SELECT pg_advisory_lock($1)", [RUN_LEASE_KEY]);
+    } catch (err) {
+      await client.end().catch(() => undefined);
+      // Review 18 follow-up: only the wait running out (lock_not_available) is "timed-out"; anything
+      // else (a dropped connection) is no turn, without blaming the unit tests.
+      return (err as { code?: string }).code === "55P03" ? "timed-out" : null;
+    }
     await client.query("SET lock_timeout = 0");
     return {
       client,
@@ -159,7 +170,7 @@ export async function takeSweepTurnAfterUnitTests(connectionString: string, wait
       },
     };
   } catch {
-    // The wait ran out (lock_timeout), or the connection failed: no turn this time.
+    // The connection or a query failed: no turn this time. (The wait running out is answered above.)
     await client.end().catch(() => undefined);
     return null;
   }

@@ -229,8 +229,9 @@ test("the sweep waits for unit-test processes, but not for another browser run",
     await new Promise<void>((done) => holder.stdout.on("data", (chunk: Buffer) => chunk.toString().includes("holding") && done()));
     const started = Date.now();
     const turn = await takeSweepTurnAfterUnitTests(url, 20_000);
-    await turn?.release();
+    if (turn && turn !== "timed-out") await turn.release();
     expect(turn).not.toBeNull();
+    expect(turn).not.toBe("timed-out");
     expect(Date.now() - started).toBeGreaterThan(500);
   } finally {
     holder.kill();
@@ -244,7 +245,7 @@ test("the sweep waits for unit-test processes, but not for another browser run",
     await browserRun.query("SELECT pg_advisory_lock_shared($1)", [RUN_LEASE_KEY]);
     const started = Date.now();
     const turn = await takeSweepTurnAfterUnitTests(url, 20_000);
-    await turn?.release();
+    if (turn && turn !== "timed-out") await turn.release();
     expect(turn).toBeNull();
     expect(Date.now() - started).toBeLessThan(5_000);
   } finally {
@@ -319,7 +320,14 @@ test("a browser run on another database doesn't stop the sweep waiting for this 
   const admin = new Client({ connectionString: url, connectionTimeoutMillis: 2_000 });
   admin.on("error", () => undefined);
   await admin.connect();
-  await admin.query(`CREATE DATABASE ${otherName}`);
+  // PR #116 review: a role that may not create databases skips this check (as ts-266's test does).
+  try {
+    await admin.query(`CREATE DATABASE ${otherName}`);
+  } catch (err) {
+    await admin.end().catch(() => undefined);
+    if ((err as { code?: string }).code === "42501") test.skip(true, "this database role can't create a throwaway database");
+    throw err;
+  }
   const otherUrl = new URL(url);
   otherUrl.pathname = `/${otherName}`;
   const otherRun = new Client({ connectionString: otherUrl.toString(), connectionTimeoutMillis: 2_000 });
@@ -335,8 +343,9 @@ test("a browser run on another database doesn't stop the sweep waiting for this 
     try {
       await new Promise<void>((done) => holder.stdout.on("data", (chunk: Buffer) => chunk.toString().includes("holding") && done()));
       const turn = await takeSweepTurnAfterUnitTests(url, 20_000);
-      await turn?.release();
+      if (turn && turn !== "timed-out") await turn.release();
       expect(turn).not.toBeNull();
+      expect(turn).not.toBe("timed-out");
     } finally {
       holder.kill();
     }
@@ -346,3 +355,28 @@ test("a browser run on another database doesn't stop the sweep waiting for this 
     await admin.end().catch(() => undefined);
   }
 });
+
+// Review 18: a wait for unit-test files that runs out says so ("timed-out"), rather than looking like
+// another browser run will sweep.
+test("the sweep's wait for unit-test files can run out, and says so", async () => {
+  test.skip(!(await localDatabaseReachable()), "no local database to hold the lease on");
+  const { takeSweepTurn, takeSweepTurnAfterUnitTests } = await import("../../e2e/support/runLease");
+  const url = resolveDatabaseUrl()!;
+  const free = await takeSweepTurn(url);
+  test.skip(free === null, "a test run holds the lease already");
+  await free!.release();
+  const holder = spawn(
+    TSX_BIN,
+    ["--import", "./apps/web/src/lib/test-run-lease.mts", resolve(REPO_ROOT, "playwright-framework/tests/fixtures/unitTestLeaseHolder.mjs")],
+    { cwd: REPO_ROOT, env: { ...process.env, DATABASE_URL: url, HOLD_MS: "6000" } }
+  );
+  try {
+    await new Promise<void>((done) => holder.stdout.on("data", (chunk: Buffer) => chunk.toString().includes("holding") && done()));
+    const turn = await takeSweepTurnAfterUnitTests(url, 1_000);
+    if (turn && turn !== "timed-out") await turn.release();
+    expect(turn).toBe("timed-out");
+  } finally {
+    holder.kill();
+  }
+});
+
