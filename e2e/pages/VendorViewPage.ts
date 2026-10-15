@@ -7,11 +7,11 @@ import { BasePage } from "./BasePage.js";
 
 export class VendorViewPage extends BasePage {
   async gotoUrl(url: string): Promise<void> {
-    await this.page.goto(new URL(url).pathname);
+    await this.open(new URL(url).pathname);
   }
 
   async gotoToken(token: string): Promise<void> {
-    await this.page.goto(`/vendor/${token}`);
+    await this.open(`/vendor/${token}`);
   }
 
   heading() {

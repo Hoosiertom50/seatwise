@@ -25,6 +25,8 @@ import { WeddingDataSetup } from "../data/api.js";
 import { uniqueTestAddress, uniqueTitle, uniqueToken } from "../data/ids.js";
 import { TEST_ACCOUNT_EMAIL_DOMAIN } from "../support/auth.js";
 import { confirmTestAccountEmail } from "../support/testDatabase.js";
+import { delayPagesOwnBack } from "../support/slowDevice.js";
+import { watchBrowserQuestions } from "../support/browserQuestions.js";
 
 /**
  * A fresh account signed in on two "devices" (browser contexts). Logging out ends the session the
@@ -145,7 +147,14 @@ defineQualityTest(
       await test.step("Log out, then Leave without saving, logs out", async () => {
         await header.pressLogOut();
         await expect(detail.unsavedChangesPrompt()).toBeVisible();
-        await Promise.all([page.waitForURL(/\/login/), detail.leaveTabWithoutSaving()]);
+        // Review 15: and the browser doesn't ask "Leave site?" on top -- straight to sign-in.
+        const questions = watchBrowserQuestions(page);
+        try {
+          await Promise.all([page.waitForURL(/\/login/, { timeout: 1_500 }), detail.leaveTabWithoutSaving()]);
+        } finally {
+          questions.stop();
+        }
+        expect(questions.asked).toEqual([]);
         expect(await signedIn(one)).toBe(401);
       });
     } finally {
@@ -235,7 +244,14 @@ defineQualityTest(
 
       await test.step("Log out, then Leave without saving, logs out", async () => {
         await header.pressLogOut();
-        await Promise.all([page.waitForURL(/\/login/), dashboard.leaveWithoutSaving()]);
+        // Review 15: and the browser doesn't ask "Leave site?" on top -- straight to sign-in.
+        const questions = watchBrowserQuestions(page);
+        try {
+          await Promise.all([page.waitForURL(/\/login/, { timeout: 1_500 }), dashboard.leaveWithoutSaving()]);
+        } finally {
+          questions.stop();
+        }
+        expect(questions.asked).toEqual([]);
         expect(await signedIn(one)).toBe(401);
       });
     } finally {
@@ -297,7 +313,14 @@ defineQualityTest(
 
       await test.step("Log out, then Leave without saving, logs out", async () => {
         await header.pressLogOut();
-        await Promise.all([page.waitForURL(/\/login/), account.leaveWithoutSaving()]);
+        // Review 15: and the browser doesn't ask "Leave site?" on top -- straight to sign-in.
+        const questions = watchBrowserQuestions(page);
+        try {
+          await Promise.all([page.waitForURL(/\/login/, { timeout: 1_500 }), account.leaveWithoutSaving()]);
+        } finally {
+          questions.stop();
+        }
+        expect(questions.asked).toEqual([]);
         expect(await signedIn(one)).toBe(401);
       });
     } finally {
@@ -406,7 +429,14 @@ defineQualityTest(
       await test.step("Log out, then Leave without saving, logs out without saving the venue", async () => {
         await header.pressLogOut();
         await expect(detail.unsavedChangesPrompt()).toBeVisible();
-        await Promise.all([page.waitForURL(/\/login/), detail.leaveTabWithoutSaving()]);
+        // Review 15: and the browser doesn't ask "Leave site?" on top -- straight to sign-in.
+        const questions = watchBrowserQuestions(page);
+        try {
+          await Promise.all([page.waitForURL(/\/login/, { timeout: 1_500 }), detail.leaveTabWithoutSaving()]);
+        } finally {
+          questions.stop();
+        }
+        expect(questions.asked).toEqual([]);
         expect(await signedIn(one)).toBe(401);
         const saved = ((await (await two.request.get(`/api/v1/weddings/${wedding.id}`)).json()) as {
           wedding: { venueName: string | null };
@@ -444,6 +474,41 @@ defineQualityTest(
       await guests.guestRow("Ann Lee").editFirstName("Anne");
       await saved;
       await Promise.all([page.waitForURL(/\/login/), header.pressLogOut()]);
+      expect(await signedIn(one)).toBe(401);
+    } finally {
+      await cleanUp();
+    }
+  },
+);
+
+defineQualityTest(
+  {
+    id: "auth.log-out-from-every-signed-in-page.on-a-slow-device-right-after-a-save",
+    title: "Log out right after a save on a slow device still lands on the sign-in page (the page's own Back held 300 ms)",
+    objective:
+      "Confirms (review 14) that when the page's own Back -- taking its extra history entry off just after a save -- lands only after the log-out has answered (as on a slow or busy device; played here by holding history.back() for 300 ms), Log out still lands on the sign-in page. It used to end the session but leave the wedding page, guest names and all, on screen.",
+    expectedOutcome: "After saving a guest's first name and pressing Log out at once: the browser is on /login, the wedding's name is no longer on screen, and /auth/me answers 401.",
+    requirementIds: ["REQ-ACCOUNT-WEDDING-MANAGEMENT", "REQ-NON-FUNCTIONAL"],
+    tags: ["@mutating", "@feature:authentication", "@risk:high", "@suite:regression"],
+  },
+  async ({ browser }, testInfo) => {
+    const { devices, signedIn, cleanUp } = await accountOnTwoDevices(browser, testInfo.workerIndex, "header-slow");
+    const [one] = devices;
+    try {
+      const setup = new WeddingDataSetup(one.request);
+      const wedding = await setup.createWedding(uniqueTitle(testInfo.workerIndex, "Slow Device Wedding"));
+      await setup.createGuest(wedding.id, { firstName: "Ann", lastName: "Lee" });
+      const page = await one.newPage();
+      // A slow device: the page's own Back lands 300 ms late.
+      await delayPagesOwnBack(page, 300);
+      const guests = new WeddingGuestsPage(page);
+      const header = new SignedInHeader(page);
+      await guests.goto(wedding.id);
+      const saved = page.waitForResponse((r) => r.request().method() === "PATCH" && /\/guests\/[^/]+$/.test(new URL(r.url()).pathname));
+      await guests.guestRow("Ann Lee").editFirstName("Anne");
+      await saved;
+      await Promise.all([page.waitForURL(/\/login/, { timeout: 10_000 }), header.pressLogOut()]);
+      await expect(new WeddingDetailPage(page).textLocator(wedding.name)).toHaveCount(0);
       expect(await signedIn(one)).toBe(401);
     } finally {
       await cleanUp();

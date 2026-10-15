@@ -31,7 +31,7 @@ export class RulesTabPage extends BasePage {
   }
 
   async goto(weddingId: string): Promise<void> {
-    await this.page.goto(`/weddings/${weddingId}`);
+    await this.open(`/weddings/${weddingId}`);
   }
 
   async openRulesTab(): Promise<void> {

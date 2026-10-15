@@ -24,9 +24,22 @@
  */
 
 import type { Locator, Page } from "@playwright/test";
+import { waitForPageToSettle } from "../support/pageSettled";
 
 export abstract class BasePage {
   constructor(protected readonly page: Page) {}
+
+  /**
+   * Review 14: opens `url` once the wedding page has finished taking its extra Back entry off after
+   * a save (it does that with a Back of its own, and a page load started just before that Back
+   * lands is cancelled on Chromium and Edge -- `net::ERR_ABORTED`, the CI flake of 10-13). A person
+   * can't reload within those few milliseconds; a test can. Waits at most 2 s and never fails: with
+   * unsaved input the entry stays on purpose, and the page is opened anyway.
+   */
+  protected async open(url: string): Promise<void> {
+    await waitForPageToSettle(this.page);
+    await this.page.goto(url);
+  }
 
   textLocator(text: string | RegExp, exact = false): Locator {
     return typeof text === "string" ? this.page.getByText(text, { exact }) : this.page.getByText(text);

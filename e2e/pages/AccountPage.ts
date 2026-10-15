@@ -7,7 +7,7 @@ import { ConfirmDelete } from "../components/ConfirmDelete.js";
 
 export class AccountPage extends BasePage {
   async goto(): Promise<void> {
-    await this.page.goto("/account");
+    await this.open("/account");
     await this.page.getByRole("heading", { name: "Your account", exact: true }).waitFor();
   }
 
@@ -24,6 +24,10 @@ export class AccountPage extends BasePage {
   /** TS-264: typing (without pressing) the password in "Delete my account". */
   async typeDeletePassword(password: string): Promise<void> {
     await this.page.getByLabel("Your password", { exact: true }).fill(password);
+  }
+  /** The "← Back to your weddings" link at the top. */
+  backToWeddingsLink() {
+    return this.page.getByRole("link", { name: "← Back to your weddings", exact: true });
   }
   deletePasswordInput() {
     return this.page.getByLabel("Your password", { exact: true });

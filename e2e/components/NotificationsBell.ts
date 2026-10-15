@@ -42,6 +42,11 @@ export class NotificationsBell {
     return this.item(messageContains).locator("span.rounded-full");
   }
 
+  /** TS-212: the panel's "Back to dashboard" link. */
+  backToDashboardLink(): Locator {
+    return this.panel().getByRole("link", { name: "Back to dashboard", exact: true });
+  }
+
   markAllReadButton(): Locator {
     return this.panel().getByRole("button", { name: "Mark all read", exact: true });
   }

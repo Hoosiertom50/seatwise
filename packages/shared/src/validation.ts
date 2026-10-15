@@ -1,3 +1,5 @@
+import { NAME_LIKE_ENDINGS, NON_LATIN_ENDINGS } from "./web-address-endings";
+
 // Name-field character validation (planner-reported UX gap, 2026-09-10 -- no ticket, a direct
 // ask after noticing name fields would silently accept digits/symbols/emoji). This is an
 // allowlist wide enough to admit how real names actually look -- accented letters (José,
@@ -10,7 +12,12 @@
 // combining marks some accented characters decompose into. Requires the first character to be a
 // letter so a name can't be just "-" or "'" on its own (the field's own .min(1)/.trim() already
 // rejects blank/whitespace-only separately).
-export const PERSON_NAME_PATTERN = /^[\p{L}\p{M}][\p{L}\p{M} '.-]*$/u;
+// Review 15 (Tom, 10-14): and, between two letters only, the marks some spellings need there -- a
+// middle dot (Catalan "Gal·la", Japanese "ジョン・スミス"), the Hebrew maqaf, the Tibetan tsheg,
+// and the zero-width joiners Persian, Sinhala and Indian scripts are typed with (which joiners
+// count as hidden characters is decided in hasHiddenCharacters below).
+const BETWEEN_LETTERS = String.raw`(?<=[\p{L}\p{M}])[\u00B7\u30FB\uFF65\u05BE\u0F0B\u200C\u200D](?=\p{L})`;
+export const PERSON_NAME_PATTERN = new RegExp(String.raw`^[\p{L}\p{M}](?:[\p{L}\p{M} '.-]|${BETWEEN_LETTERS})*$`, "u");
 export const PERSON_NAME_MESSAGE =
   "Can only contain letters, spaces, hyphens, apostrophes, and periods";
 
@@ -32,14 +39,27 @@ export function normalizePersonName(value: string): string {
 // wedding's name can't hold them; real accents (José, Nguyễn, Ó Súilleabháin) are not among them.
 const HIDDEN_CHARACTER = /[\p{Default_Ignorable_Code_Point}\p{Variation_Selector}]/u;
 export const NO_HIDDEN_CHARACTERS_MESSAGE = "Can't contain hidden characters — retype it or paste it as plain text";
+// Review 15 (Tom, 10-14): a zero-width non-joiner or joiner between two letters of a script typed
+// with them (Persian "علی‌رضا", Sinhala "ශ්‍රී", Indian scripts) is part of the spelling; anywhere
+// else (a Latin name, the start or end, between scripts) it's still a hidden character.
+// PR #115 review: both letters of the same script -- one each side of two scripts ("علی" then "राम")
+// is still a hidden character.
+const JOINED_SCRIPTS = ["Arabic", "Syriac", "Thaana", "Devanagari", "Bengali", "Gurmukhi", "Gujarati", "Oriya", "Tamil", "Telugu", "Kannada", "Malayalam", "Sinhala"];
+const JOINER_IN_A_WORD = new RegExp(
+  JOINED_SCRIPTS.map((script) => String.raw`(?<=\p{Script=${script}}\p{M}*)[\u200C\u200D](?=\p{Script=${script}})`).join("|"),
+  "gu"
+);
 export function hasHiddenCharacters(value: string): boolean {
-  return HIDDEN_CHARACTER.test(value);
+  return HIDDEN_CHARACTER.test(value.replace(JOINER_IN_A_WORD, ""));
 }
 
 // A wedding's name is a title, not a person's name -- "Alex & Jordan's Wedding", "Smith-Jones
 // Wedding, Est. 2026" -- so this allowlist is deliberately wider than PERSON_NAME_PATTERN: it
 // adds digits, ampersands, commas, and exclamation points on top of the same base set.
-export const WEDDING_NAME_PATTERN = /^[\p{L}\p{N}\p{M}][\p{L}\p{N}\p{M} '&,.!-]*$/u;
+export const WEDDING_NAME_PATTERN = new RegExp(
+  String.raw`^[\p{L}\p{N}\p{M}](?:[\p{L}\p{N}\p{M} '&,.!-]|${BETWEEN_LETTERS})*$`,
+  "u"
+);
 export const WEDDING_NAME_MESSAGE =
   "Can only contain letters, numbers, spaces, and common punctuation ( ' & , . ! - )";
 
@@ -62,13 +82,16 @@ export const WEDDING_NAME_MESSAGE =
 // which reads as a web address once the spaces are taken out. The spaced-dot check now allows
 // spaces between the ending's letters too; it still needs a dot (or "dot") and a whole ending
 // after it, so "Lee . Kim", "St. Pierre" and "J. R. R. Smith" pass.
-const DOMAIN_ENDINGS = "com|net|org|info|biz|io|co|ly|app|xyz|top|site|online|shop|store|link|click|live|club|vip|icu|ru|cn|tk|gg";
+// Review 15: and the short-link hosts one letter long (t.me, m.me, j.mp) -- not de, in, to, ca, au,
+// fr, us or page, which follow an initial in real names ("R.De Silva", "J.Page").
+const DOMAIN_ENDINGS = "com|net|org|info|biz|io|co|ly|app|xyz|top|site|online|shop|store|link|click|live|club|vip|icu|ru|cn|tk|gg|me|mp|tv|gl|uk";
 const SPACED_DOMAIN_ENDINGS = "com|net|org|info|biz|xyz|site|online|shop|click|icu|ru|cn";
 // TS-265: and the other characters that look like a period or a raised dot -- some are letters
 // (U+A4F8 Lisu, U+A78F Latin sinological dot, U+1427 Canadian syllabics), so "paypalꓸcom" passed
 // every name rule. Fullwidth, small and other compatibility forms of a period (U+FE52, U+2024...)
 // are folded to a plain one before the check (see looksLikeWebAddress).
-const DOT = String.raw`[.\u3002\uFF0E\uFF61\u00B7\u0387\u0660\u06F0\u0701\u0702\u1427\u16EB\u2022\u2024\u2027\u2219\u22C5\u2E31\u30FB\uA4F8\uA60E\uA78F\uFE52\uFF65\u{10101}\u{10A50}]`;
+// Review 14: and U+02D1 (a modifier letter drawn as a raised dot, "paypal\u02D1com").
+const DOT = String.raw`[.\u3002\uFF0E\uFF61\u00B7\u02D1\u0387\u0660\u06F0\u0701\u0702\u1427\u16EB\u2022\u2024\u2027\u2219\u22C5\u2E31\u30FB\uA4F8\uA60E\uA78F\uFE52\uFF65\u{10101}\u{10A50}]`;
 // PR #114 review: before any other ending, only a real full stop counts -- a middle dot is how
 // Japanese ("\u30B8\u30E7\u30F3\u30FB\u30B9\u30DF\u30B9") and Catalan ("Gal\u00B7la") names are written, so the middle dots above
 // count only before the endings scam links use.
@@ -120,14 +143,34 @@ const SCRIPTS_WITH_VOWEL_SIGNS = [
 function scriptOwnMarks(letter: string, marks: string): string {
   const script = SCRIPTS_WITH_VOWEL_SIGNS.find((s) => s.letter.test(letter));
   if (!script) return "";
-  return [...marks].filter((m) => !/\p{Script=Inherited}/u.test(m) && script.mark.test(m)).join("");
+  // Review 14: by Script_Extensions alone -- Arabic vowel marks (harakat) are "Inherited" but listed
+  // for Arabic, and taking them out made "أحمد.عَلي" read as letters.letters.
+  return [...marks].filter((m) => script.mark.test(m)).join("");
 }
 // TS-265: marks drawn as a dot below or beside a letter -- "evil" + U+0323 + "com" reads as
 // "evil.com" (saved as "eviḷcom"). Only checked against the endings scam links use, right after
 // (see DOTTED_ENDING), since Vietnamese and transliterated names have letters with a dot below
 // ("Thịnh", "Ngọc", "Kṛṣṇa").
-const DOT_LIKE_MARK = /[\u0323\u0358\u05C5\u065C\u093C\u09BC\u0A3C\u0ABC\u0B3C\u0CBC\u{1D16D}]/u;
-const DOTTED_ENDING = new RegExp(String.raw`[\p{L}\p{N}]\p{M}*-*${DOT}(?:${DOMAIN_ENDINGS})(?![\p{L}\p{N}])`, "iu");
+// Review 14: and the other marks drawn as a dot (above, below or beside): combining dot above,
+// Thai phinthu, Myanmar dot below, Vedic dot below, Lepcha and Telugu nuktas, Batak tompi, Tai Tham
+// dot, Tamil and Devanagari anusvara.
+const DOT_LIKE_MARK = /[\u0307\u0323\u0358\u05C5\u065C\u0902\u093C\u09BC\u0A3C\u0ABC\u0B3C\u0B82\u0C3C\u0CBC\u0E3A\u1037\u1A7F\u1BE6\u1C37\u1CDD\u{1D16D}]/u;
+// Review 14: a dot below a Latin letter stands for a dot only before the longer endings -- Igbo and
+// Yoruba write vowels with a dot below, so "Ọrụ" (Igbo) read as "O.ru" and was refused. In the copy it
+// is LATIN_MARK_DOT, not "."; marks of other scripts (an Arabic or Devanagari dot) are "." as before.
+const LATIN_MARK_DOT = "\uE000";
+// PR #115 review: and with a dot-like accent between its letters too ("eviḷcȯm").
+const LONGER_ENDINGS = DOMAIN_ENDINGS.split("|")
+  .filter((ending) => ending.length > 2)
+  .map((ending) => [...ending].join(`${LATIN_MARK_DOT}?`))
+  .join("|");
+// PR #115 review: a dot-like accent on the ending's last letter ("eviḷcoṁ") doesn't hide it -- after
+// a dot-like accent the ending may be followed by one. Igbo and Yoruba names are still kept safe by
+// LONGER_ENDINGS; after a real dot it stays as before ("A.Mẹ" is an initial and a name).
+const DOTTED_ENDING = new RegExp(
+  String.raw`[\p{L}\p{N}]\p{M}*-*(?:${DOT}(?:${DOMAIN_ENDINGS})(?![\p{L}\p{N}${LATIN_MARK_DOT}])|${LATIN_MARK_DOT}(?:${LONGER_ENDINGS})(?![\p{L}\p{N}]))`,
+  "iu"
+);
 
 /** TS-265: the copies of `value` the web-address and phone checks also look at (see above). */
 function foldedCopies(value: string): { plain: string; dotted: string } {
@@ -142,17 +185,70 @@ function foldedCopies(value: string): { plain: string; dotted: string } {
     plain += before + letter + kept;
     // PR #114 review: when a mark is drawn as a dot, the letter is followed by the dot alone -- a
     // kept mark (an Arabic or Devanagari dot after its own letter) sat between them and hid the ending.
-    dotted += before + letter + (DOT_LIKE_MARK.test(marks) ? "." : kept);
+    const markDot = KEEPS_ITS_MARKS.test(letter) ? "." : LATIN_MARK_DOT;
+    dotted += before + letter + (DOT_LIKE_MARK.test(marks) ? markDot : kept);
     last = match.index + whole.length;
   }
   const rest = decomposed.slice(last);
   return { plain: (plain + rest).normalize("NFKC"), dotted: (dotted + rest).normalize("NFKC") };
 }
 
+// Review 15: a word, a dot, and an ending written in another script ("बैंक.कॉम", "بنكِ.مصر",
+// "สวัสดี.ไทย") -- the letters.letters check above misses them when the letters carry vowel signs.
+// Before an ending that is also a name ("भारत", Bharat) only three or more letters count, so an
+// initial ("राम.भारत") passes. And a word whose own vowel signs (not accents) sit before the dot,
+// then Latin letters ("पेपाल.de") -- again three or more letters, so "राम.Kumar", "श्री.Ram" and
+// Yoruba "Ọ̀.Adé" (accents, not a script's own signs) pass, as they always did.
+const bare = (label: string) => label.normalize("NFC").toLowerCase().replace(/\p{M}/gu, "");
+const NON_LATIN_ENDING_SET = new Set(NON_LATIN_ENDINGS.map(bare));
+const NAME_LIKE_ENDING_SET = new Set(NAME_LIKE_ENDINGS.map(bare));
+// A run of letters, marks, digits and hyphens, a full stop, and the label after it (looked at, not
+// taken, so "a.b.c" is read as a.b and b.c). Starting only where a run starts keeps it linear.
+// PR #115 review: any dot, a middle dot too -- before a non-Latin ending it reads as a web address
+// ("بنك·مصر", as "بنك.مصر" does). The check for a Latin ending after it still takes a full stop only.
+const LABEL_DOT_LABEL = new RegExp(
+  String.raw`(?<![\p{L}\p{M}\p{N}-])([\p{L}\p{M}\p{N}-]+)(${DOT})(?=([\p{L}\p{M}\p{N}-]+))`,
+  "gu"
+);
+const IS_FULL_STOP = new RegExp(String.raw`^${FULL_STOP}$`, "u");
+// PR #115 review: a script's own sign is decided as for the folded copy (scriptOwnMarks) -- by the
+// letter's script -- so Arabic vowel marks ("Inherited", but Arabic's) count ("بنكِ.de"), and a Latin
+// letter's accents still don't ("Ọ̀.Adé").
+function hasScriptOwnSign(word: string): boolean {
+  for (const [, letter, marks] of word.normalize("NFD").matchAll(LETTER_AND_MARKS)) {
+    if (KEEPS_ITS_MARKS.test(letter) && scriptOwnMarks(letter, marks) !== "") return true;
+  }
+  return false;
+}
+function nonLatinAddress(text: string): boolean {
+  for (const [, left, dot, right] of text.matchAll(LABEL_DOT_LABEL)) {
+    const letters = (left.match(/[\p{L}\p{N}]/gu) ?? []).length;
+    const ending = bare(right);
+    if (NON_LATIN_ENDING_SET.has(ending) && letters >= (NAME_LIKE_ENDING_SET.has(ending) ? 3 : 1)) return true;
+    if (IS_FULL_STOP.test(dot) && letters >= 3 && hasScriptOwnSign(left) && /^\p{Script=Latin}{2,}$/u.test(right)) return true;
+  }
+  return false;
+}
+
+// PR #115 review: the marks names may now hold between two letters (BETWEEN_LETTERS) -- a middle dot,
+// a Hebrew maqaf, a Tibetan tsheg, a joiner -- split a word in two for the checks below, so "l·l.cat"
+// and "א־ב.il" read as one letter before the dot and passed. They're also checked without them
+// ("ll.cat"); a name with no dot after them ("Gal·la", "בן־עמי") is unchanged.
+const SEPARATOR_BETWEEN_LETTERS = /(?<=[\p{L}\p{M}])[\u00B7\u30FB\uFF65\u05BE\u0F0B\u200C\u200D](?=\p{L})/gu;
 export function looksLikeWebAddress(value: string): boolean {
-  if (WEB_ADDRESS_LIKE.test(value)) return true;
+  // PR #115 review: the copy without separators goes through every check, the folded copies too --
+  // an accent as well as a separator ("l·l.c̄at") hid it from both on their own.
+  const joined = value.replace(SEPARATOR_BETWEEN_LETTERS, "");
+  return addressIn(value) || (joined !== value && addressIn(joined));
+}
+
+function addressIn(value: string): boolean {
+  if (WEB_ADDRESS_LIKE.test(value) || nonLatinAddress(value)) return true;
   const { plain, dotted } = foldedCopies(value);
-  return (plain !== value && WEB_ADDRESS_LIKE.test(plain)) || (dotted !== plain && DOTTED_ENDING.test(dotted));
+  return (
+    (plain !== value && (WEB_ADDRESS_LIKE.test(plain) || nonLatinAddress(plain))) ||
+    (dotted !== plain && DOTTED_ENDING.test(dotted))
+  );
 }
 
 // TS-171: a wedding's name may hold numbers (a year, a date), but not a phone number -- the name
@@ -164,12 +260,54 @@ export function looksLikeWebAddress(value: string): boolean {
 // the digits too ("800, 555, 1234" is still a number to call).
 export const PHONE_NUMBER_LIKE = /\p{Nd}(?:[\s.,'’/()[\]_\u2010-\u2015-]*\p{Nd}){6,}/u;
 export const NO_PHONE_NUMBER_MESSAGE = "Can't contain a long run of digits, like a phone number (7 or more)";
+
+// Review 14/15: other marks between digit groups ("800&555&1234", "800−555−1234", "800ー555ー1234"
+// with a dash-shaped letter) join them too -- but only between groups of three digits or more with
+// no space around, as a phone number is written. "Oct 9 & 10, 2026", "2026 & 2027" and "3:00-3:30 &
+// 4:15" stay wedding names and times (review 14 joined every mark, and refused them).
+const ALWAYS_A_GAP = /^[\s.,'’/()[\]_\u2010-\u2015-]*$/u;
+// Letters drawn as a dash or a dot (modifier letters, the prolonged-sound mark ー, Arabic tatweel,
+// Hangul ㅡ and ㆍ (and the forms the folded copy turns them into), the CJK "one" 一, click ǀ, and
+// the dot-shaped letters in DOT).
+const DASH_SHAPED_LETTER = /[\p{Lm}\u01C0\u0640\u1173\u119E\u1427\u1428\u3161\u318D\u30FC\u4E00\uA4F8\uA78F\uFF70]/gu;
+// Letters drawn like digits, counted as digits when they touch one ("8OO", "l234", Cyrillic "12З4").
+const DIGIT_SHAPED = "Oo\u041E\u043ElI\u0406\u0417";
+const DIGIT_SHAPED_VALUE: Record<string, string> = {
+  O: "0", o: "0", "\u041E": "0", "\u043E": "0", l: "1", I: "1", "\u0406": "1", "\u0417": "3",
+};
+// (The second form only starts where a run of those letters starts, so a long run is read once.)
+const DIGIT_SHAPED_RUN = new RegExp(String.raw`(?<=\p{Nd})[${DIGIT_SHAPED}]+|(?<![${DIGIT_SHAPED}])[${DIGIT_SHAPED}]+(?=\p{Nd})`, "gu");
+
+function hasPhoneRun(text: string): boolean {
+  let run = 0;
+  let previousGroup = 0;
+  let lastEnd = -1;
+  for (const match of text.matchAll(/\p{Nd}+/gu)) {
+    // PR #115 review: digits counted as characters, not UTF-16 units -- a digit outside the basic plane
+    // (Osmanya "𐒢𐒠𐒢𐒦", 2026) counted twice, and a year read as a phone number.
+    const group = [...match[0]].length;
+    const gap = lastEnd < 0 ? null : text.slice(lastEnd, match.index);
+    const joins =
+      gap !== null &&
+      (ALWAYS_A_GAP.test(gap) || (!/[\p{L}\s]/u.test(gap) && previousGroup >= 3 && group >= 3));
+    run = joins ? run + group : group;
+    if (run >= 7) return true;
+    previousGroup = group;
+    lastEnd = match.index + match[0].length;
+  }
+  return false;
+}
+
 // TS-262: and, like the web-address check, on a copy without accent marks or hidden characters.
 // TS-265: the same copy as the web-address check, so superscript digits ("⁸⁰⁰⁵⁵⁵¹²³⁴") count too.
 export function looksLikePhoneNumber(value: string): boolean {
   if (PHONE_NUMBER_LIKE.test(value)) return true;
-  const { plain } = foldedCopies(value);
-  return plain !== value && PHONE_NUMBER_LIKE.test(plain);
+  // Review 14: numbers with no plain form (dingbat and double-circled digits, "❽⓿⓿") count as digits.
+  const plain = foldedCopies(value)
+    .plain.replace(/\p{No}/gu, "0")
+    .replace(DIGIT_SHAPED_RUN, (letters) => [...letters].map((c) => DIGIT_SHAPED_VALUE[c] ?? c).join(""))
+    .replace(DASH_SHAPED_LETTER, "~");
+  return hasPhoneRun(plain);
 }
 
 // TS-178: a word written partly in Latin letters and partly in look-alike Cyrillic or Greek ones
@@ -180,5 +318,6 @@ export const NO_MIXED_SCRIPT_MESSAGE = "Can't mix letters from different alphabe
 export function hasMixedScriptWord(value: string): boolean {
   return value
     .split(/[^\p{L}\p{M}]+/u)
-    .some((word) => /\p{Script=Latin}/u.test(word) && /[\p{Script=Cyrillic}\p{Script=Greek}]/u.test(word));
+    // Review 14: Latin with a letter of any other alphabet ("bankका"), not only Cyrillic or Greek.
+    .some((word) => /\p{Script=Latin}/u.test(word) && /(?![\p{Script=Latin}\p{Script=Common}\p{Script=Inherited}])\p{L}/u.test(word));
 }

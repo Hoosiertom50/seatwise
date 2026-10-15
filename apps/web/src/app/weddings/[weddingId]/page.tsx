@@ -21,7 +21,7 @@ import { BudgetTab } from "./components/BudgetTab";
 import { GettingStarted, loadGettingStartedCounts, type GettingStartedCounts } from "./components/GettingStarted";
 // TS-264: bell · Account · Log out, the same on every signed-in page.
 import { SignedInHeader } from "@/components/SignedInHeader";
-import { LOG_OUT, LOG_OUT_FAILED_MESSAGE, logOutThisDevice } from "@/lib/log-out";
+import { LOG_OUT, LOG_OUT_FAILED_MESSAGE, goToSignIn, logOutThisDevice } from "@/lib/log-out";
 import { EmailVerificationNotice } from "@/components/EmailVerificationNotice";
 import { SaveStatusIndicator } from "@/components/SaveStatusIndicator";
 import { saveStatusStore } from "@/lib/save-status";
@@ -124,6 +124,17 @@ export default function WeddingDetailPage() {
   // TS-166: leaving the wedding page itself ("Back to dashboard") asks the same question; the
   // browser's own prompt only covers closing or reloading the page, not links inside the app.
   const [pendingHref, setPendingHref] = useState<string | null>(null);
+  // Review 15: the question opens where it can be seen -- asked from a control further down (a wedding
+  // in the list, a link at the bottom) or after Back restored the scroll position, it used to open
+  // above the screen with focus on its off-screen Stay (WebKit on a phone; Chromium after Back).
+  const leaveQuestionRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!(pendingTab || pendingHref)) return;
+    const frame = requestAnimationFrame(() =>
+      requestAnimationFrame(() => leaveQuestionRef.current?.scrollIntoView({ block: "nearest" }))
+    );
+    return () => cancelAnimationFrame(frame);
+  }, [pendingTab, pendingHref]);
   // TS-191: the control that brought up the "unsaved changes" question, so focus can go back to it
   // when the question closes (it used to fall to the top of the page).
   // TS-199: remembered by id too -- a guest row's box is often drawn anew (after a save elsewhere on
@@ -131,6 +142,9 @@ export default function WeddingDetailPage() {
   const questionOpener = useRef<{ node: HTMLElement; id: string } | null>(null);
   function rememberOpener(preferred?: HTMLElement | null) {
     const active = document.activeElement;
+    // Review 14: asked again while the question is already up (Back pressed then) -- the control that
+    // first asked stays the one focus goes back to, not the question's own button (gone once it closes).
+    if (!preferred && active instanceof HTMLElement && active.closest('[role="alertdialog"]') && questionOpener.current) return;
     const node = preferred ?? (active instanceof HTMLElement && active !== document.body ? active : null);
     questionOpener.current = node ? { node, id: node.id } : null;
   }
@@ -228,7 +242,7 @@ export default function WeddingDetailPage() {
       }
       await unsaved.whenGuardSettled();
       unsaved.releaseForLink();
-      router.replace("/login");
+      goToSignIn();
       return;
     }
     await unsaved.whenGuardSettled();
@@ -541,6 +555,8 @@ export default function WeddingDetailPage() {
           <Link
             href="/dashboard"
             onClick={(e) => {
+              // Review 14: Safari doesn't focus a clicked link; Stay brings focus back here.
+              e.currentTarget.focus();
               if (!requestLeavePage("/dashboard")) e.preventDefault();
             }}
             className="inline-flex min-h-11 items-center text-sm text-neutral-500 dark:text-neutral-400 hover:underline"
@@ -632,6 +648,7 @@ export default function WeddingDetailPage() {
       {/* TS-159 */}
       {(pendingTab || pendingHref) && (
         <div
+          ref={leaveQuestionRef}
           role="alertdialog"
           aria-labelledby="unsaved-question"
           // TS-212: Escape means Stay, as in every other question in the app.

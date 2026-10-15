@@ -24,6 +24,7 @@ import {
   testAccountEmailConfirmed,
   weddingNotificationEmailsThisHour,
 } from "../support/testDatabase.js";
+import { reloadOnceSettled } from "../support/pageSettled.js";
 
 interface NotificationRow {
   type: string;
@@ -85,7 +86,7 @@ defineQualityTest(
               .myEmailNotificationsEnabled,
           )
           .toBe(false);
-        await auntPage.reload();
+        await reloadOnceSettled(auntPage);
         await tab.goto(w);
         await expect(tab.myEmailsCheckbox()).not.toBeChecked();
         // The owner's own switch is untouched.

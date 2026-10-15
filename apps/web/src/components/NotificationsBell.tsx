@@ -3,6 +3,7 @@
 import { formatDateTime } from "@/lib/display-format";
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { api } from "@/lib/api-client";
 import type { NotificationDTO } from "@seatwise/shared";
 
@@ -66,6 +67,7 @@ export function NotificationsBell({
   // TS-175: closes on a tap outside (pointerdown -- iPhone taps don't always send mousedown) and
   // on Escape, which returns focus to the bell.
   const buttonRef = useRef<HTMLButtonElement>(null);
+  const pathname = usePathname();
   useEffect(() => {
     function onPointerOutside(e: PointerEvent) {
       if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
@@ -188,6 +190,14 @@ export function NotificationsBell({
             <Link
               href="/dashboard"
               onClick={(e) => {
+                // Review 14: already on the dashboard -- nothing to leave, so the list just closes
+                // (it used to ask "Leave and lose what you typed?", and Leave then did nothing).
+                if (pathname === "/dashboard") {
+                  e.preventDefault();
+                  setOpen(false);
+                  buttonRef.current?.focus();
+                  return;
+                }
                 if (!onLeave) return;
                 // TS-212: when leaving has to be asked about first, the list closes so it does not
                 // cover the question (on a phone it hid Stay and Leave entirely), and focus moves to

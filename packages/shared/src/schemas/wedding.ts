@@ -12,13 +12,16 @@ import {
   NO_PHONE_NUMBER_MESSAGE,
   hasMixedScriptWord,
   NO_MIXED_SCRIPT_MESSAGE,
+  normalizePersonName,
 } from "../validation";
 
 // TS-168: the rules for a wedding's name, wherever one is given (creating, renaming, copying).
 // TS-200: the length is checked first, and a name that's too long goes no further (lengthFirst).
 // TS-262: put in composed form (NFC) first, like a person's name, and a hidden character is refused
 // before the other rules (see hasHiddenCharacters).
-export const weddingNameField = z.string().transform((v) => v.normalize("NFC")).pipe(lengthFirst(
+// Review 15: and, like a person's name (TS-243), a curly apostrophe becomes a plain one and a
+// no-break space a space -- "Sarah’s Wedding" typed on an iPhone or in Word was refused.
+export const weddingNameField = z.string().transform(normalizePersonName).pipe(lengthFirst(
   FIELD_LIMITS.weddingName,
   noHiddenCharactersFirst(
     z

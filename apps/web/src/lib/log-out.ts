@@ -17,6 +17,28 @@ export const LOG_OUT_FAILED_MESSAGE = "Couldn't log out — check your connectio
  * page. True when it worked; the caller then replaces the page with the sign-in page (TS-175: so
  * Back doesn't bounce between this page and the sign-in page).
  */
+/**
+ * Review 14: after a log out, opens the sign-in page as a new page load (replacing this page in
+ * history, as before). It used to be an in-app route change, and when the wedding page's own Back
+ * (taking its extra history entry off just after a save) landed in the same moment, Next.js went
+ * back to the wedding instead -- signed out, but with the wedding (guest names, notes) still on
+ * screen, e.g. on a shared Day-of tablet. A page load also leaves nothing of the old page in memory.
+ * If the page is somehow still here a moment later, it goes again.
+ */
+// PR #115 review: once the page is going to the sign-in page, the session is over and nothing typed
+// can be saved -- so the browser isn't asked "Leave site?" (see the provider in unsaved-changes.tsx).
+// Typing in a form while a log out was on its way made it ask, and Cancel left the signed-out page.
+let signingOut = false;
+export function isSigningOut(): boolean {
+  return signingOut;
+}
+
+export function goToSignIn(): void {
+  signingOut = true;
+  window.location.replace("/login");
+  window.setTimeout(() => window.location.replace("/login"), 2000);
+}
+
 export async function logOutThisDevice(): Promise<boolean> {
   try {
     await api.post("/api/v1/auth/logout");

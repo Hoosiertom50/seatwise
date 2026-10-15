@@ -32,7 +32,7 @@ export class WeddingDetailPage extends BasePage {
   }
 
   async goto(weddingId: string): Promise<void> {
-    await this.page.goto(`/weddings/${weddingId}`);
+    await this.open(`/weddings/${weddingId}`);
   }
 
   /** A tab's own level-2 heading (e.g. the Seating plan tab's "Seating plan") -- proof that tab is
@@ -228,6 +228,7 @@ export class WeddingDetailPage extends BasePage {
   focusedElement() {
     return this.page.locator(":focus");
   }
+
 
   /** TS-206: the page-level "Couldn't save <field>: <reason>" notes, shown near the tabs for a save
    * that failed after its tab was closed. */

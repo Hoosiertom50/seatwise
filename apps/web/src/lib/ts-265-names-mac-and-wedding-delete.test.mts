@@ -72,6 +72,12 @@ test("TS-265: other real names, accented or with a dot below, still pass", () =>
     "José", "José".normalize("NFD"), "Thị Lan Nguyễn", "Thịnh", "Ngọc", "Ngọc".normalize("NFD"), "Kṛṣṇa", "Adébáyọ̀", "Ọlá",
     "Muḥammad", "Ó Súilleabháin", "J.R. Smith", "St. Clair", "J. R. R. Smith", "Lee . Kim", "Ana B. De Souza", "J. Link",
     "Mary-Kate", "D'Arcy", "Zoë", "Łukasz", "Dvořák", "Иванова", "Ελένη", "김철수", "山田太郎", "ร.ศักดิ์ชัย",
+    // Review 14: Igbo and Yoruba vowels with a dot below before "ru" (it read as ".ru").
+    "Ụrụ", "Ọrụ", "Ịru", "Ẹ̀rù", "Ìyáọ̀ru", "Ọnụọha", "Ọkọrọ",
+    // Review 14: initials before "Bharat", Arabic with vowel marks, letters with a dot above.
+    "राम.भारत", "أحمد.عَلي", "संजय", "Żaneta Brzęczyszczykiewicz", "Jonė", "İlker",
+    // Review 15: an initial before a Latin name -- a script's own vowel sign (two letters) or accents.
+    "राम.Kumar", "श्री.Ram", "श्री.de", "Ọ̀.Adé", "Ẹ̀.Smith",
   ];
   for (const name of names) {
     assert.equal(looksLikeWebAddress(name), false, name);
@@ -130,6 +136,13 @@ const LOOKS_LIKE_A_WEB_ADDRESS = [
   "\u0627\u065Ccom", // Arabic
   "\u0915\u093Ccom", // Devanagari nukta
   "\u0A15\u0A3Ccom", // Gurmukhi nukta
+  // Review 14 (security review): the other dot look-alikes, and web addresses in Indian scripts.
+  "paypal\u02D1com", "paypal\u0E3Acom", "evil\u1037com", "evil\u0307com",
+  "पेपाल.de", "गूगल.भारत", "ஸ்டேட்வங்கி.இந்தியா", "bankका.de",
+  // Review 15: every non-Latin ending in IANA's list (Hindi .com, Arabic .مصر with a vowel mark,
+  // Thai, Bengali), and digits before India's.
+  "बैंक.कॉम", "बैंक.नेट", "بنكِ.مصر", "بنكِ.كوم", "مِثَال.مَصْر", "สวัสดี.ไทย", "ব্যাংক.বাংলা", "2026.भारत",
+  "eviḷnet", // a dot below before a longer ending (two-letter ones are how Igbo/Yoruba names look)
   // A vowel sign before ".com" (PR #114 review): the letter's own (Hindi "का", Tamil "கா"), or one
   // from another script (a Tamil sign after a Devanagari or Bengali letter).
   "\u0915\u093E.com", "\u0B95\u0BBE.com", "\u0915\u0BBE.com", "\u0995\u0BBE.net", "\u0915\u093E . com",
@@ -158,6 +171,24 @@ test("TS-265: superscript digits count as a phone number", () => {
   assert.equal(looksLikePhoneNumber("Call ⁸⁰⁰⁵⁵⁵¹²³⁴"), true);
   assert.equal(weddingNameField.safeParse("Call ⁸⁰⁰⁵⁵⁵¹²³⁴").success, false);
   assert.equal(looksLikePhoneNumber("Est. 2026"), false);
+  // Review 14: any non-letter between the digits, and dingbat digits, count too.
+  for (const v of ["Call 800&555&1234 to RSVP", "Call 800!555!1234", "Call ❽⓿⓿ ❺❺❺ ❶❷❸❹", "Call 800\u2212555\u22121234"]) {
+    assert.equal(looksLikePhoneNumber(v), true, v);
+    assert.equal(weddingNameField.safeParse(v).success, false, v);
+  }
+  for (const v of ["Smith & Jones 2026", "Alex & Jordan 10-5-26"]) assert.equal(weddingNameField.safeParse(v).success, true, v);
+  // Review 15: titles and times with "&" between small numbers aren't phone numbers (review 14 had
+  // refused them), while dash-shaped letters and digit-shaped letters between digit groups are.
+  for (const v of ["Oct 9 & 10, 2026", "June 12 & 13, 2026", "Priya & Raj - Oct 30 & 31, 2026", "Sept 5, 6 & 7 2026", "11-20 & 11-21-26", "10.09.26 & 10.10.26", "Rooms 101, 102 & 103", "Smith Wedding 2026 & 2027", "Sam & Alex 10.5.26 & 10.6.26"]) {
+    assert.equal(looksLikePhoneNumber(v), false, v);
+    assert.equal(weddingNameField.safeParse(v).success, true, v);
+  }
+  for (const v of ["Photos 3:00-3:30 & 4:15", "Toasts 7:15/7:30/7:45", "Hair & makeup 8:00-12:00"]) {
+    assert.equal(emailSafeNotificationText(v), v, v);
+  }
+  for (const v of ["Call 800ー555ー1234", "800ｰ555ｰ1234", "800ـ555ـ1234", "800ˉ555ˉ1234", "800ㆍ555ㆍ1234", "Call 800ㅡ555ㅡ1234", "800一555一1234", "800ǀ555ǀ1234", "800ꓸ555ꓸ1234", "800ʼ555ʼ1234", "Call 8OO 555 l234", "Call 8ОО 555 12З4", "800:555:1234"]) {
+    assert.equal(looksLikePhoneNumber(v), true, v);
+  }
 });
 
 test("TS-265: the web-address and phone checks stay fast on long text (no quadratic slow-down)", () => {
@@ -198,8 +229,10 @@ function importOne(bytes: Uint8Array): "refused" | { firstName: string; lastName
   return { firstName: row.data.firstName!, lastName: row.data.lastName! };
 }
 
-test("TS-265: Mac í after a vowel is caught again (Eloísa, Thaís, Raíssa, Moíses, Ruíz...)", () => {
-  for (const name of ["Eloísa", "Heloísa", "Thaís", "Laís", "Raíssa", "Moíses", "Ruíz", "Maíz", "Luís", "Luísa"]) {
+// Review 14 (Tom, 10-14): Raíssa and Moíses are no longer here -- as "Ra’ssa" and "Mo’ses" they look
+// exactly like windows-1252 "Le’ssa" and "Ka’zon", which must import (see the next test).
+test("TS-265: Mac í after a vowel is caught again (Eloísa, Thaís, Laís, Ruíz, Luísa...)", () => {
+  for (const name of ["Eloísa", "Heloísa", "Thaís", "Laís", "Ruíz", "Maíz", "Luís", "Luísa"]) {
     // As a windows-1252 file shows it: Mac í is ’.
     assert.equal(looksLikeMacRoman(name.replace("í", "’"), true, true, false), true, name);
     // From real Mac Roman bytes -- before, "Elo'sa" was saved without a word.
@@ -209,7 +242,9 @@ test("TS-265: Mac í after a vowel is caught again (Eloísa, Thaís, Raíssa, Mo
 });
 
 test("TS-265: windows-1252 names with ’ still import (Ja’nae, Da’shawn, Ta’kia, Kenya’, Andre’, Rene’, Ka’iulani)", () => {
-  for (const name of ["Ja’nae", "Da’shawn", "Ta’kia", "Kenya’", "Andre’", "Rene’", "Ka’iulani", "La’shawn", "Ke’shawn", "o’sullivan", "o’shea", "a’sante"]) {
+  for (const name of ["Ja’nae", "Da’shawn", "Ta’kia", "Kenya’", "Andre’", "Rene’", "Ka’iulani", "La’shawn", "Ke’shawn", "o’sullivan", "o’shea", "a’sante",
+    // Review 14: imported after TS-262, refused again by TS-265 -- Tom: they must import.
+    "Ja’siah", "La’sonya", "Da’sia", "Na’sir", "Ka’sandra", "Ta’sia", "Jo’sette", "Ma’zie", "Ja’zmine", "Da’zhane", "Ka’zon", "Le’ssa"]) {
     assert.equal(looksLikeMacRoman(name, true, true, false), false, name);
     assert.deepEqual(
       importOne(bytesFor("windows-1252", `First name,Last name\r\n${name},Lee\r\n`)),
@@ -390,5 +425,17 @@ test("TS-265: on the local database, a delete doesn't deadlock with a change hol
     await setup.query(`DELETE FROM "weddings" WHERE id = $1`, [weddingId]).catch(() => {});
     await setup.query(`DELETE FROM "users" WHERE id = $1`, [ownerId]).catch(() => {});
     await setup.end().catch(() => {});
+  }
+});
+
+test("Review 15: a wedding name typed with a curly apostrophe or a no-break space is saved with plain ones", () => {
+  for (const [typed, saved] of [
+    ["Sarah’s Wedding", "Sarah's Wedding"],
+    ["O’Brien & Ja’siah", "O'Brien & Ja'siah"],
+    ["Ana & Lee", "Ana & Lee"],
+  ]) {
+    const parsed = weddingNameField.safeParse(typed);
+    assert.equal(parsed.success, true, typed);
+    assert.equal(parsed.data, saved, typed);
   }
 });

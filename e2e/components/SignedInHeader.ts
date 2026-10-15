@@ -32,6 +32,11 @@ export class SignedInHeader {
     await Promise.all([this.page.waitForURL(/\/login/), this.logOutButton().click()]);
   }
 
+  /** TS-212/TS-264: the line under the controls saying a log out didn't work. */
+  logOutFailedMessage(): Locator {
+    return this.page.getByText("Couldn't log out — check your connection and try again.", { exact: true });
+  }
+
   /** Presses Log out without waiting for anywhere (unsaved input asks first). */
   async pressLogOut(): Promise<void> {
     await this.logOutButton().click();

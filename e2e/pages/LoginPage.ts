@@ -31,7 +31,7 @@ export class LoginPage extends BasePage {
   }
 
   async goto(): Promise<void> {
-    await this.page.goto("/login");
+    await this.open("/login");
   }
 
   /** TS-175: the email field's rendered text size in px (an iPhone zooms in below 16). */
@@ -41,7 +41,7 @@ export class LoginPage extends BasePage {
 
   /** TS-147: opens /login with a raw, already-encoded `?next=` value (e.g. "/%09/evil.example"). */
   async gotoWithEncodedNext(encodedNext: string): Promise<void> {
-    await this.page.goto(`/login?next=${encodedNext}`);
+    await this.open(`/login?next=${encodedNext}`);
   }
 
   /** Business-readable operation: log in and wait for the resulting navigation to settle. */
