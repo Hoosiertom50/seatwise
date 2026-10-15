@@ -451,3 +451,9 @@ test("PR #116: a name reading doesn't take the start of a spaced-out web ending"
   for (const name of ["T. Co m", "J. Ne t", "Anna Dot Co m"]) assert.equal(looksLikeWebAddress(name), true, name);
   for (const name of ["T. Me J. Smith", "Anna Dot Ly Wedding", "J. T. Me", "Anna Dot Co"]) assert.equal(looksLikeWebAddress(name), false, name);
 });
+
+// PR #116 review (Copilot round 12).
+test("PR #116: the dot-below exception doesn't take the start of a spaced-out web ending", () => {
+  for (const name of ["T. Cọ m", "J. Nẹ t"]) assert.equal(looksLikeWebAddress(name), true, name);
+  for (const name of ["A.Mẹ", "Ọ.Mẹ", "T. Mẹ", "T. Mẹ J. Ade"]) assert.equal(looksLikeWebAddress(name), false, name);
+});

@@ -277,7 +277,9 @@ function markDotBelow(value: string): string {
     .normalize("NFC");
 }
 // Review 16: an initial, a dot and a two-letter word ("A.Me", "T. Me").
-const INITIAL_THEN_TWO_LETTERS = new RegExp(String.raw`(?<![\p{L}\p{N}])\p{L}\s*${FULL_STOP}\s*\p{L}{2}(?![\p{L}\p{N}])`, "gu");
+// PR #116 review: not when a lone letter follows -- the rest of a spaced-out ending ("T. Cọ m" is
+// "com" once folded) -- unless it's another initial (as in SPACED_INITIAL_THEN_TWO_LETTERS).
+const INITIAL_THEN_TWO_LETTERS = new RegExp(String.raw`(?<![\p{L}\p{N}])\p{L}\s*${FULL_STOP}\s*\p{L}{2}(?![\p{L}\p{N}])(?!\s+\p{L}(?![\p{L}\p{N}.]))`, "gu");
 
 // Review 17: the one-letter short-link hosts an initial and a two-letter name could spell ("t.mẹ" reads
 // as t.me) -- those still count, written without a space.
