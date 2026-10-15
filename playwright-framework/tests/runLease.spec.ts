@@ -175,9 +175,11 @@ test("a unit-test process whose share of the lease ends part-way fails, saying w
   let stderr = "";
   holder.stderr.on("data", (chunk: Buffer) => (stderr += chunk.toString()));
   const exited = new Promise<number | null>((done) => holder.on("exit", (code) => done(code)));
-  await new Promise<void>((done) => {
+  // PR #116 review: its own lease connection, by its process id -- not the newest of any test file's.
+  const holderPid = await new Promise<string>((done) => {
     holder.stdout.on("data", (chunk: Buffer) => {
-      if (chunk.toString().includes("holding")) done();
+      const found = /holding (\d+)/.exec(chunk.toString());
+      if (found) done(found[1]);
     });
   });
   const admin = new Client({ connectionString: url, connectionTimeoutMillis: 2_000 });
@@ -185,8 +187,10 @@ test("a unit-test process whose share of the lease ends part-way fails, saying w
   await admin.connect();
   try {
     const { rows } = await admin.query<{ pid: number }>(
-      "SELECT pid FROM pg_stat_activity WHERE application_name = 'seatwise-unit-test-lease' ORDER BY backend_start DESC LIMIT 1"
+      "SELECT pid FROM pg_stat_activity WHERE application_name = $1",
+      [`seatwise-unit-test-lease ${holderPid}`]
     );
+    expect(rows).toHaveLength(1);
     expect(rows[0]).toBeTruthy();
     await admin.query("SELECT pg_terminate_backend($1)", [rows[0].pid]);
   } finally {

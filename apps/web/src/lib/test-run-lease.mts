@@ -46,8 +46,8 @@ if (url) {
   const pg = createRequire(import.meta.url)("pg") as {
     Client: new (o: { connectionString: string; connectionTimeoutMillis: number; application_name: string }) => Client;
   };
-  // Named, so the lease can be seen in pg_stat_activity.
-  const client = new pg.Client({ connectionString: url, connectionTimeoutMillis: 2_000, application_name: "seatwise-unit-test-lease" });
+  // Named, with this process's id, so each test file's lease can be seen in pg_stat_activity.
+  const client = new pg.Client({ connectionString: url, connectionTimeoutMillis: 2_000, application_name: `seatwise-unit-test-lease ${process.pid}` });
   let held = false;
   // Review 16 (PR #116 review): a lease lost once held (the database restarted, or the connection
   // was ended) fails this test file with the reason, as an e2e run that loses its lease does -- a

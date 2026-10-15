@@ -336,3 +336,15 @@ test("PR #116: the dot-below exception is only for an initial and a two-letter n
   for (const name of ["A.Mẹ", "T. Mẹ", "Ọrụ", "Tọ́pẹ́"]) assert.equal(looksLikeWebAddress(name), false, name);
 });
 
+test("PR #116: the tsheg needs a Tibetan letter on each side, not just a Tibetan mark", () => {
+  const tsheg = "\u0F0B";
+  const aa = "\u0F71";
+  for (const name of [`paypal${aa}${tsheg}${aa}com`, `བཀྲ${tsheg}${tsheg}ཤིས`]) {
+    assert.equal(createGuestSchema.safeParse({ firstName: name, lastName: "Lee" }).success, false, name);
+    assert.equal(weddingNameField.safeParse(name).success, false, name);
+  }
+  for (const name of [`བཀྲ${tsheg}ཤིས`, `ཨ${aa}${tsheg}ཡ`, `བཀྲ${tsheg}ཤིས${tsheg}བདེ${tsheg}ལེགས`]) {
+    assert.equal(createGuestSchema.safeParse({ firstName: name, lastName: "Dolma" }).success, true, name);
+  }
+});
+

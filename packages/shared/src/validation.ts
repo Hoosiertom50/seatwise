@@ -17,10 +17,11 @@ import { NAME_LIKE_ENDINGS, NON_LATIN_ENDINGS } from "./web-address-endings";
 // and the zero-width joiners Persian, Sinhala and Indian scripts are typed with (which joiners
 // count as hidden characters is decided in hasHiddenCharacters below).
 // Review 16: the tsheg only between two Tibetan letters -- it's drawn as a raised dot, and between
-// Latin letters ("paypal" + tsheg + "com") it read as a web address. And a zero-width joiner
+// Latin letters ("paypal" + tsheg + "com") it read as a web address. PR #116 review: letters, not
+// just anything of the Tibetan script -- a Tibetan vowel sign each side let it through again. And a zero-width joiner
 // right after a Bengali or Malayalam virama may end a word: the older way of typing a final
 // consonant (Malayalam "Arjun", Bengali khanda ta).
-const BETWEEN_LETTERS = String.raw`(?<=[\p{L}\p{M}])[\u00B7\u30FB\uFF65\u05BE\u200C\u200D](?=\p{L})|\u0F0B(?<=\p{Script=Tibetan}\p{M}*\u0F0B)(?=\p{Script=Tibetan})|\u200D(?<=[\u09CD\u0D4D]\u200D)(?![\p{L}\p{M}])`;
+const BETWEEN_LETTERS = String.raw`(?<=[\p{L}\p{M}])[\u00B7\u30FB\uFF65\u05BE\u200C\u200D](?=\p{L})|\u0F0B(?<=(?=\p{Script=Tibetan})\p{L}\p{M}*\u0F0B)(?=(?=\p{Script=Tibetan})\p{L})|\u200D(?<=[\u09CD\u0D4D]\u200D)(?![\p{L}\p{M}])`;
 export const PERSON_NAME_PATTERN = new RegExp(String.raw`^[\p{L}\p{M}](?:[\p{L}\p{M} '.-]|${BETWEEN_LETTERS})*$`, "u");
 export const PERSON_NAME_MESSAGE =
   "Can only contain letters, spaces, hyphens, apostrophes, and periods";
