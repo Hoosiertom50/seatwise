@@ -445,3 +445,9 @@ test("all-caps names after an initial, title or name read as names; lowercase or
     assert.equal(looksLikeWebAddress(name), true, name);
   }
 });
+
+// PR #116 review (Copilot round 11).
+test("PR #116: a name reading doesn't take the start of a spaced-out web ending", () => {
+  for (const name of ["T. Co m", "J. Ne t", "Anna Dot Co m"]) assert.equal(looksLikeWebAddress(name), true, name);
+  for (const name of ["T. Me J. Smith", "Anna Dot Ly Wedding", "J. T. Me", "Anna Dot Co"]) assert.equal(looksLikeWebAddress(name), false, name);
+});

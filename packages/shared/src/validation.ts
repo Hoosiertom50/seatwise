@@ -292,10 +292,12 @@ const SHORT_LINK_HOSTS = new Set(["t.me", "m.me", "j.mp", "t.ly", "t.co"]);
 // PR #116 review: Mrs and a few more titles, and an initial's own accent marks ("Ọ̀. Me", typed as a
 // letter and a separate mark). Tom (10-15): the name after it may be in capitals too ("T. ME", "Mrs. ME",
 // as an all-caps import writes them) -- still after a capital initial or title, so "go . me" and
-// "GO . ME" count as addresses; a spaced "X . UK" passes, which no email app links.
+// "GO . ME" count as addresses; a spaced "X . UK" passes, which no email app links. PR #116 review: not
+// when a lone letter follows -- that's the rest of a spaced ending ("T. Co m" is "com"), unless it's
+// another initial ("T. Me J. Smith"). The same for "Dot" ("Anna Dot Co m").
 const NAME_TITLE = String.raw`(?:\p{Lu}|Dr|Mrs|Mr|Ms|Mx|Mme|Prof|Rev|St|Jr|Sr)\p{M}*`;
 const SPACED_INITIAL_THEN_TWO_LETTERS = new RegExp(
-  String.raw`(?<![\p{L}\p{N}'-])${NAME_TITLE}\s*${FULL_STOP}\s+\p{Lu}\p{M}*\p{L}\p{M}*(?![\p{L}\p{N}])(?!\s*${FULL_STOP})`,
+  String.raw`(?<![\p{L}\p{N}'-])${NAME_TITLE}\s*${FULL_STOP}\s+\p{Lu}\p{M}*\p{L}\p{M}*(?![\p{L}\p{N}])(?!\s*${FULL_STOP})(?!\s+\p{L}(?![\p{L}\p{N}.]))`,
   "gu"
 );
 // Review 17: "Dot" as a name (Dorothy) before an ending that's also a name or a word ("Anna Dot Ly",
@@ -306,7 +308,7 @@ const SPACED_INITIAL_THEN_TWO_LETTERS = new RegExp(
 // surname, "Anna Dot Mễ") is among the words after it -- in capitals too ("Anna Dot LY", Tom 10-15). "Dot" is matched first and only
 // then looked behind (looking behind from every position over a run of spaces took time growing with
 // its square).
-const DOT_AS_A_NAME = /Dot(?<=(?:^|(?:^|\s)(?:\p{Lu}[\p{L}\p{M}'’-]*|and|&)\s+)Dot)(?=\s+(?:Ly|LY|Co|CO|Club|CLUB|Live|LIVE|Link|LINK|Me|ME)(?![\p{L}\p{N}]))/gu;
+const DOT_AS_A_NAME = /Dot(?<=(?:^|(?:^|\s)(?:\p{Lu}[\p{L}\p{M}'’-]*|and|&)\s+)Dot)(?=\s+(?:Ly|LY|Co|CO|Club|CLUB|Live|LIVE|Link|LINK|Me|ME)(?![\p{L}\p{N}])(?!\s+\p{L}(?![\p{L}\p{N}.])))/gu;
 function readAsNames(text: string): string {
   return text
     .replace(SPACED_INITIAL_THEN_TWO_LETTERS, (initial) => initial.replace(new RegExp(FULL_STOP, "u"), " "))
