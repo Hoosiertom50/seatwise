@@ -434,3 +434,14 @@ test("PR #116: Me after Dot as a name reads as a name; a lowercase Dot Me addres
   }
   for (const name of ["evil Dot Me", "evil dot me", "Anna dot me"]) assert.equal(looksLikeWebAddress(name), true, name);
 });
+
+// Tom (10-15), from PR #116 review: names in capitals after an initial, title or name.
+test("all-caps names after an initial, title or name read as names; lowercase or unnamed ones don't", () => {
+  for (const name of ["J. ME", "T. MỄ", "Mrs. ME", "JAE U. UK", "Anna Dot LY", "Anna Dot ME"]) {
+    assert.equal(looksLikeWebAddress(name), false, name);
+    assert.equal(weddingNameField.safeParse(name).success, true, name);
+  }
+  for (const name of ["go . me", "GO . ME", "evil Dot ME", "EVIL DOT ME", "PAYPAL . CO . UK", "evil . ME", "T.ME"]) {
+    assert.equal(looksLikeWebAddress(name), true, name);
+  }
+});
