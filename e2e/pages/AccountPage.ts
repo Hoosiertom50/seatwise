@@ -29,6 +29,20 @@ export class AccountPage extends BasePage {
   backToWeddingsLink() {
     return this.page.getByRole("link", { name: "← Back to your weddings", exact: true });
   }
+  /** TS-271: fills the password box the way a browser's password manager does -- the value is set and
+   * input/change events fired, without focusing the box (Firefox fills it as the page opens). */
+  async autofillDeletePassword(password: string): Promise<void> {
+    await this.deletePasswordInput().evaluate((el, value) => {
+      const input = el as HTMLInputElement;
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(input, value);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    }, password);
+  }
+  /** TS-271: the "Delete my account" button. */
+  deleteAccountButton() {
+    return this.page.getByRole("button", { name: "Delete my account", exact: true });
+  }
   deletePasswordInput() {
     return this.page.getByLabel("Your password", { exact: true });
   }
