@@ -340,7 +340,8 @@ export async function createSampleWedding(ownerId: string, today: string): Promi
   } catch (err) {
     // PR #120 review: if the half-made wedding can't be deleted, say so -- it's still in the
     // account (and on its dashboard to delete by hand), so the caller keeps it counted.
-    const removed = await deleteWeddingForOwner(wedding.id, ownerId).then(() => true, () => false);
+    // Only "deleted" or "gone" means it's out of the account ("not-owner": handed to someone else meanwhile).
+    const removed = await deleteWeddingForOwner(wedding.id, ownerId).then((r) => r === "deleted" || r === "gone", () => false);
     if (!removed) throw new SampleWeddingLeftBehindError(err);
     throw err;
   }
