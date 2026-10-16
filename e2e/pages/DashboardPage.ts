@@ -30,6 +30,24 @@ export class DashboardPage extends BasePage {
     await this.leaveQuestion().getByRole("button", { name: "Leave without saving", exact: true }).click();
   }
 
+  /** TS-272: the team-only "For the Seatwise team" section and its button. */
+  sampleWeddingSection() {
+    return this.page.getByRole("region", { name: "For the Seatwise team", exact: true });
+  }
+  addSampleWeddingButton() {
+    return this.sampleWeddingSection().getByRole("button", { name: "Add a sample wedding", exact: true });
+  }
+  /** TS-272: presses Add a sample wedding and waits for the new wedding's page; returns its id. */
+  async addSampleWedding(): Promise<string> {
+    await this.addSampleWeddingButton().click();
+    await this.page.waitForURL(/\/weddings\/[0-9a-f-]{36}$/, { timeout: 30_000 });
+    return new URL(this.page.url()).pathname.split("/").pop()!;
+  }
+  /** TS-272: the section's refusal message (e.g. after 3 in a day). */
+  sampleWeddingError() {
+    return this.sampleWeddingSection().getByRole("alert");
+  }
+
   /** The Account link in the page's header. */
   accountLink() {
     return this.page.getByRole("navigation", { name: "Your account" }).getByRole("link", { name: "Account", exact: true });

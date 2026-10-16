@@ -126,6 +126,13 @@ export const WEDDING_CREATE_LIMITS = {
 };
 export const weddingCreateKey = (userId: string) => `weddings:create:day:${userId}`;
 
+// TS-272: the team's "Add a sample wedding" button -- 3 a day per account, so it can't be used to
+// fill the database. (Each one also counts as a new wedding, under WEDDING_CREATE_LIMITS.)
+export const SAMPLE_WEDDING_LIMITS = {
+  perAccountDay: { limit: 3, windowSeconds: 86_400 },
+};
+export const sampleWeddingKey = (userId: string) => `weddings:sample:day:${userId}`;
+
 // TS-164: confirming an email address -- link uses per address (guessing isn't feasible; this only
 // stops abuse), and "Resend link" per account, so it can't be used to flood an inbox.
 export const EMAIL_VERIFICATION_LIMITS = {
@@ -431,6 +438,7 @@ export {
   RSVP_LINK_TOO_MANY_SUBMITS,
   TOO_MANY_INVITES,
   TOO_MANY_WEDDINGS_TODAY,
+  TOO_MANY_SAMPLE_WEDDINGS_TODAY,
   tooManyAttemptsMessage,
   type EmailLimitReason,
 } from "./limit-messages";

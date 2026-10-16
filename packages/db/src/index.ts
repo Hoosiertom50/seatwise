@@ -25,3 +25,4 @@ export * from "./queries/account";
 export * from "./queries/password-reset";
 export * from "./queries/email-verification";
 export { hashLinkToken } from "./link-tokens";
+export { createSampleWedding, SampleWeddingLeftBehindError, sampleGuestCsv, SAMPLE_WEDDING_NAME, SAMPLE_WEDDING_NOTE, SAMPLE_GUESTS } from "./sample-wedding";
