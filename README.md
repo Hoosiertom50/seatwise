@@ -153,7 +153,10 @@ else deploys:
 **Environment variables** (Netlify → Project configuration → Environment variables; never in the
 repo): `DATABASE_URL` (Neon's **pooled** `-pooler` string), `JWT_SECRET`, `ENCRYPTION_KEY`,
 `APP_URL` (`https://seatwise-app.netlify.app`), and the email settings `SMTP_USER`/`SMTP_PASSWORD`
-(see Email delivery). The running app refuses a `JWT_SECRET` shorter than 32 characters,
+(see Email delivery). Optional: `SAMPLE_WEDDING_EMAIL_DOMAINS` (TS-272) -- the email domain(s),
+comma-separated and without the "@", whose confirmed accounts get the dashboard's **Add a sample
+wedding** button (a filled-in wedding for trying every tab). Unset, nobody gets it. Not a secret,
+but kept out of the repo like the rest. The running app refuses a `JWT_SECRET` shorter than 32 characters,
 left at a placeholder such as the one in `.env.example` (TS-179), or the same as `ENCRYPTION_KEY`
 (TS-204) -- but only when it first uses it,
 **not at build time** (TS-215). A wrong `JWT_SECRET`, `ENCRYPTION_KEY` or `APP_URL` builds and

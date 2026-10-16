@@ -20,6 +20,8 @@ import { FIELD_LIMITS } from "@seatwise/shared";
 // Review 14: "Duplicate layout" waiting on the leave question (the wedding's id follows), and the
 // browser's Back.
 const DUPLICATE = "duplicate:";
+// TS-272: "Add a sample wedding" (team only), asked about like Duplicate when the form is typed in.
+const ADD_SAMPLE = "add-sample";
 const BACK = "__back__";
 
 // TS-19 (FR-14.2): human-readable labels for a template's captured rule-shape.
@@ -130,6 +132,9 @@ export default function DashboardPage() {
   const [planStatusFilter, setPlanStatusFilter] = useState<PlanStatusFilter>("ALL");
   const [sortKey, setSortKey] = useState<SortKey>("urgency");
 
+  // TS-272: whether this account gets the team's "Add a sample wedding" button (read with the list).
+  const [sampleAvailable, setSampleAvailable] = useState(false);
+
   // TS-175: a failed load says so, with Try again -- it used to show "No weddings yet".
   const [loadFailed, setLoadFailed] = useState(false);
   const [loadAttempt, setLoadAttempt] = useState(0);
@@ -142,6 +147,12 @@ export default function DashboardPage() {
         // TS-191: templates load on their own -- if only they fail, the weddings still show and
         // the templates section says what went wrong (it used to be "Couldn't load your weddings").
         void loadTemplates();
+        // TS-272: whether this account gets the team's "Add a sample wedding" button. Not shown if
+        // this can't be read -- the rest of the page is unaffected.
+        void api
+          .get<{ available: boolean }>("/api/v1/sample-wedding")
+          .then((r) => setSampleAvailable(r.available))
+          .catch(() => setSampleAvailable(false));
         const list = await api.get<{ weddings: WeddingSummaryDTO[] }>("/api/v1/weddings");
         setWeddings(list.weddings);
         setLoadFailed(false);
@@ -206,6 +217,21 @@ export default function DashboardPage() {
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't duplicate that wedding.");
       setDuplicatingId(null);
+    }
+  }
+
+  // TS-272: the team's "Add a sample wedding" -- a filled-in wedding in this account, then opened.
+  const [addingSample, setAddingSample] = useState(false);
+  const [sampleError, setSampleError] = useState<string | null>(null);
+  async function onAddSample() {
+    setSampleError(null);
+    setAddingSample(true);
+    try {
+      const { weddingId } = await api.post<{ weddingId: string }>("/api/v1/sample-wedding");
+      openPage(`/weddings/${weddingId}`);
+    } catch (err) {
+      setSampleError(err instanceof ApiError ? err.message : "Couldn't add the sample wedding.");
+      setAddingSample(false);
     }
   }
 
@@ -391,6 +417,8 @@ export default function DashboardPage() {
         // Review 14: focus back on Log out (it fell to the top of the page), as on the wedding page.
         leaveOpener.current?.focus();
       }
+    } else if (href === ADD_SAMPLE) {
+      await onAddSample();
     } else if (href.startsWith(DUPLICATE)) {
       const w = weddings.find((x) => x.id === href.slice(DUPLICATE.length));
       if (w) await onDuplicate(w);
@@ -855,6 +883,36 @@ export default function DashboardPage() {
             })}
           </ul>
         </>
+      )}
+
+      {/* TS-272: only for accounts on the team's email domain (the server decides; see
+          lib/sample-wedding-access.ts) -- nobody else sees this section. */}
+      {sampleAvailable && (
+        <section aria-labelledby="sample-wedding-heading" className="mt-10 rounded-lg border border-dashed border-neutral-300 dark:border-neutral-600 p-4">
+          <h2 id="sample-wedding-heading" className="text-sm font-medium">
+            For the Seatwise team
+          </h2>
+          <p className="mt-1 text-sm text-neutral-500 dark:text-neutral-400">
+            Adds a wedding filled with sample guests, tables, seating rules, seating plans, a timeline,
+            a budget and comments, so there&apos;s something to try on every tab. Delete it any time.
+          </p>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.currentTarget.focus();
+              if (onLeave(ADD_SAMPLE)) void onAddSample();
+            }}
+            disabled={addingSample}
+            className="mt-3 rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50"
+          >
+            {addingSample ? "Making your sample wedding…" : "Add a sample wedding"}
+          </button>
+          {sampleError && (
+            <p role="alert" className="mt-2 text-sm text-red-600 dark:text-red-400">
+              {sampleError}
+            </p>
+          )}
+        </section>
       )}
     </main>
   );

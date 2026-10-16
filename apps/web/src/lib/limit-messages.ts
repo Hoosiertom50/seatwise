@@ -41,6 +41,11 @@ export function TOO_MANY_WEDDINGS_TODAY(retryAfterSeconds?: number): string {
   return `You've created a lot of weddings in the last 24 hours — you can create more ${tryAgainIn(retryAfterSeconds)}.`;
 }
 
+// TS-272: the team's "Add a sample wedding" button, a few a day per account.
+export function TOO_MANY_SAMPLE_WEDDINGS_TODAY(retryAfterSeconds?: number): string {
+  return `You've added 3 sample weddings in the last 24 hours — you can add another ${tryAgainIn(retryAfterSeconds)}.`;
+}
+
 export const TOO_MANY_INVITES =
   "You've sent a lot of invites in a short time. Please wait a while before sending more.";
 // TS-203: the account's allowance rolls over 24 hours.

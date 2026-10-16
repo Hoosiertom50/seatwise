@@ -174,6 +174,10 @@ export class WeddingDetailPage extends BasePage {
   tabPanel() {
     return this.page.getByRole("tabpanel");
   }
+  /** TS-272: some text in the open tab (the first match). */
+  inTabPanel(text: string | RegExp) {
+    return this.tabPanel().getByText(text).first();
+  }
   /** TS-182: moves focus to a tab and presses a key there (e.g. ArrowRight to move along). */
   async pressOnTab(label: string, key: string): Promise<void> {
     await this.tab(label).focus();
