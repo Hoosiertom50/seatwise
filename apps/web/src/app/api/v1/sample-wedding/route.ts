@@ -34,7 +34,11 @@ export async function POST(req: NextRequest) {
   // 3 a day per account, and each counts as a new wedding too. Given back if none is made.
   const sample = await countOr429(sampleWeddingKey(user.id), SAMPLE_WEDDING_LIMITS.perAccountDay, TOO_MANY_SAMPLE_WEDDINGS_TODAY);
   if (sample.limited) return sample.limited;
-  const wedding = await countOr429(weddingCreateKey(user.id), WEDDING_CREATE_LIMITS.perAccountDay, TOO_MANY_WEDDINGS_TODAY);
+  // PR #120 review: if this check itself fails (not just "too many"), the sample count is given back too.
+  const wedding = await countOr429(weddingCreateKey(user.id), WEDDING_CREATE_LIMITS.perAccountDay, TOO_MANY_WEDDINGS_TODAY).catch(async (err) => {
+    await sample.giveBack().catch(() => undefined);
+    throw err;
+  });
   if (wedding.limited) {
     await sample.giveBack();
     return wedding.limited;
