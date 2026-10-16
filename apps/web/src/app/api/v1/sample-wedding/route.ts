@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createSampleWedding } from "@seatwise/db";
+import { createSampleWedding, SampleWeddingLeftBehindError } from "@seatwise/db";
 import { getAuthUser } from "@/lib/session";
 import { errorResponse } from "@/lib/api-response";
 import { mayAddSampleWedding } from "@/lib/sample-wedding-access";
@@ -51,8 +51,12 @@ export async function POST(req: NextRequest) {
     // Netlify's ~10 s limit on a request).
     return NextResponse.json({ weddingId }, { status: 201, headers: { "Server-Timing": `sample;desc="Making the sample wedding";dur=${Date.now() - started}` } });
   } catch (err) {
-    await sample.giveBack();
-    await wedding.giveBack();
+    // No wedding was left: both counts are given back, each tried on its own, and the build's own
+    // error is the one passed on. A half-made wedding that couldn't be removed is still in the
+    // account, so it stays counted (PR #120 review).
+    if (!(err instanceof SampleWeddingLeftBehindError)) {
+      await Promise.allSettled([sample.giveBack(), wedding.giveBack()]);
+    }
     throw err;
   }
 }

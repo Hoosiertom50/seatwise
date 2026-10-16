@@ -338,8 +338,19 @@ export async function createSampleWedding(ownerId: string, today: string): Promi
   try {
     await fillSampleWedding(wedding.id, ownerId, wedding.sideMixing as EngineSideMixing);
   } catch (err) {
-    await deleteWeddingForOwner(wedding.id, ownerId).catch(() => undefined);
+    // PR #120 review: if the half-made wedding can't be deleted, say so -- it's still in the
+    // account (and on its dashboard to delete by hand), so the caller keeps it counted.
+    const removed = await deleteWeddingForOwner(wedding.id, ownerId).then(() => true, () => false);
+    if (!removed) throw new SampleWeddingLeftBehindError(err);
     throw err;
   }
   return wedding.id;
+}
+
+/** PR #120 review: making a sample wedding failed and the half-made one couldn't be removed. */
+export class SampleWeddingLeftBehindError extends Error {
+  constructor(readonly original: unknown) {
+    super(`A sample wedding failed part-way and couldn't be removed: ${original instanceof Error ? original.message : String(original)}`);
+    this.name = "SampleWeddingLeftBehindError";
+  }
 }
