@@ -111,6 +111,9 @@ env:
   EMAIL_TRANSPORT: log
   # TS-148: the tests set up collaborators directly; the live site never allows that.
   ALLOW_DIRECT_COLLABORATOR_ADD: "1"
+  # TS-272: "Add a sample wedding" on for the test accounts (example.invalid). The live site sets
+  # its own domain in Netlify; with this unset, the tests that check nobody else gets it run instead.
+  SAMPLE_WEDDING_EMAIL_DOMAINS: example.invalid
   # No secret here: an ephemeral, CI-job-lifetime-only Postgres database that never holds anything
   # but throwaway test data, matching this framework's own e2e/support/env.ts default APP_URL and
   # the .env.example DATABASE_URL shape.
