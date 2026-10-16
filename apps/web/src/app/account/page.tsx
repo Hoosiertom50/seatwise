@@ -25,6 +25,11 @@ export default function AccountPage() {
   const router = useRouter();
   const [user, setUser] = useState<{ name: string; email: string } | null>(null);
   const [password, setPassword] = useState("");
+  // TS-271: whether the person has been in the password box (focused it or dropped onto it; see below).
+  const passwordTouched = useRef(false);
+  const markPasswordTouched = () => {
+    passwordTouched.current = true;
+  };
   // TS-264 (PR #114 review): leaving with a password typed in "Delete my account" -- Log out, the
   // bell, or Back to your weddings -- asks first rather than quietly throwing it away.
   const [pendingLeave, setPendingLeave] = useState<string | null>(null);
@@ -353,10 +358,21 @@ export default function AccountPage() {
           maxLength={FIELD_LIMITS.password}
           id="delete-password"
           type="password"
-          autoComplete="current-password"
+          // TS-271: a box to type on purpose before deleting, not a sign-in -- so browsers aren't asked
+          // to fill it, and a value a browser or password manager puts in anyway (Firefox did, as the
+          // page opened, without focusing it) is not taken until the person has been in the box. Filled
+          // in, every way off the page asked about a password nobody had typed, and the delete lost its
+          // safeguard. Focus, not key presses, is the sign: dictation and picking a saved password on
+          // purpose (and Safari's insertText) fire no key events.
+          autoComplete="off"
           className="mb-3 w-full max-w-xs rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
           value={password}
-          onChange={(e) => setPassword(e.target.value)}
+          onFocus={markPasswordTouched}
+          onDrop={markPasswordTouched}
+          onChange={(e) => {
+            if (passwordTouched.current) setPassword(e.target.value);
+            else e.target.value = password;
+          }}
         />
         <div className="flex flex-wrap items-center gap-2">
           <ConfirmDeleteButton
