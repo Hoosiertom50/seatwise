@@ -14,6 +14,7 @@ import { GuestRsvpPage } from "../pages/GuestRsvpPage.js";
 import { DayOfTabPage } from "../pages/DayOfTabPage.js";
 import { WeddingDetailPage } from "../pages/WeddingDetailPage.js";
 import { safariTabSkipsButtons } from "../support/tabOrder.js";
+import { reloadOnceSettled } from "../support/pageSettled.js";
 
 interface GuestState {
   headcount: number;
@@ -118,7 +119,7 @@ defineQualityTest(
     });
 
     await test.step("After a reload the row and the form show the new details", async () => {
-      await page.reload();
+      await reloadOnceSettled(page);
       await weddingGuestsPage.openGuestsTab();
       await row.expectVisible();
       await expect(row.summaryLine()).toContainText("The Lee House");

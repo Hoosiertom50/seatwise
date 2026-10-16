@@ -128,7 +128,7 @@ export class TimelineTabPage extends BasePage {
    * arbitrary sleep.
    */
   async goto(weddingId: string): Promise<void> {
-    await this.page.goto(`/weddings/${weddingId}`);
+    await this.open(`/weddings/${weddingId}`);
     await this.timelineTabButton().click();
     await this.page.waitForLoadState("networkidle");
   }
@@ -167,6 +167,22 @@ export class TimelineTabPage extends BasePage {
 
   async startEdit(description: string): Promise<void> {
     await this.editButton(description).click();
+  }
+
+  /** Review 18: the open editor's time box. */
+  editTimeInputLocator() {
+    return this.editTimeInput();
+  }
+  /** Review 17: the open editor's description box (for typing without saving, and checking it). */
+  editDescriptionInputLocator() {
+    return this.editDescriptionInput();
+  }
+  /** Review 17: clicks Save without waiting for its answer. */
+  async clickSaveEdit(): Promise<void> {
+    await this.saveButton().click();
+  }
+  async cancelEdit(): Promise<void> {
+    await this.page.getByRole("button", { name: "Cancel", exact: true }).click();
   }
 
   /** Waits for the PATCH to resolve before returning -- onSaveEdit updates React state directly

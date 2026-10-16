@@ -2,7 +2,7 @@ import { z } from "zod";
 // TS-180: free text refuses hidden control characters (see ../safe-text).
 import { safeText } from "../safe-text";
 import { FIELD_LIMITS } from "../field-limits";
-import { expectedRevisionField, lengthFirst } from "./common";
+import { expectedRevisionField, lengthFirst, noHiddenCharactersFirst } from "./common";
 import { PERSON_NAME_PATTERN, PERSON_NAME_MESSAGE, looksLikeWebAddress, NO_WEB_ADDRESS_MESSAGE, hasMixedScriptWord, NO_MIXED_SCRIPT_MESSAGE, normalizePersonName } from "../validation";
 
 export const guestTierEnum = z.enum(["VIP", "FAMILY", "FRIEND", "PLUS_ONE", "OTHER"]);
@@ -45,17 +45,20 @@ export type AgeCategory = z.infer<typeof ageCategoryEnum>;
 
 function guestNameField(requiredMessage: string) {
   // TS-243: ’ ‘ ʼ and the no-break space are made plain first (see normalizePersonName).
+  // TS-262: ...and put in composed form (NFC); a hidden character is refused first.
   return z.string().transform(normalizePersonName).pipe(lengthFirst(
     FIELD_LIMITS.personName,
-    z
-      .string()
-      .min(1, requiredMessage)
-      .regex(PERSON_NAME_PATTERN, PERSON_NAME_MESSAGE)
-      // TS-163: a guest's name goes into their RSVP email, so -- like a planner's name (TS-156) --
-      // it can't read as a web address that the email app would turn into a link.
-      .refine((v) => !looksLikeWebAddress(v), NO_WEB_ADDRESS_MESSAGE)
-      // TS-178: nor mix look-alike letters from different alphabets in one word.
-      .refine((v) => !hasMixedScriptWord(v), NO_MIXED_SCRIPT_MESSAGE)
+    noHiddenCharactersFirst(
+      z
+        .string()
+        .min(1, requiredMessage)
+        .regex(PERSON_NAME_PATTERN, PERSON_NAME_MESSAGE)
+        // TS-163: a guest's name goes into their RSVP email, so -- like a planner's name (TS-156) --
+        // it can't read as a web address that the email app would turn into a link.
+        .refine((v) => !looksLikeWebAddress(v), NO_WEB_ADDRESS_MESSAGE)
+        // TS-178: nor mix look-alike letters from different alphabets in one word.
+        .refine((v) => !hasMixedScriptWord(v), NO_MIXED_SCRIPT_MESSAGE)
+    )
   ));
 }
 

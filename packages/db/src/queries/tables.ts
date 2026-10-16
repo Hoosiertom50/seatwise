@@ -226,21 +226,29 @@ export async function quickCreateSeatingTables(
       input.labelPrefix,
       input.count
     );
-    const created: SeatingTableRow[] = [];
-    for (let i = 0; i < input.count; i++) {
-      const id = randomUUID();
-      const { x, y } = gridPosition(startIndex + i);
-      const { rows } = await client.query(
-        `INSERT INTO "seating_tables"
-           (id, "weddingId", label, capacity, shape, "positionX", "positionY", "updatedAt")
-         VALUES ($1, $2, $3, $4, $5::"TableShape", $6, $7, now())
-         RETURNING id, "weddingId", label, capacity, "isRestricted", "isAccessible", "isLocked",
-                   purpose, "purposeCriterionType", "purposeCriterionValue", "singleSideOnly", shape,
-                   "positionX", "positionY", revision, "createdAt", "updatedAt"`,
-        [id, weddingId, labels[i], input.capacity, input.shape, x, y]
-      );
-      created.push({ ...rows[0], requiredGuestIds: [] });
-    }
+    // TS-261: every new table in one INSERT (it was one per table). The rows come back keyed by id
+    // and are put in the order they were made, so the caller gets them in label order as before.
+    const ids = labels.map(() => randomUUID());
+    const positions = labels.map((_, i) => gridPosition(startIndex + i));
+    const { rows } = labels.length
+      ? await client.query(
+          `INSERT INTO "seating_tables"
+             (id, "weddingId", label, capacity, shape, "positionX", "positionY", "updatedAt")
+           SELECT v.id, $2, v.label, $4, $5::"TableShape", v.x, v.y, now()
+             FROM unnest($1::text[], $3::text[], $6::double precision[], $7::double precision[])
+                  WITH ORDINALITY AS v(id, label, x, y, n)
+            ORDER BY v.n
+           RETURNING id, "weddingId", label, capacity, "isRestricted", "isAccessible", "isLocked",
+                     purpose, "purposeCriterionType", "purposeCriterionValue", "singleSideOnly", shape,
+                     "positionX", "positionY", revision, "createdAt", "updatedAt"`,
+          [ids, weddingId, labels, input.capacity, input.shape, positions.map((p) => p.x), positions.map((p) => p.y)]
+        )
+      : { rows: [] };
+    const byId = new Map(rows.map((r) => [r.id as string, r]));
+    const created: SeatingTableRow[] = ids.flatMap((id) => {
+      const row = byId.get(id);
+      return row ? [{ ...row, requiredGuestIds: [] }] : [];
+    });
     await client.query("COMMIT");
     return created;
   } catch (err) {
@@ -545,7 +553,7 @@ export async function updateSeatingTableForWedding(
       isRestricted: boolean;
       isAccessible: boolean;
     }>(
-      // TS-187: NO KEY UPDATE -- see resyncSeatsAtTable in seat-checks.ts.
+      // TS-187: NO KEY UPDATE -- see resyncTables in seat-checks.ts.
       `SELECT revision, label, capacity, "isRestricted", "isAccessible" FROM "seating_tables" WHERE id = $1 AND "weddingId" = $2 FOR NO KEY UPDATE`,
       [id, weddingId]
     );
@@ -817,7 +825,7 @@ export async function setRequiredGuestsForTable(
     if (actor) await recheckActorAccess(client, weddingId, actor);
 
     const { rows: tableRows } = await client.query<TableAfterEdit>(
-      // TS-187: NO KEY UPDATE -- see resyncSeatsAtTable in seat-checks.ts.
+      // TS-187: NO KEY UPDATE -- see resyncTables in seat-checks.ts.
       `SELECT id, label, capacity, "isRestricted", "isAccessible" FROM "seating_tables" WHERE id = $1 AND "weddingId" = $2 FOR NO KEY UPDATE`,
       [tableId, weddingId]
     );
@@ -863,7 +871,7 @@ export async function setRequiredGuestsForTable(
 
 // FR-4.6 / TS-120: after a table edit that can make its current seating invalid -- accessible
 // switched off, seats lowered, or a restricted table's required list changed -- re-check everyone
-// seated at it in the Current Plan Version (see resyncSeatsAtTable in seat-checks.ts for the rules)
+// seated at it in the Current Plan Version (see resyncTables in seat-checks.ts for the rules)
 // and keep isComplete in sync, all in one transaction. Nobody is ever unseated.
 export async function resyncTableSeating(
   weddingId: string,

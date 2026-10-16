@@ -19,7 +19,9 @@ import { CommentsTab } from "./components/CommentsTab";
 import { TimelineTab } from "./components/TimelineTab";
 import { BudgetTab } from "./components/BudgetTab";
 import { GettingStarted, loadGettingStartedCounts, type GettingStartedCounts } from "./components/GettingStarted";
-import { NotificationsBell } from "@/components/NotificationsBell";
+// TS-264: bell · Account · Log out, the same on every signed-in page.
+import { SignedInHeader } from "@/components/SignedInHeader";
+import { LOG_OUT, LOG_OUT_FAILED_MESSAGE, goToSignIn, logOutThisDevice } from "@/lib/log-out";
 import { EmailVerificationNotice } from "@/components/EmailVerificationNotice";
 import { SaveStatusIndicator } from "@/components/SaveStatusIndicator";
 import { saveStatusStore } from "@/lib/save-status";
@@ -122,6 +124,17 @@ export default function WeddingDetailPage() {
   // TS-166: leaving the wedding page itself ("Back to dashboard") asks the same question; the
   // browser's own prompt only covers closing or reloading the page, not links inside the app.
   const [pendingHref, setPendingHref] = useState<string | null>(null);
+  // Review 15: the question opens where it can be seen -- asked from a control further down (a wedding
+  // in the list, a link at the bottom) or after Back restored the scroll position, it used to open
+  // above the screen with focus on its off-screen Stay (WebKit on a phone; Chromium after Back).
+  const leaveQuestionRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!(pendingTab || pendingHref)) return;
+    const frame = requestAnimationFrame(() =>
+      requestAnimationFrame(() => leaveQuestionRef.current?.scrollIntoView({ block: "nearest" }))
+    );
+    return () => cancelAnimationFrame(frame);
+  }, [pendingTab, pendingHref]);
   // TS-191: the control that brought up the "unsaved changes" question, so focus can go back to it
   // when the question closes (it used to fall to the top of the page).
   // TS-199: remembered by id too -- a guest row's box is often drawn anew (after a save elsewhere on
@@ -129,6 +142,9 @@ export default function WeddingDetailPage() {
   const questionOpener = useRef<{ node: HTMLElement; id: string } | null>(null);
   function rememberOpener(preferred?: HTMLElement | null) {
     const active = document.activeElement;
+    // Review 14: asked again while the question is already up (Back pressed then) -- the control that
+    // first asked stays the one focus goes back to, not the question's own button (gone once it closes).
+    if (!preferred && active instanceof HTMLElement && active.closest('[role="alertdialog"]') && questionOpener.current) return;
     const node = preferred ?? (active instanceof HTMLElement && active !== document.body ? active : null);
     questionOpener.current = node ? { node, id: node.id } : null;
   }
@@ -169,7 +185,15 @@ export default function WeddingDetailPage() {
     const active = document.activeElement;
     const inSaveOnLeaveBox = active instanceof HTMLElement && active.hasAttribute("data-blur-save");
     if (!inSaveOnLeaveBox && !unsaved.isSaving()) {
-      if (!unsaved.hasUnsaved()) return true;
+      // PR #114 review: Log out (which signs out before it leaves), or anything pressed while the
+      // page is still taking its extra Back entry off after a save, goes through the page's own
+      // leaving, which waits for that Back -- it used to cancel the next page, so Log out could
+      // sign out and leave the wedding page on screen.
+      if (!unsaved.hasUnsaved() && href !== LOG_OUT && !unsaved.guardSettling()) return true;
+      if (!unsaved.hasUnsaved()) {
+        void leaveAfterSaves(href);
+        return false;
+      }
       rememberOpener();
       setPendingHref(href);
       return false;
@@ -188,9 +212,7 @@ export default function WeddingDetailPage() {
       const allSaved = unsaved.isSaving() ? await unsaved.waitForSaves() : true;
       if (allSaved && !unsaved.hasUnsaved()) {
         questionOpener.current = null;
-        // TS-175: replaces the page's extra history entry if it's on it.
-        if (unsaved.releaseForLink()) router.replace(href);
-        else router.push(href);
+        await followLeave(href);
         return;
       }
       if (unsaved.hasUnsaved()) setPendingHref(href);
@@ -203,6 +225,32 @@ export default function WeddingDetailPage() {
       leaveInProgress.current = false;
     }
   }
+  // TS-264: why a Log out asked about first (or waited for saves) then didn't work -- shown in the
+  // header, under Log out.
+  const [logOutError, setLogOutError] = useState<string | null>(null);
+  /** Leaves the page once nothing is unsaved (or the planner said to leave without saving). */
+  async function followLeave(href: string) {
+    if (href === LOG_OUT) {
+      // TS-264: Log out, exactly as the dashboard's -- this device only, then the sign-in page. If
+      // it fails the page stays as it is (nothing is let go), with the reason under Log out.
+      setLogOutError(null);
+      if (!(await logOutThisDevice())) {
+        setLogOutError(LOG_OUT_FAILED_MESSAGE);
+        restoreFocus(questionOpener.current);
+        questionOpener.current = null;
+        return;
+      }
+      await unsaved.whenGuardSettled();
+      unsaved.releaseForLink();
+      goToSignIn();
+      return;
+    }
+    await unsaved.whenGuardSettled();
+    // TS-175: replace the page's extra history entry rather than leaving it behind (Back from the
+    // next page used to land on it, a dead copy of this one).
+    if (unsaved.releaseForLink()) router.replace(href);
+    else router.push(href);
+  }
   function leaveTab() {
     if (pendingHref === BACK) {
       setPendingHref(null);
@@ -213,10 +261,7 @@ export default function WeddingDetailPage() {
     if (pendingHref) {
       const href = pendingHref;
       setPendingHref(null);
-      // TS-175: replace the page's extra history entry rather than leaving it behind (Back from the
-      // next page used to land on it, a dead copy of this one).
-      if (unsaved.releaseForLink()) router.replace(href);
-      else router.push(href);
+      void followLeave(href);
       return;
     }
     if (!pendingTab) return;
@@ -501,21 +546,26 @@ export default function WeddingDetailPage() {
 
   return (
     <main className="mx-auto w-full max-w-[1600px] flex-1 px-6 py-10">
-      <div className="flex items-center justify-between">
-        <Link
-          href="/dashboard"
-          onClick={(e) => {
-            if (!requestLeavePage("/dashboard")) e.preventDefault();
-          }}
-          className="text-sm text-neutral-500 dark:text-neutral-400 hover:underline"
-        >
-          &larr; Back to dashboard
-        </Link>
-        <div className="flex items-center gap-4">
-          <SaveStatusIndicator unsavedCount={unsaved.unsavedCount} />
-          <NotificationsBell onLeave={requestLeavePage} />
-        </div>
-      </div>
+      {/* TS-264: the same bell · Account · Log out as every other signed-in page. All three (and
+          Back to dashboard) go through the unsaved-changes guard: unsaved typing asks first. */}
+      <SignedInHeader
+        onLeave={requestLeavePage}
+        logOutError={logOutError}
+        left={
+          <Link
+            href="/dashboard"
+            onClick={(e) => {
+              // Review 14: Safari doesn't focus a clicked link; Stay brings focus back here.
+              e.currentTarget.focus();
+              if (!requestLeavePage("/dashboard")) e.preventDefault();
+            }}
+            className="inline-flex min-h-11 items-center text-sm text-neutral-500 dark:text-neutral-400 hover:underline"
+          >
+            &larr; Back to dashboard
+          </Link>
+        }
+        status={<SaveStatusIndicator unsavedCount={unsaved.unsavedCount} />}
+      />
 
       {/* TS-164 */}
       <div className="mt-4">
@@ -598,6 +648,7 @@ export default function WeddingDetailPage() {
       {/* TS-159 */}
       {(pendingTab || pendingHref) && (
         <div
+          ref={leaveQuestionRef}
           role="alertdialog"
           aria-labelledby="unsaved-question"
           // TS-212: Escape means Stay, as in every other question in the app.

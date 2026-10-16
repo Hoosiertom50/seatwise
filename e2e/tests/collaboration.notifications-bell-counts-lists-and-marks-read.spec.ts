@@ -11,6 +11,7 @@ import { expect, defineQualityTest, test } from "../fixtures/index.js";
 import { uniquePersonName } from "../data/ids.js";
 import { NotificationsBell } from "../components/NotificationsBell.js";
 import { signUpFreshAccountInNewContext } from "../support/auth.js";
+import { reloadOnceSettled } from "../support/pageSettled.js";
 
 defineQualityTest(
   {
@@ -55,7 +56,7 @@ defineQualityTest(
 
       await test.step("One reply: a 1 badge, the reply listed as unread, and clicking it marks it read", async () => {
         await reply("Chicken, confirmed by phone");
-        await page.reload();
+        await reloadOnceSettled(page);
         await expect(bell.bell()).toHaveAccessibleName("Notifications (1 unread)");
         await expect(bell.badge()).toHaveText("1");
         await bell.toggle();
@@ -68,7 +69,7 @@ defineQualityTest(
 
       await test.step("Ten more: the badge caps at 9+, and Mark all read clears everything", async () => {
         for (let i = 1; i <= 10; i++) await reply(`Follow-up ${i}`);
-        await page.reload();
+        await reloadOnceSettled(page);
         await expect(bell.bell()).toHaveAccessibleName("Notifications (10 unread)");
         await expect(bell.badge()).toHaveText("9+");
         await bell.toggle();

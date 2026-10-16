@@ -7,7 +7,7 @@ import {
   lockCurrentPlan,
   lockRestrictedLists,
   recordRecheckIfApproved,
-  resyncSeatsAtTable,
+  resyncTables,
   restrictedListsOverCapacity,
   requiredAtNonAccessibleTable,
   tablesAffectedBy,
@@ -689,16 +689,16 @@ export async function commitGuestImport(
         [planVersionId, [...recheckGuestIds]]
       );
       const tableIds = [...new Set([...(tableRows as { tableId: string }[]).map((r) => r.tableId), ...recheckTableIds])].sort();
-      for (const tableId of tableIds) {
-        const { newlyFlagged, changed } = await resyncSeatsAtTable(client, weddingId, planVersionId, tableId);
-        if (changed) planFlagsChanged = true;
-        for (const f of newlyFlagged) {
-          reassignmentWarnings.push(
-            f.reason === "capacity"
-              ? `${f.name} no longer fits at their table — flagged as Needs Reassignment.`
-              : `${f.name}'s current table no longer fits a hard rule for them — flagged as Needs Reassignment.`
-          );
-        }
+      // TS-259: all of them in one re-check (it was one re-check per table); the warnings still come
+      // table by table, in the same order.
+      const { newlyFlagged, changed } = await resyncTables(client, weddingId, planVersionId, tableIds);
+      if (changed) planFlagsChanged = true;
+      for (const f of newlyFlagged) {
+        reassignmentWarnings.push(
+          f.reason === "capacity"
+            ? `${f.name} no longer fits at their table — flagged as Needs Reassignment.`
+            : `${f.name}'s current table no longer fits a hard rule for them — flagged as Needs Reassignment.`
+        );
       }
     }
 
@@ -706,7 +706,7 @@ export async function commitGuestImport(
       const { rows: countRows } = await client.query(
         `SELECT
            (SELECT COUNT(*)::int FROM "guests" g WHERE g."weddingId" = $1 AND g."dayOfAttendance" = 'ATTENDING'
-              AND NOT EXISTS (SELECT 1 FROM "seat_assignments" sa WHERE sa."planVersionId" = $2 AND sa."guestId" = g.id)
+              AND g.id NOT IN (SELECT sa."guestId" FROM "seat_assignments" sa WHERE sa."planVersionId" = $2) -- TS-266
            ) AS "unassignedCount",
            (SELECT COUNT(*)::int FROM "seat_assignments" WHERE "planVersionId" = $2 AND "needsReassignment" = true)
              AS "needsReassignmentCount"`,

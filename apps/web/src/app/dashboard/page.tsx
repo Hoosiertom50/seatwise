@@ -1,16 +1,26 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ConfirmDeleteButton } from "@/components/ConfirmDeleteButton";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { api, ApiError, apiErrorMessage } from "@/lib/api-client";
 import { formatDate, localTodayIso } from "@/lib/display-format";
+// TS-263: asks before creating a wedding whose date has already passed.
+import { pastWeddingDateQuestion } from "@/lib/past-wedding-date";
 import { formatGuestCounts, type WeddingSummaryDTO, type SeatingTemplateDTO } from "@seatwise/shared";
-import { NotificationsBell } from "@/components/NotificationsBell";
+// TS-264: bell · Account · Log out, the same on every signed-in page.
+import { SignedInHeader } from "@/components/SignedInHeader";
+import { LOG_OUT, LOG_OUT_FAILED_MESSAGE, goToSignIn, logOutThisDevice } from "@/lib/log-out";
+import { useUnsavedChangesProvider } from "@/lib/unsaved-changes";
 import { EmailVerificationNotice } from "@/components/EmailVerificationNotice";
 // TS-193: the same limits the server checks (packages/shared/src/field-limits.ts).
 import { FIELD_LIMITS } from "@seatwise/shared";
+
+// Review 14: "Duplicate layout" waiting on the leave question (the wedding's id follows), and the
+// browser's Back.
+const DUPLICATE = "duplicate:";
+const BACK = "__back__";
 
 // TS-19 (FR-14.2): human-readable labels for a template's captured rule-shape.
 const SIDE_MIXING_LABELS: Record<string, string> = {
@@ -70,6 +80,9 @@ function compareUrgency(a: WeddingSummaryDTO, b: WeddingSummaryDTO, todayIso: st
 
 export default function DashboardPage() {
   const router = useRouter();
+  // Review 14: the same guard as the wedding page -- while "Add a wedding" holds typing, a reload
+  // or closing the tab asks (the browser's own question) and the browser's Back asks ours.
+  const unsaved = useUnsavedChangesProvider({ onBackRequested: () => onBack() });
   const [userName, setUserName] = useState<string | null>(null);
   const [userId, setUserId] = useState<string | null>(null);
   const [weddings, setWeddings] = useState<WeddingSummaryDTO[]>([]);
@@ -82,6 +95,8 @@ export default function DashboardPage() {
   const [newNote, setNewNote] = useState("");
   const [showNote, setShowNote] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // TS-263: a past date waiting for "Save anyway" (the date and the question asked about it).
+  const [dateQuestion, setDateQuestion] = useState<{ value: string; message: string } | null>(null);
 
   // TS-19 (FR-14.4): "start from an existing template" is offered right in this create form --
   // templates are a portfolio-level asset (not scoped to any one wedding), so they're fetched
@@ -187,15 +202,43 @@ export default function DashboardPage() {
     setDuplicatingId(w.id);
     try {
       const { wedding } = await api.post<{ wedding: { id: string } }>(`/api/v1/weddings/${w.id}/duplicate`, {});
-      router.push(`/weddings/${wedding.id}`);
+      openPage(`/weddings/${wedding.id}`);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't duplicate that wedding.");
       setDuplicatingId(null);
     }
   }
 
+  // PR #114 review: "Save anyway" submits the form (so a name cleared, or both template boxes
+  // unticked, while the question was up is caught as with Add wedding), saying yes to this one date.
+  const createForm = useRef<HTMLFormElement>(null);
+  const pastDateConfirmed = useRef<string | null>(null);
+  function onSaveAnyway(date: string) {
+    pastDateConfirmed.current = date;
+    createForm.current?.requestSubmit();
+    // The submit (onCreate) has read it by now; if the form's own check stopped the submit, the
+    // yes mustn't carry over to a later Add wedding with the same date.
+    pastDateConfirmed.current = null;
+  }
+
   async function onCreate(e: React.FormEvent) {
     e.preventDefault();
+    const confirmed = pastDateConfirmed.current;
+    pastDateConfirmed.current = null;
+    // TS-263: a date before today (in the planner's own time zone) is only saved once they say so
+    // -- it used to be saved without a word, and it's usually the wrong year.
+    const question = pastWeddingDateQuestion(newDate, localTodayIso());
+    if (question && confirmed !== newDate) {
+      setError(null);
+      setDateQuestion({ value: newDate, message: question });
+      return;
+    }
+    await createWedding();
+  }
+
+  // TS-263: also "Save anyway" -- creates the wedding with the date that was asked about.
+  async function createWedding() {
+    setDateQuestion(null);
     setError(null);
     setCreating(true);
     try {
@@ -217,6 +260,10 @@ export default function DashboardPage() {
         { ...wedding, planStatus: null, unassignedCount: 0, needsReassignmentCount: 0 },
         ...prev,
       ]);
+      // Review 14: the page is let go first -- emptying the form would otherwise take the Back guard's
+      // extra history entry off with a Back of its own, which cancels the page opened next.
+      const href = `/weddings/${wedding.id}`;
+      const onGuardEntry = unsaved.releaseForLink();
       setNewName("");
       setNewDate("");
       setNewVenue("");
@@ -225,12 +272,20 @@ export default function DashboardPage() {
       setSelectedTemplateId("");
       // TS-112: go straight into the new wedding -- its Getting started steps (TS-96) are what a
       // planner needs next, rather than hunting for it in the list they were just on.
-      router.push(`/weddings/${wedding.id}`);
+      if (onGuardEntry) router.replace(href);
+      else router.push(href);
     } catch (err) {
       setError(apiErrorMessage(err, ["name"], "Couldn't create the wedding."));
     } finally {
       setCreating(false);
     }
+  }
+
+  // TS-263: "Change it" -- the typed date stays (usually only the year is wrong) and the date box
+  // gets focus.
+  function onChangeDate() {
+    setDateQuestion(null);
+    setTimeout(() => document.getElementById("new-wedding-date")?.focus(), 0);
   }
 
   async function onDeleteTemplate(id: string) {
@@ -252,17 +307,102 @@ export default function DashboardPage() {
     }
   }
 
-  // TS-175: a failed log out says so (it failed silently), and a successful one replaces this
-  // page in history, so Back doesn't bounce between the dashboard and the sign-in page.
-  // TS-204 (Tom's decision): this device only -- "Log out on all devices" is on the Account page.
-  async function onLogout() {
-    try {
-      await api.post("/api/v1/auth/logout");
-    } catch {
-      setError("Couldn't log out — check your connection and try again.");
-      return;
+  // TS-264: Log out (TS-175/TS-204) is in the shared SignedInHeader now, on every signed-in page.
+  // Leaving the dashboard with something typed in the "Add a wedding" form asks first, as the
+  // wedding page does -- it used to log out and lose it. Review 14: every way off the page asks --
+  // Log out, Account, a wedding in the list and Duplicate layout (which opens the copy).
+  const [pendingLeave, setPendingLeave] = useState<string | null>(null);
+  const leaveOpener = useRef<HTMLElement | null>(null);
+  // Review 15: the question opens where it can be seen -- asked from a control further down (a wedding
+  // in the list, a link at the bottom) or after Back restored the scroll position, it used to open
+  // above the screen with focus on its off-screen Stay (WebKit on a phone; Chromium after Back).
+  const leaveQuestionRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!(pendingLeave)) return;
+    const frame = requestAnimationFrame(() =>
+      requestAnimationFrame(() => leaveQuestionRef.current?.scrollIntoView({ block: "nearest" }))
+    );
+    return () => cancelAnimationFrame(frame);
+  }, [pendingLeave]);
+  function stay() {
+    setPendingLeave(null);
+    leaveOpener.current?.focus();
+    leaveOpener.current = null;
+  }
+  const [logOutError, setLogOutError] = useState<string | null>(null);
+  const createFormTyped = [newName, newDate, newVenue, newNote, selectedTemplateId].some((v) => v.trim() !== "");
+  const unsavedRegistry = unsaved.registry;
+  useEffect(() => {
+    unsavedRegistry.setDirty("create-wedding", createFormTyped);
+  }, [unsavedRegistry, createFormTyped]);
+  /** PR #114 review: Stay (or Escape) puts focus back on the control that asked -- Log out,
+   * Account, the bell or the wedding link -- not the top of the page. Review 14: asked again while
+   * the question is already up (Back pressed then), the first control is kept. */
+  function rememberOpener() {
+    const active = document.activeElement;
+    if (leaveOpener.current && active instanceof HTMLElement && active.closest('[role="alertdialog"]')) return;
+    leaveOpener.current = active instanceof HTMLElement ? active : null;
+  }
+  function onLeave(href: string): boolean {
+    if (!createFormTyped) {
+      // PR #115 review: just emptied, the form's Back entry is still being taken off -- that Back
+      // cancelled a page opened meanwhile (the link did nothing). Leave once it has landed, as the
+      // wedding page does.
+      if (!unsaved.guardSettling()) return true;
+      void leaveOnceSettled(href);
+      return false;
     }
-    router.replace("/login");
+    rememberOpener();
+    setLogOutError(null);
+    setPendingLeave(href);
+    return false;
+  }
+  /** Review 14: the browser's Back with the form typed in -- the provider has put its entry back. */
+  function onBack() {
+    rememberOpener();
+    setLogOutError(null);
+    setPendingLeave(BACK);
+  }
+  /** Leaves for `href`, replacing the Back guard's extra history entry if the page is on it. */
+  function openPage(href: string) {
+    if (unsaved.releaseForLink()) router.replace(href);
+    else router.push(href);
+  }
+  async function leaveOnceSettled(href: string) {
+    await unsaved.whenGuardSettled();
+    await leaveFor(href);
+  }
+  async function leaveWithoutSaving() {
+    const href = pendingLeave;
+    setPendingLeave(null);
+    if (href) await leaveFor(href);
+    leaveOpener.current = null;
+  }
+  async function leaveFor(href: string) {
+    if (href === BACK) {
+      // Past the extra entry and this page; opened in a fresh tab there's nothing before it.
+      unsaved.goBackPastPage(() => router.replace("/"));
+    } else if (href === LOG_OUT) {
+      if (await logOutThisDevice()) {
+        unsaved.releaseForLink();
+        goToSignIn();
+      } else {
+        setLogOutError(LOG_OUT_FAILED_MESSAGE);
+        // Review 14: focus back on Log out (it fell to the top of the page), as on the wedding page.
+        leaveOpener.current?.focus();
+      }
+    } else if (href.startsWith(DUPLICATE)) {
+      const w = weddings.find((x) => x.id === href.slice(DUPLICATE.length));
+      if (w) await onDuplicate(w);
+    } else {
+      openPage(href);
+    }
+  }
+  /** Review 14: a wedding in the list -- a plain click asks first (a click that opens a new tab doesn't). */
+  function onWeddingLinkClick(e: React.MouseEvent<HTMLAnchorElement>, href: string) {
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+    e.currentTarget.focus(); // Safari doesn't focus a clicked link; Stay brings focus back here.
+    if (!onLeave(href)) e.preventDefault();
   }
 
   if (loading) {
@@ -271,33 +411,61 @@ export default function DashboardPage() {
 
   return (
     <main className="mx-auto w-full max-w-[1600px] flex-1 px-6 py-10">
-      <div className="mb-8 flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold">Your weddings</h1>
-          {userName && <p className="text-sm text-neutral-500 dark:text-neutral-400">Signed in as {userName}</p>}
-        </div>
-        <div className="flex items-center gap-2">
-          <NotificationsBell />
-          {/* TS-105 */}
-          <Link
-            href="/account"
-            className="rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800"
-          >
-            Account
-          </Link>
+      {/* TS-264: the same bell · Account · Log out as every other signed-in page. */}
+      <div className="mb-8">
+        <SignedInHeader
+          onLeave={onLeave}
+          logOutError={logOutError}
+          left={
+            <>
+              <h1 className="text-xl font-semibold sm:text-2xl">Your weddings</h1>
+              {userName && <p className="text-sm text-neutral-500 dark:text-neutral-400">Signed in as {userName}</p>}
+            </>
+          }
+        />
+      </div>
+
+      {pendingLeave && (
+        <div
+          ref={leaveQuestionRef}
+          role="alertdialog"
+          aria-labelledby="dashboard-unsaved-question"
+          // TS-212: Escape means Stay, as in every other question in the app.
+          onKeyDown={(e) => {
+            if (e.key === "Escape") {
+              e.preventDefault();
+              e.stopPropagation();
+              stay();
+            }
+          }}
+          className="mb-6 flex flex-wrap items-center gap-3 rounded-md bg-amber-50 dark:bg-amber-950 px-4 py-3 text-sm text-amber-900 dark:text-amber-200"
+        >
+          <span id="dashboard-unsaved-question" className="flex-1">
+            You&apos;ve started adding a wedding. Leave and lose what you typed?
+          </span>
           <button
-            onClick={onLogout}
-            className="rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800"
+            type="button"
+            autoFocus
+            onClick={stay}
+            className="min-h-11 rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800"
           >
-            Log out
+            Stay
+          </button>
+          <button
+            type="button"
+            onClick={() => void leaveWithoutSaving()}
+            className="min-h-11 rounded-md bg-red-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-red-800"
+          >
+            Leave without saving
           </button>
         </div>
-      </div>
+      )}
 
       {/* TS-164 */}
       <EmailVerificationNotice />
 
       <form
+        ref={createForm}
         onSubmit={onCreate}
         className="mb-8 flex flex-col gap-3 rounded-lg border border-neutral-200 dark:border-neutral-700 p-4"
       >
@@ -332,7 +500,11 @@ export default function DashboardPage() {
               type="date"
               className="rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm"
               value={newDate}
-              onChange={(e) => setNewDate(e.target.value)}
+              onChange={(e) => {
+                setNewDate(e.target.value);
+                // TS-263: a new date is a new answer -- the question was about the old one.
+                setDateQuestion(null);
+              }}
             />
           </div>
           <div className="flex-1">
@@ -354,6 +526,48 @@ export default function DashboardPage() {
           >
             {creating ? "Adding..." : "Add wedding"}
           </button>
+        </div>
+        {/* TS-263: asks before creating a wedding whose date has already passed. Right after Add
+            wedding, so it's the next Tab stop. The region is always on the page, so the question is
+            announced when it appears (TS-212). */}
+        <div aria-live="assertive" data-testid="new-wedding-date-question-region">
+          {dateQuestion && (
+            <div
+              role="alertdialog"
+              aria-labelledby="new-wedding-date-question"
+              // TS-212: Escape means "Change it", like the other questions in the app.
+              onKeyDown={(e) => {
+                if (e.key === "Escape") {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  onChangeDate();
+                }
+              }}
+              className="flex flex-wrap items-center gap-3 rounded-md bg-amber-50 dark:bg-amber-950 px-3 py-2 text-sm text-amber-900 dark:text-amber-200"
+            >
+              {/* basis-60: on a phone the buttons go under the question rather than squeezing it. */}
+              <span id="new-wedding-date-question" className="flex-1 basis-60">
+                {dateQuestion.message}
+              </span>
+              <button
+                type="button"
+                onClick={() => onSaveAnyway(dateQuestion.value)}
+                disabled={creating || (!!selectedTemplateId && !applyTemplateTables && !applyTemplateRules)}
+                className="min-h-11 rounded-md bg-amber-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-amber-800 disabled:opacity-50"
+              >
+                Save anyway
+              </button>
+              <button
+                type="button"
+                // PR #114 review: focus starts on the safe choice, so Escape works straight away.
+                autoFocus
+                onClick={onChangeDate}
+                className="min-h-11 rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800"
+              >
+                Change it
+              </button>
+            </div>
+          )}
         </div>
         {/* TS-19 (FR-14.4): entirely optional -- leaving this at "Start from scratch" behaves
             exactly as before this feature existed. */}
@@ -576,6 +790,7 @@ export default function DashboardPage() {
                 <li key={w.id} className="flex items-stretch gap-2">
                   <Link
                     href={`/weddings/${w.id}`}
+                    onClick={(e) => onWeddingLinkClick(e, `/weddings/${w.id}`)}
                     className="flex min-w-0 flex-1 flex-col gap-2 rounded-lg border border-neutral-200 dark:border-neutral-700 px-4 py-3 hover:border-neutral-400 dark:hover:border-neutral-500 sm:flex-row sm:items-center sm:justify-between"
                   >
                     {/* TS-199: a long name or venue wraps instead of running off a phone screen. */}
@@ -591,7 +806,7 @@ export default function DashboardPage() {
                           className={`rounded-full px-2 py-0.5 text-xs font-normal ${
                             w.planStatus
                               ? PLAN_STATUS_BADGE_CLASSES[w.planStatus]
-                              : "bg-neutral-100 dark:bg-neutral-800 text-neutral-500 dark:text-neutral-400"
+                              : "bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-300" // Review 14: 4.5:1 contrast or more
                           }`}
                         >
                           {w.planStatus ? PLAN_STATUS_LABELS[w.planStatus] : "No plan yet"}
@@ -604,7 +819,7 @@ export default function DashboardPage() {
                     </div>
                     <div className="flex flex-wrap items-center gap-3 text-sm text-neutral-500 dark:text-neutral-400 sm:text-right">
                       {totalIssues > 0 && (
-                        <span className="rounded-full bg-red-100 dark:bg-red-900 px-2 py-0.5 text-xs font-medium text-red-700 dark:text-red-400">
+                        <span className="rounded-full bg-red-100 dark:bg-red-900 px-2 py-0.5 text-xs font-medium text-red-700 dark:text-red-200">
                           {w.unassignedCount > 0 && `${w.unassignedCount} unassigned`}
                           {w.unassignedCount > 0 && w.needsReassignmentCount > 0 && " · "}
                           {w.needsReassignmentCount > 0 &&
@@ -623,7 +838,10 @@ export default function DashboardPage() {
                   {userId && w.ownerId === userId && (
                     <button
                       type="button"
-                      onClick={() => onDuplicate(w)}
+                      onClick={(e) => {
+                        e.currentTarget.focus();
+                        if (onLeave(DUPLICATE + w.id)) void onDuplicate(w);
+                      }}
                       disabled={duplicatingId !== null}
                       aria-label={`Duplicate layout of ${w.name}`}
                       title="Start a new wedding with this one's tables and seating settings (no guests)"

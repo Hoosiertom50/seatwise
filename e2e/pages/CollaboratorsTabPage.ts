@@ -14,7 +14,7 @@ export type RoleLabel = "Collaborator" | "Couple";
 
 export class CollaboratorsTabPage extends BasePage {
   async goto(weddingId: string): Promise<void> {
-    await this.page.goto(`/weddings/${weddingId}`);
+    await this.open(`/weddings/${weddingId}`);
     await this.page.getByRole("tab", { name: "Collaborators", exact: true }).click();
     await this.peopleHeading().waitFor();
   }
@@ -195,6 +195,43 @@ export class CollaboratorsTabPage extends BasePage {
   }
   async changeCutoff(): Promise<void> {
     await this.rsvpCutoffQuestion().getByRole("button", { name: "Change it", exact: true }).click();
+  }
+
+  /** TS-263: types a date and presses Save date and venue, without waiting for a save (a past date
+   * asks first). */
+  async pressSaveDateAndVenue(date: string): Promise<void> {
+    await this.weddingDateInput().fill(date);
+    await this.page.getByRole("button", { name: "Save date and venue", exact: true }).click();
+  }
+
+  /** TS-263: the "This date (MM-DD-YYYY) has already passed — is that right?" question. */
+  pastDateQuestion() {
+    return this.page.getByRole("alertdialog").filter({ hasText: /has already passed/ });
+  }
+
+  /** TS-263: "Save anyway" on that question; waits for the save's answer and returns its status. */
+  async saveDateAnyway(): Promise<number> {
+    const [response] = await Promise.all([
+      this.page.waitForResponse((r) => r.request().method() === "PATCH" && /\/api\/v1\/weddings\/[^/]+$/.test(new URL(r.url()).pathname)),
+      this.pastDateQuestion().getByRole("button", { name: "Save anyway", exact: true }).click(),
+    ]);
+    return response.status();
+  }
+
+  /** TS-263: "Save anyway" without waiting for a save (it is refused when the date was changed
+   * elsewhere meanwhile). */
+  async pressSaveDateAnyway(): Promise<void> {
+    await this.pastDateQuestion().getByRole("button", { name: "Save anyway", exact: true }).click();
+  }
+
+  /** TS-212: the Date and venue box's "Saved" note. */
+  dateAndVenueSaved() {
+    return this.page.getByRole("status").filter({ hasText: /^Saved$/ });
+  }
+
+  /** TS-263: "Change it" on that question -- closes it and puts focus back in the date box. */
+  async changeDate(): Promise<void> {
+    await this.pastDateQuestion().getByRole("button", { name: "Change it", exact: true }).click();
   }
 
   /** TS-154: sets the wedding's date and venue in the owner settings and waits for the save. */

@@ -213,7 +213,7 @@ async function checkPlanVersionRevision(
 ): Promise<void> {
   const { rows } = await client.query(
     // TS-148: scoped to the wedding, so another wedding's version is never locked or compared.
-    // TS-187: NO KEY UPDATE -- see resyncSeatsAtTable in seat-checks.ts.
+    // TS-187: NO KEY UPDATE -- see resyncTables in seat-checks.ts.
     `SELECT revision, "isCurrent" FROM "plan_versions" WHERE id = $1 AND "weddingId" = $2 FOR NO KEY UPDATE`,
     [planVersionId, weddingId]
   );
@@ -423,9 +423,12 @@ export async function createPlanVersionWithAssignments(
     // TS-169: the plan was worked out from the guest list as it was before this transaction; a
     // guest who declined (or was marked Not Attending) since then doesn't keep a seat in it.
     // Attendance changes take the same wedding lock, so they land either before this or after it.
+    // TS-266: the not-attending guests are read once into a list first. As a plain IN, Postgres
+    // could check every new seat against every one of the wedding's guests when its statistics
+    // didn't know this plan or wedding yet (~350 ms on a freshly imported 2,000-guest wedding).
     await client.query(
       `DELETE FROM "seat_assignments" WHERE "planVersionId" = $1
-         AND "guestId" IN (SELECT id FROM "guests" WHERE "weddingId" = $2 AND "dayOfAttendance" <> 'ATTENDING')`,
+         AND "guestId" = ANY(ARRAY(SELECT id FROM "guests" WHERE "weddingId" = $2 AND "dayOfAttendance" <> 'ATTENDING'))`,
       [planVersionId, weddingId]
     );
     await checkNewVersion(client, weddingId, planVersionId);
@@ -436,7 +439,7 @@ export async function createPlanVersionWithAssignments(
     const { rows: countRows } = await client.query(
       `SELECT (SELECT COUNT(*)::int FROM "seat_assignments" WHERE "planVersionId" = $1) AS "seated",
               (SELECT COUNT(*)::int FROM "guests" g WHERE g."weddingId" = $2 AND g."dayOfAttendance" = 'ATTENDING'
-                 AND NOT EXISTS (SELECT 1 FROM "seat_assignments" sa WHERE sa."planVersionId" = $1 AND sa."guestId" = g.id)
+                 AND g.id NOT IN (SELECT sa."guestId" FROM "seat_assignments" sa WHERE sa."planVersionId" = $1) -- TS-266
               ) AS "unassigned"`,
       [planVersionId, weddingId]
     );
@@ -570,7 +573,7 @@ export async function recomputeCurrentPlanCompleteness(
       const { rows: countRows } = await client.query(
         `SELECT pv."isComplete",
            (SELECT COUNT(*)::int FROM "guests" g WHERE g."weddingId" = $1 AND g."dayOfAttendance" = 'ATTENDING'
-              AND NOT EXISTS (SELECT 1 FROM "seat_assignments" sa WHERE sa."planVersionId" = $2 AND sa."guestId" = g.id)
+              AND g.id NOT IN (SELECT sa."guestId" FROM "seat_assignments" sa WHERE sa."planVersionId" = $2) -- TS-266
            ) AS "unassignedCount",
            (SELECT COUNT(*)::int FROM "seat_assignments" WHERE "planVersionId" = $2 AND "needsReassignment" = true)
              AS "needsReassignmentCount"
@@ -602,16 +605,37 @@ export async function recomputeCurrentPlanCompleteness(
 // plan's own is kept up to date by every change).
 export async function listPlanVersionsForWedding(weddingId: string): Promise<PlanVersionRow[]> {
   const { rows } = await pool.query(
-    `WITH attending AS (
+    `WITH attending AS MATERIALIZED (
        SELECT COUNT(*)::int AS n FROM "guests" WHERE "weddingId" = $1 AND "dayOfAttendance" = 'ATTENDING'
      ),
-     seated AS (
-       SELECT sa."planVersionId", COUNT(DISTINCT sa."guestId")::int AS count,
-              bool_or(sa."needsReassignment") AS "anyFlagged"
-       FROM "seat_assignments" sa
-       JOIN "guests" g ON g.id = sa."guestId" AND g."dayOfAttendance" = 'ATTENDING'
-       JOIN "plan_versions" p ON p.id = sa."planVersionId" AND p."weddingId" = $1
-       GROUP BY sa."planVersionId"
+     -- Review 14: MATERIALIZED -- worked out once. Folded into the query below, Postgres re-ran it
+     -- once per version when its statistics were out of date (2,500 seat counts at 50 versions).
+     seated AS MATERIALIZED (
+       -- TS-266: COUNT(*), not COUNT(DISTINCT "guestId") -- a guest has at most one seat per plan
+       -- version (unique "planVersionId", "guestId"), so it's the same number without sorting
+       -- every seat of every version (which went to disk at 50 versions).
+       -- Review 14: each of this wedding's versions counts its own seats (through the version's
+       -- index, whatever Postgres's statistics say), less the seats of guests who aren't attending
+       -- (read by guest id). Joining the guests and versions instead read every seat in the
+       -- database, and when the statistics were missing or out of date it re-counted them once per
+       -- version (9-11 s at 50 versions of a 2,000-guest wedding).
+       SELECT p.id AS "planVersionId", (a.count - COALESCE(n.count, 0))::int AS count,
+              a.flagged - COALESCE(n.flagged, 0) > 0 AS "anyFlagged"
+       FROM "plan_versions" p
+       CROSS JOIN LATERAL (
+         SELECT COUNT(*) AS count, COUNT(*) FILTER (WHERE sa."needsReassignment") AS flagged
+         FROM "seat_assignments" sa
+         WHERE sa."planVersionId" = p.id
+       ) a
+       LEFT JOIN (
+         SELECT sa."planVersionId", COUNT(*) AS count, COUNT(*) FILTER (WHERE sa."needsReassignment") AS flagged
+         FROM "seat_assignments" sa
+         WHERE sa."guestId" = ANY(ARRAY(
+                 SELECT id FROM "guests" WHERE "weddingId" = $1 AND "dayOfAttendance" <> 'ATTENDING'))
+           AND sa."planVersionId" = ANY(ARRAY(SELECT id FROM "plan_versions" WHERE "weddingId" = $1))
+         GROUP BY sa."planVersionId"
+       ) n ON n."planVersionId" = p.id
+       WHERE p."weddingId" = $1
      )
      SELECT pv.id, pv."weddingId", pv."versionNumber", pv.label, pv.status,
             CASE WHEN pv."isCurrent" THEN pv."isComplete"
@@ -718,7 +742,7 @@ export async function setPlanVersionStatus(
     // been made View, a Collaborator, or had handed the wedding off.
     await lockWeddingRow(client, weddingId);
     const { rows } = await client.query(
-      // TS-187: NO KEY UPDATE -- see resyncSeatsAtTable in seat-checks.ts.
+      // TS-187: NO KEY UPDATE -- see resyncTables in seat-checks.ts.
       `SELECT status, "isComplete", revision, "isCurrent" FROM "plan_versions" WHERE id = $1 AND "weddingId" = $2 FOR NO KEY UPDATE`,
       [id, weddingId]
     );
@@ -994,6 +1018,11 @@ export async function getPlanVersionDetail(
   };
 }
 
+// Review 15: the guest's must-sit-together group changed (a rule added or removed) while the move was
+// on its way -- moving the group as it was read would split the one there is now.
+const MUST_SIT_GROUP_CHANGED_MESSAGE =
+  "This guest's must-sit-together group changed a moment ago — nothing was moved. Check the plan and move them again.";
+
 // FR-7.1/FR-7.2/FR-7.3/FR-7.6 (TS-10, Manual Adjustment): move a guest — and, since guests
 // forced together by MUST_SIT_TOGETHER always share a table, their whole forced-together unit —
 // to a different table within the Current Plan Version. A hard-rule violation (capacity, a
@@ -1110,8 +1139,6 @@ export async function moveGuestAssignment(
   // nobody and calling it done.
   if (unit.length === 0) throw new ManualMoveError(`${guest.name} is marked Not Attending, so they can't be seated.`);
   const unitIds = new Set(unit.map((g) => g.id));
-  const unitHeadcount = unit.reduce((sum, g) => sum + g.headcount, 0);
-  const unitNeedsAccessible = unit.some((g) => g.requiresAccessibleTable);
 
   const mustNotByGuest = new Map<string, Set<string>>();
   const avoidByGuest = new Map<string, Set<string>>();
@@ -1135,17 +1162,13 @@ export async function moveGuestAssignment(
     [planVersionId, targetTableId]
   );
   const occupants = occupantRows.filter((o) => !unitIds.has(o.guestId));
-  const occupantHeadcount = occupants.reduce((sum, o) => sum + o.headcount, 0);
 
-  // TS-189: the whole group is already at that table -- nothing to move. Answered before the
-  // checks below (a table that's over its seats would otherwise refuse a "move" that changes
-  // nothing), and checked again under the plan's lock before anything is written.
-  if (unit.length > 0 && unit.every((member) => occupantRows.some((o) => o.guestId === member.id))) {
-    const unchanged = await getPlanVersionDetail(planVersionId, weddingId);
-    if (unchanged && (expectedRevision === undefined || unchanged.revision === expectedRevision)) {
-      return { planVersion: { ...unchanged, warnings: [] }, warnings: [] };
-    }
-  }
+  // TS-189: the whole group is already at that table -- nothing to move. The checks below are
+  // skipped for it (a table that's over its seats would otherwise refuse a "move" that changes
+  // nothing). PR #115 review: it's no longer answered here, though -- only under the plan's lock,
+  // once the must-sit group has been read again (a partner linked meanwhile, seated elsewhere, was
+  // left there while this answered "nothing to move" for the old group).
+  const alreadyAtTarget = unit.length > 0 && unit.every((member) => occupantRows.some((o) => o.guestId === member.id));
 
   const guestLabel = (n: number, ids: string[]) =>
     `${n === 1 ? "Guest" : "Guests"} ${unit
@@ -1154,56 +1177,75 @@ export async function moveGuestAssignment(
       .join(", ")}`;
 
   // --- Hard rules — any failure blocks the move outright, nothing changes. ---
-  if (occupantHeadcount + unitHeadcount > targetTable.capacity) {
-    throw new ManualMoveError(
-      `${guestLabel(unit.length, unit.map((g) => g.id))} can't be seated at "${targetTable.label}" ` +
-        `— it only has ${Math.max(targetTable.capacity - occupantHeadcount, 0)} seat(s) left, but ` +
-        `${unitHeadcount} ${unitHeadcount === 1 ? "is" : "are"} needed` +
-        `${unit.length > 1 ? " (everyone in this must-sit-together group moves together)" : ""}.`
-    );
-  }
-  if (unitNeedsAccessible && !targetTable.isAccessible) {
-    const needAccessible = unit.filter((g) => g.requiresAccessibleTable).map((g) => g.id);
-    throw new ManualMoveError(
-      `${guestLabel(needAccessible.length, needAccessible)} require${
-        needAccessible.length === 1 ? "s" : ""
-      } an accessible table, and "${targetTable.label}" isn't marked as one.`
-    );
-  }
-  for (const member of unit) {
-    const conflicts = mustNotByGuest.get(member.id);
-    if (!conflicts) continue;
-    const conflictingOccupant = occupants.find((o) => conflicts.has(o.guestId));
-    if (conflictingOccupant) {
+  // Review 14: checked here, and again under the plan's lock below against the table, its guests,
+  // the rules and the required lists as they are then -- moves sent at the same moment without
+  // expectedRevision all passed this first check and overfilled the table.
+  const checkHardRules = (state: {
+    table: { label: string; capacity: number; isAccessible: boolean; isRestricted: boolean };
+    occupants: { guestId: string; headcount: number; name: string }[];
+    mustNotByGuest: Map<string, Set<string>>;
+    requiredTableByGuestId: Map<string, { tableId: string; tableLabel: string }>;
+    requiredGuestIdsForTargetTable: Set<string>;
+    /** Review 15: the group's own party sizes and accessible-table needs, as read for this check. */
+    members: { id: string; headcount: number; requiresAccessibleTable: boolean }[];
+  }) => {
+    const table = state.table;
+    const occupiedSeats = state.occupants.reduce((sum, o) => sum + o.headcount, 0);
+    const seatsNeeded = state.members.reduce((sum, g) => sum + g.headcount, 0);
+    if (occupiedSeats + seatsNeeded > table.capacity) {
       throw new ManualMoveError(
-        `${member.name} has a "must not sit together" rule with ${conflictingOccupant.name}, ` +
-          `who's already seated at "${targetTable.label}".`
+        `${guestLabel(unit.length, unit.map((g) => g.id))} can't be seated at "${table.label}" ` +
+          `— it only has ${Math.max(table.capacity - occupiedSeats, 0)} seat(s) left, but ` +
+          `${seatsNeeded} ${seatsNeeded === 1 ? "is" : "are"} needed` +
+          `${unit.length > 1 ? " (everyone in this must-sit-together group moves together)" : ""}.`
       );
     }
-  }
-  // FR-3.7a: a guest required at a Restricted table can only ever be moved to that exact table
-  // (or unassigned) -- never anywhere else, since that would "remove" them from the list's
-  // seating without actually taking them off the list.
-  for (const member of unit) {
-    const required = requiredTableByGuestId.get(member.id);
-    if (required && required.tableId !== targetTableId) {
+    if (state.members.some((g) => g.requiresAccessibleTable) && !table.isAccessible) {
+      const needAccessible = state.members.filter((g) => g.requiresAccessibleTable).map((g) => g.id);
       throw new ManualMoveError(
-        `${member.name} is required at "${required.tableLabel}" and can't be moved elsewhere ` +
-          `while they're on its required-guest list.`
+        `${guestLabel(needAccessible.length, needAccessible)} require${
+          needAccessible.length === 1 ? "s" : ""
+        } an accessible table, and "${table.label}" isn't marked as one.`
       );
     }
-  }
-  // FR-3.7a: a Restricted table can only ever hold the guests on its required list -- moving
-  // anyone else there is blocked, the same as moving a listed guest away from it above.
-  if (targetTable.isRestricted) {
-    const unlisted = unit.filter((member) => !requiredGuestIdsForTargetTable.has(member.id));
-    if (unlisted.length > 0) {
-      const names = unlisted.map((g) => g.name).join(", ");
-      throw new ManualMoveError(
-        `"${targetTable.label}" is a Restricted table — only guests on its required-guest list ` +
-          `can be seated there, and ${names} ${unlisted.length === 1 ? "isn't" : "aren't"} on it.`
-      );
+    for (const member of unit) {
+      const conflicts = state.mustNotByGuest.get(member.id);
+      if (!conflicts) continue;
+      const conflictingOccupant = state.occupants.find((o) => conflicts.has(o.guestId));
+      if (conflictingOccupant) {
+        throw new ManualMoveError(
+          `${member.name} has a "must not sit together" rule with ${conflictingOccupant.name}, ` +
+            `who's already seated at "${table.label}".`
+        );
+      }
     }
+    // FR-3.7a: a guest required at a Restricted table can only ever be moved to that exact table
+    // (or unassigned) -- never anywhere else, since that would "remove" them from the list's
+    // seating without actually taking them off the list.
+    for (const member of unit) {
+      const required = state.requiredTableByGuestId.get(member.id);
+      if (required && required.tableId !== targetTableId) {
+        throw new ManualMoveError(
+          `${member.name} is required at "${required.tableLabel}" and can't be moved elsewhere ` +
+            `while they're on its required-guest list.`
+        );
+      }
+    }
+    // FR-3.7a: a Restricted table can only ever hold the guests on its required list -- moving
+    // anyone else there is blocked, the same as moving a listed guest away from it above.
+    if (table.isRestricted) {
+      const unlisted = unit.filter((member) => !state.requiredGuestIdsForTargetTable.has(member.id));
+      if (unlisted.length > 0) {
+        const names = unlisted.map((g) => g.name).join(", ");
+        throw new ManualMoveError(
+          `"${table.label}" is a Restricted table — only guests on its required-guest list ` +
+            `can be seated there, and ${names} ${unlisted.length === 1 ? "isn't" : "aren't"} on it.`
+        );
+      }
+    }
+  };
+  if (!alreadyAtTarget) {
+    checkHardRules({ table: targetTable, occupants, mustNotByGuest, requiredTableByGuestId, requiredGuestIdsForTargetTable, members: unit });
   }
 
   // --- Soft rules — allowed, but returned as a non-blocking warning. ---
@@ -1253,6 +1295,13 @@ export async function moveGuestAssignment(
       [unitIds]
     );
     if (absent[0]) throw new ManualMoveError(`${absent[0].name} is marked Not Attending, so they can't be seated.`);
+    // Review 15: the group itself as it is now -- a must-sit rule added a moment before (which doesn't
+    // move the plan's revision) used to be checked against the copy read before the lock, and the
+    // move went through split. PR #115 review: before the "nothing to move" answer below too.
+    const groupNow = await findMustSitTogetherUnit(weddingId, guestId, client);
+    if (groupNow.length !== unitIds.length || groupNow.some((member) => !unitIds.includes(member.id))) {
+      throw new ManualMoveError(MUST_SIT_GROUP_CHANGED_MESSAGE);
+    }
     // TS-189: under the lock -- if the whole group is already there, nothing is written (no
     // revision bump, history line or notification for a move that moved nobody).
     const { rows: alreadyThere } = await client.query(
@@ -1265,6 +1314,56 @@ export async function moveGuestAssignment(
       const unchanged = await getPlanVersionDetail(planVersionId, weddingId, client);
       if (!unchanged) throw new ManualMoveError("Plan version not found.");
       return { planVersion: { ...unchanged, warnings: [] }, warnings: [] };
+    }
+    // Review 14: the hard rules again, under the plan's lock (moves, table edits, rule changes and
+    // required-list changes all take it), against the table and its guests as they are now.
+    {
+      // Review 15: the group's party sizes and accessible-table needs as they are now (the group
+      // itself was read again above) -- changed a moment before (which doesn't move the plan's
+      // revision), they used to be checked against the copy read before the lock, and the move went
+      // over the table's seats.
+      const { rows: membersNow } = await client.query(
+        `SELECT id, headcount, "requiresAccessibleTable" FROM "guests" WHERE id = ANY($1::text[]) AND "weddingId" = $2`,
+        [unitIds, weddingId]
+      );
+      const { rows: tableNow } = await client.query(
+        `SELECT label, capacity, "isAccessible", "isRestricted" FROM "seating_tables" WHERE id = $1 AND "weddingId" = $2`,
+        [targetTableId, weddingId]
+      );
+      if (!tableNow[0]) throw new ManualMoveError("Table not found.");
+      const { rows: occupantsNow } = await client.query(
+        `SELECT sa."guestId", g.headcount, (g."firstName" || ' ' || g."lastName") AS name
+         FROM "seat_assignments" sa JOIN "guests" g ON g.id = sa."guestId"
+         WHERE sa."planVersionId" = $1 AND sa."seatingTableId" = $2 AND NOT (sa."guestId" = ANY($3::text[]))`,
+        [planVersionId, targetTableId, unitIds]
+      );
+      const { rows: mustNotNow } = await client.query(
+        `SELECT "guestAId", "guestBId" FROM "guest_relationships"
+         WHERE "weddingId" = $1 AND type = 'MUST_NOT_SIT_TOGETHER'
+           AND ("guestAId" = ANY($2::text[]) OR "guestBId" = ANY($2::text[]))`,
+        [weddingId, unitIds]
+      );
+      const mustNotNowByGuest = new Map<string, Set<string>>();
+      for (const r of mustNotNow) {
+        for (const [a, b] of [[r.guestAId, r.guestBId], [r.guestBId, r.guestAId]]) {
+          if (!mustNotNowByGuest.has(a)) mustNotNowByGuest.set(a, new Set());
+          mustNotNowByGuest.get(a)!.add(b);
+        }
+      }
+      const { rows: requiredNow } = await client.query(
+        `SELECT rtg."guestId", rtg."tableId", t.label AS "tableLabel"
+         FROM "restricted_table_guests" rtg JOIN "seating_tables" t ON t.id = rtg."tableId"
+         WHERE t."weddingId" = $1 AND t."isRestricted" AND (rtg."guestId" = ANY($2::text[]) OR rtg."tableId" = $3)`,
+        [weddingId, unitIds, targetTableId]
+      );
+      checkHardRules({
+        table: tableNow[0],
+        occupants: occupantsNow,
+        mustNotByGuest: mustNotNowByGuest,
+        requiredTableByGuestId: new Map(requiredNow.map((r) => [r.guestId, { tableId: r.tableId, tableLabel: r.tableLabel }])),
+        requiredGuestIdsForTargetTable: new Set(requiredNow.filter((r) => r.tableId === targetTableId).map((r) => r.guestId)),
+        members: membersNow,
+      });
     }
     const affectedBefore = await tablesAffectedBy(client, weddingId, planVersionId, unitIds);
     // TS-181: a guest moved to a different table is seated there now (SEAT_ORDER counts them last).
@@ -1290,9 +1389,7 @@ export async function moveGuestAssignment(
     const { rows: unassignedCountRows } = await client.query(
       `SELECT
          (SELECT COUNT(*)::int FROM "guests" g WHERE g."weddingId" = $1 AND g."dayOfAttendance" = 'ATTENDING'
-            AND NOT EXISTS (
-              SELECT 1 FROM "seat_assignments" sa WHERE sa."planVersionId" = $2 AND sa."guestId" = g.id
-            )
+            AND g.id NOT IN (SELECT sa."guestId" FROM "seat_assignments" sa WHERE sa."planVersionId" = $2) -- TS-266
          ) AS "count",
          -- FR-4.6: a guest flagged Needs Reassignment elsewhere in this plan (e.g. a table they
          -- need was unmarked Accessible) also keeps the plan incomplete -- this move alone
@@ -1463,9 +1560,7 @@ export async function unassignGuestFromPlan(
     const { rows: unassignedCountRows } = await client.query(
       `SELECT
          (SELECT COUNT(*)::int FROM "guests" g WHERE g."weddingId" = $1 AND g."dayOfAttendance" = 'ATTENDING'
-            AND NOT EXISTS (
-              SELECT 1 FROM "seat_assignments" sa WHERE sa."planVersionId" = $2 AND sa."guestId" = g.id
-            )
+            AND g.id NOT IN (SELECT sa."guestId" FROM "seat_assignments" sa WHERE sa."planVersionId" = $2) -- TS-266
          ) AS "count",
          (SELECT COUNT(*)::int FROM "seat_assignments" WHERE "planVersionId" = $2 AND "needsReassignment" = true)
            AS "needsReassignmentCount"`,

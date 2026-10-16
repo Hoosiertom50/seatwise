@@ -1,3 +1,5 @@
+import { NAME_LIKE_ENDINGS, NON_LATIN_ENDINGS } from "./web-address-endings";
+
 // Name-field character validation (planner-reported UX gap, 2026-09-10 -- no ticket, a direct
 // ask after noticing name fields would silently accept digits/symbols/emoji). This is an
 // allowlist wide enough to admit how real names actually look -- accented letters (José,
@@ -10,7 +12,19 @@
 // combining marks some accented characters decompose into. Requires the first character to be a
 // letter so a name can't be just "-" or "'" on its own (the field's own .min(1)/.trim() already
 // rejects blank/whitespace-only separately).
-export const PERSON_NAME_PATTERN = /^[\p{L}\p{M}][\p{L}\p{M} '.-]*$/u;
+// Review 15 (Tom, 10-14): and, between two letters only, the marks some spellings need there -- a
+// middle dot (Catalan "Gal·la", Japanese "ジョン・スミス"), the Hebrew maqaf, the Tibetan tsheg,
+// and the zero-width joiners Persian, Sinhala and Indian scripts are typed with (which joiners
+// count as hidden characters is decided in hasHiddenCharacters below).
+// Review 16: the tsheg only between two Tibetan letters -- it's drawn as a raised dot, and between
+// Latin letters ("paypal" + tsheg + "com") it read as a web address. PR #116 review: letters, not
+// just anything of the Tibetan script -- a Tibetan vowel sign each side let it through again. And a zero-width joiner
+// right after a Bengali or Malayalam virama may end a word: the older way of typing a final
+// consonant (Malayalam "Arjun", Bengali khanda ta). Review 17: only after a Bengali or Malayalam letter's
+// virama -- after any letter ("Smith" + virama + joiner) it hid two invisible characters in a name.
+// Review 18: a letter of those scripts, not just a mark of theirs (a Bengali nukta, kept for RRA).
+const BETWEEN_LETTERS = String.raw`(?<=[\p{L}\p{M}])[\u00B7\u30FB\uFF65\u05BE\u200C\u200D](?=\p{L})|\u0F0B(?<=(?=\p{Script=Tibetan})\p{L}\p{M}*\u0F0B)(?=(?=\p{Script=Tibetan})\p{L})|\u200D(?<=(?:(?=\p{Script=Bengali})\p{L}\u09BC?\u09CD|(?=\p{Script=Malayalam})\p{L}\u0D4D)\u200D)(?![\p{L}\p{M}])`;
+export const PERSON_NAME_PATTERN = new RegExp(String.raw`^[\p{L}\p{M}](?:[\p{L}\p{M} '.-]|${BETWEEN_LETTERS})*$`, "u");
 export const PERSON_NAME_MESSAGE =
   "Can only contain letters, spaces, hyphens, apostrophes, and periods";
 
@@ -18,14 +32,44 @@ export const PERSON_NAME_MESSAGE =
 // and copied text can hold a no-break space -- both used to be refused as "can only contain
 // letters...". Before the name rules run, ’ ‘ ʼ become a plain ' and a no-break space becomes a
 // space; the plain form is what's saved. (One character for one, so lengths don't change.)
+// TS-262: and the name is put in its composed form (NFC): an "é" pasted as "e" plus a separate
+// accent mark becomes the one letter "é", so a real accented name is saved the usual way. (That
+// can make a name shorter; the length is checked after.)
 export function normalizePersonName(value: string): string {
-  return value.replace(/[’‘ʼ]/g, "'").replace(/ /g, " ");
+  return value.replace(/[’‘ʼ]/g, "'").replace(/ /g, " ").normalize("NFC");
+}
+
+// TS-262: some characters show nothing at all -- the combining grapheme joiner (U+034F), the
+// variation selectors (U+FE00-FE0F, U+E0100-E01EF, U+180B-180F), zero-width spaces and joiners
+// (U+200B-200D, U+2060, U+FEFF), the soft hyphen, the Hangul fillers. Put inside "evil.com" one hid
+// it from the web-address check while the name still read "evil.com" in an email. A person's or a
+// wedding's name can't hold them; real accents (José, Nguyễn, Ó Súilleabháin) are not among them.
+const HIDDEN_CHARACTER = /[\p{Default_Ignorable_Code_Point}\p{Variation_Selector}]/u;
+export const NO_HIDDEN_CHARACTERS_MESSAGE = "Can't contain hidden characters — retype it or paste it as plain text";
+// Review 15 (Tom, 10-14): a zero-width non-joiner or joiner between two letters of a script typed
+// with them (Persian "علی‌رضا", Sinhala "ශ්‍රී", Indian scripts) is part of the spelling; anywhere
+// else (a Latin name, the start or end, between scripts) it's still a hidden character.
+// PR #115 review: both letters of the same script -- one each side of two scripts ("علی" then "राम")
+// is still a hidden character.
+const JOINED_SCRIPTS = ["Arabic", "Syriac", "Thaana", "Devanagari", "Bengali", "Gurmukhi", "Gujarati", "Oriya", "Tamil", "Telugu", "Kannada", "Malayalam", "Sinhala"];
+// Review 16: the joiner is matched first and only then are its neighbours looked at -- looking
+// behind from every position over a run of marks took time growing with the square of its length
+// (4,000 marks: 2.7 seconds; a 1 MB guest import: 17 seconds of the server's time).
+const JOINER_IN_A_WORD = new RegExp(
+  String.raw`[\u200C\u200D](?:${JOINED_SCRIPTS.map((script) => String.raw`(?<=\p{Script=${script}}\p{M}*.)(?=\p{Script=${script}})`).join("|")}|(?<=(?:(?=\p{Script=Bengali})\p{L}\u09BC?\u09CD|(?=\p{Script=Malayalam})\p{L}\u0D4D)\u200D)(?![\p{L}\p{M}]))`,
+  "gu"
+);
+export function hasHiddenCharacters(value: string): boolean {
+  return HIDDEN_CHARACTER.test(value.replace(JOINER_IN_A_WORD, ""));
 }
 
 // A wedding's name is a title, not a person's name -- "Alex & Jordan's Wedding", "Smith-Jones
 // Wedding, Est. 2026" -- so this allowlist is deliberately wider than PERSON_NAME_PATTERN: it
 // adds digits, ampersands, commas, and exclamation points on top of the same base set.
-export const WEDDING_NAME_PATTERN = /^[\p{L}\p{N}\p{M}][\p{L}\p{N}\p{M} '&,.!-]*$/u;
+export const WEDDING_NAME_PATTERN = new RegExp(
+  String.raw`^[\p{L}\p{N}\p{M}](?:[\p{L}\p{N}\p{M} '&,.!-]|${BETWEEN_LETTERS})*$`,
+  "u"
+);
 export const WEDDING_NAME_MESSAGE =
   "Can only contain letters, numbers, spaces, and common punctuation ( ' & , . ! - )";
 
@@ -48,24 +92,298 @@ export const WEDDING_NAME_MESSAGE =
 // which reads as a web address once the spaces are taken out. The spaced-dot check now allows
 // spaces between the ending's letters too; it still needs a dot (or "dot") and a whole ending
 // after it, so "Lee . Kim", "St. Pierre" and "J. R. R. Smith" pass.
-const DOMAIN_ENDINGS = "com|net|org|info|biz|io|co|ly|app|xyz|top|site|online|shop|store|link|click|live|club|vip|icu|ru|cn|tk|gg";
-const SPACED_DOMAIN_ENDINGS = "com|net|org|info|biz|xyz|site|online|shop|click|icu|ru|cn";
-const DOT = String.raw`[.\u3002\uFF0E\uFF61]`; // a period, or one of the look-alike dots
+// Review 15: and the short-link hosts one letter long (t.me, m.me, j.mp) -- not de, in, to, ca, au,
+// fr, us or page, which follow an initial in real names ("R.De Silva", "J.Page").
+const DOMAIN_ENDINGS = "com|net|org|info|biz|io|co|ly|app|xyz|top|site|online|shop|store|link|click|live|club|vip|icu|ru|cn|tk|gg|me|mp|tv|gl|uk";
+// Review 16: and me, app, tv, uk and vip ("evil . me") -- still not ly, link, co or io, which follow an
+// initial in real names ("T. Ly", "J. Link", "J. Co", "Ms. Io"). A two-part ending with co is caught
+// on its own ("paypal . co . uk", see webAddressLike).
+const SPACED_DOMAIN_ENDINGS = "com|net|org|info|biz|xyz|site|online|shop|click|icu|ru|cn|me|app|tv|uk|vip";
+// TS-265: and the other characters that look like a period or a raised dot -- some are letters
+// (U+A4F8 Lisu, U+A78F Latin sinological dot, U+1427 Canadian syllabics), so "paypalꓸcom" passed
+// every name rule. Fullwidth, small and other compatibility forms of a period (U+FE52, U+2024...)
+// are folded to a plain one before the check (see looksLikeWebAddress).
+// Review 14: and U+02D1 (a modifier letter drawn as a raised dot, "paypal\u02D1com").
+const DOT = String.raw`[.\u3002\uFF0E\uFF61\u00B7\u02D1\u0387\u0660\u06F0\u0701\u0702\u1427\u16EB\u2022\u2024\u2027\u2219\u22C5\u2E31\u30FB\uA4F8\uA60E\uA78F\uFE52\uFF65\u{10101}\u{10A50}]`;
+// PR #114 review: before any other ending, only a real full stop counts -- a middle dot is how
+// Japanese ("\u30B8\u30E7\u30F3\u30FB\u30B9\u30DF\u30B9") and Catalan ("Gal\u00B7la") names are written, so the middle dots above
+// count only before the endings scam links use.
+const FULL_STOP = String.raw`[.\u3002\uFF0E\uFF61\u0701\u0702\u2024\uA60E\uFE52\u{10A50}]`;
 // TS-258: "com" becomes c\s*o\s*m, so "c o m" is caught as well.
 const SPACED_LETTER_ENDINGS = SPACED_DOMAIN_ENDINGS.split("|")
   .map((ending) => [...ending].join(String.raw`\s*`))
   .join("|");
-export const WEB_ADDRESS_LIKE = new RegExp(
+// Review 16: after the word "dot" every ending counts ("evil dot io") -- no initial is written that way.
+const SPELLED_DOT_ENDINGS = DOMAIN_ENDINGS.split("|")
+  .map((ending) => [...ending].join(String.raw`\s*`))
+  .join("|");
+function webAddressLike(endings: string, spacedEndings: string, spelledDotEndings: string): RegExp {
+  return new RegExp(
   [
-    String.raw`[\p{L}\p{N}][\p{L}\p{N}-]*[\p{L}\p{N}]${DOT}\p{L}{2,}`,
-    String.raw`[\p{L}\p{N}]${DOT}(?:${DOMAIN_ENDINGS})(?![\p{L}\p{N}])`,
-    String.raw`[\p{L}\p{N}](?:\s*${DOT}\s*|\s+dot\s+)(?:${SPACED_LETTER_ENDINGS})(?![\p{L}\p{N}])`,
+    // TS-265: hyphens just before the dot too ("evil-.com", "x-.com"). And it starts only where a
+    // run of letters, digits and hyphens starts (anything it found from inside a run it finds from
+    // the run's start), so a long name is read once rather than once from every letter -- a
+    // 4,000-character run of fullwidth letters took half a second.
+    String.raw`(?<![\p{L}\p{N}-])-*[\p{L}\p{N}][\p{L}\p{N}-]*[\p{L}\p{N}-]${FULL_STOP}\p{L}{2,}`,
+    // PR #114 review: a letter's own vowel signs before the dot too -- "का.com" is a Hindi syllable
+    // (a letter and its vowel sign) then ".com", and the sign stopped the match.
+    String.raw`[\p{L}\p{N}]\p{M}*-*${DOT}(?:${endings})(?![\p{L}\p{N}])`,
+    String.raw`[\p{L}\p{N}]\p{M}*\s*${DOT}\s*(?:${spacedEndings}|c\s*o\s*${DOT}\s*\p{L}\s*\p{L})(?![\p{L}\p{N}])`,
+    String.raw`[\p{L}\p{N}]\p{M}*\s+dot\s+(?:${spelledDotEndings})(?![\p{L}\p{N}])`,
   ].join("|"),
   "iu"
-);
+  );
+}
+export const WEB_ADDRESS_LIKE = webAddressLike(DOMAIN_ENDINGS, SPACED_LETTER_ENDINGS, SPELLED_DOT_ENDINGS);
 export const NO_WEB_ADDRESS_MESSAGE = "Can't look like a web address";
+// TS-262: the check also runs on a copy with accent marks and hidden characters taken out -- an
+// invisible mark inside "com" ("evil.c" + U+034F + "om") stopped the match, though it still reads
+// (and can link) as "evil.com". Taking characters out only joins letters up, so the copy never
+// misses what the plain check finds.
+// TS-265: the copy took out every mark, and in Tamil, Hindi and other Indic scripts the vowels
+// after a letter are marks -- so an initial written without a space ("இரா.செழியன்", "श्री.रामचंद्र",
+// "आर.किरण") joined up into "letters.letters" and was refused. Now a mark is kept when it belongs to
+// the letter's own script and follows a letter of a script other than Latin, Greek or Cyrillic (a
+// Tamil vowel after a Tamil letter); accents (José, Nguyễn) and marks put after a Latin letter or a
+// dot are still taken out. And the copy is now in its compatibility form (NFKC), so fullwidth,
+// math, superscript and small forms read as the plain letters and dots they look like ("x.ｃｏｍ",
+// "evil . ｃｏｍ", "x.ᶜᵒᵐ", "evil﹒com").
+const HIDDEN_CHARACTERS = /[\p{Default_Ignorable_Code_Point}\p{Variation_Selector}]/gu;
+const LETTER_AND_MARKS = /(\p{L}?)(\p{M}+)/gu;
+const KEEPS_ITS_MARKS = /^(?![\p{Script=Latin}\p{Script=Greek}\p{Script=Cyrillic}])\p{L}$/u;
+// PR #114 review: "its own script" is checked -- a Tamil vowel sign after a Devanagari letter
+// ("क" + U+0BBE) is taken out, as any mark from another script is. A letter of a script not listed
+// here keeps no marks.
+const SCRIPTS_WITH_VOWEL_SIGNS = [
+  "Devanagari", "Bengali", "Gurmukhi", "Gujarati", "Oriya", "Tamil", "Telugu", "Kannada", "Malayalam",
+  "Sinhala", "Thai", "Lao", "Tibetan", "Myanmar", "Khmer", "Arabic", "Hebrew", "Syriac", "Thaana",
+].map((script) => ({
+  letter: new RegExp(String.raw`^\p{Script=${script}}$`, "u"),
+  mark: new RegExp(String.raw`\p{Script_Extensions=${script}}`, "u"),
+}));
+function scriptOwnMarks(letter: string, marks: string): string {
+  const script = SCRIPTS_WITH_VOWEL_SIGNS.find((s) => s.letter.test(letter));
+  if (!script) return "";
+  // Review 14: by Script_Extensions alone -- Arabic vowel marks (harakat) are "Inherited" but listed
+  // for Arabic, and taking them out made "أحمد.عَلي" read as letters.letters.
+  return [...marks].filter((m) => script.mark.test(m)).join("");
+}
+// TS-265: marks drawn as a dot below or beside a letter -- "evil" + U+0323 + "com" reads as
+// "evil.com" (saved as "eviḷcom"). Only checked against the endings scam links use, right after
+// (see DOTTED_ENDING), since Vietnamese and transliterated names have letters with a dot below
+// ("Thịnh", "Ngọc", "Kṛṣṇa").
+// Review 14: and the other marks drawn as a dot (above, below or beside): combining dot above,
+// Thai phinthu, Myanmar dot below, Vedic dot below, Lepcha and Telugu nuktas, Batak tompi, Tai Tham
+// dot, Tamil and Devanagari anusvara.
+const DOT_LIKE_MARK = /[\u0307\u0323\u0358\u05C5\u065C\u0902\u093C\u09BC\u0A3C\u0ABC\u0B3C\u0B82\u0C3C\u0CBC\u0E3A\u1037\u1A7F\u1BE6\u1C37\u1CDD\u{1D16D}]/u;
+// Review 14: a dot below a Latin letter stands for a dot only before the longer endings -- Igbo and
+// Yoruba write vowels with a dot below, so "Ọrụ" (Igbo) read as "O.ru" and was refused. In the copy it
+// is LATIN_MARK_DOT, not "."; marks of other scripts (an Arabic or Devanagari dot) are "." as before.
+const LATIN_MARK_DOT = "\uE000";
+// PR #115 review: and with a dot-like accent between its letters too ("eviḷcȯm").
+const LONGER_ENDINGS = DOMAIN_ENDINGS.split("|")
+  .filter((ending) => ending.length > 2)
+  .map((ending) => [...ending].join(`${LATIN_MARK_DOT}?`))
+  .join("|");
+// PR #115 review: a dot-like accent on the ending's last letter ("eviḷcoṁ") doesn't hide it -- after
+// a dot-like accent the ending may be followed by one. Igbo and Yoruba names are still kept safe by
+// LONGER_ENDINGS; after a real dot it stays as before ("A.Mẹ" is an initial and a name).
+const DOTTED_ENDING = new RegExp(
+  String.raw`[\p{L}\p{N}]\p{M}*-*(?:${DOT}(?:${DOMAIN_ENDINGS})(?![\p{L}\p{N}${LATIN_MARK_DOT}])|${LATIN_MARK_DOT}(?:${LONGER_ENDINGS})(?![\p{L}\p{N}]))`,
+  "iu"
+);
+
+/** TS-265: the copies of `value` the web-address and phone checks also look at (see above). */
+function foldedCopies(value: string): { plain: string; dotted: string } {
+  const decomposed = value.normalize("NFKD").replace(HIDDEN_CHARACTERS, "");
+  let dotted = "";
+  let last = 0;
+  let plain = "";
+  for (const match of decomposed.matchAll(LETTER_AND_MARKS)) {
+    const [whole, letter, marks] = match;
+    const kept = KEEPS_ITS_MARKS.test(letter) ? scriptOwnMarks(letter, marks) : "";
+    const before = decomposed.slice(last, match.index);
+    plain += before + letter + kept;
+    // PR #114 review: when a mark is drawn as a dot, the letter is followed by the dot alone -- a
+    // kept mark (an Arabic or Devanagari dot after its own letter) sat between them and hid the ending.
+    const markDot = KEEPS_ITS_MARKS.test(letter) ? "." : LATIN_MARK_DOT;
+    dotted += before + letter + (DOT_LIKE_MARK.test(marks) ? markDot : kept);
+    last = match.index + whole.length;
+  }
+  const rest = decomposed.slice(last);
+  return { plain: (plain + rest).normalize("NFKC"), dotted: (dotted + rest).normalize("NFKC") };
+}
+
+// Review 15: a word, a dot, and an ending written in another script ("बैंक.कॉम", "بنكِ.مصر",
+// "สวัสดี.ไทย") -- the letters.letters check above misses them when the letters carry vowel signs.
+// Before an ending that is also a name ("भारत", Bharat) only three or more letters count, so an
+// initial ("राम.भारत") passes. And a word whose own vowel signs (not accents) sit before the dot,
+// then Latin letters ("पेपाल.de") -- again three or more letters, so "राम.Kumar", "श्री.Ram" and
+// Yoruba "Ọ̀.Adé" (accents, not a script's own signs) pass, as they always did.
+const bare = (label: string) => label.normalize("NFC").toLowerCase().replace(/\p{M}/gu, "");
+const NON_LATIN_ENDING_SET = new Set(NON_LATIN_ENDINGS.map(bare));
+const NAME_LIKE_ENDING_SET = new Set(NAME_LIKE_ENDINGS.map(bare));
+// A run of letters, marks, digits and hyphens, a full stop, and the label after it (looked at, not
+// taken, so "a.b.c" is read as a.b and b.c). Starting only where a run starts keeps it linear.
+// PR #115 review: any dot, a middle dot too -- before a non-Latin ending it reads as a web address
+// ("بنك·مصر", as "بنك.مصر" does). The check for a Latin ending after it still takes a full stop only.
+const LABEL_DOT_LABEL = new RegExp(
+  String.raw`(?<![\p{L}\p{M}\p{N}-])([\p{L}\p{M}\p{N}-]+)(${DOT})(?=([\p{L}\p{M}\p{N}-]+))`,
+  "gu"
+);
+const IS_FULL_STOP = new RegExp(String.raw`^${FULL_STOP}$`, "u");
+// PR #115 review: a script's own sign is decided as for the folded copy (scriptOwnMarks) -- by the
+// letter's script -- so Arabic vowel marks ("Inherited", but Arabic's) count ("بنكِ.de"), and a Latin
+// letter's accents still don't ("Ọ̀.Adé").
+function hasScriptOwnSign(word: string): boolean {
+  for (const [, letter, marks] of word.normalize("NFD").matchAll(LETTER_AND_MARKS)) {
+    if (KEEPS_ITS_MARKS.test(letter) && scriptOwnMarks(letter, marks) !== "") return true;
+  }
+  return false;
+}
+function nonLatinAddress(text: string): boolean {
+  for (const [, left, dot, right] of text.matchAll(LABEL_DOT_LABEL)) {
+    const letters = (left.match(/[\p{L}\p{N}]/gu) ?? []).length;
+    const ending = bare(right);
+    if (NON_LATIN_ENDING_SET.has(ending) && letters >= (NAME_LIKE_ENDING_SET.has(ending) ? 3 : 1)) return true;
+    if (IS_FULL_STOP.test(dot) && letters >= 3 && hasScriptOwnSign(left) && /^\p{Script=Latin}{2,}$/u.test(right)) return true;
+  }
+  return false;
+}
+
+// PR #115 review: the marks names may now hold between two letters (BETWEEN_LETTERS) -- a middle dot,
+// a Hebrew maqaf, a Tibetan tsheg, a joiner -- split a word in two for the checks below, so "l·l.cat"
+// and "א־ב.il" read as one letter before the dot and passed. They're also checked without them
+// ("ll.cat"); a name with no dot after them ("Gal·la", "בן־עמי") is unchanged.
+const SEPARATOR_BETWEEN_LETTERS = /(?<=[\p{L}\p{M}])[\u00B7\u30FB\uFF65\u05BE\u0F0B\u200C\u200D](?=\p{L})/gu;
 export function looksLikeWebAddress(value: string): boolean {
-  return WEB_ADDRESS_LIKE.test(value);
+  // PR #115 review: the copy without separators goes through every check, the folded copies too --
+  // an accent as well as a separator ("l·l.c̄at") hid it from both on their own.
+  const joined = value.replace(SEPARATOR_BETWEEN_LETTERS, "");
+  return addressIn(value) || (joined !== value && addressIn(joined));
+}
+
+// Review 16: a dot below a Latin letter is a letter of its own in Yoruba, Igbo and Vietnamese (ẹ, ọ,
+// ụ). For the check below such a letter is replaced by one that can't be part of a web ending (ǂ),
+// so the copy is folded like every other (compatibility forms, hidden characters, other marks) but
+// "Mẹ" doesn't become "Me". PR #116 review: replaced, not followed -- an initial stays one letter
+// ("Ọ.Mẹ" was read as two letters, a dot and two letters).
+function markDotBelow(value: string): string {
+  return value
+    .normalize("NFD")
+    .replace(/(\p{Script=Latin})(\p{M}+)/gu, (whole, letter: string, marks: string) =>
+      marks.includes("\u0323") ? "\u01C2" + marks.replace("\u0323", "") : whole
+    )
+    .normalize("NFC");
+}
+// Review 16: an initial, a dot and a two-letter word ("A.Me", "T. Me").
+// Review 24 (Tom, 10-15): whether a two-letter word and the letters spaced out after it spell a web
+// ending ("Co m" is com, "In fo" is info, "Cọ m" once folded) -- then a name reading doesn't apply.
+// Checked on the letters themselves, so a name part after it ("T. Me O'Brien", "Anna Dot Ly y
+// Garcia") still reads as a name.
+const LONGER_DOMAIN_ENDINGS = DOMAIN_ENDINGS.split("|").filter((ending) => ending.length > 2);
+const LONGEST_ENDING = Math.max(...LONGER_DOMAIN_ENDINGS.map((ending) => ending.length));
+const bareLetters = (text: string) => text.normalize("NFKD").replace(/\p{M}/gu, "").toLowerCase();
+// Reads only the few letters after `from` (skipping spaces and marks), so it takes time in line with
+// what it reads, not with the rest of the text.
+function spellsSpacedEnding(word: string, text: string, from: number): boolean {
+  const start = bareLetters(word);
+  const letters: string[] = [];
+  const endsAt: number[] = [];
+  const capital: boolean[] = [];
+  let i = from;
+  while (i < text.length && letters.length < LONGEST_ENDING) {
+    const ch = String.fromCodePoint(text.codePointAt(i)!);
+    i += ch.length;
+    if (/\s|\p{M}/u.test(ch)) continue;
+    letters.push(bareLetters(ch));
+    endsAt.push(i);
+    capital.push(/\p{Lu}/u.test(ch));
+  }
+  return LONGER_DOMAIN_ENDINGS.some((ending) => {
+    if (ending.length <= start.length || !ending.startsWith(start)) return false;
+    const rest = ending.slice(start.length);
+    if (letters.slice(0, rest.length).join("") !== rest) return false;
+    let after = endsAt[rest.length - 1];
+    while (after < text.length && /\p{M}/u.test(String.fromCodePoint(text.codePointAt(after)!))) after += String.fromCodePoint(text.codePointAt(after)!).length;
+    const next = String.fromCodePoint(text.codePointAt(after) ?? 32);
+    // Review 25: a capital and a full stop is another initial ("T. Vi P. Nguyen"), not the end of "vip".
+    if (capital[rest.length - 1] && new RegExp(`^${FULL_STOP}$`, "u").test(next)) return false;
+    return !/[\p{L}\p{N}]/u.test(next);
+  });
+}
+const LAST_TWO_LETTERS = /(\p{L}\p{M}*\p{L}\p{M}*)$/u;
+/** Replaces the dot in each match that doesn't spell a spaced ending with what follows. */
+function readInitialsAsNames(text: string, pattern: RegExp): string {
+  return text.replace(pattern, (initial: string, offset: number) => {
+    const word = LAST_TWO_LETTERS.exec(initial)?.[1] ?? "";
+    if (spellsSpacedEnding(word, text, offset + initial.length)) return initial;
+    return initial.replace(new RegExp(FULL_STOP, "u"), " ");
+  });
+}
+const INITIAL_THEN_TWO_LETTERS = new RegExp(String.raw`(?<![\p{L}\p{N}])\p{L}\s*${FULL_STOP}\s*\p{L}{2}(?![\p{L}\p{N}])`, "gu");
+
+// Review 17: the one-letter short-link hosts an initial and a two-letter name could spell ("t.mẹ" reads
+// as t.me) -- those still count, written without a space.
+const SHORT_LINK_HOSTS = new Set(["t.me", "m.me", "j.mp", "t.ly", "t.co"]);
+// Review 17: an initial or a short title, a spaced dot and a two-letter name ("T. Mễ", "Dr. Mê", "Jae U.
+// Uk") -- the endings a spaced dot takes since review 16 (me, tv, uk) read those as addresses. Not
+// inside a chain of spaced dots ("paypal . co . uk").
+// Review 18: written as a name is -- a capital initial or a known title, and a capitalised name --
+// any two lowercase letters let "go . me" and "paypal-co . uk" through. PR #116 review: with the
+// capitals required, a chain of web labels ("paypal . co . uk") can't match, so a run of initials
+// before the name ("J. T. Me") is no longer mistaken for one.
+// PR #116 review: Mrs and a few more titles, and an initial's own accent marks ("Ọ̀. Me", typed as a
+// letter and a separate mark). Tom (10-15): the name after it may be in capitals too ("T. ME", "Mrs. ME",
+// as an all-caps import writes them) -- still after a capital initial or title, so "go . me" and
+// "GO . ME" count as addresses; a spaced "X . UK" passes, which no email app links. PR #116 review: not
+// when the letters after it finish a spaced-out ending ("T. Co m" is "com"; see spellsSpacedEnding).
+// The same for "Dot" ("Anna Dot Co m").
+const NAME_TITLE = String.raw`(?:\p{Lu}|Dr|Mrs|Mr|Ms|Mx|Mme|Prof|Rev|St|Jr|Sr)\p{M}*`;
+const SPACED_INITIAL_THEN_TWO_LETTERS = new RegExp(
+  String.raw`(?<![\p{L}\p{N}'-])${NAME_TITLE}\s*${FULL_STOP}\s+\p{Lu}\p{M}*\p{L}\p{M}*(?![\p{L}\p{N}])(?!\s*${FULL_STOP})`,
+  "gu"
+);
+// Review 17: "Dot" as a name (Dorothy) before an ending that's also a name or a word ("Anna Dot Ly",
+// "Polka Dot Club") -- the spelled-out "dot" takes every ending since review 16.
+// Review 18: as a name is written -- a capitalised name before it (or "and", "&", or nothing) and a
+// capitalised word after it; "evil Dot Co" and "bit Dot Ly" got through. PR #116 review: that name may
+// hold a name's hyphen, apostrophe or accent marks ("Mary-Jane Dot Ly", "O'Brien Dot Co"), and "Me" (the
+// surname, "Anna Dot Mễ") is among the words after it -- in capitals too ("Anna Dot LY", Tom 10-15). "Dot" is matched first and only
+// then looked behind (looking behind from every position over a run of spaces took time growing with
+// its square).
+const DOT_AS_A_NAME = /Dot(?<=(?:^|(?:^|\s)(?:\p{Lu}[\p{L}\p{M}'’-]*|and|&)\s+)Dot)(?=\s+(?:Ly|LY|Co|CO|Club|CLUB|Live|LIVE|Link|LINK|Me|ME)(?![\p{L}\p{N}]))/gu;
+function readAsNames(text: string): string {
+  const initialsRead = readInitialsAsNames(text, SPACED_INITIAL_THEN_TWO_LETTERS);
+  return initialsRead.replace(DOT_AS_A_NAME, (dot: string, offset: number) => {
+    // The word after "Dot" (one of a few short ones -- see DOT_AS_A_NAME), read where it starts.
+    const word = /\s+(\p{L}+)/uy;
+    word.lastIndex = offset + dot.length;
+    const found = word.exec(initialsRead);
+    return found && spellsSpacedEnding(found[1], initialsRead, word.lastIndex) ? dot : "Dott";
+  });
+}
+function webAddressIn(text: string): boolean {
+  return WEB_ADDRESS_LIKE.test(readAsNames(text)) || nonLatinAddress(text);
+}
+
+function addressIn(value: string): boolean {
+  if (webAddressIn(value)) return true;
+  const { plain, dotted } = foldedCopies(value);
+  if (plain !== value && webAddressIn(plain)) {
+    // Review 16: when it reads as an address only once a Yoruba or Igbo dot below is taken off, and
+    // only as an initial and a two-letter name ("A.Mẹ" read as "A.Me"), it's a name. Anything else
+    // still counts -- a longer ending ("x.cọm"), a spaced or spelled-out dot ("evil . mẹ"), or a
+    // match with no dot below at all ("x.ｍｅ").
+    const kept = foldedCopies(markDotBelow(value)).plain;
+    if (webAddressIn(kept)) return true;
+    const withoutInitials = readInitialsAsNames(plain, INITIAL_THEN_TWO_LETTERS);
+    if (webAddressIn(withoutInitials)) return true;
+    for (const [initial] of plain.matchAll(INITIAL_THEN_TWO_LETTERS)) {
+      if (SHORT_LINK_HOSTS.has(initial.toLowerCase().replace(new RegExp(FULL_STOP, "gu"), "."))) return true;
+    }
+  }
+  return dotted !== plain && DOTTED_ENDING.test(dotted);
 }
 
 // TS-171: a wedding's name may hold numbers (a year, a date), but not a phone number -- the name
@@ -77,8 +395,54 @@ export function looksLikeWebAddress(value: string): boolean {
 // the digits too ("800, 555, 1234" is still a number to call).
 export const PHONE_NUMBER_LIKE = /\p{Nd}(?:[\s.,'’/()[\]_\u2010-\u2015-]*\p{Nd}){6,}/u;
 export const NO_PHONE_NUMBER_MESSAGE = "Can't contain a long run of digits, like a phone number (7 or more)";
+
+// Review 14/15: other marks between digit groups ("800&555&1234", "800−555−1234", "800ー555ー1234"
+// with a dash-shaped letter) join them too -- but only between groups of three digits or more with
+// no space around, as a phone number is written. "Oct 9 & 10, 2026", "2026 & 2027" and "3:00-3:30 &
+// 4:15" stay wedding names and times (review 14 joined every mark, and refused them).
+const ALWAYS_A_GAP = /^[\s.,'’/()[\]_\u2010-\u2015-]*$/u;
+// Letters drawn as a dash or a dot (modifier letters, the prolonged-sound mark ー, Arabic tatweel,
+// Hangul ㅡ and ㆍ (and the forms the folded copy turns them into), the CJK "one" 一, click ǀ, and
+// the dot-shaped letters in DOT).
+const DASH_SHAPED_LETTER = /[\p{Lm}\u01C0\u0640\u1173\u119E\u1427\u1428\u3161\u318D\u30FC\u4E00\uA4F8\uA78F\uFF70]/gu;
+// Letters drawn like digits, counted as digits when they touch one ("8OO", "l234", Cyrillic "12З4").
+const DIGIT_SHAPED = "Oo\u041E\u043ElI\u0406\u0417";
+const DIGIT_SHAPED_VALUE: Record<string, string> = {
+  O: "0", o: "0", "\u041E": "0", "\u043E": "0", l: "1", I: "1", "\u0406": "1", "\u0417": "3",
+};
+// (The second form only starts where a run of those letters starts, so a long run is read once.)
+const DIGIT_SHAPED_RUN = new RegExp(String.raw`(?<=\p{Nd})[${DIGIT_SHAPED}]+|(?<![${DIGIT_SHAPED}])[${DIGIT_SHAPED}]+(?=\p{Nd})`, "gu");
+
+function hasPhoneRun(text: string): boolean {
+  let run = 0;
+  let previousGroup = 0;
+  let lastEnd = -1;
+  for (const match of text.matchAll(/\p{Nd}+/gu)) {
+    // PR #115 review: digits counted as characters, not UTF-16 units -- a digit outside the basic plane
+    // (Osmanya "𐒢𐒠𐒢𐒦", 2026) counted twice, and a year read as a phone number.
+    const group = [...match[0]].length;
+    const gap = lastEnd < 0 ? null : text.slice(lastEnd, match.index);
+    const joins =
+      gap !== null &&
+      (ALWAYS_A_GAP.test(gap) || (!/[\p{L}\s]/u.test(gap) && previousGroup >= 3 && group >= 3));
+    run = joins ? run + group : group;
+    if (run >= 7) return true;
+    previousGroup = group;
+    lastEnd = match.index + match[0].length;
+  }
+  return false;
+}
+
+// TS-262: and, like the web-address check, on a copy without accent marks or hidden characters.
+// TS-265: the same copy as the web-address check, so superscript digits ("⁸⁰⁰⁵⁵⁵¹²³⁴") count too.
 export function looksLikePhoneNumber(value: string): boolean {
-  return PHONE_NUMBER_LIKE.test(value);
+  if (PHONE_NUMBER_LIKE.test(value)) return true;
+  // Review 14: numbers with no plain form (dingbat and double-circled digits, "❽⓿⓿") count as digits.
+  const plain = foldedCopies(value)
+    .plain.replace(/\p{No}/gu, "0")
+    .replace(DIGIT_SHAPED_RUN, (letters) => [...letters].map((c) => DIGIT_SHAPED_VALUE[c] ?? c).join(""))
+    .replace(DASH_SHAPED_LETTER, "~");
+  return hasPhoneRun(plain);
 }
 
 // TS-178: a word written partly in Latin letters and partly in look-alike Cyrillic or Greek ones
@@ -89,5 +453,6 @@ export const NO_MIXED_SCRIPT_MESSAGE = "Can't mix letters from different alphabe
 export function hasMixedScriptWord(value: string): boolean {
   return value
     .split(/[^\p{L}\p{M}]+/u)
-    .some((word) => /\p{Script=Latin}/u.test(word) && /[\p{Script=Cyrillic}\p{Script=Greek}]/u.test(word));
+    // Review 14: Latin with a letter of any other alphabet ("bankका"), not only Cyrillic or Greek.
+    .some((word) => /\p{Script=Latin}/u.test(word) && /(?![\p{Script=Latin}\p{Script=Common}\p{Script=Inherited}])\p{L}/u.test(word));
 }

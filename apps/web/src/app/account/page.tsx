@@ -1,14 +1,22 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { api, ApiError } from "@/lib/api-client";
 import { ConfirmDeleteButton } from "@/components/ConfirmDeleteButton";
 import { AppearanceSetting } from "@/components/AppearanceSetting";
+// TS-264: bell · Account · Log out, the same on every signed-in page.
+import { SignedInHeader } from "@/components/SignedInHeader";
+import { LOG_OUT, LOG_OUT_FAILED_MESSAGE, goToSignIn, logOutThisDevice } from "@/lib/log-out";
+import { useUnsavedChangesProvider } from "@/lib/unsaved-changes";
 import { SUPPORT_EMAIL, SUPPORT_MAILTO, SUPPORT_PROMISE } from "@/lib/support";
 // TS-193: the same limits the server checks (packages/shared/src/field-limits.ts).
 import { FIELD_LIMITS } from "@seatwise/shared";
+
+// Review 14: "Log out on all devices" waiting on the leave question.
+const LOG_OUT_EVERYWHERE = "log-out-everywhere";
+const BACK = "__back__";
 
 // TS-105: the signed-in planner's account page -- who they're signed in as, and deleting the
 // account. Deleting needs the password, and is refused while they still own any wedding (Tom's
@@ -17,6 +25,96 @@ export default function AccountPage() {
   const router = useRouter();
   const [user, setUser] = useState<{ name: string; email: string } | null>(null);
   const [password, setPassword] = useState("");
+  // TS-264 (PR #114 review): leaving with a password typed in "Delete my account" -- Log out, the
+  // bell, or Back to your weddings -- asks first rather than quietly throwing it away.
+  const [pendingLeave, setPendingLeave] = useState<string | null>(null);
+  const leaveOpener = useRef<HTMLElement | null>(null);
+  // Review 15: the question opens where it can be seen -- asked from a control further down (a wedding
+  // in the list, a link at the bottom) or after Back restored the scroll position, it used to open
+  // above the screen with focus on its off-screen Stay (WebKit on a phone; Chromium after Back).
+  const leaveQuestionRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!(pendingLeave)) return;
+    const frame = requestAnimationFrame(() =>
+      requestAnimationFrame(() => leaveQuestionRef.current?.scrollIntoView({ block: "nearest" }))
+    );
+    return () => cancelAnimationFrame(frame);
+  }, [pendingLeave]);
+  function stay() {
+    setPendingLeave(null);
+    leaveOpener.current?.focus();
+    leaveOpener.current = null;
+  }
+  const [logOutError, setLogOutError] = useState<string | null>(null);
+  // Review 15 (Tom, 10-14): the browser's Back and a reload ask too, as on every other page -- the
+  // same guard as the dashboard and the wedding page, held while a password is typed.
+  const unsaved = useUnsavedChangesProvider({ onBackRequested: () => onBack() });
+  const unsavedRegistry = unsaved.registry;
+  useEffect(() => {
+    unsavedRegistry.setDirty("delete-password", password !== "");
+  }, [unsavedRegistry, password]);
+  /** PR #114 review: Stay (or Escape) puts focus back on the control that asked. Review 15: asked
+   * again while the question is already up (Back pressed then), the first control is kept. */
+  function rememberOpener() {
+    const active = document.activeElement;
+    if (leaveOpener.current && active instanceof HTMLElement && active.closest('[role="alertdialog"]')) return;
+    leaveOpener.current = active instanceof HTMLElement ? active : null;
+  }
+  function onLeave(href: string): boolean {
+    if (password === "") {
+      // PR #115 review: as on the dashboard -- just emptied, leave once its Back entry is off.
+      if (!unsaved.guardSettling()) return true;
+      void leaveOnceSettled(href);
+      return false;
+    }
+    rememberOpener();
+    setLogOutError(null);
+    setPendingLeave(href);
+    return false;
+  }
+  function onBack() {
+    rememberOpener();
+    setLogOutError(null);
+    setPendingLeave(BACK);
+  }
+  async function leaveOnceSettled(href: string) {
+    await unsaved.whenGuardSettled();
+    await leaveFor(href);
+  }
+  async function leaveWithoutSaving() {
+    const href = pendingLeave;
+    setPendingLeave(null);
+    if (href) await leaveFor(href);
+    leaveOpener.current = null;
+  }
+  async function leaveFor(href: string) {
+    // Review 14: the typed password stays until the page really goes -- a Log out that failed used
+    // to clear it anyway, and focus fell to the top of the page instead of going back to Log out.
+    if (href === BACK) {
+      // Past the extra entry and this page; opened in a fresh tab there's nothing before it.
+      unsaved.goBackPastPage(() => router.replace("/dashboard"));
+    } else if (href === LOG_OUT) {
+      if (await logOutThisDevice()) {
+        unsaved.releaseForLink();
+        goToSignIn();
+      } else {
+        setLogOutError(LOG_OUT_FAILED_MESSAGE);
+        leaveOpener.current?.focus();
+      }
+    } else if (href === LOG_OUT_EVERYWHERE) {
+      await onLogOutEverywhere();
+    } else {
+      setPassword("");
+      if (unsaved.releaseForLink()) router.replace(href);
+      else router.push(href);
+    }
+  }
+  /** Review 14: the links in "Delete my account" ask first too (a click that opens a new tab doesn't). */
+  function onLinkClick(e: React.MouseEvent<HTMLAnchorElement>, href: string) {
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+    e.currentTarget.focus(); // Safari doesn't focus a clicked link; Stay brings focus back here.
+    if (!onLeave(href)) e.preventDefault();
+  }
   const [error, setError] = useState<string | null>(null);
   const [ownedWeddings, setOwnedWeddings] = useState<{ id: string; name: string }[]>([]);
   const [deleted, setDeleted] = useState(false);
@@ -38,7 +136,7 @@ export default function AccountPage() {
       });
   }, [router, loadAttempt]);
 
-  // TS-204 (Tom's decision): "Log out" (on the dashboard) signs out this device only; this signs
+  // TS-204 (Tom's decision): "Log out" (at the top of every page) signs out this device only; this signs
   // out every device -- other browsers, phones, the mobile app -- the way a password reset does.
   const [signOutError, setSignOutError] = useState<string | null>(null);
   const [signingOutEverywhere, setSigningOutEverywhere] = useState(false);
@@ -59,14 +157,25 @@ export default function AccountPage() {
       setSigningOutEverywhere(false);
       return;
     }
-    router.replace("/login");
+    unsaved.releaseForLink();
+    goToSignIn();
   }
+  // Review 15: a failed "Log out on all devices" puts focus back on the button (it was disabled
+  // while waiting, which dropped focus to the top of the page).
+  const logOutEverywhereButton = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (signOutError) logOutEverywhereButton.current?.focus();
+  }, [signOutError]);
 
   async function onDelete() {
     setError(null);
     setOwnedWeddings([]);
     try {
       await api.delete("/api/v1/auth/me", { password });
+      // PR #115 review: the password isn't unsaved input any more -- left counting, a reload of the
+      // "deleted" page warned, and Back asked a question that page never shows (so Back did nothing).
+      setPassword("");
+      unsaved.clear();
       setDeleted(true);
     } catch (err) {
       if (err instanceof ApiError && err.status === 409 && Array.isArray(err.data?.ownedWeddings)) {
@@ -111,9 +220,59 @@ export default function AccountPage() {
 
   return (
     <main className="mx-auto max-w-xl px-4 py-10">
-      <Link href="/dashboard" className="text-sm text-neutral-500 dark:text-neutral-400 underline">
-        ← Back to your weddings
-      </Link>
+      {/* TS-264: the same bell · Account · Log out as every other signed-in page. */}
+      <SignedInHeader
+        onAccountPage
+        onLeave={onLeave}
+        logOutError={logOutError}
+        left={
+          <Link
+            href="/dashboard"
+            onClick={(e) => {
+              e.currentTarget.focus(); // Safari doesn't focus a clicked link; Stay brings focus back here.
+              if (!onLeave("/dashboard")) e.preventDefault();
+            }}
+            className="inline-flex min-h-11 items-center text-sm text-neutral-500 dark:text-neutral-400 underline"
+          >
+            ← Back to your weddings
+          </Link>
+        }
+      />
+      {pendingLeave && (
+        <div
+          ref={leaveQuestionRef}
+          role="alertdialog"
+          aria-labelledby="account-unsaved-question"
+          // TS-212: Escape means Stay, as in every other question in the app.
+          onKeyDown={(e) => {
+            if (e.key === "Escape") {
+              e.preventDefault();
+              e.stopPropagation();
+              stay();
+            }
+          }}
+          className="mt-4 flex flex-wrap items-center gap-3 rounded-md bg-amber-50 dark:bg-amber-950 px-4 py-3 text-sm text-amber-900 dark:text-amber-200"
+        >
+          <span id="account-unsaved-question" className="flex-1">
+            You&apos;ve typed your password to delete your account. Leave and clear it?
+          </span>
+          <button
+            type="button"
+            autoFocus
+            onClick={stay}
+            className="min-h-11 rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800"
+          >
+            Stay
+          </button>
+          <button
+            type="button"
+            onClick={() => void leaveWithoutSaving()}
+            className="min-h-11 rounded-md bg-red-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-red-800"
+          >
+            Leave without saving
+          </button>
+        </div>
+      )}
       <h1 className="mb-1 mt-4 text-2xl font-semibold">Your account</h1>
       {/* TS-199: a long name or address wraps instead of running off a phone screen. */}
       <p className="mb-8 break-words text-sm text-neutral-600 dark:text-neutral-300 [overflow-wrap:anywhere]">
@@ -147,8 +306,13 @@ export default function AccountPage() {
           out everywhere — every browser, phone and app signed in to your account, this one included.
         </p>
         <button
+          ref={logOutEverywhereButton}
           type="button"
-          onClick={onLogOutEverywhere}
+          onClick={(e) => {
+            // Review 14: with a password typed in "Delete my account", this asks first like Log out.
+            e.currentTarget.focus();
+            if (onLeave(LOG_OUT_EVERYWHERE)) void onLogOutEverywhere();
+          }}
           disabled={signingOutEverywhere}
           className="rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50"
         >
@@ -162,7 +326,8 @@ export default function AccountPage() {
               {signOutNeedsSignIn && (
                 <>
                   {" "}
-                  <Link href="/login?next=/account" className="underline">
+                  {/* Review 16: asks first with a password typed, like every other way off this page. */}
+                  <Link href="/login?next=/account" onClick={(e) => onLinkClick(e, "/login?next=/account")} className="underline">
                     Sign in
                   </Link>
                 </>
@@ -209,7 +374,7 @@ export default function AccountPage() {
           <ul className="mt-2 list-inside list-disc text-sm">
             {ownedWeddings.map((w) => (
               <li key={w.id}>
-                <Link href={`/weddings/${w.id}`} className="underline">
+                <Link href={`/weddings/${w.id}`} onClick={(e) => onLinkClick(e, `/weddings/${w.id}`)} className="underline">
                   {w.name}
                 </Link>{" "}
                 — open it, then Collaborators → Hand off this wedding (once someone else has access), or

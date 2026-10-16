@@ -2,7 +2,7 @@ import { z } from "zod";
 // TS-180: free text refuses hidden control characters (see ../safe-text).
 import { safeText } from "../safe-text";
 import { FIELD_LIMITS, cutToLimit } from "../field-limits";
-import { calendarDateField, expectedRevisionField, lengthFirst } from "./common";
+import { calendarDateField, expectedRevisionField, lengthFirst, noHiddenCharactersFirst } from "./common";
 import {
   WEDDING_NAME_PATTERN,
   WEDDING_NAME_MESSAGE,
@@ -12,23 +12,30 @@ import {
   NO_PHONE_NUMBER_MESSAGE,
   hasMixedScriptWord,
   NO_MIXED_SCRIPT_MESSAGE,
+  normalizePersonName,
 } from "../validation";
 
 // TS-168: the rules for a wedding's name, wherever one is given (creating, renaming, copying).
 // TS-200: the length is checked first, and a name that's too long goes no further (lengthFirst).
-export const weddingNameField = lengthFirst(
+// TS-262: put in composed form (NFC) first, like a person's name, and a hidden character is refused
+// before the other rules (see hasHiddenCharacters).
+// Review 15: and, like a person's name (TS-243), a curly apostrophe becomes a plain one and a
+// no-break space a space -- "Sarah’s Wedding" typed on an iPhone or in Word was refused.
+export const weddingNameField = z.string().transform(normalizePersonName).pipe(lengthFirst(
   FIELD_LIMITS.weddingName,
-  z
-    .string()
-    .min(1, "Wedding name is required")
-    .regex(WEDDING_NAME_PATTERN, WEDDING_NAME_MESSAGE)
-    // TS-156: the wedding name goes into RSVP and invite emails.
-    .refine((v) => !looksLikeWebAddress(v), NO_WEB_ADDRESS_MESSAGE)
-    // TS-171: nor can it carry a phone number.
-    .refine((v) => !looksLikePhoneNumber(v), NO_PHONE_NUMBER_MESSAGE)
-    // TS-178: nor mix look-alike letters from different alphabets in one word.
-    .refine((v) => !hasMixedScriptWord(v), NO_MIXED_SCRIPT_MESSAGE)
-);
+  noHiddenCharactersFirst(
+    z
+      .string()
+      .min(1, "Wedding name is required")
+      .regex(WEDDING_NAME_PATTERN, WEDDING_NAME_MESSAGE)
+      // TS-156: the wedding name goes into RSVP and invite emails.
+      .refine((v) => !looksLikeWebAddress(v), NO_WEB_ADDRESS_MESSAGE)
+      // TS-171: nor can it carry a phone number.
+      .refine((v) => !looksLikePhoneNumber(v), NO_PHONE_NUMBER_MESSAGE)
+      // TS-178: nor mix look-alike letters from different alphabets in one word.
+      .refine((v) => !hasMixedScriptWord(v), NO_MIXED_SCRIPT_MESSAGE)
+  )
+));
 
 /** TS-168: the default name for a copy -- within the length limit and the allowed characters. */
 export function copiedWeddingName(original: string): string {

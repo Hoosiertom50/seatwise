@@ -197,14 +197,22 @@ const MAC_ROMAN_IN_A_WORD = new RegExp(`\\p{L}[${MAC_ROMAN_NOT_LETTERS}]\\p{L}|\
 // "Mart’" for Martí), which used to be made a plain apostrophe and saved as "Zo'" -- but not inside a
 // quoted nickname ("Robert ‘Bob’", "Robert ‘Bobby Joe’", "‘Bobby-Joe’"). And the Mac's own curly apostrophes, which windows-1252 shows as
 // Õ and Ô, inside a name ("OÕBrien", "DÔArcy", "KaÕiulani").
+// TS-262: ’ at the end of a word counts only after a consonant ("Mart’", "Lev’" for Martí, Leví) --
+// windows-1252 names end in ’ after a vowel ("Kenya’", "Andre’", "Rene’"), and Mac í after a vowel
+// at a word's end is rare. ‘ at the end (Mac ë: "Zo‘", "Chlo‘") still counts after any small letter.
+// The quoted-nickname check now looks back from the ’ or ‘ instead of from every letter -- looking
+// back from every letter of a long cell took time growing with the square of its length (a
+// 20,000-character cell took 3.7 seconds).
 const MAC_ROMAN_IN_A_NAME = new RegExp(
   [
     `\\p{Ll}‘\\p{Ll}`,
     `\\p{L}[¿§]`,
     `(?<!\\p{L})[${MAC_ROMAN_NOT_LETTERS_AT_START}]\\p{L}`,
     `\\p{L}œ(?![ui])\\p{Ll}`,
-    `(?<!['‘"“][\\p{L}\\p{M}]*)(?<![‘"“][\\p{L}\\p{M} .-]*)\\p{Ll}[’‘](?![\\p{L}\\p{M}])`,
+    `(?:\\p{Ll}‘|[^\\P{Ll}aeiou]’)(?![\\p{L}\\p{M}])(?<!['‘"“][\\p{L}\\p{M}]*[’‘])(?<![‘"“][\\p{L}\\p{M} .-]*[’‘])(?<!(?<![\\p{L}\\p{M}])'[\\p{L}\\p{M} .-]*[’‘])`,
     `\\p{Ll}[ÕÔ]\\p{L}|\\p{Lu}[ÕÔ]\\p{Lu}\\p{Ll}`,
+    // Review 15: œ (Ï inside a word). (Irish "Ní", "Ó" and Œ: see MAC_ROMAN_IN_A_NAME_UNLESS_WINDOWS.)
+    `\\p{L}Ï\\p{Ll}`,
   ].join("|"),
   "u"
 );
@@ -223,11 +231,46 @@ const MAC_ROMAN_IN_A_NAME = new RegExp(
 // - õ after a, or after another õ, with only consonants between, and not before a vowel: the Mac's
 //   Turkish dotless ı ("Yõldõz", "Aydõn", "Sarõ"). Estonian õ is nearly always in a name's first
 //   syllable ("Tõnis", "Mõttus", "Rõõmus"), and Portuguese õ always before e ("Simões", "Camões").
+// TS-262: the code did more than the note above says -- ’ before a consonant counted too, so a lone
+// windows-1252 "Ja’nae", "Da’shawn" or "Ta’kia" was refused as Mac. Now only a consonant before the
+// ’ counts ("Mar’a", "Garc’a", "Mart’nez"), plus "u’s" (Mac "Luís", "Luísa"), which those names
+// don't have. "Shan’tel" (n before ’) still looks exactly like Mac "Ben’tez" (Benítez), so a lone
+// one is still refused; with any other Windows sign in the file it imports.
+// TS-265: that let Mac í after a vowel through -- "Eloísa", "Thaís", "Raíssa", "Moíses", "Ruíz"
+// came in as "Elo'sa", "Tha's"... A few spellings those names have and the Windows ones above don't
+// count too: o’s and a’s not before h ("Elo’sa", "Mo’ses", "Tha’s", "La’s" -- "Da’shawn" has a’sh),
+// u’z and a’z ("Ru’z", "Ma’z"), and ’ss ("Ra’ssa").
+// PR #114 review: only inside a word -- the í is never a name's first letter, and a lowercase
+// "o’sullivan" or "o’shea" in a windows-1252 file is an Irish O’, not Mac "oísullivan".
+// Review 14 (Tom, 10-14): with the ’ right after a name's second letter they count only when the
+// name ends there or one letter later -- Mac "La’s", "Lu’s", "Lu’sa", "Ru’z", "Ma’z" (Laís, Luís,
+// Luísa, Ruíz, Maíz). TS-265 had refused the windows-1252 names TS-262 let in -- "Na’sir",
+// "Ja’siah", "Da’sia", "Ma’zie", "Ka’zon", "Le’ssa" -- which look exactly like Mac "Mo’ses" and
+// "Ra’ssa" (Moíses, Raíssa); the Windows names win, as before TS-265. Further into a name ("Elo’sa",
+// "Helo’sa", "Tha’s") nothing changes.
+// Review 15: y counts as a vowel before ’ ("Ny’asia", "Ky’ree", "Jy’mir"), and further into a name
+// the vowel before ’ must follow a consonant ("Elo’sa", "Tha’s") -- after another vowel it's a
+// Windows name ("Tia’sia", "Mia’sia", "Nia’zia"); a’s counts only at a name's end or one letter
+// before it ("Tha’s", not "Sha’sia"), and ’ss only as a’ss ("Bre’ssa" imports). And the Mac's
+// dotless ı after a capital I too ("Ilgõn" for Ilgın).
 const MAC_ROMAN_IN_A_NAME_UNLESS_WINDOWS = new RegExp(
   [
-    `[^\\P{Ll}aeiou]’\\p{Ll}|\\p{Ll}’[^\\P{Ll}aeiou]`,
+    `[^\\P{Ll}aeiouy]’\\p{Ll}`,
+    `(?<=\\p{L}[^\\P{Ll}aeiouy])(?:u’s|o’s(?!h)|a’s\\p{Ll}?(?!\\p{L})|[au]’z)|(?<=\\p{L}[^\\P{Ll}aeiouy])a’ss`,
+    `(?<![\\p{L}’'])\\p{L}(?:u’s|[ao]’s|[au]’z)\\p{Ll}?(?![\\p{L}’'])`,
     `\\p{L}š(?:(?!le)[rhlnmsfdgbwzc]|tt|tz|th|pf|pp)`,
-    `[aAõ][b-df-hj-np-tv-z]+õ(?![aeiouõ])`,
+    `[aAIõ][b-df-hj-np-tv-z]+õ(?![aeiouõ])`,
+    // PR #115 review: Irish "Ó" (a lone î or Î) and Œ starting a word (Î, "Îuvray") -- moved here from
+    // MAC_ROMAN_IN_A_NAME: Romanian names start with Î ("Întorsureanu", the initial "Î."), so with
+    // any other Windows sign in the file they import.
+    `(?<![\\p{L}\\p{M}])[îÎ](?![\\p{L}\\p{M}])`,
+    `(?<![\\p{L}\\p{M}])Î\\p{Ll}`,
+    // Review 15: Irish "Ní" (Mac í is ’ in windows-1252, so "N’ Bhriain"). Review 16: only N’ before a
+    // space, and here, not in MAC_ROMAN_IN_A_NAME -- any capital before ’ and a space used to count,
+    // even in a file that shows it's Windows, so "D’ Souza", "O’ Brien" or "JONES’" got the whole
+    // import refused. Not the closing ’ of a quoted nickname ("Robert ‘JN’ Lee"). Review 17: the married
+    // name "Uí" too, and either one ending the cell ("Ní" on its own).
+    `(?<![\\p{L}\\p{M}])[NU]’(?= |$)(?<!['‘"“][\\p{L}\\p{M}]*’)(?<![‘"“][\\p{L}\\p{M} .-]*’)(?<!(?<![\\p{L}\\p{M}])'[\\p{L}\\p{M} .-]*’)`,
   ].join("|"),
   "u"
 );
@@ -238,7 +281,7 @@ const MAC_ROMAN_IN_A_NAME_UNLESS_WINDOWS = new RegExp(
 // can't have (the Mac's own ’ is Õ in windows-1252).
 const WINDOWS_SMALL_ACCENTED = "à-ôø-ÿö";
 const WINDOWS_LETTERS = new RegExp(
-  `\\p{Ll}[${WINDOWS_SMALL_ACCENTED}]|\\p{Lu}[${WINDOWS_SMALL_ACCENTED}]\\p{Ll}|\\p{Lu}’|’\\p{Lu}`,
+  `\\p{Ll}[${WINDOWS_SMALL_ACCENTED}]|\\p{Lu}[${WINDOWS_SMALL_ACCENTED}]\\p{Ll}|\\p{Lu}’(?=\\p{L})|’\\p{Lu}`,
   "u"
 );
 // TS-243: Mac capitals Á Ó Ú È Í Î Ô Ò Â Ê Ë are small accented letters in windows-1252 (ç î ò é ê

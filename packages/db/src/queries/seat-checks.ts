@@ -15,59 +15,71 @@ export interface Queryable {
   query: (text: string, params?: unknown[]) => Promise<{ rows: Record<string, unknown>[]; rowCount?: number | null }>;
 }
 
-// Re-checks one already-seated guest's current table against every hard rule that's about the
-// guest rather than the table's size: requires-accessible-table (FR-3.x), a Restricted table's
-// required-guest list (FR-3.7a), must-not-sit-together (FR-3.1) against whoever else is at that
-// table, and (TS-150) must-sit-together against a partner seated at a different table. Capacity
-// is checked by resyncSeatsAtTable, which sees the whole table.
-export async function checkGuestHardRuleViolation(
-  q: Queryable,
-  weddingId: string,
-  planVersionId: string,
-  guestId: string,
-  tableId: string,
-  requiresAccessibleTable: boolean
-): Promise<boolean> {
-  const { rows: tableRows } = await q.query(
-    `SELECT "isAccessible", "isRestricted" FROM "seating_tables" WHERE id = $1`,
-    [tableId]
+// The hard rules about a seated guest rather than the table's size: requires-accessible-table
+// (FR-3.x), a Restricted table's required-guest list (FR-3.7a), must-not-sit-together (FR-3.1)
+// against whoever else is at that table, and (TS-150) must-sit-together against a partner seated
+// at a different table. Capacity is checked by resyncTables, which sees the whole table.
+// TS-259: the table rules are worked out in SQL for every seat a re-check reads, in the same
+// statement (this used to be checkGuestHardRuleViolation, three more queries per guest). One column
+// per rule, so the flag's reason -- and the message the planner sees -- is told apart exactly as before:
+//   "accessibleBroken": needs an accessible table and this one isn't;
+//   "restrictedBroken": the table is Restricted and the guest isn't on its list;
+//   "requiredElsewhere": (TS-173) on another Restricted table's list, so they belong at that table
+//     and no other.
+// TS-260: the seating rules between guests (must-sit / must-not) are no longer in this statement --
+// see seatingRuleConflicts. Their check joined every seat against every other seat when Postgres
+// thought the plan had almost no seats (a brand-new plan version isn't in its statistics yet), which
+// took 16-20 s on a 2,000-guest wedding with a few thousand rules.
+// Uses the aliases sa (seat_assignments), g (guests) and t (the seat's seating_tables row).
+const SEAT_RULE_COLUMNS = `
+  (g."requiresAccessibleTable" AND NOT t."isAccessible") AS "accessibleBroken",
+  (t."isRestricted" AND NOT EXISTS (
+     SELECT 1 FROM "restricted_table_guests" rtg WHERE rtg."tableId" = t.id AND rtg."guestId" = sa."guestId"
+  )) AS "restrictedBroken",
+  EXISTS (
+     SELECT 1 FROM "restricted_table_guests" rtg JOIN "seating_tables" t2 ON t2.id = rtg."tableId"
+     WHERE rtg."guestId" = sa."guestId" AND rtg."tableId" <> t.id AND t2."isRestricted"
+  ) AS "requiredElsewhere"`;
+
+// TS-260: which guests break a must-sit-together or must-not-sit-together rule in this plan version,
+// worked out here from two plain reads -- the wedding's hard rules, and where everyone in the plan
+// is seated -- instead of in the database. Exactly the rules the SQL used to apply: a guest breaks a
+// rule when the partner is seated in the same plan version at the same table (must-not) or at a
+// different one (must-sit); a partner with no seat in this plan is no conflict; a rule naming the
+// same guest twice is ignored; only this wedding's rules count. Both guests of a broken rule are
+// returned (each one sees the other). Soft rules (prefer near, avoid) never flag anyone.
+// Locks: none are taken here and none are needed beyond what the re-check already holds. The old
+// statement read these same rows (other seats in the plan, the rules) without locking them too; every
+// change to a seat in the plan waits for the current plan's lock, which the caller already holds
+// (lockCurrentPlan / lockCurrentPlanOrWedding, before any table), and so does adding a rule
+// (createRelationship), so neither can change between these reads and the flags being written.
+// Removing a rule doesn't take the plan's lock, but its own re-check (resyncGuestsSeats) does and
+// runs after it -- so a removal that lands between these reads is put right there, just as one that
+// landed while the old single statement waited for its turn was.
+async function seatingRuleConflicts(client: Queryable, weddingId: string, planVersionId: string): Promise<Set<string>> {
+  const { rows: rules } = await client.query(
+    `SELECT "guestAId", "guestBId", type FROM "guest_relationships"
+     WHERE "weddingId" = $1 AND type IN ('MUST_SIT_TOGETHER', 'MUST_NOT_SIT_TOGETHER')`,
+    [weddingId]
   );
-  const table = tableRows[0] as { isAccessible: boolean; isRestricted: boolean } | undefined;
-  if (!table) return false;
-
-  if (requiresAccessibleTable && !table.isAccessible) return true;
-
-  if (table.isRestricted) {
-    const { rows: reqRows } = await q.query(
-      `SELECT 1 FROM "restricted_table_guests" WHERE "tableId" = $1 AND "guestId" = $2`,
-      [tableId, guestId]
-    );
-    if (reqRows.length === 0) return true;
+  const broken = new Set<string>();
+  if (rules.length === 0) return broken;
+  const { rows: seats } = await client.query(
+    `SELECT "guestId", "seatingTableId" AS "tableId" FROM "seat_assignments" WHERE "planVersionId" = $1`,
+    [planVersionId]
+  );
+  const tableOf = new Map(seats.map((r) => [r.guestId as string, r.tableId as string]));
+  for (const r of rules as { guestAId: string; guestBId: string; type: string }[]) {
+    if (r.guestAId === r.guestBId) continue;
+    const a = tableOf.get(r.guestAId);
+    const b = tableOf.get(r.guestBId);
+    if (a === undefined || b === undefined) continue;
+    if ((r.type === "MUST_NOT_SIT_TOGETHER" && a === b) || (r.type === "MUST_SIT_TOGETHER" && a !== b)) {
+      broken.add(r.guestAId);
+      broken.add(r.guestBId);
+    }
   }
-  // TS-173: and the other way round -- a guest on a Restricted table's list belongs at that table
-  // and no other. Before, only an unlisted guest *at* a Restricted table was flagged, so putting a
-  // seated guest on another table's list left them where they were, unflagged.
-  const { rows: requiredElsewhere } = await q.query(
-    `SELECT 1 FROM "restricted_table_guests" rtg JOIN "seating_tables" t ON t.id = rtg."tableId"
-     WHERE rtg."guestId" = $1 AND rtg."tableId" <> $2 AND t."isRestricted" LIMIT 1`,
-    [guestId, tableId]
-  );
-  if (requiredElsewhere.length > 0) return true;
-
-  const { rows: conflictRows } = await q.query(
-    `SELECT 1
-     FROM "guest_relationships" gr
-     JOIN "seat_assignments" sa2
-       ON sa2."planVersionId" = $1 AND sa2."guestId" <> $3
-       AND ((gr."guestAId" = $3 AND gr."guestBId" = sa2."guestId")
-         OR (gr."guestBId" = $3 AND gr."guestAId" = sa2."guestId"))
-     WHERE gr."weddingId" = $4
-       AND ((gr.type = 'MUST_NOT_SIT_TOGETHER' AND sa2."seatingTableId" = $2)
-         OR (gr.type = 'MUST_SIT_TOGETHER' AND sa2."seatingTableId" <> $2))
-     LIMIT 1`,
-    [planVersionId, tableId, guestId, weddingId]
-  );
-  return conflictRows.length > 0;
+  return broken;
 }
 
 // TS-181: when a plan-history entry happened, for "Modified since approval". A change's own
@@ -102,86 +114,122 @@ export interface NewlyFlaggedSeat {
 // keeps a seat, and renaming a guest never changes who is flagged.
 export const SEAT_ORDER = `g."isLocked" DESC, sa."createdAt", g.id`;
 
-// FR-4.6 / TS-120 / TS-150: re-checks everyone seated at one table in the given plan version and
+// FR-4.6 / TS-120 / TS-150: re-checks everyone seated at these tables in the given plan version and
 // sets Needs Reassignment exactly where a hard rule is broken or the table has no room left for
-// them -- flagging and clearing alike, so the answer is always the whole truth for that table.
+// them -- flagging and clearing alike, so the answer is always the whole truth for each table.
 // Nobody is ever unseated. Who "no longer fits": locked guests keep their place first, then guests
 // in the order they were seated (SEAT_ORDER); whoever pushes the headcount past capacity is flagged. Runs on
 // the caller's client; the caller owns the transaction and recomputes isComplete.
+// TS-165: each table once, in a fixed order so two requests lock them the same way round.
+// TS-259: all the tables at once, in a fixed number of queries however many guests there are --
+// before, it was three per table and three more per seat, about 6,800 for Generate or Approve on a
+// 2,000-guest wedding (minutes from a laptop to the live database, seconds on the live site, all
+// under the wedding's lock). Now: lock the tables; lock and read every seat at them, with the
+// rules above worked out in the same statement; count the seats in JS as before; write the flags
+// that changed in one UPDATE. TS-260: plus the seating rules, read in two plain queries and checked
+// in JS (seatingRuleConflicts) -- 4 or 5 queries in all. Locks are still tables (by id), then seats -- inside the documented
+// order (wedding -> current plan -> restricted lists -> tables -> guests and seats) -- the tables
+// are now all locked before any seat rather than table by table, which only tightens it.
+export async function resyncTables(
+  client: Queryable,
+  weddingId: string,
+  planVersionId: string,
+  tableIds: Iterable<string>
+): Promise<{ newlyFlagged: NewlyFlaggedSeat[]; changed: boolean }> {
+  const ids = [...new Set(tableIds)];
+  if (ids.length === 0) return { newlyFlagged: [], changed: false };
+
+  // TS-187: NO KEY UPDATE (here and wherever a row's id isn't being changed or deleted) still lets
+  // only one change at a time touch the row, but doesn't stop Postgres's own "does this table
+  // still exist?" check when someone else saves a seat at it -- so the two don't wait on each other.
+  // TS-259: COLLATE "C" sorts ids byte by byte, the same order as the JS sort this used to lock them
+  // in one at a time. A table that isn't this wedding's is skipped, as before.
+  const { rows: tableRows } = await client.query(
+    `SELECT id, capacity, "isRestricted", "isAccessible" FROM "seating_tables"
+     WHERE id = ANY($1::text[]) AND "weddingId" = $2
+     ORDER BY id COLLATE "C"
+     FOR NO KEY UPDATE`,
+    [ids, weddingId]
+  );
+  const tables = tableRows as { id: string; capacity: number; isRestricted: boolean; isAccessible: boolean }[];
+  if (tables.length === 0) return { newlyFlagged: [], changed: false };
+
+  // TS-259: every seat at those tables, locked in table order and then SEAT_ORDER -- the order the
+  // capacity walk below counts them in.
+  const { rows } = await client.query(
+    `SELECT sa.id, sa."guestId", sa."seatingTableId" AS "tableId", (g."firstName" || ' ' || g."lastName") AS name,
+            g.headcount, sa."needsReassignment", ${SEAT_RULE_COLUMNS}
+     FROM "seat_assignments" sa
+     JOIN "guests" g ON g.id = sa."guestId"
+     JOIN "seating_tables" t ON t.id = sa."seatingTableId"
+     WHERE sa."planVersionId" = $1 AND sa."seatingTableId" = ANY($2::text[])
+     ORDER BY sa."seatingTableId" COLLATE "C", ${SEAT_ORDER}
+     FOR NO KEY UPDATE OF sa`,
+    [planVersionId, tables.map((t) => t.id)]
+  );
+  const seated = rows as {
+    id: string;
+    guestId: string;
+    tableId: string;
+    name: string;
+    headcount: number;
+    needsReassignment: boolean;
+    accessibleBroken: boolean;
+    restrictedBroken: boolean;
+    requiredElsewhere: boolean;
+  }[];
+  // TS-260: read after the seats are locked, so the lock order is unchanged (tables, then seats).
+  const ruleBrokenFor = seated.length > 0 ? await seatingRuleConflicts(client, weddingId, planVersionId) : new Set<string>();
+  const capacityOf = new Map(tables.map((t) => [t.id, t.capacity]));
+
+  const newlyFlagged: NewlyFlaggedSeat[] = [];
+  const changedIds: string[] = [];
+  const changedFlags: boolean[] = [];
+  const seatsUsedAt = new Map<string, number>();
+  for (const a of seated) {
+    // "rule" (the reason below) covers both: required at another table, or a seating rule.
+    const otherBroken = a.requiredElsewhere || ruleBrokenFor.has(a.guestId);
+    const ruleBroken = a.accessibleBroken || a.restrictedBroken || otherBroken;
+    const seatsUsed = seatsUsedAt.get(a.tableId) ?? 0;
+    // A guest already flagged for a broken rule doesn't take up one of the table's seats.
+    const fits = ruleBroken ? true : seatsUsed + a.headcount <= capacityOf.get(a.tableId)!;
+    if (!ruleBroken && fits) seatsUsedAt.set(a.tableId, seatsUsed + a.headcount);
+    const flag = ruleBroken || !fits;
+    if (flag !== a.needsReassignment) {
+      changedIds.push(a.id);
+      changedFlags.push(flag);
+      if (flag) {
+        const reason: TableSeatingFlagReason = !fits
+          ? "capacity"
+          : a.accessibleBroken
+            ? "accessible"
+            : a.restrictedBroken
+              ? "restricted"
+              : "rule";
+        newlyFlagged.push({ guestId: a.guestId, name: a.name, reason, tableId: a.tableId });
+      }
+    }
+  }
+  // TS-259: every flag that changed, in one statement (the rows are already locked above).
+  if (changedIds.length > 0) {
+    await client.query(
+      `UPDATE "seat_assignments" sa SET "needsReassignment" = v.flag, "updatedAt" = now()
+       FROM unnest($1::text[], $2::boolean[]) AS v(id, flag)
+       WHERE sa.id = v.id`,
+      [changedIds, changedFlags]
+    );
+  }
+  return { newlyFlagged, changed: changedIds.length > 0 };
+}
+
+// One table's re-check (see resyncTables).
 export async function resyncSeatsAtTable(
   client: Queryable,
   weddingId: string,
   planVersionId: string,
   tableId: string
 ): Promise<{ newlyFlagged: NewlyFlaggedSeat[]; changed: boolean }> {
-  // TS-187: NO KEY UPDATE (here and wherever a row's id isn't being changed or deleted) still lets
-  // only one change at a time touch the row, but doesn't stop Postgres's own "does this table
-  // still exist?" check when someone else saves a seat at it -- so the two don't wait on each other.
-  const { rows: tableRows } = await client.query(
-    `SELECT capacity, "isRestricted", "isAccessible" FROM "seating_tables" WHERE id = $1 AND "weddingId" = $2 FOR NO KEY UPDATE`,
-    [tableId, weddingId]
-  );
-  const table = tableRows[0] as { capacity: number; isRestricted: boolean; isAccessible: boolean } | undefined;
-  if (!table) return { newlyFlagged: [], changed: false };
-  const { rows: requiredRows } = await client.query(
-    `SELECT "guestId" FROM "restricted_table_guests" WHERE "tableId" = $1`,
-    [tableId]
-  );
-  const required = new Set(requiredRows.map((r) => r.guestId as string));
-
-  const { rows } = await client.query(
-    `SELECT sa.id, sa."guestId", (g."firstName" || ' ' || g."lastName") AS name, g.headcount,
-            g."requiresAccessibleTable", sa."needsReassignment"
-     FROM "seat_assignments" sa JOIN "guests" g ON g.id = sa."guestId"
-     WHERE sa."planVersionId" = $1 AND sa."seatingTableId" = $2
-     ORDER BY ${SEAT_ORDER}
-     FOR NO KEY UPDATE OF sa`,
-    [planVersionId, tableId]
-  );
-  const seated = rows as {
-    id: string;
-    guestId: string;
-    name: string;
-    headcount: number;
-    requiresAccessibleTable: boolean;
-    needsReassignment: boolean;
-  }[];
-
-  const newlyFlagged: NewlyFlaggedSeat[] = [];
-  let changed = false;
-  let seatsUsed = 0;
-  for (const a of seated) {
-    const ruleBroken = await checkGuestHardRuleViolation(
-      client,
-      weddingId,
-      planVersionId,
-      a.guestId,
-      tableId,
-      a.requiresAccessibleTable
-    );
-    // A guest already flagged for a broken rule doesn't take up one of the table's seats.
-    const fits = ruleBroken ? true : seatsUsed + a.headcount <= table.capacity;
-    if (!ruleBroken && fits) seatsUsed += a.headcount;
-    const flag = ruleBroken || !fits;
-    if (flag !== a.needsReassignment) {
-      changed = true;
-      await client.query(
-        `UPDATE "seat_assignments" SET "needsReassignment" = $1, "updatedAt" = now() WHERE id = $2`,
-        [flag, a.id]
-      );
-      if (flag) {
-        const reason: TableSeatingFlagReason = !fits
-          ? "capacity"
-          : a.requiresAccessibleTable && !table.isAccessible
-            ? "accessible"
-            : table.isRestricted && !required.has(a.guestId)
-              ? "restricted"
-              : "rule";
-        newlyFlagged.push({ guestId: a.guestId, name: a.name, reason, tableId });
-      }
-    }
-  }
-  return { newlyFlagged, changed };
+  return resyncTables(client, weddingId, planVersionId, [tableId]);
 }
 
 // TS-181: the Restricted tables any of these guests is on the required-guest list of, where the
@@ -275,24 +323,6 @@ export async function tablesAffectedBy(
   return rows.map((r) => r.tableId as string);
 }
 
-// TS-165: re-checks each of these tables (each once, in a fixed order so two requests lock them
-// the same way round). The caller owns the transaction and refreshes completeness afterwards.
-export async function resyncTables(
-  client: Queryable,
-  weddingId: string,
-  planVersionId: string,
-  tableIds: Iterable<string>
-): Promise<{ newlyFlagged: NewlyFlaggedSeat[]; changed: boolean }> {
-  const newlyFlagged: NewlyFlaggedSeat[] = [];
-  let changed = false;
-  for (const tableId of [...new Set(tableIds)].sort()) {
-    const result = await resyncSeatsAtTable(client, weddingId, planVersionId, tableId);
-    newlyFlagged.push(...result.newlyFlagged);
-    changed ||= result.changed;
-  }
-  return { newlyFlagged, changed };
-}
-
 // TS-165: when a re-check changes who's flagged on an *approved* plan (a guest's RSVP grew their
 // party, a table edit), it's recorded in the plan's history, so the plan shows "Modified since
 // approval" -- before, an approved plan could quietly become incomplete with no sign of it.
@@ -319,10 +349,14 @@ export async function refreshPlanCompleteness(
   planVersionId: string,
   { bumpRevision }: { bumpRevision: boolean }
 ): Promise<void> {
+  // TS-266: "attending and not seated" is a NOT IN over this plan's seats (guestId is never NULL,
+  // so it finds the same guests as NOT EXISTS did). Postgres reads the plan's seats once into a
+  // lookup; with NOT EXISTS it could pair every guest with every seat when its statistics didn't
+  // know this plan yet (a freshly imported wedding), which took ~150-300 ms a time on 2,000 guests.
   const { rows: countRows } = await client.query(
     `SELECT
        (SELECT COUNT(*)::int FROM "guests" g WHERE g."weddingId" = $1 AND g."dayOfAttendance" = 'ATTENDING'
-          AND NOT EXISTS (SELECT 1 FROM "seat_assignments" sa WHERE sa."planVersionId" = $2 AND sa."guestId" = g.id)
+          AND g.id NOT IN (SELECT sa."guestId" FROM "seat_assignments" sa WHERE sa."planVersionId" = $2)
        ) AS "unassignedCount",
        (SELECT COUNT(*)::int FROM "seat_assignments" WHERE "planVersionId" = $2 AND "needsReassignment" = true)
          AS "needsReassignmentCount"`,
@@ -350,11 +384,13 @@ export async function refreshPlanCompleteness(
 // at all just gets "none" a few times over, which costs next to nothing.
 const LOCK_CURRENT_PLAN_ATTEMPTS = 4;
 
-export async function lockCurrentPlan(q: Queryable, weddingId: string): Promise<string | null> {
+// TS-265: `forDelete` -- the wedding delete takes the row FOR UPDATE (what deleting it needs) from
+// the start; see deleteWeddingForOwner.
+export async function lockCurrentPlan(q: Queryable, weddingId: string, forDelete = false): Promise<string | null> {
   for (let attempt = 1; attempt <= LOCK_CURRENT_PLAN_ATTEMPTS; attempt++) {
-    // TS-187: NO KEY UPDATE -- see resyncSeatsAtTable.
+    // TS-187: NO KEY UPDATE -- see resyncTables.
     const { rows } = await q.query(
-      `SELECT id FROM "plan_versions" WHERE "weddingId" = $1 AND "isCurrent" FOR NO KEY UPDATE`,
+      `SELECT id FROM "plan_versions" WHERE "weddingId" = $1 AND "isCurrent" ${forDelete ? "FOR UPDATE" : "FOR NO KEY UPDATE"}`,
       [weddingId]
     );
     if (rows[0]) return rows[0].id as string;
@@ -485,17 +521,16 @@ export async function resyncGuestsSeats(
     }
     const { rows } = await client.query(
       `SELECT DISTINCT "seatingTableId" AS "tableId" FROM "seat_assignments"
-       WHERE "planVersionId" = $1 AND "guestId" = ANY($2::text[])
-       ORDER BY 1`,
+       WHERE "planVersionId" = $1 AND "guestId" = ANY($2::text[])`,
       [planVersionId, guestIds]
     );
-    const newlyFlagged: NewlyFlaggedSeat[] = [];
-    let changed = false;
-    for (const { tableId } of rows as { tableId: string }[]) {
-      const result = await resyncSeatsAtTable(client, weddingId, planVersionId, tableId);
-      newlyFlagged.push(...result.newlyFlagged);
-      changed ||= result.changed;
-    }
+    // TS-259: all their tables in one re-check (it was one re-check per table).
+    const { newlyFlagged, changed } = await resyncTables(
+      client,
+      weddingId,
+      planVersionId,
+      (rows as { tableId: string }[]).map((r) => r.tableId)
+    );
     await refreshPlanCompleteness(client, weddingId, planVersionId, { bumpRevision: changed });
     if (changed) await recordRecheckIfApproved(client, planVersionId, "Seating re-checked after a change — some guests' Needs Reassignment flags changed", null);
     await client.query("COMMIT");

@@ -1,4 +1,4 @@
-import { PERSON_NAME_PATTERN, WEDDING_NAME_PATTERN, hasMixedScriptWord, looksLikePhoneNumber, looksLikeWebAddress } from "./validation";
+import { PERSON_NAME_PATTERN, WEDDING_NAME_PATTERN, hasHiddenCharacters, hasMixedScriptWord, looksLikePhoneNumber, looksLikeWebAddress } from "./validation";
 
 // TS-156 / TS-163: names typed by planners go into emails Seatwise sends to other people (invites,
 // RSVP links). Today's rules stop a name reading as a web address, but names saved before those
@@ -13,7 +13,9 @@ export function emailSafePersonName(name: string): string | null {
     PERSON_NAME_PATTERN.test(trimmed) &&
     !looksLikeWebAddress(trimmed) &&
     // TS-178
-    !hasMixedScriptWord(trimmed)
+    !hasMixedScriptWord(trimmed) &&
+    // TS-262: a name saved before hidden characters were refused ("evil.c" + U+034F + "om")
+    !hasHiddenCharacters(trimmed)
     ? trimmed
     : null;
 }
@@ -28,7 +30,9 @@ export function emailSafeWeddingName(name: string): string | null {
     // TS-171
     !looksLikePhoneNumber(trimmed) &&
     // TS-178
-    !hasMixedScriptWord(trimmed)
+    !hasMixedScriptWord(trimmed) &&
+    // TS-262: a name saved before hidden characters were refused ("evil.c" + U+034F + "om")
+    !hasHiddenCharacters(trimmed)
     ? trimmed
     : null;
 }

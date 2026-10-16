@@ -32,7 +32,7 @@ export class WeddingDetailPage extends BasePage {
   }
 
   async goto(weddingId: string): Promise<void> {
-    await this.page.goto(`/weddings/${weddingId}`);
+    await this.open(`/weddings/${weddingId}`);
   }
 
   /** A tab's own level-2 heading (e.g. the Seating plan tab's "Seating plan") -- proof that tab is
@@ -227,6 +227,12 @@ export class WeddingDetailPage extends BasePage {
   /** TS-191: whichever element has keyboard focus, for checking where focus went back to. */
   focusedElement() {
     return this.page.locator(":focus");
+  }
+
+
+  /** TS-264: presses Log out in the page's header (bell · Account · Log out). */
+  async logOut(): Promise<void> {
+    await this.page.getByRole("navigation", { name: "Your account" }).getByRole("button", { name: "Log out", exact: true }).click();
   }
 
   /** TS-206: the page-level "Couldn't save <field>: <reason>" notes, shown near the tabs for a save

@@ -7,7 +7,7 @@ import { ConfirmDelete } from "../components/ConfirmDelete.js";
 
 export class AccountPage extends BasePage {
   async goto(): Promise<void> {
-    await this.page.goto("/account");
+    await this.open("/account");
     await this.page.getByRole("heading", { name: "Your account", exact: true }).waitFor();
   }
 
@@ -19,6 +19,28 @@ export class AccountPage extends BasePage {
       this.page.waitForResponse((r) => r.request().method() === "DELETE" && new URL(r.url()).pathname === "/api/v1/auth/me"),
       new ConfirmDelete(this.page).confirm(),
     ]);
+  }
+
+  /** TS-264: typing (without pressing) the password in "Delete my account". */
+  async typeDeletePassword(password: string): Promise<void> {
+    await this.page.getByLabel("Your password", { exact: true }).fill(password);
+  }
+  /** The "← Back to your weddings" link at the top. */
+  backToWeddingsLink() {
+    return this.page.getByRole("link", { name: "← Back to your weddings", exact: true });
+  }
+  deletePasswordInput() {
+    return this.page.getByLabel("Your password", { exact: true });
+  }
+  /** TS-264: the question shown when leaving with a password typed in "Delete my account". */
+  leaveQuestion() {
+    return this.page.getByRole("alertdialog", { name: /typed your password to delete your account/ });
+  }
+  async stayOnPage(): Promise<void> {
+    await this.leaveQuestion().getByRole("button", { name: "Stay", exact: true }).click();
+  }
+  async leaveWithoutSaving(): Promise<void> {
+    await this.leaveQuestion().getByRole("button", { name: "Leave without saving", exact: true }).click();
   }
 
   /** TS-100: the "Get help" section and its Email support link. */

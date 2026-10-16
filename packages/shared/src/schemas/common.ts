@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { hasHiddenCharacters, NO_HIDDEN_CHARACTERS_MESSAGE } from "../validation";
 
 // TS-174: bounds shared by every schema, so an out-of-range value is a 422 the person can fix
 // rather than a value the database refuses (a server error).
@@ -35,4 +36,13 @@ export const calendarDateField = z
 export function lengthFirst<T extends z.ZodTypeAny>(max: number, then: T, opts: { trim?: boolean } = {}) {
   const base = opts.trim === false ? z.string() : z.string().trim();
   return base.max(max).pipe(then);
+}
+
+/**
+ * TS-262: a name that holds a hidden character (see hasHiddenCharacters) is refused with that reason
+ * alone, before the other name rules run -- "can only contain letters" wouldn't say what's wrong
+ * with a name that looks fine.
+ */
+export function noHiddenCharactersFirst<T extends z.ZodTypeAny>(then: T) {
+  return z.string().refine((v) => !hasHiddenCharacters(v), NO_HIDDEN_CHARACTERS_MESSAGE).pipe(then);
 }

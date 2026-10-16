@@ -20,8 +20,10 @@
 import { getEnv } from "./env";
 import { assertMutationAllowed, selectionMayMutate } from "./productionGuard";
 import { TEST_ADDRESS_RUN_ENV, newTestAddressRunBlock } from "../data/ids";
+import { onlyDatabaseFreeProjects } from "./globalTeardown";
+import { takeRunLease } from "./runLease";
 
-export default function globalSetup(): void {
+export default async function globalSetup(): Promise<void> {
   const env = getEnv();
   const hasMutatingSelection = selectionMayMutate(process.env.PW_RUN_HAS_MUTATING_SELECTION);
 
@@ -35,4 +37,8 @@ export default function globalSetup(): void {
   // variables set here reach every worker, so uniqueTestAddress (e2e/data/ids.ts) can give each
   // worker process its own block without the workers talking to each other.
   process.env[TEST_ADDRESS_RUN_ENV] ??= newTestAddressRunBlock();
+
+  // Review 14: this run's share of the "run in progress" lease (see runLease.ts), so another run
+  // finishing meanwhile doesn't sweep away this run's accounts.
+  if (!onlyDatabaseFreeProjects(process.argv)) await takeRunLease();
 }

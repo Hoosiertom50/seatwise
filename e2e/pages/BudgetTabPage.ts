@@ -45,7 +45,7 @@ export class BudgetTabPage extends BasePage {
   }
 
   async goto(weddingId: string): Promise<void> {
-    await this.page.goto(`/weddings/${weddingId}`);
+    await this.open(`/weddings/${weddingId}`);
     await this.budgetTabButton().click();
     await this.page.waitForLoadState("networkidle");
   }
@@ -363,6 +363,10 @@ export class BudgetTabPage extends BasePage {
     return this.page.getByRole("button", { name: "Cancel", exact: true });
   }
 
+  /** Review 17: the open editor's name box (for checking what's typed in it). */
+  editNameInputLocator() {
+    return this.editNameInput();
+  }
   async setEditName(name: string): Promise<void> {
     await this.editNameInput().fill(name);
   }

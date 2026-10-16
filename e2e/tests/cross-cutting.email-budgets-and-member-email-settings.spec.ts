@@ -85,7 +85,8 @@ defineQualityTest(
               .myEmailNotificationsEnabled,
           )
           .toBe(false);
-        await auntPage.reload();
+        // A fresh page load shows it stayed off. (PR #116 CI: a reload straight before this second load
+        // was cancelled on WebKit while the reloaded page was still starting -- one load is enough.)
         await tab.goto(w);
         await expect(tab.myEmailsCheckbox()).not.toBeChecked();
         // The owner's own switch is untouched.

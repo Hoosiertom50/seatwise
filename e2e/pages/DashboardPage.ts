@@ -19,6 +19,27 @@ export interface CreateWeddingInput {
 }
 
 export class DashboardPage extends BasePage {
+  /** TS-264: the question shown when leaving with something typed in "Add a wedding". */
+  leaveQuestion() {
+    return this.page.getByRole("alertdialog", { name: /started adding a wedding/ });
+  }
+  async stayOnDashboard(): Promise<void> {
+    await this.leaveQuestion().getByRole("button", { name: "Stay", exact: true }).click();
+  }
+  async leaveWithoutSaving(): Promise<void> {
+    await this.leaveQuestion().getByRole("button", { name: "Leave without saving", exact: true }).click();
+  }
+
+  /** The Account link in the page's header. */
+  accountLink() {
+    return this.page.getByRole("navigation", { name: "Your account" }).getByRole("link", { name: "Account", exact: true });
+  }
+
+  /** TS-264: the "Add a wedding" form's name box (for typing without submitting). */
+  weddingNameInput() {
+    return this.nameInput();
+  }
+
   private nameInput() {
     return this.page.locator("#new-wedding-name");
   }
@@ -76,7 +97,7 @@ export class DashboardPage extends BasePage {
   }
 
   async goto(): Promise<void> {
-    await this.page.goto("/dashboard");
+    await this.open("/dashboard");
   }
 
   /** The list link for a wedding whose visible name contains this text. Also carries the row's
@@ -219,6 +240,52 @@ export class DashboardPage extends BasePage {
   async createWeddingAndLandOnIt(name: string): Promise<void> {
     await this.nameInput().fill(name);
     await Promise.all([this.page.waitForURL(/\/weddings\/[^/]+$/), this.addWeddingButton().click()]);
+  }
+
+  /** TS-263: the create form's date box (focus goes back to it after "Change it"). */
+  newWeddingDateBox() {
+    return this.dateInput();
+  }
+
+  /** TS-263: fills the name and date and presses Add wedding, staying wherever the app leaves you
+   * (a past date stays on the dashboard with the "already passed" question). */
+  async submitNewWedding(name: string, date: string): Promise<void> {
+    await this.nameInput().fill(name);
+    await this.dateInput().fill(date);
+    await this.addWeddingButton().click();
+  }
+
+  /** TS-263: the "This date (MM-DD-YYYY) has already passed — is that right?" question. */
+  /** Review 15: the past-date question's "Change it" button (where focus starts). */
+  pastDateChangeItButton() {
+    return this.pastDateQuestion().getByRole("button", { name: "Change it", exact: true });
+  }
+
+  pastDateQuestion() {
+    return this.page.getByRole("alertdialog").filter({ hasText: /has already passed/ });
+  }
+
+  /** TS-263: "Save anyway" -- creates the wedding and waits for its page to open. */
+  async saveDateAnyway(): Promise<void> {
+    await Promise.all([
+      this.page.waitForURL(/\/weddings\/[^/]+$/),
+      this.pastDateQuestion().getByRole("button", { name: "Save anyway", exact: true }).click(),
+    ]);
+  }
+
+  /** PR #114 review: "Save anyway" without waiting for a page (the form's own checks can stop it). */
+  async pressSaveDateAnyway(): Promise<void> {
+    await this.pastDateQuestion().getByRole("button", { name: "Save anyway", exact: true }).click();
+  }
+
+  /** PR #114 review: whether the browser's own check finds the wedding-name box filled in. */
+  async weddingNameIsValid(): Promise<boolean> {
+    return this.nameInput().evaluate((el) => (el as HTMLInputElement).validity.valid);
+  }
+
+  /** TS-263: "Change it" -- closes the question and puts focus back in the date box. */
+  async changeDate(): Promise<void> {
+    await this.pastDateQuestion().getByRole("button", { name: "Change it", exact: true }).click();
   }
 
   /** Clicks a wedding's list link and waits for the resulting navigation to its detail page. */

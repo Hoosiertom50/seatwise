@@ -33,6 +33,23 @@ export function TimelineTab({ weddingId, canEdit }: { weddingId: string; canEdit
   const [adding, setAdding] = useState(false);
 
   const [editingId, setEditingId] = useState<string | null>(null);
+  // Review 17: which entry's editor is open now -- a save that comes back late closes only its own.
+  const editingIdRef = useRef(editingId);
+  // Review 18: and which opening of it -- counted each time an editor opens or closes, so a save that
+  // comes back after Cancel and Edit on the same entry doesn't close the editor opened since.
+  const editOpening = useRef(0);
+  useEffect(() => {
+    editingIdRef.current = editingId;
+    editOpening.current++;
+  }, [editingId]);
+  const stillEditing = (id: string, opening: number) => editingIdRef.current === id && editOpening.current === opening;
+  // Review 18: the version of the entry the open editor was filled from -- its save is checked against
+  // that, not the list's latest. Reopened while an earlier save was on its way, the editor shows the
+  // values from before that save; saving it used to quietly undo that save (or someone else's change
+  // that came back with a conflict). Now that save is refused as "changed since", like any other.
+  const editRevision = useRef<number | undefined>(undefined);
+  /** Review 19: the entry as the open editor was filled from (see reorderAndReload). */
+  const editSource = useRef<TimelineEntryDTO | null>(null);
   const [editTime, setEditTime] = useState("");
   const [editNextDay, setEditNextDay] = useState(false);
   const [editDescription, setEditDescription] = useState("");
@@ -97,6 +114,8 @@ export function TimelineTab({ weddingId, canEdit }: { weddingId: string; canEdit
     }
     setError(null);
     setEditingId(entry.id);
+    editRevision.current = entry.revision;
+    editSource.current = entry;
     setEditTime(entry.time);
     setEditNextDay(entry.nextDay);
     setEditDescription(entry.description);
@@ -112,6 +131,7 @@ export function TimelineTab({ weddingId, canEdit }: { weddingId: string; canEdit
     }
     setSaving(true);
     setError(null);
+    const opening = editOpening.current;
     try {
       const { entry } = await api.patch<{ entry: TimelineEntryDTO }>(
         `/api/v1/weddings/${weddingId}/timeline-entries/${entryId}`,
@@ -120,7 +140,7 @@ export function TimelineTab({ weddingId, canEdit }: { weddingId: string; canEdit
           nextDay: editNextDay,
           description: editDescription,
           // TS-92: the version this edit is based on -- a stale one is refused, never overwrites.
-          expectedRevision: entries.find((e) => e.id === entryId)?.revision,
+          expectedRevision: editRevision.current ?? entries.find((e) => e.id === entryId)?.revision,
         }
       );
       // TS-182: applied to the list as it is now, so an entry added or removed meanwhile stays.
@@ -130,9 +150,13 @@ export function TimelineTab({ weddingId, canEdit }: { weddingId: string; canEdit
           .map((e) => (e.id === entryId ? entry : e))
           .sort(compareTimelineEntries)
       );
-      setEditingId(null);
-      // TS-212: back to this entry's Edit button (wherever the new time put it).
-      focusIfLost(`timeline-${entryId}-edit`);
+      // Review 17: only if this entry's editor is still the one open -- after Cancel, another entry
+      // may be open with typing in it, which this used to close (losing it) and take focus from.
+      if (stillEditing(entryId, opening)) {
+        setEditingId(null);
+        // TS-212: back to this entry's Edit button (wherever the new time put it).
+        focusIfLost(`timeline-${entryId}-edit`);
+      }
     } catch (err) {
       // TS-92: someone else changed this entry first. Show their version and say plainly that
       // this edit was not saved -- the edit box closes so the stale text can't be mistaken for
@@ -144,8 +168,10 @@ export function TimelineTab({ weddingId, canEdit }: { weddingId: string; canEdit
             .map((e) => (e.id === entryId ? fresh : e))
             .sort(compareTimelineEntries)
         );
-        setEditingId(null);
-        focusIfLost(`timeline-${entryId}-edit`);
+        if (stillEditing(entryId, opening)) {
+          setEditingId(null);
+          focusIfLost(`timeline-${entryId}-edit`);
+        }
       }
       setError(apiErrorMessage(err, [], "Couldn't save that change."));
     } finally {
@@ -228,6 +254,15 @@ export function TimelineTab({ weddingId, canEdit }: { weddingId: string; canEdit
         );
         if (seq === listChange.current) {
           setEntries(res.entries);
+          // Review 19: a move up or down bumps both swapped entries' revision, though only their order
+          // changes -- an open edit of one of them then took the old revision and was refused. If the
+          // open entry's own content is as the editor was filled from, the editor moves on with it.
+          const open = editSource.current;
+          const now = open && editingIdRef.current === open.id ? res.entries.find((e) => e.id === open.id) : undefined;
+          if (open && now && now.time === open.time && now.nextDay === open.nextDay && now.description === open.description) {
+            editRevision.current = now.revision;
+            editSource.current = now;
+          }
           return;
         }
       }

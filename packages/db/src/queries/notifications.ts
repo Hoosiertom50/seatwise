@@ -1,7 +1,7 @@
 import { randomUUID } from "crypto";
-import { accountDailyEmailLimit, emailMayHaveGone, sendEmail, type EmailResult } from "../email";
+import { accountDailyEmailLimit, emailMayHaveGone, sendEmail, sendEmailsToWeddingMembers, type EmailResult } from "../email";
 import { beginTransaction, pool } from "../pool";
-import { claimCooldown, hitRateLimit, releaseCooldown, undoRateLimitHit } from "./rate-limit";
+import { claimCooldown, hitRateLimit, hitRateLimits, releaseCooldown, undoRateLimitHit, undoRateLimitHits } from "./rate-limit";
 import { appBaseUrl, emailSafeWeddingName, looksLikePhoneNumber, looksLikeWebAddress } from "@seatwise/shared";
 
 // TS-163: how many notification emails one person's actions can set off (each recipient counts).
@@ -94,6 +94,31 @@ export async function reserveNotificationEmail(counters: Counter[]): Promise<{ a
   if (results.every((r) => r.allowed)) return { allowed: true, giveBack };
   await giveBack();
   return { allowed: false, giveBack: async () => {} };
+}
+
+/**
+ * TS-266: reserveNotificationEmail for `n` emails at once -- every limit counted in one statement
+ * (see hitRateLimits) rather than about six statements per email. `allowed` is how many may go: as
+ * many as one-at-a-time reservations would have allowed (each needs room under every limit; one
+ * refused gives all its counts back). The rest are given back straight away; `giveBack(m)` takes
+ * back `m` of the allowed ones -- for emails that then didn't go out.
+ */
+export async function reserveNotificationEmails(
+  counters: Counter[],
+  n: number
+): Promise<{ allowed: number; giveBack: (m: number) => Promise<void> }> {
+  if (n <= 0 || counters.length === 0) return { allowed: Math.max(n, 0), giveBack: async () => {} };
+  const results = await hitRateLimits(counters.map((c) => ({ ...c, n })));
+  let held = n;
+  const giveBack = async (m: number) => {
+    const back = Math.min(m, held);
+    if (back <= 0) return;
+    held -= back;
+    await undoRateLimitHits(counters.map((c, i) => ({ key: c.key, windowStart: results[i].windowStart, n: back })));
+  };
+  const allowed = Math.min(n, ...results.map((r) => r.fits));
+  await giveBack(n - allowed);
+  return { allowed, giveBack };
 }
 
 export async function notificationEmailCounters(actorUserId: string | null, weddingId: string, ownerId: string): Promise<Counter[]> {
@@ -342,6 +367,80 @@ export async function insertNotification(weddingId: string, recipientUserId: str
   }
 }
 
+/**
+ * TS-261: insertNotification for many recipients at once -- one transaction with the same checks and
+ * the same lock order (the wedding KEY SHARE, then the recipients' accounts, then their access
+ * rows, each set in id order), then one INSERT for everyone who is still the wedding's owner or a
+ * collaborator. Returns those people's ids; anyone else gets nothing written. It used to be a
+ * transaction of about six statements per recipient.
+ */
+export async function insertNotifications(
+  weddingId: string,
+  recipientUserIds: string[],
+  type: string,
+  message: string
+): Promise<Set<string>> {
+  const ids = [...new Set(recipientUserIds)].sort();
+  if (ids.length === 0) return new Set();
+  const client = await pool.connect();
+  let commitSent = false;
+  try {
+    await beginTransaction(client);
+    const { rows: wedding } = await client.query<{ ownerId: string }>(
+      `SELECT "ownerId" FROM "weddings" WHERE id = $1 FOR KEY SHARE`,
+      [weddingId]
+    );
+    const members = new Set<string>();
+    if (wedding[0]) {
+      const { rows: accounts } = await client.query<{ id: string }>(
+        `SELECT id FROM "users" WHERE id = ANY($1::text[]) ORDER BY id FOR KEY SHARE`,
+        [ids]
+      );
+      const existing = accounts.map((a) => a.id);
+      if (existing.includes(wedding[0].ownerId)) members.add(wedding[0].ownerId);
+      const others = existing.filter((id) => id !== wedding[0].ownerId);
+      if (others.length > 0) {
+        const { rows: access } = await client.query<{ userId: string }>(
+          `SELECT "userId" FROM "wedding_collaborators" WHERE "weddingId" = $1 AND "userId" = ANY($2::text[])
+            ORDER BY "userId" FOR KEY SHARE`,
+          [weddingId, others]
+        );
+        for (const a of access) members.add(a.userId);
+      }
+    }
+    if (members.size > 0) {
+      const written = ids.filter((id) => members.has(id));
+      await client.query(
+        `INSERT INTO "notifications" (id, "weddingId", "recipientUserId", type, message)
+         SELECT v.id, $2, v."recipientUserId", $3::"NotificationType", $4
+           FROM unnest($1::text[], $5::text[]) AS v(id, "recipientUserId")`,
+        [written.map(() => randomUUID()), weddingId, type, message, written]
+      );
+    }
+    commitSent = true;
+    await client.query("COMMIT");
+    return members;
+  } catch (err) {
+    if (commitSent) throw new NotificationBatchOutcomeUnknown(err);
+    await client.query("ROLLBACK").catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * TS-261: the batch's COMMIT was sent but its answer never came back (the connection dropped), so
+ * the notifications may well have been saved. Trying each recipient again could then notify them
+ * twice, so the caller doesn't.
+ */
+export class NotificationBatchOutcomeUnknown extends Error {
+  constructor(cause: unknown) {
+    super("The notifications' COMMIT got no answer; they may have been saved.");
+    this.cause = cause;
+  }
+}
+
 const errorCode = (err: unknown) => {
   const code = (err as { code?: string } | null)?.code;
   return code ? `database error ${code}` : err instanceof Error ? err.message : String(err);
@@ -384,9 +483,27 @@ async function notifyEveryone(
   );
   const recipients = onlyUserIds ? everyone.filter((r) => onlyUserIds.includes(r.id)) : everyone;
 
-  const notified: typeof recipients = [];
-  for (const recipient of recipients) {
-    if (recipient.id === actorUserId) continue;
+  const toNotify = recipients.filter((r) => r.id !== actorUserId);
+  let notified: typeof recipients = [];
+  // TS-261: everyone written in one go (see insertNotifications) -- the same "still a member at
+  // this moment" check, under the same locks, as one at a time below.
+  let writtenTogether = false;
+  if (toNotify.length > 1) {
+    try {
+      const members = await insertNotifications(weddingId, toNotify.map((r) => r.id), type, message);
+      notified = toNotify.filter((r) => members.has(r.id));
+      writtenTogether = true;
+    } catch (err) {
+      if (err instanceof NotificationBatchOutcomeUnknown) {
+        // They may already have the notification -- don't risk a second one (or a second email).
+        console.error(`[notify] couldn't confirm a ${type} notification was saved: ${errorCode(err.cause)}`);
+        writtenTogether = true;
+      }
+      // Otherwise nothing was written (one transaction, rolled back). TS-194: one recipient's
+      // failure mustn't stop the others hearing about it, so they're tried one at a time instead.
+    }
+  }
+  for (const recipient of writtenTogether ? [] : toNotify) {
     // TS-186: written only if they're still the owner or a collaborator at this moment -- someone
     // removed while this was running (between the list above and here) gets neither the
     // notification nor the email. TS-234: their access row is share-locked (FOR KEY SHARE) as it's
@@ -427,42 +544,53 @@ async function notifyEveryone(
     // TS-203: charged to whoever caused it, so it counts toward that account's share of Seatwise's
     // email. TS-219: a guest's answer is not charged to the owner (see notificationEmailCharge).
     const charge = notificationEmailCharge(actorUserId, wedding.ownerId);
-    // TS-203: everyone is emailed at the same time (over the shared, pooled mail connection), not
-    // one after another -- a guest's RSVP used to wait for each planner's email in turn.
-    await Promise.all(
-      toEmail.map(async (recipient) => {
-        try {
-          // TS-194: checked again right before each email -- someone removed from the wedding, or
-          // whose account was deleted or changed address, since the list above isn't emailed.
-          // TS-213: nor someone who has just turned these emails off.
-          const { rows: still } = await pool.query<{ email: string }>(
-            `SELECT u.email FROM "users" u
-              WHERE u.id = $1 AND u."emailVerifiedAt" IS NOT NULL
-                AND (EXISTS (SELECT 1 FROM "weddings" WHERE id = $2 AND "ownerId" = u.id AND "ownerEmailNotificationsEnabled")
-                  OR EXISTS (SELECT 1 FROM "wedding_collaborators" WHERE "weddingId" = $2 AND "userId" = u.id AND "emailNotificationsEnabled"))`,
-            [recipient.id, weddingId]
-          );
-          if (!still[0]) return;
-          const reservation = await reserveNotificationEmail(counters);
-          if (!reservation.allowed) return;
-          const result = await sendEmailNotification(
-            still[0].email,
-            weddingName ? `Seatwise: ${weddingName}` : "Seatwise: a wedding update",
-            body,
-            // TS-171: a confirmed member of this wedding, so not held to the per-address daily cap.
-            { toWeddingMember: true, ...charge }
-          );
-          // TS-178: nothing went out (failed, held back by the day's limit, or no email service), so it
-          // doesn't use up the sender's or the wedding's allowance. TS-203: unless it may have gone
-          // out after all ("uncertain"), when it stays counted.
-          if (emailMayHaveGone(result)) anyEmailed = true;
-          else await reservation.giveBack();
-        } catch (err) {
-          // TS-194: one recipient's failure is logged; the others are still emailed.
-          console.error(`[notify] couldn't email a ${type} notification: ${errorCode(err)}`);
-        }
-      })
+    // TS-194: checked again right before the emails -- someone removed from the wedding, or whose
+    // account was deleted or changed address, since the list above isn't emailed. TS-213: nor
+    // someone who has just turned these emails off. TS-266: for everyone in one read (it was one
+    // read per recipient).
+    const { rows: still } = await pool.query<{ id: string; email: string }>(
+      `SELECT u.id, u.email FROM "users" u
+        WHERE u.id = ANY($1::text[]) AND u."emailVerifiedAt" IS NOT NULL
+          AND (EXISTS (SELECT 1 FROM "weddings" WHERE id = $2 AND "ownerId" = u.id AND "ownerEmailNotificationsEnabled")
+            OR EXISTS (SELECT 1 FROM "wedding_collaborators" WHERE "weddingId" = $2 AND "userId" = u.id AND "emailNotificationsEnabled"))`,
+      [toEmail.map((r) => r.id), weddingId]
     );
+    const stillEmail = new Map(still.map((r) => [r.id, r.email]));
+    const addresses = toEmail.filter((r) => stillEmail.has(r.id)).map((r) => stillEmail.get(r.id)!);
+    if (addresses.length === 0) return;
+    let pending = addresses;
+    while (pending.length > 0) {
+      // TS-266: the wedding's (or the person's) limits counted once for all of them -- as many go as
+      // one-at-a-time reservations would have let go, the first ones in the list.
+      const reservation = await reserveNotificationEmails(counters, pending.length);
+      if (reservation.allowed === 0) return;
+      const batch = pending.slice(0, reservation.allowed);
+      // TS-203: everyone is emailed at the same time (over the shared, pooled mail connection), not
+      // one after another -- a guest's RSVP used to wait for each planner's email in turn. TS-266:
+      // with Seatwise's own email counts made once for the batch, too (see sendEmailsToWeddingMembers).
+      // TS-171: confirmed members of this wedding, so not held to the per-address daily cap.
+      const results = await sendEmailsToWeddingMembers(
+        batch,
+        weddingName ? `Seatwise: ${weddingName}` : "Seatwise: a wedding update",
+        body,
+        process.env,
+        charge
+      );
+      // TS-178: what didn't go out (failed, held back by the day's limit, or no email service) doesn't
+      // use up the sender's or the wedding's allowance. TS-203: unless it may have gone out after all
+      // ("uncertain"), when it stays counted.
+      if (results.some(emailMayHaveGone)) anyEmailed = true;
+      await reservation.giveBack(results.filter((r) => !emailMayHaveGone(r)).length);
+      // TS-266: one at a time, a failed send's give-back left room for the next person in the list.
+      // So while sends fail, whoever wasn't reached yet (held back for room, or not reserved for)
+      // is tried again with that room; otherwise everyone left would be refused anyway.
+      if (!results.includes("failed")) return;
+      const tried = results.filter((r) => r !== "limited" && r !== "account-limited").length;
+      pending = [...batch.slice(tried), ...pending.slice(batch.length)];
+    }
+  } catch (err) {
+    // TS-194: logged, never passed on -- the change it's about is already saved.
+    console.error(`[notify] couldn't email a ${type} notification: ${errorCode(err)}`);
   } finally {
     if (!anyEmailed) await gate.release();
   }

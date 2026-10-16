@@ -3,6 +3,7 @@ import { pool, beginTransaction } from "../pool";
 import { compareTableLabels, cutToLimit } from "@seatwise/shared";
 import { lockWeddingRow, recheckActorAccess, WeddingDeletedError, type ActorAccess } from "./wedding-lock";
 import { assertWeddingHasRoom } from "./wedding-caps";
+import { insertSeatingTableCopies, insertTemplateTableCopies } from "./table-copies";
 
 // TS-19 (FR-14.1/FR-14.2): a template is a reusable snapshot of a wedding's table layout plus its
 // "rule-shape" (the wedding's Side-Mixing setting). It deliberately never stores anything
@@ -111,33 +112,8 @@ export async function createTemplateFromWedding(
       [weddingId]
     );
     tableRows.sort((a, b) => compareTableLabels(a.label, b.label));
-    let sortOrder = 0;
-    for (const t of tableRows) {
-      await client.query(
-        `INSERT INTO "seating_template_tables"
-           (id, "templateId", label, capacity, "isRestricted", "isAccessible", "isLocked", purpose,
-            "purposeCriterionType", "purposeCriterionValue", "singleSideOnly", shape,
-            "positionX", "positionY", "sortOrder")
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::"TablePurposeCriterionType", $10, $11, $12::"TableShape", $13, $14, $15)`,
-        [
-          randomUUID(),
-          templateId,
-          t.label,
-          t.capacity,
-          t.isRestricted,
-          t.isAccessible,
-          t.isLocked,
-          t.purpose,
-          t.purposeCriterionType,
-          t.purposeCriterionValue,
-          t.singleSideOnly,
-          t.shape,
-          t.positionX,
-          t.positionY,
-          sortOrder++,
-        ]
-      );
-    }
+    // TS-261: all of them in one INSERT, sortOrder 0, 1, 2... in that order.
+    await insertTemplateTableCopies(client, templateId, tableRows);
 
     await client.query("COMMIT");
   } catch (err) {
@@ -247,20 +223,13 @@ async function insertLayoutTables(
     [weddingId]
   );
   const taken = new Set(existing.map((r) => r.label));
-  for (const t of tables) {
+  const renamed = tables.map((t) => {
     const label = uniqueLabel(t.label, taken);
     taken.add(label);
-    await client.query(
-      `INSERT INTO "seating_tables"
-         (id, "weddingId", label, capacity, "isRestricted", "isAccessible", "isLocked", purpose,
-          "purposeCriterionType", "purposeCriterionValue", "singleSideOnly", shape, "positionX", "positionY", "updatedAt")
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::"TablePurposeCriterionType", $10, $11, $12::"TableShape", $13, $14, now())`,
-      [
-        randomUUID(), weddingId, label, t.capacity, t.isRestricted, t.isAccessible, t.isLocked, t.purpose,
-        t.purposeCriterionType, t.purposeCriterionValue, t.singleSideOnly, t.shape, t.positionX, t.positionY,
-      ]
-    );
-  }
+    return { ...t, label };
+  });
+  // TS-261: every table in one INSERT (it was one per table).
+  await insertSeatingTableCopies(client, weddingId, renamed);
   return tables.length;
 }
 

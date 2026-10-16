@@ -289,7 +289,7 @@ export async function updateGuestForWedding(
       dayOfAttendance: string;
       name: string;
     }>(
-      // TS-187: NO KEY UPDATE -- see resyncSeatsAtTable in seat-checks.ts.
+      // TS-187: NO KEY UPDATE -- see resyncTables in seat-checks.ts.
       `SELECT revision, headcount, "rsvpStatus", "dayOfAttendance", ("firstName" || ' ' || "lastName") AS name
        FROM "guests" WHERE id = $1 AND "weddingId" = $2 FOR NO KEY UPDATE`,
       [id, weddingId]

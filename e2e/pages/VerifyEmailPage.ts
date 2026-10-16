@@ -7,7 +7,7 @@ import { BasePage } from "./BasePage.js";
 
 export class VerifyEmailPage extends BasePage {
   async goto(token: string): Promise<void> {
-    await this.page.goto(`/verify-email/${token}`);
+    await this.open(`/verify-email/${token}`);
   }
 
   confirmButton() {

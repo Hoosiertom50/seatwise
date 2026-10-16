@@ -8,6 +8,7 @@ import { expect, defineQualityTest, test } from "../fixtures/index.js";
 import { AccountPage } from "../pages/AccountPage.js";
 import { DashboardPage } from "../pages/DashboardPage.js";
 import type { Page } from "@playwright/test";
+import { reloadOnceSettled } from "../support/pageSettled.js";
 
 const LIGHT_BACKGROUND = "rgb(255, 255, 255)";
 const DARK_BACKGROUND = "rgb(10, 10, 10)";
@@ -52,7 +53,7 @@ defineQualityTest(
     });
 
     await test.step("Dark is kept after a reload and on the dashboard", async () => {
-      await page.reload();
+      await reloadOnceSettled(page);
       await expect(accountPage.appearanceChoice("Dark")).toBeChecked();
       expect(await pageBackground(page)).toBe(DARK_BACKGROUND);
       await new DashboardPage(page).goto();
@@ -64,7 +65,7 @@ defineQualityTest(
       await accountPage.goto();
       await accountPage.appearanceChoice("Light").check();
       await expect.poll(() => pageBackground(page)).toBe(LIGHT_BACKGROUND);
-      await page.reload();
+      await reloadOnceSettled(page);
       await expect(accountPage.appearanceChoice("Light")).toBeChecked();
       expect(await pageBackground(page)).toBe(LIGHT_BACKGROUND);
     });
@@ -72,7 +73,7 @@ defineQualityTest(
     await test.step("Match my device follows the device again (dark)", async () => {
       await accountPage.appearanceChoice("Match my device").check();
       await expect.poll(() => pageBackground(page)).toBe(DARK_BACKGROUND);
-      await page.reload();
+      await reloadOnceSettled(page);
       await expect(accountPage.appearanceChoice("Match my device")).toBeChecked();
       expect(await pageBackground(page)).toBe(DARK_BACKGROUND);
     });

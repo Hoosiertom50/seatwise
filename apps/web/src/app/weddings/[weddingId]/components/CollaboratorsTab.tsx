@@ -19,6 +19,8 @@ import { FIELD_LIMITS } from "@seatwise/shared";
 // TS-214: asks before saving an RSVP cutoff in the past or after the wedding.
 import { rsvpCutoffWarning } from "@seatwise/shared";
 import { formatDate, localTodayIso } from "@/lib/display-format";
+// TS-263: asks before saving a wedding date that has already passed.
+import { changedWeddingDateQuestion } from "@/lib/past-wedding-date";
 // TS-219: "may have been sent" when the email service stopped answering part-way.
 import { inviteSentMessage } from "@/lib/email-outcome-text";
 // TS-246: a box whose setting was saved elsewhere while it was being typed in.
@@ -120,6 +122,8 @@ export function CollaboratorsTab({
   const [eventDate, setEventDate] = useState(wedding?.eventDate ?? "");
   const [venueName, setVenueName] = useState(wedding?.venueName ?? "");
   const [savingDetails, setSavingDetails] = useState(false);
+  // TS-263: a past wedding date waiting for "Save anyway" (the date and the question asked about it).
+  const [dateQuestion, setDateQuestion] = useState<{ value: string; message: string } | null>(null);
   const [detailsSaved, setDetailsSaved] = useState(false);
   // FR-1.3a: this wedding's own names for its two sides -- edited here, then PATCHed as a pure
   // label rename. Local input state so typing doesn't PATCH on every keystroke; saved on blur.
@@ -272,6 +276,8 @@ export function CollaboratorsTab({
       settingFields.markDirty(fieldKey, false);
       // TS-246: this box now shows the latest, so it no longer counts as changed underneath.
       changedUnderneath.current.delete(fieldKey as SettingsBoxKey);
+      // Review 14: with the tab already closed, the page says this wasn't saved, and why.
+      settingFields.noteIfClosed(fieldKey, field, reason);
     } else settingFields.keepUnsaved(fieldKey, field, reason);
     return false;
   }
@@ -431,12 +437,70 @@ export function CollaboratorsTab({
     // TS-246: the date or venue was saved elsewhere while being changed here -- both boxes show
     // what's saved now; the change can be made again.
     if (changedElsewhere("setting-date", "setting-venue")) {
+      refuseDetailsChangedElsewhere();
+      return;
+    }
+    // TS-263: a changed date before today (in the planner's own time zone) is only saved once the
+    // planner says so -- it used to be saved without a word, and it's usually the wrong year. Until
+    // then both boxes keep what was typed and count as unsaved.
+    const question = changedWeddingDateQuestion(eventDate, wedding.eventDate, localTodayIso());
+    if (question) {
       setDetailsSaved(false);
-      setError(SETTINGS_CHANGED_ELSEWHERE_MESSAGE);
+      setError(null);
+      setDateQuestion({ value: eventDate, message: question });
+      return;
+    }
+    await saveDetailsTracked(eventDate);
+  }
+
+  // TS-246: the date or venue was saved elsewhere while being changed here -- both boxes show what's
+  // saved now; the change can be made again.
+  function refuseDetailsChangedElsewhere() {
+    if (!wedding) return;
+    setDateQuestion(null);
+    setDetailsSaved(false);
+    setError(SETTINGS_CHANGED_ELSEWHERE_MESSAGE);
+    setEventDate(wedding.eventDate ?? "");
+    setVenueName(wedding.venueName ?? "");
+  }
+
+  // TS-263: "Save anyway" -- refused like the box's own Save when the date or venue was saved
+  // elsewhere (another tab, say) while the question was up, the same as the RSVP cutoff's (TS-251).
+  async function onSaveDateAnyway(value: string) {
+    if (!wedding) return;
+    const toSave = `${value}\n${venueName.trim()}`;
+    const latest = `${wedding.eventDate ?? ""}\n${wedding.venueName ?? ""}`;
+    if (takeChangedFlags(changedUnderneath.current, ["setting-date", "setting-venue"], toSave, latest)) {
+      refuseDetailsChangedElsewhere();
+      return;
+    }
+    // TS-255: already what's saved (another tab saved this same date and venue) -- nothing to send.
+    if (toSave === latest) {
+      setDateQuestion(null);
       setEventDate(wedding.eventDate ?? "");
       setVenueName(wedding.venueName ?? "");
       return;
     }
+    await saveDetailsTracked(value);
+  }
+
+  // TS-263: "Change it" -- the typed date stays (usually only the year is wrong) and still counts as
+  // unsaved; the date box gets focus. A change saved elsewhere meanwhile is still caught on Save.
+  function onChangeDate() {
+    setDateQuestion(null);
+    setTimeout(() => document.getElementById("wedding-date")?.focus(), 0);
+  }
+
+  // TS-264: registered with the page's saves, so Log out, Account and the other ways off the page
+  // wait for it (and ask if it fails) instead of signing out while it's on its way.
+  function saveDetailsTracked(date: string) {
+    return settingFields.trackSave("setting-details", saveDetails(date));
+  }
+
+  /** False if the date and venue weren't saved. */
+  async function saveDetails(date: string): Promise<boolean> {
+    if (!wedding) return false;
+    setDateQuestion(null);
     setSavingDetails(true);
     setDetailsSaved(false);
     setError(null);
@@ -444,7 +508,7 @@ export function CollaboratorsTab({
       // TS-214: compare-and-set (saveSettings) -- this save used to send both boxes and silently put
       // back a venue (or date) another tab had just changed.
       const updated = await saveSettings({
-        eventDate: eventDate || null,
+        eventDate: date || null,
         venueName: venueName.trim() || null,
       });
       setWedding((w) =>
@@ -461,6 +525,7 @@ export function CollaboratorsTab({
       setEventDate(updated.eventDate ?? "");
       setVenueName(updated.venueName ?? "");
       setDetailsSaved(true);
+      return true;
     } catch (err) {
       setError(apiErrorMessage(err, ["eventDate", "venueName"], "Couldn't save the date and venue."));
       // TS-214: on a conflict both boxes show what's saved now; the change can be made again.
@@ -470,6 +535,7 @@ export function CollaboratorsTab({
         setVenueName(fresh.venueName ?? "");
         changedElsewhere("setting-date", "setting-venue"); // TS-246: they show the latest now.
       }
+      return false;
     } finally {
       setSavingDetails(false);
     }
@@ -1101,6 +1167,8 @@ export function CollaboratorsTab({
                     onChange={(e) => {
                       setEventDate(e.target.value);
                       setDetailsSaved(false);
+                      // TS-263: a new date is a new answer -- the question was about the old one.
+                      setDateQuestion(null);
                     }}
                   />
                 </div>
@@ -1132,6 +1200,48 @@ export function CollaboratorsTab({
                 <span role="status" className="text-sm text-green-700 dark:text-green-400">
                   {detailsSaved ? "Saved" : ""}
                 </span>
+              </div>
+              {/* TS-263: asks before saving a wedding date that has already passed. Right after Save,
+                  so it's the next Tab stop. The region is always on the page, so the question is
+                  announced when it appears (TS-212). */}
+              <div aria-live="assertive" data-testid="wedding-date-question-region">
+                {dateQuestion && (
+                  <div
+                    role="alertdialog"
+                    aria-labelledby="wedding-date-question"
+                    // TS-212: Escape means "Change it", like the other questions in the app.
+                    onKeyDown={(e) => {
+                      if (e.key === "Escape") {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        onChangeDate();
+                      }
+                    }}
+                    className="mt-3 flex flex-wrap items-center gap-3 rounded-md bg-amber-50 dark:bg-amber-950 px-3 py-2 text-sm text-amber-900 dark:text-amber-200"
+                  >
+                    {/* basis-60: on a phone the buttons go under the question rather than squeezing it. */}
+                    <span id="wedding-date-question" className="flex-1 basis-60">
+                      {dateQuestion.message}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => void onSaveDateAnyway(dateQuestion.value)}
+                      disabled={savingDetails}
+                      className="min-h-11 rounded-md bg-amber-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-amber-800 disabled:opacity-50"
+                    >
+                      Save anyway
+                    </button>
+                    <button
+                      type="button"
+                      // PR #114 review: focus starts on the safe choice, so Escape works straight away.
+                      autoFocus
+                      onClick={onChangeDate}
+                      className="min-h-11 rounded-md border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800"
+                    >
+                      Change it
+                    </button>
+                  </div>
+                )}
               </div>
             </form>
           )}

@@ -25,3 +25,14 @@ test("any browser project, or no project named at all, still sweeps", () => {
   expect(onlyDatabaseFreeProjects(run("--project", "webkit"))).toBe(false);
   expect(onlyDatabaseFreeProjects(run())).toBe(false);
 });
+
+// PR #115 review: Playwright reads every name after `--project` up to the next option.
+test("several projects after one --project are all read, so a browser among them still counts", () => {
+  expect(selectedProjects(run("--project", "unit", "chromium"))).toEqual(["unit", "chromium"]);
+  expect(selectedProjects(run("--project", "unit", "framework-unit", "--grep", "x"))).toEqual(["unit", "framework-unit"]);
+  expect(onlyDatabaseFreeProjects(run("--project", "unit", "chromium"))).toBe(false);
+  expect(onlyDatabaseFreeProjects(run("--project", "unit", "framework-unit"))).toBe(true);
+  // With "=", only that one name is a project (Playwright reads the next word as a file filter).
+  expect(selectedProjects(run("--project=unit", "e2e/tests/unit"))).toEqual(["unit"]);
+});
+

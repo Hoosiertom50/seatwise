@@ -2,6 +2,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { UnsavedRegistry, LeavingFlag, couldntSaveNote, type UnsavedNote } from "./unsaved-registry";
+import { isSigningOut } from "./log-out";
 
 // TS-159: the wedding page shows one tab at a time, so switching tabs used to throw away whatever
 // was half-typed in the tab being left (an Add guest / table / vendor form, an open edit, a draft
@@ -29,11 +30,15 @@ export function useUnsavedChanges(key: string, dirty: boolean): void {
  * time (dirty while its text differs from what's saved); `clearAll` forgets every field this
  * component reported, and leaving the component does the same.
  */
+/** Review 15: how recent a refusal must be to be noted when its tab closes (see noteIfClosed). */
+const RECENT_REFUSAL_MS = 2_000;
+
 export function useUnsavedFields(): {
   markDirty: (key: string, dirty: boolean) => void;
   clearAll: () => void;
   trackSave: (key: string, save: Promise<unknown>) => Promise<boolean>;
   keepUnsaved: (key: string, field: string, reason: string) => void;
+  noteIfClosed: (key: string, field: string, reason: string) => void;
 } {
   const registry = useContext(UnsavedChangesContext);
   const keys = useRef(new Set<string>());
@@ -41,15 +46,25 @@ export function useUnsavedFields(): {
   // can't mark its box unsaved -- the box is gone, and the mark could never be cleared, so every
   // later tab click, reload and Back asked about nothing.
   const mounted = useRef(false);
+  // Review 15: refusals answered while the tab was still open, kept for a moment -- see noteIfClosed.
+  const recentRefusals = useRef<{ key: string; field: string; reason: string; at: number }[]>([]);
   useEffect(() => {
     mounted.current = true;
     return () => {
       mounted.current = false;
+      const now = Date.now();
+      for (const r of recentRefusals.current) {
+        if (now - r.at < RECENT_REFUSAL_MS) registry?.addNote(couldntSaveNote(r.field, r.reason));
+      }
+      recentRefusals.current = [];
     };
-  }, []);
+  }, [registry]);
   const markDirty = useCallback(
     (key: string, dirty: boolean) => {
       if (dirty && !mounted.current) return;
+      // PR #115 review: typing in the box again replaces a refusal it had -- its note no longer
+      // applies (a retry that saved used to be followed by "Couldn't save" when the tab closed).
+      if (dirty) recentRefusals.current = recentRefusals.current.filter((r) => r.key !== key);
       if (dirty) keys.current.add(key);
       else keys.current.delete(key);
       registry?.setDirty(key, dirty);
@@ -82,7 +97,26 @@ export function useUnsavedFields(): {
     },
     [markDirty, registry]
   );
-  return useMemo(() => ({ markDirty, clearAll, trackSave, keepUnsaved }), [markDirty, clearAll, trackSave, keepUnsaved]);
+  /**
+   * Review 14: a save refused because the setting was changed elsewhere (409) -- with the tab still
+   * open its box shows the latest and the message says so; once the tab has closed, the page shows
+   * "Couldn't save <field>: <reason>" (the typing used to vanish without a word).
+   */
+  // Review 15: and when the answer comes back just before the tab closes -- the save starts as the
+  // mouse goes down on another tab, the tab switches as it comes up, and a refusal in between showed
+  // in the tab for a moment and was then gone. A refusal from the last couple of seconds is noted
+  // when the tab closes.
+  const noteIfClosed = useCallback(
+    (key: string, field: string, reason: string) => {
+      if (!mounted.current) registry?.addNote(couldntSaveNote(field, reason));
+      else recentRefusals.current.push({ key, field, reason, at: Date.now() });
+    },
+    [registry]
+  );
+  return useMemo(
+    () => ({ markDirty, clearAll, trackSave, keepUnsaved, noteIfClosed }),
+    [markDirty, clearAll, trackSave, keepUnsaved, noteIfClosed]
+  );
 }
 
 /**
@@ -95,6 +129,8 @@ export function useUnsavedChangesProvider({ onBackRequested }: { onBackRequested
   useEffect(() => {
     onBackRef.current = onBackRequested;
   }, [onBackRequested]);
+  /** The latest `reconcile` (below), for the registry's listener. */
+  const reconcileNow = useRef<() => void>(() => {});
   const [count, setCount] = useState(0);
   // TS-206: saves still on their way keep the page's extra history entry (below) in place, so a
   // Back pressed meanwhile is caught and can wait for them.
@@ -106,6 +142,9 @@ export function useUnsavedChangesProvider({ onBackRequested }: { onBackRequested
         setCount(registry.dirtyCount());
         setSaving(registry.isSaving());
         setNotes(registry.notes());
+        // Review 14: the Back guard goes in at once, not after the next render -- a Back pressed in
+        // that instant (typing pasted or filled in, then Back) left without asking.
+        if (registry.hasUnsaved()) reconcileNow.current();
       }),
     [registry]
   );
@@ -114,12 +153,17 @@ export function useUnsavedChangesProvider({ onBackRequested }: { onBackRequested
   useEffect(() => {
     if (count === 0) return;
     const warn = (e: BeforeUnloadEvent) => {
+      // Review 15: asked again as it fires -- "Leave without saving" then Log out clears the input and
+      // opens the sign-in page in the same moment, before this listener comes off with the next
+      // render, and the browser asked "Leave site?" on top of the page's own question.
+      // PR #115 review: nor while going to the sign-in page after a log out (see goToSignIn).
+      if (!registry.hasUnsaved() || isSigningOut()) return;
       e.preventDefault();
       e.returnValue = "";
     };
     window.addEventListener("beforeunload", warn);
     return () => window.removeEventListener("beforeunload", warn);
-  }, [count]);
+  }, [count, registry]);
 
 
   // TS-170: the browser's Back button (or a back swipe) moves within the app without unloading the
@@ -134,6 +178,8 @@ export function useUnsavedChangesProvider({ onBackRequested }: { onBackRequested
   const pageUrl = useRef<string | null>(null);
   /** A Back the page made itself (taking the extra entry off) -- not the user's. */
   const ignoreNextPop = useRef(false);
+  /** Waiting for that Back to land (see whenGuardSettled). */
+  const guardSettled = useRef<(() => void)[]>([]);
   /** Set while the page is leaving on purpose, so the extra entry isn't taken off in the meantime. */
   // TS-218: a LeavingFlag (unsaved-registry.ts), so a cancelled reload's mark can be lifted.
   const [leaving] = useState(() => new LeavingFlag());
@@ -185,6 +231,9 @@ export function useUnsavedChangesProvider({ onBackRequested }: { onBackRequested
   useEffect(() => {
     reconcile();
   }, [count, saving, reconcile]);
+  useEffect(() => {
+    reconcileNow.current = reconcile;
+  }, [reconcile]);
 
   useEffect(() => {
     pageUrl.current = window.location.href;
@@ -194,6 +243,12 @@ export function useUnsavedChangesProvider({ onBackRequested }: { onBackRequested
       if (ignoreNextPop.current) {
         ignoreNextPop.current = false;
         reconcile();
+        // PR #115 review: told a moment later, once the router has dealt with this Back too -- a page
+        // opened straight away was replaced by the router putting this one back.
+        const waiting = guardSettled.current.splice(0);
+        window.setTimeout(() => {
+          for (const settled of waiting) settled();
+        }, 0);
         return;
       }
       if (leaving.value) return;
@@ -209,6 +264,30 @@ export function useUnsavedChangesProvider({ onBackRequested }: { onBackRequested
     return () => window.removeEventListener("popstate", onPop);
   }, [reconcile, needsGuard, leaving]);
 
+  /**
+   * PR #114 review: true while the page's own Back (taking its extra entry off, just after a save)
+   * hasn't landed yet. Opening another page then -- Log out's sign-in page, say -- was cancelled
+   * by that Back, leaving a signed-out wedding page on screen.
+   */
+  // PR #115 review: or about to start -- the extra entry is still there with nothing left unsaved,
+  // and the render that takes it off hasn't come yet (a box just emptied, a link clicked in the same
+  // moment). That Back then cancelled the page the link opened.
+  const removalPending = useCallback(
+    () => !leaving.value && !ignoreNextPop.current && onGuardEntry() && !needsGuard(),
+    [leaving, needsGuard]
+  );
+  const guardSettling = useCallback(() => ignoreNextPop.current || removalPending(), [removalPending]);
+  /** Resolves once that Back has landed (or after half a second, so leaving never hangs). */
+  const whenGuardSettled = useCallback(() => {
+    // PR #115 review: a Back about to start is started now, and waited for like any other.
+    if (removalPending()) reconcileNow.current();
+    return ignoreNextPop.current
+      ? new Promise<void>((resolve) => {
+          guardSettled.current.push(resolve);
+          window.setTimeout(resolve, 500);
+        })
+      : Promise.resolve();
+  }, [removalPending]);
   const hasUnsaved = useCallback(() => registry.hasUnsaved(), [registry]);
   const clear = useCallback(() => registry.clearDirty(), [registry]);
   /** TS-206: waits for every save-on-leave box's save; true when all of them saved. */
@@ -255,6 +334,8 @@ export function useUnsavedChangesProvider({ onBackRequested }: { onBackRequested
     dismissNote,
     releaseForLink,
     goBackPastPage,
+    guardSettling,
+    whenGuardSettled,
     Provider: UnsavedChangesContext.Provider,
   };
 }
